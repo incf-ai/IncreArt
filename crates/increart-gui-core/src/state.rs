@@ -2432,6 +2432,8 @@ impl Alerts {
 pub struct Message {
     pub text: String,
     pub error: bool,
+    /// A notification alert's reason: shown with Snooze and Settings links.
+    pub alert: bool,
 }
 
 /// An inline rename in a tree: which node, and the edited name.
@@ -4373,11 +4375,16 @@ impl AppState {
     }
 
     pub fn messages_error(&mut self, text: impl Into<String>) {
-        self.messages.push(Message { text: text.into(), error: true });
+        self.messages.push(Message { text: text.into(), error: true, alert: false });
     }
 
     pub fn messages_info(&mut self, text: impl Into<String>) {
-        self.messages.push(Message { text: text.into(), error: false });
+        self.messages.push(Message { text: text.into(), error: false, alert: false });
+    }
+
+    /// A notification alert's reason (its message, when so set).
+    pub fn messages_alert(&mut self, text: impl Into<String>) {
+        self.messages.push(Message { text: text.into(), error: false, alert: true });
     }
 }
 

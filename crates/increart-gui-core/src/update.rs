@@ -8408,7 +8408,7 @@ fn ring(state: &mut AppState, sound: increart_core::notify::Sound, text: String)
     }
     let fx = vec![Effect::PlaySound { sound, volume: n.volume, player: n.player.clone(), test: false }];
     if n.show_message {
-        state.messages_info(text);
+        state.messages_alert(text);
     }
     fx
 }
