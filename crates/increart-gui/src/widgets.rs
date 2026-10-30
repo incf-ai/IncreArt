@@ -292,6 +292,41 @@ pub fn single_click(ui: &egui::Ui, resp: &egui::Response) -> bool {
     now - t < delay * 3.0
 }
 
+/// A widget drawn at `rect` on top of others, taking no space in `ui`'s
+/// layout (`ui.put` would: in the wrapped grid that pushes the next tiles
+/// along when a hovered tile shows its buttons, so they jump around).
+pub fn overlay(ui: &mut egui::Ui, rect: egui::Rect, w: impl egui::Widget) -> egui::Response {
+    let layout = egui::Layout::centered_and_justified(egui::Direction::LeftToRight);
+    ui.new_child(egui::UiBuilder::new().max_rect(rect).layout(layout)).add(w)
+}
+
+/// A button over an image (a tile's actions): dark, so it reads on any
+/// picture.
+pub fn overlay_button(b: egui::Button<'static>) -> egui::Button<'static> {
+    b.fill(Color32::from_rgba_unmultiplied(20, 20, 20, 220))
+}
+
+/// Two buttons along the bottom of a tile's `cover` (its picture), each
+/// (icon, label, hover): labelled when there's room, else icons with the
+/// label on hover. Returns which was clicked.
+pub fn cover_buttons(ui: &mut egui::Ui, cover: egui::Rect, buttons: &[(&str, &str, &str)]) -> Option<usize> {
+    let n = buttons.len().max(1) as f32;
+    let w = (cover.width() - 12.0 - 4.0 * (n - 1.0)) / n;
+    let labelled = w >= 70.0;
+    let mut clicked = None;
+    for (i, (icon, label, hover)) in buttons.iter().enumerate() {
+        let at = egui::pos2(cover.left() + 6.0 + i as f32 * (w + 4.0), cover.bottom() - 34.0);
+        let text = if labelled { ic(icon, label) } else { icon.to_string() };
+        let hover = if labelled { hover.to_string() } else { format!("{label}: {hover}") };
+        let r =
+            overlay(ui, egui::Rect::from_min_size(at, egui::vec2(w, 28.0)), overlay_button(egui::Button::new(text)));
+        if r.on_hover_text(hover).clicked() {
+            clicked = Some(i);
+        }
+    }
+    clicked
+}
+
 pub fn card(ui: &mut egui::Ui, selected: bool, w: f32, h: f32, add: impl FnOnce(&mut egui::Ui)) -> egui::Response {
     let stroke = if selected { Stroke::new(2.0, ACCENT) } else { ui.visuals().widgets.noninteractive.bg_stroke };
     let r = ui.allocate_ui_with_layout(Vec2::new(w + 14.0, h + 14.0), egui::Layout::top_down(egui::Align::Min), |ui| {

@@ -12,7 +12,7 @@ use increart_gui_core::{
 
 use crate::textures::Textures;
 use crate::tree;
-use crate::widgets::{ACCENT, NEUTRAL, card, dialog_footer, ic, ph, short, single_click, thumb};
+use crate::widgets::{ACCENT, NEUTRAL, card, cover_buttons, dialog_footer, ic, ph, short, single_click, thumb};
 
 /// Idea cards (Idea inbox and Input library): all one size (the Input
 /// library's zooms), the first image square across the full width, the
@@ -25,6 +25,18 @@ const CARD_TEXT_H: f32 = 92.0;
 /// when it has none); the pencil on the image (on hover, or selected): the
 /// editor.
 #[allow(clippy::too_many_arguments)]
+/// What an idea card's picture offers while hovered or selected, besides
+/// ✎ Edit.
+#[derive(Clone, Copy, PartialEq)]
+enum CardButtons {
+    /// The Idea inbox: Keep and Discard (2 and 3).
+    Triage,
+    /// The Input library: Promote, and Add as refs when it has images.
+    Library,
+    None,
+}
+
+#[allow(clippy::too_many_arguments)]
 fn idea_card(
     ui: &mut egui::Ui,
     st: &AppState,
@@ -33,6 +45,7 @@ fn idea_card(
     e: &IdeaEntry,
     w: f32,
     selected: bool,
+    buttons: CardButtons,
     out: &mut Vec<Msg>,
 ) -> egui::Response {
     let r = idea_card_body(ui, st, root, tex, e, w, selected);
@@ -47,6 +60,35 @@ fn idea_card(
         let tip = if st.tab == Tab::IdeaInbox { "Edit idea   Enter" } else { "Edit idea" };
         if b.on_hover_text(tip).clicked() {
             out.push(Msg::OpenIdea(e.idea.id.clone()));
+        }
+        // along the bottom of the picture, as on project tiles
+        let cover = egui::Rect::from_min_size(r.rect.min + egui::vec2(7.0, 7.0), egui::vec2(w, w));
+        let id = &e.idea.id;
+        match buttons {
+            CardButtons::Triage => {
+                let picked = cover_buttons(
+                    ui,
+                    cover,
+                    &[
+                        (ph::CHECK, "Keep", "into the input library (2 / N)"),
+                        (ph::TRASH, "Discard", "can be restored from Discarded (3 / B)"),
+                    ],
+                );
+                if let Some(i) = picked {
+                    out.push(Msg::ReviewIdea(id.clone(), if i == 0 { Verdict::Neutral } else { Verdict::Bad }));
+                }
+            }
+            CardButtons::Library => {
+                let promote = (ph::ROCKET_LAUNCH, "Promote", "into a project (P / Space)");
+                let refs = (ph::IMAGES, "Add as refs", "its images to the current project's Generate panel");
+                let list: &[_] = if e.idea.images.is_empty() { &[promote] } else { &[promote, refs] };
+                match cover_buttons(ui, cover, list) {
+                    Some(0) => out.push(Msg::Promote(vec![id.clone()])),
+                    Some(_) => out.push(Msg::AddRefs(e.idea.images.iter().cloned().map(ImageRef::input).collect())),
+                    None => {}
+                }
+            }
+            CardButtons::None => {}
         }
     }
     if r.double_clicked() {
@@ -507,17 +549,20 @@ fn inbox_grid(ui: &mut egui::Ui, st: &AppState, tex: &mut Textures, out: &mut Ve
     Panel::left("inbox_side").default_size(230.0).show(ui, |ui| inbox_side(ui, st, out));
     // always shown: triage reads the idea there
     if let Some(root) = st.library.as_deref() {
-        Panel::right("inbox_info").default_size(300.0).show(ui, |ui| {
-            ScrollArea::vertical().auto_shrink([false, true]).id_salt("inbox_info_scroll").show(ui, |ui| {
-                match ideas.get(st.inbox_cursor) {
-                    Some(e) => inbox_idea_panel(ui, st, root, tex, e, out),
-                    None => crate::widgets::nothing_selected(
-                        ui,
-                        "Idea",
-                        "No idea here: the inbox is empty, or the filters hide them all.",
-                    ),
-                }
-            });
+        Panel::right("inbox_info").default_size(300.0).show(ui, |ui| match ideas.get(st.inbox_cursor) {
+            Some(e) => {
+                panel_header(ui, out, None);
+                pinned_actions(ui, "inbox_info_actions", |ui| inbox_actions(ui, e, out));
+                ScrollArea::vertical()
+                    .auto_shrink([false, false])
+                    .id_salt("inbox_info_scroll")
+                    .show(ui, |ui| idea_details(ui, st, root, tex, e, out));
+            }
+            None => crate::widgets::nothing_selected(
+                ui,
+                "Idea",
+                "No idea here: the inbox is empty, or the filters hide them all.",
+            ),
         });
     }
     egui::CentralPanel::default().show(ui, |ui| {
@@ -555,7 +600,7 @@ fn inbox_grid(ui: &mut egui::Ui, st: &AppState, tex: &mut Textures, out: &mut Ve
         ScrollArea::vertical().auto_shrink([false, true]).show(ui, |ui| {
             ui.horizontal_wrapped(|ui| {
                 for (i, e) in ideas.iter().enumerate() {
-                    let r = idea_card(ui, st, root, tex, e, w, i == st.inbox_cursor, out);
+                    let r = idea_card(ui, st, root, tex, e, w, i == st.inbox_cursor, CardButtons::Triage, out);
                     if i == st.inbox_cursor {
                         crate::widgets::reveal_cursor(ui, "inbox", e.idea.id.clone(), &r);
                     }
@@ -723,7 +768,7 @@ fn discarded(ui: &mut egui::Ui, st: &AppState, tex: &mut Textures, out: &mut Vec
         ScrollArea::vertical().auto_shrink([false, true]).show(ui, |ui| {
             ui.horizontal_wrapped(|ui| {
                 for e in ideas {
-                    let r = idea_card(ui, st, root, tex, e, CARD_W, false, out);
+                    let r = idea_card(ui, st, root, tex, e, CARD_W, false, CardButtons::None, out);
                     r.context_menu(|ui| {
                         let id = &e.idea.id;
                         if ui.button(ic(ph::TRAY, "Restore to the Idea inbox")).clicked() {
@@ -887,16 +932,19 @@ pub fn input_library(ui: &mut egui::Ui, st: &AppState, tex: &mut Textures, out: 
     }
     if !st.info_hidden.contains(&InfoPanel::Library) {
         Panel::right("lib_info").default_size(300.0).show(ui, |ui| {
-            ScrollArea::vertical().auto_shrink([false, true]).id_salt("lib_info_scroll").show(ui, |ui| {
-                match st.lib_info.as_ref().and_then(|id| st.idea(id)) {
-                    Some(e) => idea_panel(ui, st, &root, tex, e, out),
-                    None => crate::widgets::nothing_selected(
-                        ui,
-                        "Idea",
-                        "No idea selected: click one to see it in full here.",
-                    ),
+            match st.lib_info.as_ref().and_then(|id| st.idea(id)) {
+                Some(e) => {
+                    panel_header(ui, out, Some(Msg::ShowInfo(InfoPanel::Library, false)));
+                    pinned_actions(ui, "lib_info_actions", |ui| library_actions(ui, e, out));
+                    ScrollArea::vertical()
+                        .auto_shrink([false, false])
+                        .id_salt("lib_info_scroll")
+                        .show(ui, |ui| idea_details(ui, st, &root, tex, e, out));
                 }
-            });
+                None => {
+                    crate::widgets::nothing_selected(ui, "Idea", "No idea selected: click one to see it in full here.")
+                }
+            }
         });
     }
     egui::CentralPanel::default().show(ui, |ui| {
@@ -917,7 +965,7 @@ pub fn input_library(ui: &mut egui::Ui, st: &AppState, tex: &mut Textures, out: 
             ui.horizontal_wrapped(|ui| {
                 for (i, e) in ideas.into_iter().enumerate() {
                     let id = e.idea.id.clone();
-                    let r = idea_card(ui, st, &root, tex, e, w, st.lib_selected.contains(&id), out);
+                    let r = idea_card(ui, st, &root, tex, e, w, st.lib_selected.contains(&id), CardButtons::Library, out);
                     if lib_current(st).as_ref() == Some(&id) {
                         crate::widgets::reveal_cursor(ui, "library", id.clone(), &r);
                     }
@@ -1029,13 +1077,20 @@ fn library_keys(ui: &egui::Ui, st: &AppState, out: &mut Vec<Msg>) {
     });
 }
 
-/// An Input library idea in the side panel: its images, text, what it's
-/// been used for, and what to do with it.
-fn idea_panel(ui: &mut egui::Ui, st: &AppState, root: &Path, tex: &mut Textures, e: &IdeaEntry, out: &mut Vec<Msg>) {
+/// A side panel's buttons, pinned to its bottom (the details scroll above).
+fn pinned_actions(ui: &mut egui::Ui, id: &str, add: impl FnOnce(&mut egui::Ui)) {
+    Panel::bottom(id).resizable(false).frame(egui::Frame::NONE.inner_margin(egui::Margin::symmetric(0, 6))).show(
+        ui,
+        |ui| {
+            ui.spacing_mut().item_spacing.y = 4.0;
+            add(ui);
+        },
+    );
+}
+
+/// An Input library idea's buttons, under its details in the side panel.
+fn library_actions(ui: &mut egui::Ui, e: &IdeaEntry, out: &mut Vec<Msg>) {
     let id = e.idea.id.clone();
-    panel_header(ui, out, Some(Msg::ShowInfo(InfoPanel::Library, false)));
-    idea_details(ui, st, root, tex, e, out);
-    ui.separator();
     ui.horizontal_wrapped(|ui| {
         if ui.button(ic(ph::PENCIL_SIMPLE, "Edit…")).clicked() {
             out.push(Msg::OpenIdea(id.clone()));
@@ -1060,20 +1115,10 @@ fn idea_panel(ui: &mut egui::Ui, st: &AppState, root: &Path, tex: &mut Textures,
     });
 }
 
-/// The Idea inbox Grid's current idea in the side panel: the same details,
-/// and the triage actions (the keys, as buttons).
-fn inbox_idea_panel(
-    ui: &mut egui::Ui,
-    st: &AppState,
-    root: &Path,
-    tex: &mut Textures,
-    e: &IdeaEntry,
-    out: &mut Vec<Msg>,
-) {
+/// The Idea inbox's current idea's buttons: the triage actions (the keys,
+/// as buttons), then the rest.
+fn inbox_actions(ui: &mut egui::Ui, e: &IdeaEntry, out: &mut Vec<Msg>) {
     let id = e.idea.id.clone();
-    panel_header(ui, out, None);
-    idea_details(ui, st, root, tex, e, out);
-    ui.separator();
     ui.horizontal_wrapped(|ui| {
         for (label, tip, v) in [
             (ic(ph::STAR, "Keep ★"), "into the input library, starred (1 / G)", Verdict::Good),

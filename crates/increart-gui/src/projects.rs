@@ -243,9 +243,12 @@ fn grid(ui: &mut egui::Ui, st: &AppState, tex: &mut Textures, out: &mut Vec<Msg>
                     let review = egui::Rect::from_min_size(egui::pos2(cover.left() + 6.0, y), egui::vec2(92.0, 28.0));
                     let generate =
                         egui::Rect::from_min_size(egui::pos2(cover.left() + 102.0, y), egui::vec2(92.0, 28.0));
-                    let fill =
-                        |b: egui::Button<'static>| b.fill(egui::Color32::from_rgba_unmultiplied(20, 20, 20, 220));
-                    let rv = overlay(ui, review, fill(egui::Button::new(ic(ph::EYE, &format!("Review {u}")))));
+                    let fill = crate::widgets::overlay_button;
+                    let rv = crate::widgets::overlay(
+                        ui,
+                        review,
+                        fill(egui::Button::new(ic(ph::EYE, &format!("Review {u}")))),
+                    );
                     if rv.on_hover_text("review this project's new images").clicked() {
                         out.push(Msg::ReviewScope(Some(p.project.id.clone())));
                         out.push(Msg::Tab(Tab::Review));
@@ -254,12 +257,14 @@ fn grid(ui: &mut egui::Ui, st: &AppState, tex: &mut Textures, out: &mut Vec<Msg>
                         // where the button is, for the screenshot tour's click check
                         ui.ctx().data_mut(|d| d.insert_temp(egui::Id::unique("tour_generate_button"), generate));
                     }
-                    if overlay(ui, generate, fill(egui::Button::new(ic(ph::MAGIC_WAND, "Generate")))).clicked() {
+                    if crate::widgets::overlay(ui, generate, fill(egui::Button::new(ic(ph::MAGIC_WAND, "Generate"))))
+                        .clicked()
+                    {
                         out.push(Msg::OpenInGenerate(p.project.id.clone()));
                     }
                     // top left: the top right has the "new images" dot
                     let outputs = egui::Rect::from_min_size(cover.min + egui::vec2(6.0, 6.0), egui::vec2(28.0, 28.0));
-                    let ov = overlay(ui, outputs, fill(egui::Button::new(ph::IMAGES)));
+                    let ov = crate::widgets::overlay(ui, outputs, fill(egui::Button::new(ph::IMAGES)));
                     if ov.on_hover_text(format!("show its outputs ({} kept)", g + n)).clicked() {
                         out.push(Msg::ShowOutputs(OutputSource::Project(p.project.id.clone())));
                     }
@@ -268,14 +273,6 @@ fn grid(ui: &mut egui::Ui, st: &AppState, tex: &mut Textures, out: &mut Vec<Msg>
             }
         });
     });
-}
-
-/// A widget drawn at `rect` on top of others, taking no space in `ui`'s
-/// layout (`ui.put` would: in the wrapped grid that pushes the next tiles
-/// along when a hovered tile shows its buttons, so they jump around).
-fn overlay(ui: &mut egui::Ui, rect: egui::Rect, w: impl egui::Widget) -> egui::Response {
-    let layout = egui::Layout::centered_and_justified(egui::Direction::LeftToRight);
-    ui.new_child(egui::UiBuilder::new().max_rect(rect).layout(layout)).add(w)
 }
 
 /// Right-click on a project tile: generate more of its latest run, open it,

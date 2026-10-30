@@ -2450,7 +2450,16 @@ the keys and mouse buttons go through that view's own history instead.
     of text and the tags, each cut to fit. On every idea card (here, the
     Input library and Discarded), double-click shows the first image full
     size (the editor when there's no image), and a pencil button on the
-    image (on hover, or when selected) opens the editor. Keys as in the
+    image (on hover, or when selected) opens the editor. Hovered or
+    selected, the image also shows two buttons along its bottom, as on
+    project tiles: here **Keep** and **Discard** (`2`/`3`); in the Input
+    library **Promote** and **Add as refs** (Promote alone for a text-only
+    idea); none in Discarded. They act on that card only; on a small card
+    (zoomed out) they're icons, the name on hover (`widgets::cover_buttons`).
+    The side panel showing the current idea keeps its buttons pinned to its
+    bottom (here **Keep ★** / **Keep** / **Discard**, then **Promote**,
+    **Edit…**, **Copy text**, **Open folder**) and its header at the top;
+    the details scroll between. Keys as in the
     table above, plus `Home`/`End` = the first / last idea, `Enter`/`T` = open the **Edit idea** window (title, tags,
     text, variants, images, and a finished PE rewrite's diff with Accept /
     Reject). Right-click a card, in groups: promote (`P`), edit (`Enter`),
@@ -2503,7 +2512,7 @@ the keys and mouse buttons go through that view's own history instead.
   right: the idea's images (double-click: full size), text, tags, created
   date and folder, what its images were used for, the projects it was
   promoted into (links), and Edit…, Promote, Add as refs, Copy text, Open
-  folder; × closes it. While the panel is closed it opens a moment after
+  folder pinned to its bottom (the details scroll above them); × closes it. While the panel is closed it opens a moment after
   the click, so a double-click (full size) doesn't open it; while it's
   open, a click shows the clicked idea at once. Ctrl/Shift+click only
   selects.
