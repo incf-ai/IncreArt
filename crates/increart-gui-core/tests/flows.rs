@@ -4599,10 +4599,12 @@ fn presets_window_shows_one_group_of_a_task() {
 
 #[test]
 fn chat_servers_go_with_their_preset() {
+    use increart_core::config::{full_binary, full_path};
     use increart_core::pe::{PeDevice, PeRun, PeServer, PeStart};
+    // full already, as saving makes them (on Windows with a drive letter)
     let kobold = |port| PeRun::KoboldCpp {
-        binary: "/bin/kcpp".into(),
-        model: "/m/a.gguf".into(),
+        binary: full_binary("/bin/kcpp"),
+        model: full_path("/m/a.gguf"),
         mmproj: String::new(),
         config: String::new(),
         host: "127.0.0.1".into(),
