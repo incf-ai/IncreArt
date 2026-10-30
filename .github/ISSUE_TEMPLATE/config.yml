@@ -1,5 +1,5 @@
 blank_issues_enabled: false
 contact_links:
   - name: Setup guides
-    url: https://github.com/incf-ai/IncreArt-QwenImage2.1/blob/main/docs/setup/README.md
+    url: https://github.com/incf-ai/IncreArt/blob/main/docs/setup/README.md
     about: Installing KoboldCpp or sd-server, models, and first run.
