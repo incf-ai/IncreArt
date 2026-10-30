@@ -346,6 +346,73 @@ fn player(ui: &mut egui::Ui, n: &mut Notifications) {
 }
 
 const OPEN_BELL: &str = "open_bell";
+const SNOOZE_DIALOG: &str = "snooze_dialog";
+
+/// Opens **Snooze for…** with `text` typed in (for the screenshot tour).
+pub fn open_snooze_dialog(ctx: &egui::Context, text: &str) {
+    ctx.data_mut(|d| {
+        d.insert_temp(egui::Id::unique(SNOOZE_DIALOG), true);
+        d.insert_temp(egui::Id::unique("snooze_text"), text.to_string());
+    });
+}
+
+/// **Snooze for…**: a time typed in (45, 45m, 1h30, 1:30), checked as it's
+/// typed; Snooze (or Enter) only when it's a time from 1 min to 24 h. The
+/// text is kept for the session.
+fn snooze_dialog(ctx: &egui::Context, out: &mut Vec<Msg>) {
+    let open = egui::Id::unique(SNOOZE_DIALOG);
+    if !ctx.data(|d| d.get_temp::<bool>(open)).unwrap_or(false) {
+        return;
+    }
+    let key = egui::Id::unique("snooze_text");
+    let mut text = ctx.data(|d| d.get_temp::<String>(key)).unwrap_or_else(|| "15m".into());
+    let parsed = increart_gui_core::state::parse_snooze(&text);
+    let mut close = false;
+    let m = egui::Modal::new(egui::Id::unique("snooze_modal")).show(ctx, |ui| {
+        ui.set_width(320.0);
+        ui.heading(ic(ph::BELL_Z, "Snooze for…"));
+        ui.add_space(4.0);
+        let field = ui.add(
+            egui::TextEdit::singleline(&mut text).hint_text("e.g. 45, 45m, 1h30 or 1:30").desired_width(f32::INFINITY),
+        );
+        if !field.has_focus() && !ui.memory(|m| m.focused().is_some()) {
+            field.request_focus();
+        }
+        match &parsed {
+            Ok(min) => {
+                let (h, m) = (min / 60, min % 60);
+                let span = match (h, m) {
+                    (0, m) => format!("{m} min"),
+                    (h, 0) => format!("{h} h"),
+                    (h, m) => format!("{h} h {m:02} min"),
+                };
+                ui.colored_label(GOOD, format!("No sound for {span}"));
+            }
+            Err(e) => {
+                ui.colored_label(BAD, e);
+            }
+        }
+        ui.weak("Minutes, or hours and minutes: 1 min to 24 h.");
+        ui.add_space(6.0);
+        let enter = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+        crate::widgets::dialog_buttons(ui, |ui| {
+            let go = ui.add_enabled(parsed.is_ok(), egui::Button::new(ic(ph::BELL_Z, "Snooze")));
+            if (go.clicked() || enter)
+                && let Ok(min) = parsed
+            {
+                out.push(Msg::Snooze(Some(min as f64 * 60.0)));
+                close = true;
+            }
+            if ui.button("Cancel   Esc").clicked() {
+                close = true;
+            }
+        });
+    });
+    ctx.data_mut(|d| d.insert_temp(key, text));
+    if close || m.should_close() {
+        ctx.data_mut(|d| d.remove::<bool>(open));
+    }
+}
 
 /// Opens the status bar's bell menu (its snooze) on the next frame.
 pub fn open_bell(ctx: &egui::Context) {
@@ -374,6 +441,7 @@ pub fn alert_links(ui: &mut egui::Ui, out: &mut Vec<Msg>) {
 /// what holds, snooze and the settings.
 /// `force_open`: for the screenshot tour.
 pub fn bell(ui: &mut egui::Ui, st: &AppState, out: &mut Vec<Msg>, force_open: bool) {
+    snooze_dialog(ui.ctx(), out);
     let n = &st.config.notifications;
     if !n.gpu_idle.on && !n.queue_cleared.on && !n.review_backlog.on {
         if ui.small_button(ph::BELL_SLASH).on_hover_text("No notifications: click to set them up").clicked() {
@@ -451,28 +519,10 @@ pub fn bell(ui: &mut egui::Ui, st: &AppState, out: &mut Vec<Msg>, force_open: bo
             if snooze(ui, "Snooze 1 h") {
                 picked = Some(Some(3600.0));
             }
-            // a duration of your own, in minutes (kept for the session); the
-            // submenu stays open while the field is clicked and typed in
-            let key = egui::Id::unique("snooze_custom_min");
-            let mut min = ui.ctx().data(|d| d.get_temp::<u32>(key)).unwrap_or(15);
-            let config =
-                egui::containers::menu::MenuConfig::new().close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside);
-            let mut custom = None;
-            egui::containers::menu::SubMenuButton::new(ic(ph::BELL_Z, "Snooze for…")).config(config).ui(ui, |ui| {
-                ui.horizontal(|ui| {
-                    let field = ui.add(egui::DragValue::new(&mut min).range(1..=1440).suffix(" min"));
-                    let enter = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-                    let go = ui.button(ic(ph::BELL_Z, "Snooze")).clicked();
-                    if go || enter {
-                        custom = Some(min);
-                        ui.close_kind(egui::UiKind::Menu);
-                    }
-                });
-                ui.weak("1 min to 24 h; drag or type, Enter snoozes");
-            });
-            ui.ctx().data_mut(|d| d.insert_temp(key, min));
-            if let Some(m) = custom {
-                picked = Some(Some(m as f64 * 60.0));
+            // a time of your own, typed in a dialog (see `snooze_dialog`)
+            if snooze(ui, "Snooze for…") {
+                ui.ctx().data_mut(|d| d.insert_temp(egui::Id::unique(SNOOZE_DIALOG), true));
+                ui.close();
             }
             if snooze(ui, "Until restart") {
                 picked = Some(None);

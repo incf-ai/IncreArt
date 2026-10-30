@@ -120,6 +120,7 @@ const EXTRA_SCENES: &[&str] = &[
     "74-notification-settings",
     "74b-timeout-settings",
     "74c-bell-ringing",
+    "74d-snooze-dialog",
     "75-promote-in-folder",
     "76-top-bar-wide",
     "77-top-bar-medium",
@@ -751,6 +752,7 @@ impl Tour {
                 n.show_message = true;
                 vec![Msg::ContinueWithoutServers, Msg::Settings(false), Msg::SetNotifications(n)]
             }
+            "74d-snooze-dialog" => vec![],
             "75-promote-in-folder" => {
                 let idea = st.index.ideas.iter().find(|e| matches!(e.loc, increart_core::IdeaLoc::Library(_)));
                 let mut v = vec![Msg::ContinueWithoutServers, Msg::Settings(false), Msg::Tab(Tab::InputLibrary)];
@@ -1590,6 +1592,11 @@ impl Tour {
 
     pub fn messages_popover(&self) -> bool {
         self.scenes.get(self.scene) == Some(&"87-messages-popover")
+    }
+
+    /// The bell's Snooze for… dialog, with a time it can't read.
+    pub fn snooze_dialog(&self) -> bool {
+        self.scenes.get(self.scene) == Some(&"74d-snooze-dialog")
     }
 
     pub fn bell_popover(&self) -> bool {

@@ -619,7 +619,7 @@ fn inbox_grid(ui: &mut egui::Ui, st: &AppState, tex: &mut Textures, out: &mut Ve
         picks_bar(ui, st, picks, true, out);
         crate::review::grid_ctrl_scroll(ui, st, ZoomGrid::Inbox, out);
         let w = st.grid_cell_size(ZoomGrid::Inbox) as f32;
-        let bg = pick_background(ui, !picks.is_empty(), Msg::InboxPick(vec![]), out);
+        let bg = pick_background(ui, st, picks, Msg::InboxPick(vec![]), out);
         let mut rects = vec![];
         ScrollArea::vertical().auto_shrink([false, true]).show(ui, |ui| {
             ui.horizontal_wrapped(|ui| {
@@ -709,11 +709,25 @@ fn inbox_grid(ui: &mut egui::Ui, st: &AppState, tex: &mut Textures, out: &mut Ve
 
 /// The empty space of an idea grid: a click there drops the picks
 /// (`clear`), a drag draws the rubber band. Before the cards.
-fn pick_background(ui: &mut egui::Ui, any: bool, clear: Msg, out: &mut Vec<Msg>) -> egui::Response {
+fn pick_background(
+    ui: &mut egui::Ui,
+    st: &AppState,
+    picks: &[increart_core::Id],
+    clear: Msg,
+    out: &mut Vec<Msg>,
+) -> egui::Response {
     let bg = ui.interact(ui.available_rect_before_wrap(), ui.scope_id().with("idea_pick_bg"), Sense::click_and_drag());
-    if bg.clicked() && any {
+    if bg.clicked() && !picks.is_empty() {
         out.push(clear);
     }
+    bg.context_menu(|ui| {
+        let n = picks.len();
+        if n > 0 && ui.button(ic(ph::SQUARES_FOUR, &format!("Tile the {n} picked…   T"))).clicked() {
+            out.push(Msg::TileIdeas(picks.to_vec()));
+            ui.close();
+        }
+        crate::tiles::clipboard_item(ui, st, out);
+    });
     bg
 }
 
@@ -1173,7 +1187,7 @@ pub fn input_library(ui: &mut egui::Ui, st: &AppState, tex: &mut Textures, out: 
         }
         crate::review::grid_ctrl_scroll(ui, st, ZoomGrid::Library, out);
         let w = st.grid_cell_size(ZoomGrid::Library) as f32;
-        let bg = pick_background(ui, !sel.is_empty(), Msg::LibClearSelection, out);
+        let bg = pick_background(ui, st, &sel, Msg::LibClearSelection, out);
         let mut rects = vec![];
         ScrollArea::vertical().auto_shrink([false, true]).show(ui, |ui| {
             ui.horizontal_wrapped(|ui| {

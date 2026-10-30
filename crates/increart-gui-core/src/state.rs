@@ -2417,6 +2417,57 @@ pub struct Alerts {
     pub pe_busy_at: Option<f64>,
 }
 
+/// The longest snooze for a time typed in (longer: Until restart).
+pub const SNOOZE_MAX_MIN: u32 = 24 * 60;
+
+/// Minutes, with or without a unit ("45", "45m", "45 min").
+fn minutes_of(t: &str) -> Option<f64> {
+    let m = t.trim_end_matches(|c: char| c.is_alphabetic()).trim();
+    let unit = t[m.len()..].trim();
+    let ok = ["", "m", "min", "mins", "minute", "minutes"].contains(&unit);
+    m.parse::<f64>().ok().filter(|v| ok && v.is_finite() && *v >= 0.0)
+}
+
+/// A snooze typed in, in minutes: `45` (minutes), `45m`, `45 min`, `2h`,
+/// `1.5h`, `1h30`, `1h 30m`, `1:30` (hours:minutes); 1 min to 24 h.
+pub fn parse_snooze(text: &str) -> Result<u32, String> {
+    let t = text.trim().to_lowercase();
+    if t.is_empty() {
+        return Err("Type a time, e.g. 45, 45m, 1h30 or 1:30".into());
+    }
+    let bad = || format!("\"{}\" isn't a time: try 45, 45m, 1h30 or 1:30", text.trim());
+    let num = |s: &str| -> Result<f64, String> {
+        let s = s.trim();
+        s.parse::<f64>().ok().filter(|v| v.is_finite() && *v >= 0.0).ok_or_else(bad)
+    };
+    let minutes = if let Some((h, m)) = t.split_once(':') {
+        let m = num(m)?;
+        if m >= 60.0 {
+            return Err("Minutes after the colon go up to 59".into());
+        }
+        num(h)? * 60.0 + m
+    } else if let Some(at) = t.find('h') {
+        // hours, then minutes if any ("1h30", "1h 30m", "2 hours")
+        let (h, rest) = t.split_at(at);
+        let after = rest.trim_start_matches(|c: char| c.is_alphabetic());
+        if !["h", "hr", "hrs", "hour", "hours"].contains(&&rest[..rest.len() - after.len()]) {
+            return Err(bad());
+        }
+        let after = after.trim();
+        num(h)? * 60.0 + if after.is_empty() { 0.0 } else { minutes_of(after).ok_or_else(bad)? }
+    } else {
+        minutes_of(&t).ok_or_else(bad)?
+    };
+    let minutes = minutes.round();
+    if minutes < 1.0 {
+        return Err("At least 1 minute".into());
+    }
+    if minutes > SNOOZE_MAX_MIN as f64 {
+        return Err("At most 24 hours (longer: Until restart)".into());
+    }
+    Ok(minutes as u32)
+}
+
 impl Alerts {
     pub fn snoozed(&self, now: f64) -> bool {
         self.muted || self.snooze_until.is_some_and(|t| now < t)
@@ -4703,5 +4754,32 @@ mod tests {
         assert_eq!(scaled(1024, 1024, ScaleBy::Megapixels, 50.0, g), (2048, 2048));
         let d = ScaleDialog::new(ScaleTarget::Generate, 1344, 896);
         assert_eq!((d.megapixels, d.side, d.result()), (1.2, 1344, (1344, 896)));
+    }
+}
+
+#[cfg(test)]
+mod snooze_tests {
+    use super::parse_snooze;
+
+    #[test]
+    fn snooze_times_typed_in() {
+        for (text, min) in [
+            ("45", 45),
+            (" 45m ", 45),
+            ("45 min", 45),
+            ("2h", 120),
+            ("1.5h", 90),
+            ("1h30", 90),
+            ("1h 30m", 90),
+            ("2 hours", 120),
+            ("1:30", 90),
+            ("0:05", 5),
+            ("24h", 1440),
+        ] {
+            assert_eq!(parse_snooze(text), Ok(min), "{text}");
+        }
+        for text in ["", "abc", "0", "0.2", "25h", "1:75", "5 sec", "-3", "1h x"] {
+            assert!(parse_snooze(text).is_err(), "{text}");
+        }
     }
 }

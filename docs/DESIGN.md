@@ -2212,6 +2212,12 @@ out as one image.
   of the tiled idea, and fit into the cells, which are sized by the
   outputs (by the inputs or pasted images only when there are no outputs;
   the preview reads their sizes from the files).
+- **Tile the clipboard…** starts a tiling from what the clipboard holds
+  (or adds it to the open one). It's in the right-click menu on the empty
+  background of the Folder views and of every grid: Review (Grid, the
+  contact sheet, Single's filmstrip), the Output library Grid, the Idea
+  inbox Grid and the Input library Grid. With picks, the same menu starts
+  with **Tile the N picked…**.
 - **Title / subtitle**: lines centred above the grid (a gap below them), the
   subtitle at half the title's size, in the caption colour. Their text
   belongs to the layout, not the settings.
@@ -2997,8 +3003,10 @@ The **bell** at the right of the status bar shows the state: plain, ringing
 (filled solid amber while an alert holds and isn't snoozed, so it's seen at a
 glance; plain again once nothing holds), snoozed, or a warning (filled red)
 when a sound couldn't play. Its menu lists what holds and snoozes for 5 min,
-30 min, 1 h, **Snooze for…** (a submenu: a number of minutes of your own,
-1–1440, remembered for the session; Enter or **Snooze**), or until restart,
+30 min, 1 h, **Snooze for…** (a dialog: a time typed in as `45`, `45m`,
+`1h30`, `1h 30m`, `1.5h` or `1:30`, checked as it's typed; it says how long
+it reads, or why it can't; **Snooze** and Enter work only for 1 min to 24 h;
+the text is remembered for the session), or until restart,
 and links to the Notifications settings. An alert's message in the status
 bar (when so set) has **Snooze…** (opens the bell's menu) and ⚙ (the
 Notifications settings) before its text, and in the messages list.

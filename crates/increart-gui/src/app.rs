@@ -127,6 +127,11 @@ impl App {
 
     fn dispatch(&mut self, msg: Msg) {
         for fx in update(&mut self.st, msg) {
+            // the screenshot tour is silent: its Xvfb hides the windows, not
+            // the speakers (its alert scenes would sound for real)
+            if self.tour.is_some() && matches!(fx, increart_gui_core::Effect::PlaySound { .. }) {
+                continue;
+            }
             self.rt.run(fx);
         }
     }
@@ -207,6 +212,9 @@ impl App {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 jobs_indicator(ui, st, out, force_open);
                 let bell_open = self.tour.as_ref().is_some_and(|t| t.bell_popover());
+                if self.tour.as_ref().is_some_and(|t| t.snooze_dialog()) {
+                    crate::settings::open_snooze_dialog(ui.ctx(), "1h 3x");
+                }
                 crate::settings::bell(ui, st, out, bell_open);
                 ui.add_space(4.0);
                 ui.separator();

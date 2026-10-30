@@ -21,7 +21,31 @@ pub fn background(ui: &mut egui::Ui, st: &AppState, out: &mut Vec<Msg>) -> egui:
     if bg.clicked() && !st.picked.is_empty() {
         out.push(Msg::PickSet(vec![]));
     }
+    bg.context_menu(|ui| {
+        let n = st.picked.len();
+        if n > 0 && ui.button(ic(ph::SQUARES_FOUR, &format!("Tile the {n} picked…   T"))).clicked() {
+            out.push(Msg::OpenTile);
+            ui.close();
+        }
+        clipboard_item(ui, st, out);
+    });
     bg
+}
+
+/// **Tile the clipboard…** (a view's background menu): a tiling of what
+/// the clipboard holds, or added to the open one.
+pub fn clipboard_item(ui: &mut egui::Ui, st: &AppState, out: &mut Vec<Msg>) {
+    if ui
+        .button(ic(ph::SQUARES_FOUR, "Tile the clipboard…"))
+        .on_hover_text("its image, or the images it names (copied here or in a file manager)")
+        .clicked()
+    {
+        let tiles = clipboard_tiles(st, out);
+        if !tiles.is_empty() {
+            out.push(Msg::TileStart(tiles));
+        }
+        ui.close();
+    }
 }
 
 /// An image's click: with Ctrl or Shift it picks (true: the view's own
