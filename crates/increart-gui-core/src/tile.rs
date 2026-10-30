@@ -75,6 +75,14 @@ impl TileLayout {
         TileLayout::flow(images, cols)
     }
 
+    /// [`square`](Self::square), of any contents (pasted ones too).
+    pub fn square_of(contents: Vec<TileContent>) -> TileLayout {
+        let cols = ((contents.len() as f64).sqrt().ceil() as u32).clamp(1, MAX_COLS);
+        let mut l = TileLayout { cols, ..TileLayout::default() };
+        l.add(contents, None);
+        l
+    }
+
     /// The images at these (column, row) cells (the contact sheet's),
     /// shifted so the top-left one is at 0, 0.
     pub fn at(cells: Vec<(ImageRef, u32, u32)>) -> TileLayout {

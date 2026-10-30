@@ -4237,6 +4237,42 @@ impl AppState {
         })
     }
 
+    /// The library images a path names (absolute, or relative to the
+    /// root): a store file, an image link ([`image_at`](Self::image_at)),
+    /// else every image under it as a folder (a project's or a collection's
+    /// links, ideas' images), once each. None for anything else.
+    pub fn images_at(&self, path: &Path) -> Vec<ImageRef> {
+        let rel = match (path.is_absolute(), &self.library) {
+            (false, _) => path,
+            (true, Some(root)) => match path.strip_prefix(root) {
+                Ok(rel) => rel,
+                Err(_) => return vec![],
+            },
+            (true, None) => return vec![],
+        };
+        // the root itself: not the whole library
+        if rel.as_os_str().is_empty() {
+            return vec![];
+        }
+        let store = rel.parent().and_then(|d| d.to_str()).and_then(increart_core::model::Store::from_dir);
+        let id = rel.file_stem().and_then(|s| s.to_str()?.parse::<Id>().ok());
+        if let (Some(store), Some(id)) = (store, id) {
+            return vec![ImageRef { id, store }];
+        }
+        if let Some(image) = self.image_at(rel) {
+            return vec![image];
+        }
+        let outputs = self.index.projects.iter().flat_map(|p| &p.outputs).map(|o| (&o.path, &o.image));
+        let collected = self.index.collection_links.iter().map(|l| (&l.path, &l.image));
+        let mut images: Vec<ImageRef> =
+            outputs.chain(collected).filter(|(p, _)| p.starts_with(rel)).map(|(_, i)| i.clone()).collect();
+        let ideas = self.index.ideas.iter().filter(|e| e.dir.starts_with(rel));
+        images.extend(ideas.flat_map(|e| e.idea.images.iter().cloned().map(ImageRef::input)));
+        let mut seen = BTreeSet::new();
+        images.retain(|i| seen.insert(i.clone()));
+        images
+    }
+
     /// Days with kept images (`YYYY.MM.DD`), newest first.
     pub fn kept_days(&self) -> Vec<(String, usize)> {
         let mut days: std::collections::BTreeMap<String, usize> = Default::default();

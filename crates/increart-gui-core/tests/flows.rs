@@ -347,6 +347,58 @@ fn idea_picks_tile_and_triage_together() {
 }
 
 #[test]
+fn clipboard_paths_and_images_start_a_tiling() {
+    use increart_gui_core::tile::{TileContent, TileImage};
+    let mut h = Harness::new();
+    let dir = h._tmp.path().join("drop");
+    std::fs::create_dir_all(&dir).unwrap();
+    image::RgbImage::from_pixel(8, 8, image::Rgb([200, 10, 10])).save(dir.join("red.png")).unwrap();
+    h.send(Msg::DropFiles(vec![dir.join("red.png")]));
+    h.settle();
+    let idea = h.state.unreviewed_ideas()[0].clone();
+    let red = increart_core::ImageRef::input(idea.idea.images[0].clone());
+
+    // what pasted paths name: an idea's folder (relative, as the folder view
+    // copies it, or absolute), a store file; files elsewhere aren't the library's
+    assert_eq!(h.state.images_at(&idea.dir), std::slice::from_ref(&red));
+    assert_eq!(h.state.images_at(&h.root.join(&idea.dir)), std::slice::from_ref(&red));
+    assert_eq!(h.state.images_at(&red.path(&h.root)), std::slice::from_ref(&red));
+    assert!(h.state.images_at(&dir.join("red.png")).is_empty());
+    assert!(h.state.images_at(Path::new("notes/todo")).is_empty());
+    assert!(h.state.images_at(&h.root).is_empty(), "not the whole library");
+    // a folder: every image under it, once; a project: its outputs
+    assert!(h.state.images_at(idea.dir.parent().unwrap()).contains(&red));
+    h.send(Msg::NewProject(PathBuf::new()));
+    h.send(Msg::CommitRename);
+    h.settle();
+    let project = h.state.project.clone().unwrap();
+    Library_::steal(&h.root).write_two(&project);
+    h.rt.run(Effect::Rescan);
+    h.settle();
+    let p = h.state.index.project(&project).unwrap();
+    let outputs: Vec<_> = p.outputs.iter().map(|o| o.image.clone()).collect();
+    assert_eq!(outputs.len(), 2);
+    assert_eq!(h.state.images_at(&h.root.join(&p.dir)), outputs);
+
+    // nothing: no tiling
+    h.send(Msg::TileStart(vec![]));
+    assert!(h.state.tile.is_none());
+    assert!(h.state.messages.iter().any(|m| m.text == "Nothing to tile"));
+    // a library image and a pasted one: a new tiling, square
+    let pasted = || TileContent::Pasted(TileImage(std::sync::Arc::new(image::RgbaImage::new(8, 8))));
+    h.send(Msg::TileStart(vec![TileContent::Image(red.clone()), pasted()]));
+    let t = h.state.tile.as_ref().unwrap();
+    assert_eq!(t.layout.cols, 2);
+    assert_eq!(t.layout.tiles.iter().map(|x| (x.col, x.row)).collect::<Vec<_>>(), [(0, 0), (1, 0)]);
+    assert_eq!(t.layout.tiles[0].image(), Some(&red));
+    // with one open: after its last tile
+    h.send(Msg::TileStart(vec![pasted()]));
+    let t = h.state.tile.as_ref().unwrap();
+    assert_eq!((t.layout.tiles.len(), t.layout.tiles[2].col, t.layout.tiles[2].row), (3, 0, 1));
+    assert_eq!(t.selected, Some(2));
+}
+
+#[test]
 fn trees_create_rename_move_delete() {
     let mut h = Harness::new();
     h.send(Msg::NewFolder(increart_core::Tree::Projects, PathBuf::new()));
