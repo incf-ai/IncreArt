@@ -141,6 +141,8 @@ pub enum Msg {
     ServerSettings(bool),
     /// Shows or hides the server status window.
     ServerStatus(bool),
+    /// Settings: loads wait for free RAM, or don't.
+    SetSkipRamCheck(bool),
     /// The Settings window.
     Settings(bool),
     SetNotifications(increart_core::notify::Notifications),
@@ -889,9 +891,12 @@ pub enum Effect {
     StartEngine {
         shared: SdServerConfig,
         order: Order,
+        skip_ram_check: bool,
     },
     /// Spread the servers over the queued runs, or finish them one by one.
     SetJobOrder(Order),
+    /// Loads stop (or start again) waiting for free RAM.
+    SetSkipRamCheck(bool),
     /// Stop the engine and the servers the app started.
     StopServers,
     /// Stop the engine only, keeping the servers (switching libraries).
@@ -1717,6 +1722,7 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
                     fx.push(Effect::StartEngine {
                         shared: state.config.sdserver.clone(),
                         order: state.config.job_order,
+                        skip_ram_check: state.config.skip_ram_check,
                     });
                 }
                 return fx;
@@ -1772,6 +1778,7 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
                 return vec![Effect::StartEngine {
                     shared: state.config.sdserver.clone(),
                     order: state.config.job_order,
+                    skip_ram_check: state.config.skip_ram_check,
                 }];
             }
             vec![]
@@ -2300,6 +2307,7 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
                 return vec![Effect::StartEngine {
                     shared: state.config.sdserver.clone(),
                     order: state.config.job_order,
+                    skip_ram_check: state.config.skip_ram_check,
                 }];
             }
             vec![]
@@ -2342,7 +2350,11 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
             state.phase = Phase::Main;
             state.engine_running = true;
             state.servers.iter_mut().for_each(|s| (s.idle_since, s.worked) = (None, false));
-            vec![Effect::StartEngine { shared: state.config.sdserver.clone(), order: state.config.job_order }]
+            vec![Effect::StartEngine {
+                shared: state.config.sdserver.clone(),
+                order: state.config.job_order,
+                skip_ram_check: state.config.skip_ram_check,
+            }]
         }
         Msg::ContinueWithoutServers => {
             let chat = match &mut state.phase {
@@ -2395,6 +2407,15 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
         Msg::ServerStatus(open) => {
             state.server_status = open && state.phase == Phase::Main;
             vec![]
+        }
+        Msg::SetSkipRamCheck(skip) => {
+            if state.config.skip_ram_check == skip {
+                return vec![];
+            }
+            state.config.skip_ram_check = skip;
+            let mut fx = save_config(state);
+            fx.push(Effect::SetSkipRamCheck(skip));
+            fx
         }
         Msg::Settings(open) => {
             state.settings_open = open && state.phase == Phase::Main;
@@ -7436,7 +7457,11 @@ fn start_with_up(state: &mut AppState, progress: &[ServerProgress]) -> Vec<Effec
     }
     state.engine_running = true;
     state.servers.iter_mut().for_each(|s| (s.idle_since, s.worked) = (None, false));
-    vec![Effect::StartEngine { shared: state.config.sdserver.clone(), order: state.config.job_order }]
+    vec![Effect::StartEngine {
+        shared: state.config.sdserver.clone(),
+        order: state.config.job_order,
+        skip_ram_check: state.config.skip_ram_check,
+    }]
 }
 
 /// After the Generate form's image list changed: saved soon, and if the

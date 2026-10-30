@@ -59,6 +59,10 @@ pub struct Config {
     /// sweep / one at a time).
     #[serde(skip_serializing_if = "is_default")]
     pub job_order: crate::scheduler::Order,
+    /// Loads on this machine don't wait for free RAM (a KoboldCpp that
+    /// offloads its weights otherwise waits until they fit, 8 GiB to spare).
+    #[serde(skip_serializing_if = "is_default")]
+    pub skip_ram_check: bool,
     /// Sounds when a GPU is idle or the review queue is long.
     #[serde(skip_serializing_if = "is_default")]
     pub notifications: crate::notify::Notifications,

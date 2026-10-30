@@ -1758,6 +1758,7 @@ fn start_engine_with_pending_runs_does_not_hang() {
     h.rt.run(Effect::StartEngine {
         shared: increart_core::config::SdServerConfig::default(),
         order: Default::default(),
+        skip_ram_check: false,
     });
     let msgs = h.rt.wait(Duration::from_secs(10));
     assert!(msgs.contains(&Msg::RunsQueued(vec![run])), "{msgs:?}");
@@ -6169,4 +6170,14 @@ fn timeouts_are_set_at_least_a_second_and_saved() {
     assert_eq!(back.timeouts, s.config.timeouts);
     let text = increart_core::rsnfmt::to_string(&increart_core::config::Config::default());
     assert!(!text.contains("timeouts"));
+}
+
+#[test]
+fn skipping_the_ram_check_is_saved_and_reaches_the_engine() {
+    let mut s = dialog_state(vec![], None);
+    assert!(!s.config.skip_ram_check);
+    let fx = update(&mut s, Msg::SetSkipRamCheck(true));
+    assert!(s.config.skip_ram_check);
+    assert!(fx.iter().any(|f| matches!(f, Effect::SetSkipRamCheck(true))));
+    assert!(update(&mut s, Msg::SetSkipRamCheck(true)).is_empty());
 }

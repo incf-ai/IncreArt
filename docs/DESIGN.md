@@ -1438,13 +1438,18 @@ its details window, and for every run at once in the Jobs header:
   `127.0.0.1` load models one after another (a server waiting shows
   "waiting for another server's load"). A KoboldCpp that offloads its
   weights (`--sdoffloadcpu`) pins about its files' size in RAM, less the
-  model it drops; its load waits until that much RAM plus 8 GiB is free
-  ("waiting for RAM: needs 13 GiB, 9 GiB free"), and fails at once if the
-  machine hasn't that much at all (RAM from `/proc/meminfo` on Linux,
+  model it drops; its load waits up to 2 s for that much RAM plus 8 GiB to
+  be free ("waiting for RAM: 20.6 of 21.0 GiB free (13.0 GiB to load + 8
+  to spare)"), then loads anyway and says so in the messages ("loading
+  without enough free RAM after 2 s: …"; RAM held outside the app, e.g.
+  by increbot, may never come free), without holding up the other
+  servers' loads meanwhile, and fails at once if the machine hasn't that
+  much at all (RAM from `/proc/meminfo` on Linux,
   `GlobalMemoryStatusEx` on Windows, `hw.memsize` and `vm_stat`'s free,
   inactive and speculative pages on macOS). Two loads at once, with pinned weights,
-  had starved the desktop (no swap; increbot shares the RAM). Remote
-  servers load freely.
+  had starved the desktop (no swap; increbot shares the RAM). Server
+  settings' **Wait for free RAM before loading a model** unticked skips
+  the wait and the message. Remote servers load freely.
 - **Warm-up**: after launch or load, each server runs one small throwaway job
   (e.g. 512², 1 step) so lazy weight loading doesn't land on the first real
   seed.

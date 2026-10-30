@@ -1039,6 +1039,16 @@ fn settings(ui: &mut egui::Ui, st: &AppState, d: &ServerDialog, out: &mut Vec<Ms
     if c != st.config.sdserver {
         out.push(Msg::SetSdServer(c));
     }
+    let mut check = !st.config.skip_ram_check;
+    if ui
+        .checkbox(&mut check, "Wait for free RAM before loading a model")
+        .on_hover_text(
+            "A KoboldCpp that offloads its weights (--sdoffloadcpu) waits up to 2 s for them to fit in free RAM with 8 GiB to spare",
+        )
+        .changed()
+    {
+        out.push(Msg::SetSkipRamCheck(!check));
+    }
     ui.add_space(12.0);
     ui.label(RichText::new(ic(ph::TIMER, "Timeouts")).strong());
     crate::settings::timeouts(ui, st, out);

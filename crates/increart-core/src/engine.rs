@@ -5,8 +5,9 @@
 
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, TryLockError};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
@@ -40,6 +41,9 @@ pub struct EngineOptions {
     pub backoff_base: Duration,
     pub warm_up: bool,
     pub order: Order,
+    /// Loads on this machine don't wait for free RAM (see
+    /// [`Engine::set_skip_ram_check`]).
+    pub skip_ram_check: bool,
 }
 
 impl Default for EngineOptions {
@@ -52,6 +56,7 @@ impl Default for EngineOptions {
             backoff_base: Duration::from_secs(2),
             warm_up: true,
             order: Order::Spread,
+            skip_ram_check: false,
         }
     }
 }
@@ -142,11 +147,16 @@ enum Report {
     /// A load waits (for another server's load, or for free RAM): shown as
     /// its state until `None`.
     Waiting(Option<String>),
+    /// A load went ahead after [`RAM_WAIT`] without the RAM it wanted free
+    /// (the figures).
+    ShortOfRam(String),
 }
 
 pub struct Engine {
     tx: Sender<Msg>,
     events: Receiver<Event>,
+    /// No load waits for RAM.
+    skip_ram_check: Arc<AtomicBool>,
     thread: Option<JoinHandle<()>>,
 }
 
@@ -161,6 +171,7 @@ impl Engine {
     ) -> Engine {
         let (tx, rx) = mpsc::channel();
         let (etx, events) = mpsc::channel();
+        let skip_ram_check = Arc::new(AtomicBool::new(opts.skip_ram_check));
         let workers = servers
             .iter()
             .enumerate()
@@ -169,9 +180,10 @@ impl Engine {
                 let client = ep.client.clone();
                 let report = tx.clone();
                 let poll = opts.poll_interval;
+                let skip = skip_ram_check.clone();
                 std::thread::Builder::new()
                     .name(format!("sd-server {}", ep.name))
-                    .spawn(move || worker(i, client, crx, report, poll))
+                    .spawn(move || worker(i, client, crx, report, poll, skip))
                     .expect("spawn worker");
                 ctx
             })
@@ -193,7 +205,7 @@ impl Engine {
             notify,
         };
         let thread = std::thread::Builder::new().name("engine".into()).spawn(move || co.run(rx)).expect("spawn engine");
-        Engine { tx, events, thread: Some(thread) }
+        Engine { tx, events, skip_ram_check, thread: Some(thread) }
     }
 
     /// Queues the pending seeds of a run (again after adding seeds: only
@@ -212,6 +224,12 @@ impl Engine {
     /// Spread the servers over the queued runs, or finish them one by one.
     pub fn set_order(&self, order: Order) {
         let _ = self.tx.send(Msg::Order(order));
+    }
+
+    /// Loads on this machine stop (or start again) waiting for free RAM;
+    /// one waiting now goes ahead.
+    pub fn set_skip_ram_check(&self, skip: bool) {
+        self.skip_ram_check.store(skip, Ordering::Relaxed);
     }
 
     pub fn events(&self) -> &Receiver<Event> {
@@ -393,6 +411,11 @@ impl Coordinator {
                     }
                 }
                 Report::Waiting(w) => self.waiting[s] = w,
+                Report::ShortOfRam(figures) => self.emit(Event::Problem(format!(
+                    "{}: loading without enough free RAM after {} s: {figures}",
+                    self.servers[s].name,
+                    RAM_WAIT.as_secs()
+                ))),
                 Report::Loaded(r) => {
                     self.waiting[s] = None;
                     let target = match self.sched.server_state(s) {
@@ -599,25 +622,44 @@ static LOCAL_LOADS: Mutex<()> = Mutex::new(());
 /// The RAM a load leaves free for everything else (GiB).
 const RAM_HEADROOM_GIB: f64 = 8.0;
 
+/// How long a load waits for free RAM before it goes ahead anyway.
+const RAM_WAIT: Duration = Duration::from_secs(2);
+
 /// Loads `model`. On this machine: after any other server's load, and once
-/// the RAM it pins is free with [`RAM_HEADROOM_GIB`] to spare. `None`: the
-/// engine has gone.
-fn load(client: &Client, model: &ModelKey, report: &impl Fn(Report) -> bool) -> Option<Result<ModelStatus, ApiError>> {
+/// the RAM it pins is free with [`RAM_HEADROOM_GIB`] to spare, or
+/// [`RAM_WAIT`] has passed (said in a [`Report::ShortOfRam`]); not at all
+/// with `skip_ram_check`. Waiting for RAM doesn't hold up the other
+/// servers' loads. `None`: the engine has gone.
+fn load(
+    client: &Client,
+    model: &ModelKey,
+    skip_ram_check: &AtomicBool,
+    report: &impl Fn(Report) -> bool,
+) -> Option<Result<ModelStatus, ApiError>> {
     if !client.is_local() {
         return Some(client.load_model(model));
     }
-    let _one = match LOCAL_LOADS.try_lock() {
-        Ok(g) => g,
-        Err(_) => {
-            if !report(Report::Waiting(Some("waiting for another server's load".into()))) {
-                return None;
-            }
-            LOCAL_LOADS.lock().unwrap_or_else(|e| e.into_inner())
-        }
-    };
     const GIB: f64 = (1u64 << 30) as f64;
-    let need = client.load_ram_need(model) as f64 / GIB;
-    if need > 0.0 {
+    let mut shown: Option<String> = None;
+    let show = |shown: &mut Option<String>, text: String| {
+        shown.replace(text.clone()).as_ref() == Some(&text) || report(Report::Waiting(Some(text)))
+    };
+    let since = Instant::now();
+    let _one = loop {
+        let one = match LOCAL_LOADS.try_lock() {
+            Ok(g) => g,
+            Err(TryLockError::Poisoned(e)) => e.into_inner(),
+            Err(TryLockError::WouldBlock) => {
+                if !show(&mut shown, "waiting for another server's load".into()) {
+                    return None;
+                }
+                LOCAL_LOADS.lock().unwrap_or_else(|e| e.into_inner())
+            }
+        };
+        let need = client.load_ram_need(model) as f64 / GIB;
+        if need <= 0.0 || skip_ram_check.load(Ordering::Relaxed) {
+            break one;
+        }
         if let Some(total) = crate::tiers::total_ram_gib()
             && need + RAM_HEADROOM_GIB > total
         {
@@ -625,25 +667,38 @@ fn load(client: &Client, model: &ModelKey, report: &impl Fn(Report) -> bool) -> 
                 "it needs {need:.0} GiB of RAM for its offloaded weights; this machine has {total:.0} GiB"
             ))));
         }
-        let mut shown = None;
-        while let Some(free) = crate::tiers::available_ram_gib()
-            && free < need + RAM_HEADROOM_GIB
-        {
-            let text = format!("waiting for RAM: needs {need:.0} GiB, {free:.0} GiB free");
-            if shown.as_ref() != Some(&text) {
-                if !report(Report::Waiting(Some(text.clone()))) {
-                    return None;
-                }
-                shown = Some(text);
+        let free = match crate::tiers::available_ram_gib() {
+            Some(free) if free < need + RAM_HEADROOM_GIB => free,
+            _ => break one,
+        };
+        let figures = format!(
+            "{free:.1} of {:.1} GiB free ({need:.1} GiB to load + {RAM_HEADROOM_GIB:.0} to spare)",
+            need + RAM_HEADROOM_GIB
+        );
+        if since.elapsed() >= RAM_WAIT {
+            if !report(Report::ShortOfRam(figures)) {
+                return None;
             }
-            std::thread::sleep(Duration::from_secs(2));
+            break one;
         }
-    }
+        drop(one);
+        if !show(&mut shown, format!("waiting for RAM: {figures}")) {
+            return None;
+        }
+        std::thread::sleep(Duration::from_millis(500));
+    };
     report(Report::Waiting(None));
     Some(client.load_model(model))
 }
 
-fn worker(server: ServerIdx, client: Client, cmds: Receiver<Cmd>, reports: Sender<Msg>, poll: Duration) {
+fn worker(
+    server: ServerIdx,
+    client: Client,
+    cmds: Receiver<Cmd>,
+    reports: Sender<Msg>,
+    poll: Duration,
+    skip_ram_check: Arc<AtomicBool>,
+) {
     let report = |r: Report| reports.send(Msg::Report(server, r)).is_ok();
     let mut jobs: Vec<Polled> = vec![];
     let mut cancelled_early: Vec<Ticket> = vec![];
@@ -656,7 +711,7 @@ fn worker(server: ServerIdx, client: Client, cmds: Receiver<Cmd>, reports: Sende
         let alive = match cmd {
             None => true,
             Some(Cmd::Probe) => report(Report::Probed(client.model_status())),
-            Some(Cmd::Load(model)) => match load(&client, &model, &report) {
+            Some(Cmd::Load(model)) => match load(&client, &model, &skip_ram_check, &report) {
                 Some(r) => report(Report::Loaded(r)),
                 None => false,
             },

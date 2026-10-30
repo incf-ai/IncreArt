@@ -1199,7 +1199,13 @@ fn work_on(shared: &Arc<Mutex<Shared>>, wake: &Wake, fx: Effect) -> Vec<Msg> {
             }
             vec![]
         }
-        Effect::StartEngine { shared: cfg, order } => {
+        Effect::SetSkipRamCheck(skip) => {
+            if let Some(e) = &shared.lock().unwrap().engine {
+                e.set_skip_ram_check(skip);
+            }
+            vec![]
+        }
+        Effect::StartEngine { shared: cfg, order, skip_ram_check } => {
             let Some(lib) = library(shared) else { return vec![] };
             // Runs with seeds left, found before taking any other lock (the
             // library lock is held once, never nested). From one scan: the
@@ -1227,6 +1233,7 @@ fn work_on(shared: &Arc<Mutex<Shared>>, wake: &Wake, fx: Effect) -> Vec<Msg> {
                 generation: GenOptions { preview: cfg.preview.clone(), ..Default::default() },
                 sdcpp: cfg.commit.clone(),
                 order,
+                skip_ram_check,
                 ..Default::default()
             };
             let w = wake.clone();

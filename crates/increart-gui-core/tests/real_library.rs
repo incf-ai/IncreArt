@@ -116,7 +116,7 @@ fn save_soon_after_opening() {
     r.state.no_server_warned = true;
     // as when the servers are up: the engine finds the runs with seeds left
     let order = r.state.config.job_order;
-    r.rt.run(Effect::StartEngine { shared: r.state.config.sdserver.clone(), order });
+    r.rt.run(Effect::StartEngine { shared: r.state.config.sdserver.clone(), order, skip_ram_check: false });
     r.pump(Duration::from_secs_f64(after), |_| false);
     let first = r.annotate_and_save();
 
