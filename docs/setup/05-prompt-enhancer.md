@@ -74,8 +74,10 @@ returns text.
 
 **If it fails:**
 - `<name>: KoboldCpp exited (…) while starting; log …` → read that log.
-- `<name>: KoboldCpp didn't answer within 300 s; log …` → model load too
-  slow (CPU, cold disk) or stuck; read the log.
+- `<name>: KoboldCpp didn't answer, its log quiet for 300 s (the server
+  start timeout); log …` → the model load stopped printing (stuck, or a
+  very slow disk); read the log, and raise the server start timeout
+  (Settings → Timeouts) if it was only slow.
 - The chat server and an sd-server on one GPU: PE asks slow images down and
   need ~7.2 GB beside it; on small cards use CPU.
 

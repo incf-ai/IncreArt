@@ -818,7 +818,8 @@ fn the_shared_koboldcpp_binary_starts_new_entries_and_is_checked() {
     update(&mut s, Msg::AddKoboldServer);
     let ServerConfig::Kobold(k) = &dialog(&s).draft.servers[0] else { panic!() };
     let increart_core::kobold::KoboldRun::Start { binary, .. } = &k.run else { panic!() };
-    assert_eq!(binary, "/opt/kcpp/koboldcpp");
+    // made full on closing (Windows' adds the drive)
+    assert_eq!(*binary, increart_core::config::full_binary("/opt/kcpp/koboldcpp"));
 
     // picked: the entry's files, starting by what's there
     let dir = tempfile::tempdir().unwrap();
@@ -904,18 +905,23 @@ fn kobold_wizard_plans_by_vram_downloads_then_opens() {
     let picked = dialog(&s).kobold.clone().unwrap();
     assert_eq!((picked.models_dir.as_str(), picked.binary.as_str()), ("/picked", "/opt/k/koboldcpp"));
 
-    // a relative folder, then a card too small: said, nothing fetched
-    k.models_dir = "models".into();
+    // no folder: said, nothing fetched
+    k.models_dir = " ".into();
     update(&mut s, Msg::EditKoboldWizard(k.clone()));
-    assert!(update(&mut s, Msg::FinishKoboldWizard).is_empty());
-    assert!(dialog(&s).kobold.as_ref().unwrap().error.as_ref().unwrap().contains("full path"));
-    // a full path on this OS ("/m" isn't one on Windows)
-    let m = if cfg!(windows) { r"C:\m" } else { "/m" };
-    k.models_dir = m.into();
+    let fx = update(&mut s, Msg::FinishKoboldWizard);
+    assert!(fx.is_empty(), "{fx:?}");
+    assert!(dialog(&s).kobold.as_ref().unwrap().error.as_ref().unwrap().contains("Choose a folder"));
+    // a relative folder made full, then a card too small: said, nothing fetched
+    k.models_dir = "models".into();
     k.gpus.as_mut().unwrap().as_mut().unwrap()[2].gpu.vram_gib = 6.0;
     update(&mut s, Msg::EditKoboldWizard(k.clone()));
     assert!(update(&mut s, Msg::FinishKoboldWizard).is_empty());
-    assert!(dialog(&s).kobold.as_ref().unwrap().error.as_ref().unwrap().contains("8 GB"));
+    let w = dialog(&s).kobold.clone().unwrap();
+    assert!(w.error.as_ref().unwrap().contains("8 GB"));
+    assert_eq!(std::path::Path::new(&w.models_dir), std::path::absolute("models").unwrap());
+    // a full path on this OS ("/m" isn't one on Windows)
+    let m = if cfg!(windows) { r"C:\m" } else { "/m" };
+    k.models_dir = m.into();
 
     // a preset chosen counts only while choosing
     k.gpus.as_mut().unwrap().as_mut().unwrap()[2].gpu.vram_gib = 11.9;
@@ -4734,7 +4740,9 @@ fn the_chat_server_editor_edits_the_presets_draft() {
     update(&mut s, Msg::Picked(PickKind::Pe(PeFile::Mmproj), vec!["/m/mm.gguf".into()]));
     update(&mut s, Msg::PeEditorSave);
     let chat = dialog(&s).draft.chat().unwrap().clone();
-    assert!(matches!(&chat.run, PeRun::KoboldCpp { mmproj, .. } if mmproj == "/m/mm.gguf"));
+    assert!(
+        matches!(&chat.run, PeRun::KoboldCpp { mmproj, .. } if *mmproj == increart_core::config::full_path("/m/mm.gguf"))
+    );
     assert_eq!(dialog(&s).draft.servers.len(), 2);
     // a settings file stands in for the model
     update(&mut s, Msg::PeEditorOpen(Some(1)));
@@ -4749,7 +4757,9 @@ fn the_chat_server_editor_edits_the_presets_draft() {
     update(&mut s, Msg::PeEditorSave);
     assert!(s.pe.editor.is_none());
     let chat = dialog(&s).draft.chat().unwrap().clone();
-    assert!(matches!(&chat.run, PeRun::KoboldCpp { model, config, .. } if model.is_empty() && config == "/m/q.kcpps"));
+    assert!(
+        matches!(&chat.run, PeRun::KoboldCpp { model, config, .. } if model.is_empty() && *config == increart_core::config::full_path("/m/q.kcpps"))
+    );
 }
 
 #[test]
@@ -5877,4 +5887,24 @@ fn a_library_exported_and_opened_again() {
     h.settle();
     assert_eq!(h.state.phase, Phase::Main);
     assert_eq!(h.state.library.as_deref(), Some(away.join("lib").as_path()), "{:?}", h.state.messages);
+}
+
+#[test]
+fn timeouts_are_set_at_least_a_second_and_saved() {
+    use increart_core::config::Timeouts;
+    let mut s = dialog_state(vec![], None);
+    s.config_path = Some(PathBuf::from("/nowhere/config.rsn"));
+    let t = Timeouts { server_start: 900, request: 0, ..Timeouts::DEFAULT };
+    let fx = update(&mut s, Msg::SetTimeouts(t));
+    assert!(matches!(fx[..], [Effect::SaveConfig(..)]), "{fx:?}");
+    assert_eq!(s.config.timeouts, Timeouts { server_start: 900, request: 1, ..Timeouts::DEFAULT });
+    let same = s.config.timeouts;
+    assert!(update(&mut s, Msg::SetTimeouts(same)).is_empty(), "unchanged: not saved");
+    // in config.rsn only when not the defaults
+    let text = increart_core::rsnfmt::to_string(&s.config);
+    assert!(text.contains("server_start: 900"), "{text}");
+    let back: increart_core::config::Config = increart_core::rsnfmt::from_str(&text).unwrap();
+    assert_eq!(back.timeouts, s.config.timeouts);
+    let text = increart_core::rsnfmt::to_string(&increart_core::config::Config::default());
+    assert!(!text.contains("timeouts"));
 }

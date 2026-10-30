@@ -2,7 +2,7 @@
 //! Startup: servers).
 
 use eframe::egui::{self, Color32, RichText};
-use increart_core::config::ServerConfig;
+use increart_core::config::{self, ServerConfig};
 use increart_core::kobold::{KoboldChat, KoboldRun, KoboldServer};
 use increart_core::pe::PeDevice;
 use increart_core::tiers::{self, Gpu, Layout};
@@ -377,11 +377,23 @@ fn log_file(s: &ServerConfig) -> String {
 }
 
 /// A path's text box, with a Browse… button picking it.
+/// The label column of the wizard's KoboldCpp rows.
+const LABEL_W: f32 = 76.0;
+
+/// An example models folder, as this OS writes one (`~` works too).
+fn models_hint() -> &'static str {
+    if cfg!(windows) { r"C:\models" } else { "~/models" }
+}
+
 fn path_edit(ui: &mut egui::Ui, s: &mut String, hint: &str, pick: PickKind, out: &mut Vec<Msg>) -> bool {
+    let binary = matches!(pick, PickKind::WizardBinary | PickKind::Kobold(_, PeFile::Binary));
     ui.horizontal(|ui| {
         let r = ui.add(egui::TextEdit::singleline(s).desired_width(ui.available_width() - 36.0).hint_text(hint));
         if ui.button(ph::FOLDER_OPEN).on_hover_text("Browse…").clicked() {
             out.push(Msg::Pick(pick));
+        }
+        if r.lost_focus() {
+            *s = if binary { config::full_binary(s) } else { config::full_path(s) };
         }
         r.lost_focus()
     })
@@ -950,6 +962,9 @@ fn settings(ui: &mut egui::Ui, st: &AppState, d: &ServerDialog, out: &mut Vec<Ms
     if c != st.config.sdserver {
         out.push(Msg::SetSdServer(c));
     }
+    ui.add_space(12.0);
+    ui.label(RichText::new(ic(ph::TIMER, "Timeouts")).strong());
+    crate::settings::timeouts(ui, st, out);
 }
 
 /// The shared KoboldCpp binary, and its version (checked when the field is
@@ -963,6 +978,9 @@ fn kobold_binary_field(ui: &mut egui::Ui, st: &AppState, d: &ServerDialog, out: 
             ui.add(egui::TextEdit::singleline(&mut b).desired_width(ui.available_width() - 36.0).hint_text(&fallback));
         if ui.button(ph::FOLDER_OPEN).on_hover_text("Browse…").clicked() {
             out.push(Msg::Pick(PickKind::KoboldBinary));
+        }
+        if r.lost_focus() {
+            b = config::full_binary(&b);
         }
         r
     });
@@ -1032,7 +1050,10 @@ fn command_line(ui: &mut egui::Ui, st: &AppState, i: usize, s: &ServerConfig) {
 fn sdserver_binary_field(ui: &mut egui::Ui, c: &mut increart_core::config::SdServerConfig, out: &mut Vec<Msg>) {
     ui.horizontal(|ui| {
         ui.add_sized([56.0, 18.0], egui::Label::new("Binary"));
-        ui.add(egui::TextEdit::singleline(&mut c.binary).desired_width(ui.available_width() - 36.0));
+        let r = ui.add(egui::TextEdit::singleline(&mut c.binary).desired_width(ui.available_width() - 36.0));
+        if r.lost_focus() {
+            c.binary = config::full_binary(&c.binary);
+        }
         if ui.button(ph::FOLDER_OPEN).on_hover_text("Browse…").clicked() {
             out.push(Msg::Pick(PickKind::SdServerBinary));
         }
@@ -1061,11 +1082,12 @@ fn models_field(ui: &mut egui::Ui, c: &mut increart_core::config::SdServerConfig
     ui.horizontal(|ui| {
         ui.add_sized([56.0, 18.0], egui::Label::new("Models"));
         let mut dir = c.model_dirs.first().cloned().unwrap_or_default();
-        ui.add(
-            egui::TextEdit::singleline(&mut dir)
-                .desired_width(ui.available_width() - 36.0)
-                .hint_text("/path/to/models"),
+        let r = ui.add(
+            egui::TextEdit::singleline(&mut dir).desired_width(ui.available_width() - 36.0).hint_text(models_hint()),
         );
+        if r.lost_focus() {
+            dir = config::full_path(&dir);
+        }
         if ui.button(ph::FOLDER_OPEN).on_hover_text("Browse…").clicked() {
             out.push(Msg::Pick(PickKind::ModelDir));
         }
@@ -1104,7 +1126,7 @@ fn server_wizard(ctx: &egui::Context, st: &AppState, d: &ServerDialog, out: &mut
         if let Some(k) = &d.kobold {
             let binary = increart_gui_core::update::wizard_binary(k);
             let version = d.kobold_version.as_ref().filter(|(b, _)| *b == binary).map(|(_, r)| r);
-            kobold_wizard(ui, k, version, out);
+            kobold_wizard(ui, k, version, &st.config.sdserver.model_dirs, out);
             return;
         }
         ui.label("IncreArt runs sd-server on your GPUs, one server per GPU.");
@@ -1224,7 +1246,13 @@ fn server_wizard(ctx: &egui::Context, st: &AppState, d: &ServerDialog, out: &mut
 /// (each one's memory picks its preset), how two or more share the work;
 /// then the models downloaded and the servers opened.
 /// `version`: the binary's `--version` (None while asking).
-fn kobold_wizard(ui: &mut egui::Ui, k: &KoboldWizard, version: Option<&Result<String, String>>, out: &mut Vec<Msg>) {
+fn kobold_wizard(
+    ui: &mut egui::Ui,
+    k: &KoboldWizard,
+    version: Option<&Result<String, String>>,
+    model_dirs: &[String],
+    out: &mut Vec<Msg>,
+) {
     let mut new = k.clone();
     let busy = k.downloading.is_some();
     let plan = k.plan();
@@ -1233,13 +1261,13 @@ fn kobold_wizard(ui: &mut egui::Ui, k: &KoboldWizard, version: Option<&Result<St
     ui.add_enabled_ui(!busy, |ui| {
         ui.label(RichText::new("1. KoboldCpp").strong());
         ui.horizontal(|ui| {
-            ui.add_sized([56.0, 18.0], egui::Label::new("Binary"));
+            ui.add_sized([LABEL_W, 18.0], egui::Label::new("Binary"));
             if path_edit(ui, &mut new.binary, "koboldcpp", PickKind::WizardBinary, out) {
                 out.push(Msg::CheckWizardBinary);
             }
         });
         ui.horizontal(|ui| {
-            ui.add_space(64.0);
+            ui.add_space(LABEL_W + 8.0);
             match version {
                 Some(Ok(v)) => {
                     ui.colored_label(GOOD, ic(ph::CHECK, &format!("KoboldCpp {v}")));
@@ -1255,7 +1283,7 @@ fn kobold_wizard(ui: &mut egui::Ui, k: &KoboldWizard, version: Option<&Result<St
         });
         if matches!(version, Some(Err(_))) {
             ui.horizontal(|ui| {
-                ui.add_space(64.0);
+                ui.add_space(LABEL_W + 8.0);
                 ui.weak(
                     "Download KoboldCpp from github.com/LostRuins/koboldcpp/releases and pick it with Browse…, \
                      or Save anyway and set it later in Server settings.",
@@ -1263,13 +1291,19 @@ fn kobold_wizard(ui: &mut egui::Ui, k: &KoboldWizard, version: Option<&Result<St
             });
         }
         ui.horizontal(|ui| {
-            ui.add_sized([56.0, 18.0], egui::Label::new("Models"));
-            path_edit(ui, &mut new.models_dir, "/path/to/models", PickKind::WizardModels, out);
+            ui.add_sized([LABEL_W, 18.0], egui::Label::new("Download to"));
+            path_edit(ui, &mut new.models_dir, models_hint(), PickKind::WizardModels, out);
         });
-        ui.weak(
-            "The models go in koboldcpp/ in this folder (about 10 GB for 8–12 GB cards, 13 GB for bigger ones). \
-             Ones already in your model folders or Hugging Face's cache are linked, not downloaded again.",
-        );
+        let dir = config::full_path(&new.models_dir);
+        let to = std::path::Path::new(&dir).join(tiers::MODEL_SUBDIR);
+        let mut found: Vec<&str> = model_dirs.iter().map(String::as_str).filter(|d| *d != dir).collect();
+        found.push("Hugging Face's cache");
+        ui.weak(format!(
+            "{} (about 10 GB for 8–12 GB cards, 13 GB for bigger ones). \
+             Files already in {} are linked, not downloaded again.",
+            if dir.is_empty() { "Choose where the models go".into() } else { format!("They go in {}", to.display()) },
+            found.join(", ")
+        ));
         ui.add_space(10.0);
         ui.horizontal(|ui| {
             ui.label(RichText::new("2. GPUs").strong());

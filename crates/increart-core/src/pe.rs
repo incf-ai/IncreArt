@@ -8,7 +8,7 @@ use std::io::Cursor;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use base64::Engine as _;
 use serde::{Deserialize, Serialize};
@@ -429,12 +429,17 @@ pub fn device_env(device: &PeDevice) -> Vec<(String, String)> {
     v
 }
 
-fn agent(timeout: Duration) -> Agent {
+/// `total`: a cap on the whole request; `stall`: on each read and write
+/// (restarted by every byte, so a slow answer that keeps coming is never
+/// cut off).
+fn agent(total: Option<Duration>, stall: Option<Duration>) -> Agent {
     // a fresh connection per request: KoboldCpp closes one after answering
     Agent::config_builder()
         .max_idle_connections_per_host(0)
         .http_status_as_error(false)
-        .timeout_global(Some(timeout))
+        .timeout_global(total)
+        .timeout_per_read(stall)
+        .timeout_per_write(stall)
         .timeout_connect(Some(Duration::from_secs(5)))
         .build()
         .into()
@@ -458,13 +463,15 @@ pub type ChatResult = Result<String, String>;
 
 impl Client {
     pub fn new(base: &str) -> Client {
-        // on CPU an answer with images can take minutes
-        Client { base: base.trim_end_matches('/').to_string(), agent: agent(Duration::from_secs(600)) }
+        // on CPU an answer with images can take minutes: given up only
+        // when no word comes for the config's chat timeout
+        let stall = crate::config::timeouts().chat();
+        Client { base: base.trim_end_matches('/').to_string(), agent: agent(None, Some(stall)) }
     }
 
     /// Whether a chat server answers.
     pub fn ready(&self) -> bool {
-        let quick = agent(Duration::from_secs(3));
+        let quick = agent(Some(Duration::from_secs(3)), None);
         quick.get(format!("{}/v1/models", self.base)).call().is_ok_and(|r| r.status().is_success())
     }
 
@@ -561,7 +568,7 @@ impl Client {
 
     /// Asks KoboldCpp to stop the answer it's writing (best effort).
     pub fn abort(&self) {
-        let quick = agent(Duration::from_secs(3));
+        let quick = agent(Some(Duration::from_secs(3)), None);
         let _ = quick.post(format!("{}/api/extra/abort", self.base)).send_json(json!({}));
     }
 }
@@ -594,7 +601,8 @@ pub fn log_name(server: &str) -> String {
 }
 
 /// Connects to the server, starting KoboldCpp first if it doesn't answer
-/// (logging to [`log_path`]) and waiting up to `wait` for its model to load.
+/// (logging to [`log_path`]) and waiting for its model to load (given up
+/// after `wait` without a new line in its log).
 pub fn open(server: &PeServer, log_dir: &Path, wait: Duration, cancel: &AtomicBool) -> Result<PeProcess, String> {
     let client = Client::new(&server.base_url());
     let mut proc = PeProcess { client: client.clone(), child: None, log: None };
@@ -610,7 +618,7 @@ pub fn open(server: &PeServer, log_dir: &Path, wait: Duration, cancel: &AtomicBo
         .map_err(|e| format!("{}: {e}", server.name))?;
     proc.child = Some(child);
     proc.log = Some(log.clone());
-    let deadline = Instant::now() + wait;
+    let mut stall = crate::process::LogStall::new(&log, wait);
     loop {
         if client.ready() {
             return Ok(proc);
@@ -622,9 +630,9 @@ pub fn open(server: &PeServer, log_dir: &Path, wait: Duration, cancel: &AtomicBo
         if cancel.load(Ordering::Relaxed) {
             return Err(format!("{}: cancelled", server.name));
         }
-        if Instant::now() >= deadline {
+        if stall.stalled() {
             return Err(format!(
-                "{}: KoboldCpp didn't answer within {} s; log {}",
+                "{}: KoboldCpp didn't answer, its log quiet for {} s (the server start timeout); log {}",
                 server.name,
                 wait.as_secs(),
                 log.display()

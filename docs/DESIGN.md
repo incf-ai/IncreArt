@@ -266,7 +266,7 @@ asks among them):
   server uses one quantization, the smallest preset's, so one
   recipe runs on all. **Download, save as preset and open** fetches the
   files into `<models>/koboldcpp/` (Hugging Face, through `.part` files,
-  one already there kept; one found by name in the model folders or
+  a broken or cancelled one carried on next time, see Timeouts; one already there kept; one found by name in the model folders or
   Hugging Face's cache (`$HF_HOME`, else `~/.cache/huggingface`, five
   folders down, not `blobs`/`xet`), the same size as Hugging Face's HEAD
   says, linked instead; a progress bar and **Cancel download**), adds
@@ -306,7 +306,7 @@ asks among them):
   picked) or why it can't run. **sd-server**: the binary and the devices
   (`sd-server --list-devices`, **List again**). **Both**: the models
   folder (KoboldCpp loads the recipes' files from it too) and leave started
-  servers running. When a preset starts sd-servers and the binary or
+  servers running. **Timeouts** (also a tab in Settings): see Timeouts below. When a preset starts sd-servers and the binary or
   models folder is missing, the dialog says so with **Fix…**, which opens
   it.
 - ✎ or **New preset** opens the editor modal: the name, then the server
@@ -2835,11 +2835,40 @@ timing existed have none).
 
 Durations read as "0.84 s", "34.2 s", "4 min 12 s", "2 h 05 min".
 
+### Timeouts
+
+Each is a stall limit, not a cap: how long something may go without a sign
+of progress before it's given up on, so a slow download, answer or load that
+keeps coming is never cut off. Seconds, at least 1, in `config.rsn`'s
+`timeouts` (written only when not the defaults), set in Settings →
+**Timeouts** and at the bottom of **Server settings** (the same section),
+with **Reset to defaults**. Used by servers and downloads started from then
+on.
+
+- **Server start** (300 s): a server being started (sd-server, KoboldCpp,
+  prompt enhance's KoboldCpp) gives up once its log has had no new line for
+  this long (`process::LogStall`); its exit or **Cancel** end the wait
+  sooner.
+- **Image server requests** (60 s): sd-server and KoboldCpp requests, per
+  read and write (ureq's `timeout_per_read`/`_per_write`), so a big result
+  over a slow link isn't cut off. sd-server's `models/load` (silent until
+  loaded) keeps a 1 h cap, and KoboldCpp's generate a 1 h cap (a cancel ends
+  it sooner).
+- **Prompt enhance answer** (300 s): no word yet (with images on a CPU the
+  first can take minutes) or none since the last; the whole answer has no
+  cap.
+- **Model downloads** (60 s): no data. A broken or cancelled download keeps
+  its `.part` and carries on from there next time (`Range`; from the start
+  when the server takes no ranges).
+
+The short ones stay fixed: connecting (5 s; 20 s for downloads), the 3 s
+"is it up" checks, the 20 s download-size check.
+
 ### Notifications
 
-**Settings** (⚙ at the far right of the top bar; a modal, changes apply as made) has two tabs:
+**Settings** (⚙ at the far right of the top bar; a modal, changes apply as made) has three tabs:
 **Library** (the open library's store format and its conversion, see Image
-stores) and **Notifications**, with three
+stores), **Timeouts** (see Timeouts) and **Notifications**, with three
 independent alerts. Its footer shows the version line (`increart 0.1.0
 (b6bd961, 2026-10-29)`: the crate version, then the commit built from and
 its date, from `build.rs`; also `increart --version`) with a copy button,

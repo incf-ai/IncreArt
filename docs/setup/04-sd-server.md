@@ -164,7 +164,9 @@ sd-server --listen-ip 127.0.0.1 --listen-port 1234 --backend ROCm0 \
 ```
 
 - `sdserver.args` defaults to `--fa --conditioning-cache-size 32`.
-- Waits up to **180 s** for `GET /sdcpp/v1/capabilities` to answer.
+- Waits for `GET /sdcpp/v1/capabilities` to answer, giving up once the log
+  has had no new line for the server start timeout (300 s by default;
+  Settings → Timeouts, or Server settings).
 - Logs to `<state>/logs/sd-server-<name>.log`.
 - An sd-server already answering on the port is used instead of starting
   another.

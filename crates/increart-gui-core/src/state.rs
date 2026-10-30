@@ -2496,6 +2496,8 @@ pub enum SettingsTab {
     Notifications,
     /// This library's own settings (its image storage).
     Library,
+    /// How long the servers may go quiet (`Config::timeouts`).
+    Timeouts,
 }
 
 /// The open library's store format and what its stores hold now.

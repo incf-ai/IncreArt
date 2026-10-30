@@ -11,9 +11,6 @@ use ureq::Agent;
 
 use crate::model::ModelSelection;
 
-/// How long ordinary requests may take. Submissions carry base64 ref images
-/// and results base64 PNGs, so this is generous.
-const TIMEOUT: Duration = Duration::from_secs(60);
 /// `models/load` blocks until the load is done (minutes for Qwen-Image).
 const LOAD_TIMEOUT: Duration = Duration::from_secs(60 * 60);
 /// Response bodies: a 2048² RGBA PNG is ~16 MB, ~22 MB as base64.
@@ -310,10 +307,15 @@ impl std::fmt::Debug for Client {
     }
 }
 
-fn agent(timeout: Duration) -> Agent {
+/// `total`: a cap on the whole request; `stall`: on each read and write
+/// (restarted by every byte: submissions carry base64 ref images and
+/// results base64 PNGs, slow over a slow link but coming).
+fn agent(total: Option<Duration>, stall: Option<Duration>) -> Agent {
     Agent::config_builder()
         .http_status_as_error(false)
-        .timeout_global(Some(timeout))
+        .timeout_global(total)
+        .timeout_per_read(stall)
+        .timeout_per_write(stall)
         .timeout_connect(Some(Duration::from_secs(5)))
         .build()
         .into()
@@ -324,8 +326,9 @@ impl Client {
     pub fn new(base: &str) -> Client {
         Client {
             base: base.trim_end_matches('/').to_string(),
-            agent: agent(TIMEOUT),
-            load_agent: agent(LOAD_TIMEOUT),
+            agent: agent(None, Some(crate::config::timeouts().request())),
+            // nothing comes until it's loaded: a cap, not a stall
+            load_agent: agent(Some(LOAD_TIMEOUT), None),
             kobold: None,
         }
     }

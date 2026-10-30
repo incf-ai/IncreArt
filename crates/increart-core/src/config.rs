@@ -52,6 +52,9 @@ pub struct Config {
     /// startup if none is); entries keep their own.
     #[serde(skip_serializing_if = "String::is_empty")]
     pub koboldcpp: String,
+    /// How long the servers may go quiet (see [`Timeouts`]).
+    #[serde(skip_serializing_if = "is_default")]
+    pub timeouts: Timeouts,
     /// How the job queue shares the servers (Jobs: spread all / sweep by
     /// sweep / one at a time).
     #[serde(skip_serializing_if = "is_default")]
@@ -335,6 +338,75 @@ pub fn user_dir(xdg: &str, unix: &str, windows: &str) -> Option<PathBuf> {
     Some(base.join("increart"))
 }
 
+/// `p` as a full path, so it means the same to every server whatever
+/// folder starts it: a leading `~` is the home folder, a relative path is
+/// taken from the folder the app was started in. Empty stays empty.
+pub fn full_path(p: &str) -> String {
+    let t = p.trim();
+    if t.is_empty() {
+        return String::new();
+    }
+    let home = || std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")).map(PathBuf::from);
+    let path = match (t.strip_prefix('~'), home()) {
+        (Some(""), Some(h)) => h,
+        (Some(rest), Some(h)) if rest.starts_with(['/', '\\']) => h.join(rest.trim_start_matches(['/', '\\'])),
+        _ => PathBuf::from(t),
+    };
+    std::path::absolute(&path).map_or_else(|_| t.to_string(), |a| a.to_string_lossy().into_owned())
+}
+
+/// A binary as a [full path](full_path) when a path names it
+/// (`./sd-server`, `~/bin/koboldcpp`); a bare name (looked up on `PATH`)
+/// and a command line (`python3 koboldcpp.py`) stay as they are.
+pub fn full_binary(b: &str) -> String {
+    let t = b.trim();
+    let full = full_path(t);
+    let named = t.starts_with('~') || t.contains(['/', '\\']);
+    if named && (!t.contains(char::is_whitespace) || Path::new(&full).exists()) { full } else { b.to_string() }
+}
+
+/// Sets `s` to `f(s)`, noting the change in `said`.
+fn make_full(s: &mut String, f: fn(&str) -> String, said: &mut Vec<String>) {
+    let n = f(s);
+    if n != *s {
+        said.push(format!("{s} → {n}"));
+        *s = n;
+    }
+}
+
+impl ServerConfig {
+    /// Its binaries, models and settings files as [full paths](full_path);
+    /// each change noted in `said`.
+    pub fn full_paths(&mut self, said: &mut Vec<String>) {
+        match self {
+            ServerConfig::Start { .. } | ServerConfig::Connect { .. } => {}
+            ServerConfig::Chat(s) => s.run.full_paths(said),
+            ServerConfig::Kobold(k) => {
+                if let crate::kobold::KoboldRun::Start { binary, config, .. } = &mut k.run {
+                    make_full(binary, full_binary, said);
+                    make_full(config, full_path, said);
+                }
+                if let Some(c) = &mut k.chat {
+                    make_full(&mut c.model, full_path, said);
+                    make_full(&mut c.mmproj, full_path, said);
+                }
+            }
+        }
+    }
+}
+
+impl crate::pe::PeRun {
+    /// As [`ServerConfig::full_paths`].
+    pub fn full_paths(&mut self, said: &mut Vec<String>) {
+        if let crate::pe::PeRun::KoboldCpp { binary, model, mmproj, config, .. } = self {
+            make_full(binary, full_binary, said);
+            for p in [model, mmproj, config] {
+                make_full(p, full_path, said);
+            }
+        }
+    }
+}
+
 impl Config {
     pub fn preset(&self, name: &str) -> Option<&ServerPreset> {
         self.server_presets.iter().find(|p| p.name == name)
@@ -586,6 +658,64 @@ impl Default for TileSettings {
     }
 }
 
+/// How long, in seconds, something may go without progress before it's
+/// given up on: each a stall limit, restarted by every sign of life, not a
+/// cap on the whole (a slow download or answer that keeps coming is never
+/// cut off). Read by the clients as they're made ([`timeouts`]; set with
+/// [`set_timeouts`]). 0 isn't allowed: at least 1 s.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename = "Timeouts", default)]
+pub struct Timeouts {
+    /// A server being started: no new line in its log.
+    pub server_start: u64,
+    /// A request to an image server: no data (results, status).
+    pub request: u64,
+    /// Prompt enhance's answer: no word yet, or none since the last one
+    /// (it reads the images first, minutes on a CPU).
+    pub chat: u64,
+    /// A model download: no data.
+    pub download: u64,
+}
+
+impl Timeouts {
+    pub const DEFAULT: Timeouts = Timeouts { server_start: 300, request: 60, chat: 300, download: 60 };
+
+    pub fn server_start(&self) -> std::time::Duration {
+        secs(self.server_start)
+    }
+    pub fn request(&self) -> std::time::Duration {
+        secs(self.request)
+    }
+    pub fn chat(&self) -> std::time::Duration {
+        secs(self.chat)
+    }
+    pub fn download(&self) -> std::time::Duration {
+        secs(self.download)
+    }
+}
+
+impl Default for Timeouts {
+    fn default() -> Self {
+        Timeouts::DEFAULT
+    }
+}
+
+fn secs(s: u64) -> std::time::Duration {
+    std::time::Duration::from_secs(s.max(1))
+}
+
+static TIMEOUTS: std::sync::RwLock<Timeouts> = std::sync::RwLock::new(Timeouts::DEFAULT);
+
+/// The timeouts in use (the config's, once [`set_timeouts`]).
+pub fn timeouts() -> Timeouts {
+    *TIMEOUTS.read().unwrap_or_else(|e| e.into_inner())
+}
+
+/// The config's timeouts for the clients made from now on.
+pub fn set_timeouts(t: Timeouts) {
+    *TIMEOUTS.write().unwrap_or_else(|e| e.into_inner()) = t;
+}
+
 fn is_default<T: Default + PartialEq>(v: &T) -> bool {
     *v == T::default()
 }
@@ -691,12 +821,20 @@ impl Config {
     }
 
     /// Applies the load rules: old PE servers moved into the server presets,
+    /// the servers' paths made [full](Self::full_paths),
     /// `library` folded into the recent libraries,
     /// built-in list if empty, sizes snapped to multiples of 32, exactly one
     /// default (the first marked, else the first).
     pub fn normalize(&mut self) -> Vec<String> {
         let mut warnings = Vec::new();
         warnings.extend(self.move_pe_servers());
+        let said = self.full_paths();
+        if !said.is_empty() {
+            warnings.push(format!(
+                "paths made full (a relative one is taken from the folder IncreArt started in): {}",
+                said.join("; ")
+            ));
+        }
         if let Some(l) = self.library.take().filter(|l| !l.is_empty()) {
             self.add_recent_library(l);
         }
@@ -731,6 +869,32 @@ impl Config {
             r.default = i == first;
         }
         warnings
+    }
+
+    /// The binaries, models folders and files the servers are given as
+    /// [full paths](full_path) (libraries are already); what changed, said
+    /// as `old → new`.
+    pub fn full_paths(&mut self) -> Vec<String> {
+        let mut said = vec![];
+        make_full(&mut self.sdserver.binary, full_binary, &mut said);
+        make_full(&mut self.koboldcpp, full_binary, &mut said);
+        for d in &mut self.sdserver.model_dirs {
+            make_full(d, full_path, &mut said);
+        }
+        let mut seen = vec![];
+        self.sdserver.model_dirs.retain(|d| {
+            !d.is_empty() && !seen.contains(d) && {
+                seen.push(d.clone());
+                true
+            }
+        });
+        for s in self.server_presets.iter_mut().flat_map(|p| &mut p.servers) {
+            s.full_paths(&mut said);
+        }
+        for s in &mut self.pe.servers {
+            s.run.full_paths(&mut said);
+        }
+        said
     }
 
     /// Puts `root` first in the recent libraries (once), keeping
@@ -1068,6 +1232,48 @@ mod tests {
         assert_eq!(c.sdserver.args, ["--fa", "--conditioning-cache-size", "32"], "defaults for missing fields");
         let again: Config = rsnfmt::from_str(&rsnfmt::to_string(&c)).unwrap();
         assert_eq!(again, c);
+    }
+
+    #[test]
+    fn paths_made_full() {
+        let abs = |p: &str| std::path::absolute(p).unwrap().to_string_lossy().into_owned();
+        let home = PathBuf::from(std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")).unwrap());
+        assert_eq!(full_path(" models "), abs("models"));
+        assert_eq!(full_path(&abs("m")), abs("m"));
+        assert_eq!(full_path("~"), home.to_string_lossy());
+        assert_eq!(full_path("~/models"), home.join("models").to_string_lossy());
+        assert_eq!(full_path("~user/m"), abs("~user/m"), "not the home folder");
+        assert_eq!(full_path(""), "");
+        // a bare name is looked up on PATH, a command line left alone
+        assert_eq!(full_binary("koboldcpp"), "koboldcpp");
+        assert_eq!(full_binary("./koboldcpp"), abs("./koboldcpp"));
+        assert_eq!(full_binary("python3 k/koboldcpp.py"), "python3 k/koboldcpp.py");
+
+        let mut c: Config = rsnfmt::from_str(
+            r#"Config {
+                server_presets: [ServerPreset { name: "k", servers: [
+                    Kobold(KoboldServer { name: "gpu0", run: Start { binary: "bin/koboldcpp", port: 5001 },
+                        chat: KoboldChat { model: "c.gguf" } }),
+                    Chat(PeServer { name: "pe", run: KoboldCpp { binary: "koboldcpp", model: "p.gguf", host: "h", port: 1, context: 0 } }),
+                ] }],
+                sdserver: SdServer { binary: "sd-server", model_dirs: ["models", "", "models"] },
+            }"#,
+        )
+        .unwrap();
+        let w = c.normalize();
+        assert!(w.iter().any(|w| w.contains(&format!("models → {}", abs("models")))), "{w:?}");
+        assert_eq!(c.sdserver.model_dirs, [abs("models")], "the empty and the repeated one dropped");
+        assert_eq!(c.sdserver.binary, "sd-server");
+        let ServerConfig::Kobold(k) = &c.server_presets[0].servers[0] else { panic!() };
+        let crate::kobold::KoboldRun::Start { binary, .. } = &k.run else { panic!() };
+        assert_eq!(
+            (binary.as_str(), k.chat.as_ref().unwrap().model.as_str()),
+            (abs("bin/koboldcpp").as_str(), abs("c.gguf").as_str())
+        );
+        let ServerConfig::Chat(pe) = &c.server_presets[0].servers[1] else { panic!() };
+        let crate::pe::PeRun::KoboldCpp { binary, model, .. } = &pe.run else { panic!() };
+        assert_eq!((binary.as_str(), model.as_str()), ("koboldcpp", abs("p.gguf").as_str()));
+        assert!(c.full_paths().is_empty(), "once");
     }
 
     #[test]

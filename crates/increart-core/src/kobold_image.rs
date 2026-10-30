@@ -166,12 +166,17 @@ fn now_ms() -> i64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis() as i64)
 }
 
-fn agent(timeout: Duration) -> Agent {
+/// `total`: a cap on the whole request; `stall`: on each read and write
+/// (restarted by every byte, so a slow answer that keeps coming is never
+/// cut off).
+fn agent(total: Option<Duration>, stall: Option<Duration>) -> Agent {
     // a fresh connection per request: KoboldCpp closes one after answering
     Agent::config_builder()
         .max_idle_connections_per_host(0)
         .http_status_as_error(false)
-        .timeout_global(Some(timeout))
+        .timeout_global(total)
+        .timeout_per_read(stall)
+        .timeout_per_write(stall)
         .timeout_connect(Some(Duration::from_secs(5)))
         .build()
         .into()
@@ -230,7 +235,7 @@ impl KoboldImage {
     pub fn new(base: &str, password: &str, admin: Option<Admin>) -> KoboldImage {
         let inner = Arc::new(Inner {
             base: base.trim_end_matches('/').to_string(),
-            agent: agent(Duration::from_secs(60)),
+            agent: agent(None, Some(crate::config::timeouts().request())),
             password: password.to_string(),
             admin,
             loaded: Mutex::new(None),

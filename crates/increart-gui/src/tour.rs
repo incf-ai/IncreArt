@@ -114,6 +114,7 @@ const EXTRA_SCENES: &[&str] = &[
     "72-review-sweep-button",
     "73-promote",
     "74-notification-settings",
+    "74b-timeout-settings",
     "75-promote-in-folder",
     "76-top-bar-wide",
     "77-top-bar-medium",
@@ -714,6 +715,7 @@ impl Tour {
                 n.player = "mpv --really-quiet --volume={volume_percent} {file}".into();
                 vec![Msg::ContinueWithoutServers, Msg::SetNotifications(n), Msg::Settings(true)]
             }
+            "74b-timeout-settings" => vec![Msg::SettingsTab(increart_gui_core::state::SettingsTab::Timeouts)],
             "75-promote-in-folder" => {
                 let idea = st.index.ideas.iter().find(|e| matches!(e.loc, increart_core::IdeaLoc::Library(_)));
                 let mut v = vec![Msg::ContinueWithoutServers, Msg::Settings(false), Msg::Tab(Tab::InputLibrary)];

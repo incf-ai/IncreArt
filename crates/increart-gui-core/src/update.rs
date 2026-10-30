@@ -476,6 +476,9 @@ pub enum Msg {
     SetSdServer(SdServerConfig),
     /// The shared KoboldCpp binary (`Config::koboldcpp`).
     SetKoboldBinary(String),
+    /// `Config::timeouts` (each at least 1 s); the app hands them to the
+    /// clients ([`increart_core::config::set_timeouts`]).
+    SetTimeouts(increart_core::config::Timeouts),
     /// `--version` of the shared KoboldCpp binary, unless known.
     CheckKoboldVersion,
     /// (binary, `--version`'s answer)
@@ -1423,6 +1426,9 @@ fn save_draft(state: &mut AppState) -> bool {
         return false;
     }
     d.draft.name = name.clone();
+    for s in &mut d.draft.servers {
+        s.full_paths(&mut vec![]);
+    }
     let preset = d.draft.clone();
     d.editing = None;
     match editing {
@@ -2027,8 +2033,10 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
                 return vec![];
             }
             k.open = open;
-            if !std::path::Path::new(k.models_dir.trim()).is_absolute() {
-                k.error = Some("The models folder must be a full path.".into());
+            k.models_dir = increart_core::config::full_path(&k.models_dir);
+            k.binary = increart_core::config::full_binary(&k.binary);
+            if k.models_dir.is_empty() {
+                k.error = Some("Choose a folder for the models.".into());
                 return vec![];
             }
             match k.plan() {
@@ -2113,6 +2121,9 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
                 return vec![];
             }
             d.editing = None;
+            for s in &mut d.draft.servers {
+                s.full_paths(&mut vec![]);
+            }
             let draft = d.draft.clone();
             let mut fx = vec![];
             if !draft.name.is_empty() && state.config.preset(&draft.name).is_some() {
@@ -2324,7 +2335,8 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
             let Phase::Servers(d) = &mut state.phase else { return vec![] };
             d.settings = open && !d.opening;
             if !d.settings {
-                return vec![];
+                // (a field closed while typing in it)
+                return if state.config.full_paths().is_empty() { vec![] } else { save_config(state) };
             }
             let mut fx = list_devices_once(state);
             fx.extend(kobold_version_once(state));
@@ -3699,7 +3711,8 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
                 return vec![];
             }
             let Phase::Servers(d) = &mut state.phase else { return vec![] };
-            let server = ServerConfig::Chat(increart_core::pe::PeServer { name, ..e.draft });
+            let mut server = ServerConfig::Chat(increart_core::pe::PeServer { name, ..e.draft });
+            server.full_paths(&mut vec![]);
             // a new one is added: prompt enhance shares its asks among them
             let at = e.index.filter(|i| d.draft.servers.get(*i).is_some_and(ServerConfig::is_chat));
             match at {
@@ -5612,6 +5625,16 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
                 return vec![];
             }
             state.config.set_koboldcpp(b);
+            save_config(state)
+        }
+        Msg::SetTimeouts(mut t) => {
+            for s in [&mut t.server_start, &mut t.request, &mut t.chat, &mut t.download] {
+                *s = (*s).max(1);
+            }
+            if t == state.config.timeouts {
+                return vec![];
+            }
+            state.config.timeouts = t;
             save_config(state)
         }
         Msg::CheckKoboldVersion => kobold_version_once(state),

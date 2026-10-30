@@ -10,6 +10,33 @@ use std::time::{Duration, Instant};
 
 /// Readies `cmd` to run in the background: on Windows without a console
 /// window, and with `group`, in a process group of its own (see [`stop`]).
+/// A server starting: given up on once its log has had no new output for
+/// `wait` (loading prints as it goes, so a slow load isn't cut off; a hung
+/// one is).
+pub struct LogStall {
+    log: std::path::PathBuf,
+    len: u64,
+    until: Instant,
+    wait: Duration,
+}
+
+impl LogStall {
+    pub fn new(log: &std::path::Path, wait: Duration) -> LogStall {
+        let len = std::fs::metadata(log).map_or(0, |m| m.len());
+        LogStall { log: log.to_path_buf(), len, until: Instant::now() + wait, wait }
+    }
+
+    /// Whether the log has been quiet for the whole wait.
+    pub fn stalled(&mut self) -> bool {
+        let len = std::fs::metadata(&self.log).map_or(0, |m| m.len());
+        if len != self.len {
+            self.len = len;
+            self.until = Instant::now() + self.wait;
+        }
+        Instant::now() >= self.until
+    }
+}
+
 pub fn background(cmd: &mut Command, group: bool) -> &mut Command {
     #[cfg(unix)]
     if group {
@@ -290,6 +317,24 @@ mod imp {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_start_is_given_up_on_only_once_its_log_goes_quiet() {
+        use std::io::Write;
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("s.log");
+        std::fs::write(&log, "starting\n").unwrap();
+        let mut stall = LogStall::new(&log, Duration::from_millis(300));
+        let t = Instant::now();
+        // a line every 100 ms for 600 ms: twice the wait, still going
+        while t.elapsed() < Duration::from_millis(600) {
+            std::fs::OpenOptions::new().append(true).open(&log).unwrap().write_all(b"loading\n").unwrap();
+            assert!(!stall.stalled());
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        std::thread::sleep(Duration::from_millis(350));
+        assert!(stall.stalled(), "quiet for the whole wait");
+    }
+
     use super::*;
     use std::process::Stdio;
 

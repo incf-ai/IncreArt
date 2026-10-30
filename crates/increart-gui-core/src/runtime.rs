@@ -17,9 +17,6 @@ use increart_core::{Id, IdeaLoc, ImageRef, Library, NewIdea, NewRun, Tree, Verdi
 use crate::state::{EntryKind, FvEntry, GenerateForm, PickKind};
 use crate::update::{DraftSave, Effect, LibOp, Msg, OpOk, TileTarget};
 
-/// How long a started sd-server may take to answer.
-const START_WAIT: Duration = Duration::from_secs(180);
-
 #[derive(Default)]
 struct Shared {
     library: Option<Arc<Mutex<Library>>>,
@@ -423,9 +420,6 @@ impl Drop for Runtime {
 /// How often an answer being written is reported.
 const PE_PROGRESS_EVERY: Duration = Duration::from_millis(250);
 
-/// How long a started KoboldCpp may take to load its model.
-const PE_START_WAIT: Duration = Duration::from_secs(300);
-
 /// What PE threads share.
 #[derive(Clone)]
 struct PeCtx {
@@ -524,7 +518,7 @@ fn pe_report(pe: &PeCtx) {
 /// its slot (`id`) is gone.
 fn pe_worker(pe: &PeCtx, id: u64, server: increart_core::pe::PeServer, cancel: &std::sync::atomic::AtomicBool) {
     use increart_core::pe;
-    let opened = pe::open(&server, &logs(&pe.shared), PE_START_WAIT, cancel);
+    let opened = pe::open(&server, &logs(&pe.shared), increart_core::config::timeouts().server_start(), cancel);
     let (client, unused, problem) = {
         let mut s = pe.shared.lock().unwrap();
         let others_ready = s.pe.iter().any(|p| p.id != id && p.process.is_some());
@@ -765,7 +759,13 @@ fn open_servers(
                     if server.is_started() {
                         watch_start_log(&server, &logs, attempt, i, &tx, &wake, &done);
                     }
-                    let opened = launcher::open_cancellable(&server, &cfg, &logs, START_WAIT, &cancel);
+                    let opened = launcher::open_cancellable(
+                        &server,
+                        &cfg,
+                        &logs,
+                        increart_core::config::timeouts().server_start(),
+                        &cancel,
+                    );
                     done.store(true, std::sync::atomic::Ordering::Relaxed);
                     opening.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
                     let msg = match opened {

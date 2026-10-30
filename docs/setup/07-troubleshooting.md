@@ -48,7 +48,7 @@ In the app: **Servers…** → **Logs…**.
 | `{name}: no server answers on {url}` | a `Connect` entry's server isn't running | start it; check `curl {url}/sdcpp/v1/capabilities` (sd-server) or `{url}/api/extra/version` (KoboldCpp) |
 | `{name}: can't start {binary}: {error}` | binary missing / not executable | `ls -l` and `chmod +x` the binary; fix the path |
 | `{name}: the server exited ({status}) during start-up; log {file}:` + tail | crash at start: wrong `--backend` device, missing libraries, port in use by another program | read the tail; `sd-server --list-devices` for valid names; `ss -ltnp \| grep <port>` |
-| `{name}: the server didn't answer within {secs} s; log {file}` | not up in 180 s (sd-server) | read the log; slow disk or stuck driver |
+| `{name}: the server didn't answer, its log quiet for {secs} s (the server start timeout); log {file}` | its log stopped growing before it answered | read the log; slow disk or stuck driver; raise the timeout in Settings → Timeouts if it was only slow |
 | servers still running after the app was killed | **Leave started servers running** on, or a leftover from a crash | `pgrep -af 'sd-server\|koboldcpp'`; stop them, or let the next session reuse them (a server already answering on its port is used as is) |
 | "No open server can run {preset}: …" when queueing | no open server has the model preset's files | open a preset whose servers have the files (guide 6.4), or fix the preset's file IDs |
 
@@ -101,7 +101,7 @@ In the app: **Servers…** → **Logs…**.
 | `No chat server in use: add one to a server preset (Servers…), or pick one to continue without sd-servers` | preset has no chat server | guide 5 |
 | `{name}: no chat server answers on {url}` | Connect chat server down | start it; `curl {url}/v1/models` |
 | `{name}: KoboldCpp exited ({status}) while starting; log {file}` | bad model path, out of memory, bad device flags | read `pe-<name>.log` |
-| `{name}: KoboldCpp didn't answer within 300 s; log {file}` | model load too slow | read the log; use a GPU or a smaller model |
+| `{name}: KoboldCpp didn't answer, its log quiet for {secs} s (the server start timeout); log {file}` | the model load stopped printing | read the log; raise the timeout in Settings → Timeouts if it was only slow |
 | `{url}: HTTP {status}: …` | server error | read the server's log |
 | PE can't describe images | KoboldCpp chat entry without `mmproj` (text only) | set the vision file (guide 5.2) |
 | asks are slow while images run | PE shares a GPU with an image server | give PE its own GPU or the CPU |

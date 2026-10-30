@@ -781,8 +781,11 @@ pub fn link(src: &Path, dest: &Path) -> Result<(), String> {
 }
 
 /// Fetches `url` to `dest` (through `dest.part`, so a broken download is
-/// never taken for the file); one already there is kept. `progress` gets
-/// (bytes so far, total if known); `cancel` stops it.
+/// never taken for the file); one already there is kept. A `.part` left
+/// by a broken one is carried on from where it stopped (when the server
+/// takes a `Range`). Given up after the config's download timeout without
+/// data, never for being slow. `progress` gets (bytes so far, total if
+/// known); `cancel` stops it (the `.part` kept, to carry on later).
 pub fn download(
     url: &str,
     dest: &Path,
@@ -795,25 +798,49 @@ pub fn download(
     if let Some(dir) = dest.parent() {
         std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     }
+    let stall = crate::config::timeouts().download();
     let agent: ureq::Agent = ureq::Agent::config_builder()
         .timeout_connect(Some(std::time::Duration::from_secs(20)))
-        .timeout_recv_body(Some(std::time::Duration::from_secs(120)))
+        .timeout_per_read(Some(stall))
+        .http_status_as_error(false)
         .build()
         .into();
-    let mut resp = agent.get(url).call().map_err(|e| format!("{url}: {e}"))?;
-    let total = resp.headers().get("content-length").and_then(|v| v.to_str().ok()).and_then(|v| v.parse().ok());
     let part = PathBuf::from(format!("{}.part", dest.display()));
-    let mut out = std::fs::File::create(&part).map_err(|e| format!("{}: {e}", part.display()))?;
+    let had = std::fs::metadata(&part).map_or(0, |m| m.len());
+    let mut rq = agent.get(url);
+    if had > 0 {
+        rq = rq.header("Range", format!("bytes={had}-"));
+    }
+    let mut resp = rq.call().map_err(|e| format!("{url}: {e}"))?;
+    let status = resp.status().as_u16();
+    let length: Option<u64> =
+        resp.headers().get("content-length").and_then(|v| v.to_str().ok()).and_then(|v| v.parse().ok());
+    // carried on (206), or from the start (200: no ranges here)
+    let (mut out, mut done, total) = match status {
+        206 if had > 0 => {
+            let out = std::fs::OpenOptions::new().append(true).open(&part);
+            (out.map_err(|e| format!("{}: {e}", part.display()))?, had, length.map(|n| n + had))
+        }
+        200..=299 => (std::fs::File::create(&part).map_err(|e| format!("{}: {e}", part.display()))?, 0, length),
+        // the .part is all of it already
+        416 if had > 0 => {
+            return std::fs::rename(&part, dest).map_err(|e| format!("{}: {e}", dest.display()));
+        }
+        _ => return Err(format!("{url}: HTTP {status}")),
+    };
+    progress(done, total);
     let mut body = resp.body_mut().with_config().limit(u64::MAX).reader();
     let mut buf = vec![0u8; 1 << 20];
-    let mut done = 0u64;
     loop {
         if cancel.load(Ordering::Relaxed) {
-            drop(out);
-            let _ = std::fs::remove_file(&part);
             return Err("cancelled".into());
         }
-        let n = body.read(&mut buf).map_err(|e| format!("{url}: {e}"))?;
+        let n = body.read(&mut buf).map_err(|e| match e.kind() {
+            std::io::ErrorKind::TimedOut => {
+                format!("{url}: no data for {} s (download timeout; the rest is fetched next time)", stall.as_secs())
+            }
+            _ => format!("{url}: {e} (the rest is fetched next time)"),
+        })?;
         if n == 0 {
             break;
         }
@@ -1077,6 +1104,43 @@ mod tests {
         assert!(!dir.path().join("koboldcpp/f.gguf.part").exists());
         // there already: not fetched again (the server is gone)
         download(&url, &dest, &AtomicBool::new(false), |_, _| panic!("fetched")).unwrap();
+    }
+
+    #[test]
+    fn a_broken_download_carries_on_where_it_stopped() {
+        let whole: Vec<u8> = (0..(3u32 << 20)).map(|i| (i % 251) as u8).collect();
+        let served = whole.clone();
+        let server = tiny_http::Server::http("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/f.gguf", server.server_addr().to_ip().unwrap());
+        // the first asks for the rest (206); the second server knows no ranges (200)
+        std::thread::spawn(move || {
+            for (i, req) in server.incoming_requests().take(2).enumerate() {
+                let range = req.headers().iter().find(|h| h.field.equiv("Range")).map(|h| h.value.to_string());
+                let from: usize = range
+                    .as_deref()
+                    .and_then(|r| r.strip_prefix("bytes=")?.strip_suffix('-')?.parse().ok())
+                    .unwrap_or(0);
+                let r = if i == 0 && from > 0 {
+                    tiny_http::Response::from_data(served[from..].to_vec()).with_status_code(206)
+                } else {
+                    tiny_http::Response::from_data(served.clone())
+                };
+                let _ = req.respond(r);
+            }
+        });
+        let dir = tempfile::tempdir().unwrap();
+        let dest = dir.path().join("f.gguf");
+        let part = dir.path().join("f.gguf.part");
+        std::fs::write(&part, &whole[..1 << 20]).unwrap();
+        let mut seen = vec![];
+        download(&url, &dest, &AtomicBool::new(false), |d, _| seen.push(d)).unwrap();
+        assert_eq!(seen.first(), Some(&(1 << 20)), "from where it stopped");
+        assert!(std::fs::read(&dest).unwrap() == whole && !part.exists());
+        // no ranges: from the start, not appended
+        std::fs::remove_file(&dest).unwrap();
+        std::fs::write(&part, &whole[..1 << 20]).unwrap();
+        download(&url, &dest, &AtomicBool::new(false), |_, _| {}).unwrap();
+        assert!(std::fs::read(&dest).unwrap() == whole);
     }
 
     #[test]

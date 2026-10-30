@@ -18,9 +18,11 @@ pub fn window(ctx: &egui::Context, st: &AppState, out: &mut Vec<Msg>) {
         ui.set_width(620.0);
         ui.heading(ic(ph::GEAR, "Settings"));
         ui.horizontal(|ui| {
-            for (tab, icon, name) in
-                [(SettingsTab::Notifications, ph::BELL, "Notifications"), (SettingsTab::Library, ph::BOOKS, "Library")]
-            {
+            for (tab, icon, name) in [
+                (SettingsTab::Notifications, ph::BELL, "Notifications"),
+                (SettingsTab::Library, ph::BOOKS, "Library"),
+                (SettingsTab::Timeouts, ph::TIMER, "Timeouts"),
+            ] {
                 if ui.selectable_label(st.settings_tab == tab, ic(icon, name)).clicked() && st.settings_tab != tab {
                     out.push(Msg::SettingsTab(tab));
                 }
@@ -30,6 +32,7 @@ pub fn window(ctx: &egui::Context, st: &AppState, out: &mut Vec<Msg>) {
         match st.settings_tab {
             SettingsTab::Notifications => notifications(ui, st, &mut n, out),
             SettingsTab::Library => library(ui, st, out),
+            SettingsTab::Timeouts => timeouts(ui, st, out),
         }
         ui.add_space(8.0);
         // the version, for bug reports
@@ -51,6 +54,50 @@ pub fn window(ctx: &egui::Context, st: &AppState, out: &mut Vec<Msg>) {
     }
     if m.inner || m.should_close() {
         out.push(Msg::Settings(false));
+    }
+}
+
+/// How long the servers may go quiet before they're given up on (here and
+/// in Server settings): each a stall limit, never a cap on something slow
+/// that keeps coming.
+pub fn timeouts(ui: &mut egui::Ui, st: &AppState, out: &mut Vec<Msg>) {
+    use increart_core::config::Timeouts;
+    ui.weak(
+        "How long something may go without a sign of progress before it's given up on. \
+         Slow is fine: a download, answer or load that keeps coming is never cut off.",
+    );
+    let mut t = st.config.timeouts;
+    let rows: [(&str, &str, &mut u64); 4] = [
+        (
+            "Server start",
+            "a server starting: no new line in its log (loading a big model from a slow disk can pause)",
+            &mut t.server_start,
+        ),
+        ("Image server requests", "sending a job or reading a result: no data", &mut t.request),
+        (
+            "Prompt enhance answer",
+            "no word yet, or none since the last (with images on a CPU the first can take minutes)",
+            &mut t.chat,
+        ),
+        ("Model downloads", "no data (a broken download carries on where it stopped)", &mut t.download),
+    ];
+    egui::Grid::new("timeouts").num_columns(3).spacing([12.0, 6.0]).show(ui, |ui| {
+        for (name, what, secs) in rows {
+            ui.label(name);
+            ui.add(egui::DragValue::new(secs).range(1..=86_400).speed(1.0).suffix(" s"));
+            ui.add(egui::Label::new(RichText::new(what).weak()).wrap());
+            ui.end_row();
+        }
+    });
+    ui.horizontal(|ui| {
+        let reset = egui::Button::new("Reset to defaults");
+        if ui.add_enabled(t != Timeouts::DEFAULT, reset).clicked() {
+            t = Timeouts::DEFAULT;
+        }
+        ui.weak("Used by servers and downloads started from now on.");
+    });
+    if t != st.config.timeouts {
+        out.push(Msg::SetTimeouts(t));
     }
 }
 

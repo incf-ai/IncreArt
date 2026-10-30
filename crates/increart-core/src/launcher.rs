@@ -5,7 +5,7 @@ use std::fs::{self, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use crate::config::{SdServerConfig, ServerConfig};
 use crate::sdserver::Client;
@@ -21,7 +21,10 @@ pub enum LaunchError {
     Exited { name: String, status: String, log: PathBuf, tail: String },
     #[error("{name}: opening cancelled")]
     Cancelled { name: String },
-    #[error("{name}: the server didn't answer within {secs} s; log {}", log.display())]
+    #[error(
+        "{name}: the server didn't answer, its log quiet for {secs} s (the server start timeout); log {}",
+        log.display()
+    )]
     Timeout { name: String, secs: u64, log: PathBuf },
     #[error("{0}")]
     Io(#[from] std::io::Error),
@@ -148,8 +151,9 @@ pub fn command_line(
 
 /// Opens one server of the chosen preset. `Connect` checks that it answers.
 /// `Start` launches sd-server, logging to `log_dir/sd-server-<name>.log`,
-/// and waits up to `wait` for it to answer; if an sd-server already answers
-/// on that port (e.g. left over from a crash) it is used as is.
+/// and waits for it to answer (given up after `wait` without a new line in
+/// its log); if an sd-server already answers on that port (e.g. left over
+/// from a crash) it is used as is.
 pub fn open(
     server: &ServerConfig,
     shared: &SdServerConfig,
@@ -277,7 +281,7 @@ fn wait_up(
 ) -> Result<ServerProcess, LaunchError> {
     let name = proc.name.clone();
     let client = proc.client.clone();
-    let deadline = Instant::now() + wait;
+    let mut stall = crate::process::LogStall::new(&log, wait);
     loop {
         if client.capabilities().is_ok() {
             return Ok(proc);
@@ -290,7 +294,7 @@ fn wait_up(
             proc.stop();
             return Err(LaunchError::Cancelled { name });
         }
-        if Instant::now() >= deadline {
+        if stall.stalled() {
             return Err(LaunchError::Timeout { name, secs: wait.as_secs(), log });
         }
         std::thread::sleep(Duration::from_millis(200));

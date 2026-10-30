@@ -980,6 +980,10 @@ impl eframe::App for App {
             ctx.send_viewport_cmd(egui::ViewportCommand::RequestUserAttention(egui::UserAttentionType::Reset));
             self.attention = false;
         }
+        // the config's timeouts for the clients made from now on
+        if self.st.config.timeouts != increart_core::config::timeouts() {
+            increart_core::config::set_timeouts(self.st.config.timeouts);
+        }
         let n = &self.st.config.notifications;
         if n.gpu_idle.on || n.review_backlog.on {
             ctx.request_repaint_after(std::time::Duration::from_secs(1));
