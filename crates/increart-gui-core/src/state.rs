@@ -2334,7 +2334,8 @@ pub enum PickKind {
     TileFile(increart_core::config::TileFormat),
     SdServerBinary,
     KoboldBinary,
-    ModelDir,
+    /// A Models folder (its index; one past the last adds one).
+    ModelDir(usize),
     /// A file for the PE server being edited.
     Pe(PeFile),
     /// A file for the preset editor's KoboldCpp entry (its index).
@@ -3215,7 +3216,10 @@ impl AppState {
         if c.binary.contains('/') && !Path::new(&c.binary).is_file() {
             return Some(format!("sd-server not found at {}", c.binary));
         }
-        c.model_dirs.iter().find(|m| !Path::new(m).is_dir()).map(|m| format!("Models folder not found: {m}"))
+        c.model_dirs
+            .iter()
+            .find(|m| !m.trim().is_empty() && !Path::new(m).is_dir())
+            .map(|m| format!("Models folder not found: {m}"))
     }
 
     pub fn place(&self) -> Place {

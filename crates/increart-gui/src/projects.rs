@@ -1524,8 +1524,9 @@ pub fn recipes_window(ctx: &egui::Context, st: &AppState, out: &mut Vec<Msg>) {
                         ui.add(
                             egui::Label::new(
                                 RichText::new(
-                                    "Paths inside the Models folder, written relative to it (vae/x.safetensors): \
-                                     sd-server loads only files inside it. Browse… writes them so.",
+                                    "Paths inside a Models folder, written relative to it (vae/x.safetensors): \
+                                     the servers load only files inside these, in this order (Server settings). \
+                                     Browse… writes them so.",
                                 )
                                 .weak(),
                             )

@@ -82,7 +82,7 @@ pub fn command_args(server: &ServerConfig, shared: &SdServerConfig) -> Vec<Strin
     };
     let mut args: Vec<String> =
         vec!["--listen-ip".into(), host.clone(), "--listen-port".into(), port.to_string(), "--backend".into(), backend];
-    for dir in &shared.model_dirs {
+    for dir in shared.model_dirs.iter().filter(|d| !d.trim().is_empty()) {
         args.extend(["--model-dir".into(), dir.clone()]);
     }
     args.extend(shared.args.iter().cloned());

@@ -422,7 +422,7 @@ impl Client {
         if let Some(k) = &self.kobold {
             return k.loadable();
         }
-        Ok(Loadable::files(self.model_files()?.into_iter().map(|f| f.id)))
+        Ok(Loadable::files(self.model_files()?.into_iter().map(|f| portable_id(&f.id).to_string())))
     }
 
     pub fn refresh_models(&self) -> ApiResult<Value> {
@@ -433,7 +433,7 @@ impl Client {
         if let Some(k) = &self.kobold {
             return k.model_status();
         }
-        self.get("models/status")
+        self.get("models/status").map(portable_status)
     }
 
     /// Loads a model; blocks until the load has finished.
@@ -441,8 +441,13 @@ impl Client {
         if let Some(k) = &self.kobold {
             return k.load_model(model);
         }
-        let body = serde_json::json!({ "recipe": model.recipe, "models": model.models });
-        Self::finish(self.load_agent.post(self.url("models/load")).send_json(&body), false)
+        // its names for files outside its first --model-dir
+        // (as they are when it can't list them: its load says what's wrong)
+        let listed: Vec<String> = self.model_files().map(|f| f.into_iter().map(|f| f.id).collect()).unwrap_or_default();
+        let models: BTreeMap<&String, String> =
+            model.models.iter().map(|(slot, id)| (slot, server_id(&listed, id))).collect();
+        let body = serde_json::json!({ "recipe": model.recipe, "models": models });
+        Self::finish(self.load_agent.post(self.url("models/load")).send_json(&body), false).map(portable_status)
     }
 
     pub fn unload_model(&self) -> ApiResult<ModelStatus> {
@@ -450,6 +455,7 @@ impl Client {
             return k.unload_model();
         }
         Self::finish(self.load_agent.post(self.url("models/unload")).send_json(serde_json::json!({})), false)
+            .map(portable_status)
     }
 
     /// Submits an `img_gen` job; returns its ID.
@@ -457,7 +463,32 @@ impl Client {
         if let Some(k) = &self.kobold {
             return k.img_gen(body);
         }
-        Ok(self.post::<Submitted>("img_gen", body)?.id)
+        match body.get("lora").and_then(Value::as_array).filter(|l| !l.is_empty()) {
+            Some(loras) => {
+                // its names for LoRAs outside its first --model-dir's loras/
+                #[derive(Deserialize)]
+                struct Lora {
+                    path: String,
+                }
+                let listed: Vec<Lora> =
+                    Self::finish(self.agent.get(format!("{}/sdapi/v1/loras", self.base)).call(), false)
+                        .unwrap_or_default();
+                let listed: Vec<String> = listed.into_iter().map(|l| l.path).collect();
+                let mut body = body.clone();
+                body["lora"] = loras
+                    .iter()
+                    .map(|l| {
+                        let mut l = l.clone();
+                        if let Some(path) = l.get("path").and_then(Value::as_str) {
+                            l["path"] = server_id(&listed, path).into();
+                        }
+                        l
+                    })
+                    .collect();
+                Ok(self.post::<Submitted>("img_gen", &body)?.id)
+            }
+            None => Ok(self.post::<Submitted>("img_gen", body)?.id),
+        }
     }
 
     pub fn job(&self, id: &str) -> ApiResult<Job> {
@@ -477,9 +508,56 @@ impl Client {
     }
 }
 
+/// A model or LoRA file as IncreArt names it: its path inside the Models
+/// folder (or LoRA folder) that has it, as KoboldCpp finds it. sd-server
+/// names those outside its first `--model-dir` `@<folder hash>/<path>`.
+pub fn portable_id(id: &str) -> &str {
+    match id.split_once('/') {
+        Some((root, rest))
+            if root.len() == 17 && root.starts_with('@') && root[1..].bytes().all(|b| b.is_ascii_hexdigit()) =>
+        {
+            rest
+        }
+        _ => id,
+    }
+}
+
+/// sd-server's name for a file IncreArt names `id`, among those it lists:
+/// `id` itself when its first folder has it, else another folder's file at
+/// that path (`id` as it is when none has it, for its error).
+fn server_id(listed: &[String], id: &str) -> String {
+    if listed.iter().any(|l| l == id) {
+        return id.to_string();
+    }
+    listed.iter().find(|l| portable_id(l) == id && l.as_str() != id).cloned().unwrap_or_else(|| id.to_string())
+}
+
+fn portable_status(mut s: ModelStatus) -> ModelStatus {
+    for id in s.models.values_mut() {
+        *id = portable_id(id).to_string();
+    }
+    s
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ids_outside_the_first_model_dir() {
+        let h = "@0123456789abcdef";
+        assert_eq!(portable_id(&format!("{h}/vae/v.safetensors")), "vae/v.safetensors");
+        for kept in ["vae/v.safetensors", "@short/v.gguf", "@0123456789abcdeg/v.gguf", "@command-line"] {
+            assert_eq!(portable_id(kept), kept);
+        }
+        let listed: Vec<String> = ["a.gguf", &format!("{h}/a.gguf"), &format!("{h}/b.gguf")].map(String::from).into();
+        assert_eq!(server_id(&listed, "a.gguf"), "a.gguf", "the first folder's");
+        assert_eq!(server_id(&listed, "b.gguf"), format!("{h}/b.gguf"));
+        assert_eq!(server_id(&listed, "c.gguf"), "c.gguf", "unknown, for its error");
+        let status =
+            ModelStatus { models: BTreeMap::from([("vae".to_string(), format!("{h}/b.gguf"))]), ..Default::default() };
+        assert_eq!(portable_status(status).models["vae"], "b.gguf");
+    }
 
     #[test]
     fn local_servers_and_why_not() {

@@ -159,8 +159,8 @@ pub struct RecipePreset {
     pub loras: Vec<PresetLora>,
 }
 
-/// A LoRA of a model preset: its file inside the first Models folder's
-/// `loras/` (as [`lora_file_id`] writes it), and how strongly it applies.
+/// A LoRA of a model preset: its file inside a Models folder's `loras/`
+/// (as [`lora_file_id`] writes it), and how strongly it applies.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename = "Lora")]
 pub struct PresetLora {
@@ -179,37 +179,50 @@ pub const LORA_DIRS: [&str; 2] = ["loras", "lora"];
 
 /// The LoRA folder of a Models folder as it is on disk, if it has one.
 pub fn lora_dir(model_dir: &str) -> Option<PathBuf> {
-    let mut found: Vec<PathBuf> = std::fs::read_dir(model_dir)
-        .ok()?
-        .flatten()
-        .filter(|e| e.path().is_dir() && LORA_DIRS.contains(&e.file_name().to_string_lossy().to_lowercase().as_str()))
-        .map(|e| e.path())
-        .collect();
-    // `loras` before `Lora`, as sd-server orders them
-    found.sort_by_key(|p| p.file_name().is_none_or(|n| n != "loras"));
-    found.into_iter().next()
+    lora_dirs(&[model_dir.to_string()]).into_iter().next()
 }
 
-/// A LoRA as a model preset names it: its path inside the first Models
-/// folder, which must be in its `loras/` (`loras/style.safetensors`). Both
-/// servers look for LoRAs there, and are sent the path inside it
-/// ([`lora_request_path`]).
+/// A LoRA as a model preset names it: its path inside the Models folder
+/// it's in, which must be in that folder's `loras/` (`loras/style.safetensors`).
+/// Both servers look for LoRAs in every Models folder's `loras/`, and are
+/// sent the path inside it ([`lora_request_path`]).
 pub fn lora_file_id(file: &Path, model_dirs: &[String]) -> std::result::Result<String, String> {
-    let Some(first) = model_dirs.iter().find(|d| !d.trim().is_empty()) else {
+    if !model_dirs.iter().any(|d| !d.trim().is_empty()) {
         return Err("No Models folder is set: set one in Server settings first.".into());
-    };
+    }
     let outside = || {
         format!(
-            "{} isn't in the loras folder of the Models folder ({}): sd-server and KoboldCpp only load LoRAs from there.",
+            "{} isn't in the loras folder of a Models folder ({}): sd-server and KoboldCpp only load LoRAs from there.",
             file.display(),
-            Path::new(first).join("loras").display()
+            model_dirs.iter().filter(|d| !d.trim().is_empty()).cloned().collect::<Vec<_>>().join(", ")
         )
     };
-    let id = model_file_id(file, std::slice::from_ref(first)).map_err(|_| outside())?;
+    let id = model_file_id(file, model_dirs).map_err(|_| outside())?;
     match id.split_once('/') {
         Some((dir, rest)) if LORA_DIRS.contains(&dir.to_lowercase().as_str()) && !rest.is_empty() => Ok(id),
         _ => Err(outside()),
     }
+}
+
+/// Every LoRA folder of the Models folders, in order (`loras` before
+/// `Lora` in each, as sd-server orders them).
+pub fn lora_dirs(model_dirs: &[String]) -> Vec<PathBuf> {
+    model_dirs
+        .iter()
+        .flat_map(|d| {
+            let mut found: Vec<PathBuf> = std::fs::read_dir(d)
+                .into_iter()
+                .flatten()
+                .flatten()
+                .filter(|e| {
+                    e.path().is_dir() && LORA_DIRS.contains(&e.file_name().to_string_lossy().to_lowercase().as_str())
+                })
+                .map(|e| e.path())
+                .collect();
+            found.sort_by_key(|p| (p.file_name().is_none_or(|n| n != "loras"), p.clone()));
+            found
+        })
+        .collect()
 }
 
 /// The path a server is sent for a LoRA ID: inside the LoRA folder
@@ -1366,14 +1379,15 @@ mod tests {
     }
 
     #[test]
-    fn loras_named_inside_the_first_models_folder() {
+    fn loras_named_inside_their_models_folder() {
         let dir = tempfile::tempdir().unwrap();
         let models = dir.path().join("models");
         let dirs = vec![models.to_string_lossy().into_owned(), dir.path().join("more").to_string_lossy().into_owned()];
         let id = |p: PathBuf| lora_file_id(&p, &dirs);
         assert_eq!(id(models.join("loras/style.safetensors")).unwrap(), "loras/style.safetensors");
         assert_eq!(id(models.join("Lora/sub/x.gguf")).unwrap(), "Lora/sub/x.gguf");
-        for wrong in [models.join("vae/v.safetensors"), models.join("loras"), dir.path().join("more/loras/a.gguf")] {
+        assert_eq!(id(dir.path().join("more/loras/a.gguf")).unwrap(), "loras/a.gguf", "any Models folder");
+        for wrong in [models.join("vae/v.safetensors"), models.join("loras"), dir.path().join("other/loras/a.gguf")] {
             assert!(id(wrong).unwrap_err().contains("isn't in the loras folder"));
         }
         assert!(lora_file_id(&models.join("loras/a.gguf"), &[]).unwrap_err().contains("No Models folder"));
@@ -1386,6 +1400,9 @@ mod tests {
         assert_eq!(lora_dir(&dirs[0]), Some(models.join("Lora")));
         std::fs::create_dir_all(models.join("loras")).unwrap();
         assert_eq!(lora_dir(&dirs[0]), Some(models.join("loras")));
+        std::fs::create_dir_all(dir.path().join("more/loras")).unwrap();
+        let all = [models.join("loras"), models.join("Lora"), dir.path().join("more/loras")];
+        assert_eq!(lora_dirs(&dirs), all, "every folder's, in order");
     }
 
     #[test]

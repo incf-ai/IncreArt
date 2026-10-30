@@ -1250,9 +1250,14 @@ fn picked_files() {
     h.settle();
     assert_eq!(h.state.unreviewed_ideas()[0].idea.images.len(), 1);
 
-    let fx = h.send(Msg::Picked(PickKind::ModelDir, vec!["/models".into()]));
+    let fx = h.send(Msg::Picked(PickKind::ModelDir(0), vec!["/models".into()]));
     assert!(fx.is_empty(), "no config path in tests: nothing saved");
     assert_eq!(h.state.config.sdserver.model_dirs, ["/models"]);
+    h.send(Msg::Picked(PickKind::ModelDir(1), vec!["/more".into()]));
+    h.send(Msg::Picked(PickKind::ModelDir(2), vec!["/models".into()]));
+    assert_eq!(h.state.config.sdserver.model_dirs, ["/models", "/more"], "added once");
+    h.send(Msg::Picked(PickKind::ModelDir(0), vec!["/other".into()]));
+    assert_eq!(h.state.config.sdserver.model_dirs, ["/other", "/more"], "replaced");
     h.send(Msg::Picked(PickKind::SdServerBinary, vec!["/opt/sd/sd-server".into()]));
     assert_eq!(h.state.config.sdserver.binary, "/opt/sd/sd-server");
     assert!(h.send(Msg::Picked(PickKind::ImportFiles, vec![])).is_empty(), "cancelled");

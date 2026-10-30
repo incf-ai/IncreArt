@@ -405,7 +405,7 @@ fn path_kind(pick: PickKind) -> PathKind {
         | PickKind::Kobold(_, PeFile::Binary)
         | PickKind::Pe(PeFile::Binary) => PathKind::Binary,
         PickKind::WizardModels => PathKind::NewFolder,
-        PickKind::ModelDir => PathKind::Folder,
+        PickKind::ModelDir(_) => PathKind::Folder,
         _ => PathKind::File,
     }
 }
@@ -1034,7 +1034,7 @@ fn settings(ui: &mut egui::Ui, st: &AppState, d: &ServerDialog, out: &mut Vec<Ms
         Some(d) => format!("into {}", std::path::Path::new(d).join(tiers::MODEL_SUBDIR).display()),
         None => format!("into {}/ in it", tiers::MODEL_SUBDIR),
     };
-    ui.weak(format!("KoboldCpp loads the recipes' model files from here too; the setup wizard downloads {wizard}."));
+    ui.weak(format!("KoboldCpp loads the recipes' model files from these too; the setup wizard downloads {wizard}."));
     leave_running_field(ui, &mut c);
     if c != st.config.sdserver {
         out.push(Msg::SetSdServer(c));
@@ -1149,19 +1149,70 @@ fn sdserver_fields(ui: &mut egui::Ui, st: &AppState, out: &mut Vec<Msg>) {
     }
 }
 
-/// The models folder: sd-server's first `--model-dir`, where KoboldCpp's
-/// files are looked up too.
+/// The Models folders, in order: sd-server's `--model-dir`s, where
+/// KoboldCpp's files and both servers' LoRAs are looked up too. Each can
+/// be typed, browsed to, moved or removed; Add folder… browses to another.
 fn models_field(ui: &mut egui::Ui, c: &mut increart_core::config::SdServerConfig, out: &mut Vec<Msg>) {
-    ui.horizontal(|ui| {
-        ui.add_sized([56.0, 18.0], egui::Label::new("Models"));
-        let mut dir = c.model_dirs.first().cloned().unwrap_or_default();
-        path_edit(ui, &mut dir, models_hint(), PickKind::ModelDir, out);
-        if dir != c.model_dirs.first().cloned().unwrap_or_default() {
-            match c.model_dirs.first_mut() {
-                Some(first) => *first = dir,
-                None => c.model_dirs.push(dir),
+    let n = c.model_dirs.len().max(1);
+    let mut moved = None;
+    // one width for every row (↑ ↓ × after each)
+    let sp = ui.spacing().item_spacing.x;
+    let w = ui.available_width() - 56.0 - sp - 3.0 * (ui.spacing().interact_size.y + 8.0 + sp);
+    for i in 0..n {
+        ui.horizontal(|ui| {
+            if i == 0 {
+                ui.add_sized([56.0, 18.0], egui::Label::new("Models")).on_hover_text(
+                    "Folders searched for model files and LoRAs (in each one's loras/), in order: \
+                     a file in more than one is the first one's. sd-server is started with each.",
+                );
+            } else {
+                ui.add_space(56.0 + sp);
             }
-            c.model_dirs.retain(|d| !d.is_empty());
+            let mut dir = c.model_dirs.get(i).cloned().unwrap_or_default();
+            ui.allocate_ui(egui::vec2(w, 18.0), |ui| {
+                path_edit(ui, &mut dir, models_hint(), PickKind::ModelDir(i), out)
+            });
+            if dir != c.model_dirs.get(i).cloned().unwrap_or_default() {
+                match c.model_dirs.get_mut(i) {
+                    Some(d) => *d = dir,
+                    None => c.model_dirs.push(dir),
+                }
+            }
+            let many = c.model_dirs.len() > 1;
+            if ui
+                .add_enabled(many && i > 0, egui::Button::new(ph::ARROW_UP))
+                .on_hover_text("Search it earlier")
+                .clicked()
+            {
+                moved = Some((i, i - 1));
+            }
+            if ui
+                .add_enabled(many && i + 1 < c.model_dirs.len(), egui::Button::new(ph::ARROW_DOWN))
+                .on_hover_text("Search it later")
+                .clicked()
+            {
+                moved = Some((i, i + 1));
+            }
+            if ui
+                .add_enabled(i < c.model_dirs.len(), egui::Button::new(ph::X))
+                .on_hover_text("Remove it from the list (the folder stays on disk)")
+                .clicked()
+            {
+                c.model_dirs.remove(i);
+            }
+        });
+    }
+    if let Some((from, to)) = moved {
+        c.model_dirs.swap(from, to);
+    }
+    ui.horizontal(|ui| {
+        ui.add_space(56.0 + sp);
+        if ui
+            .button(ic(ph::FOLDER_PLUS, "Add folder…"))
+            .on_hover_text("Browse to another folder with model files")
+            .clicked()
+        {
+            out.push(Msg::Pick(PickKind::ModelDir(c.model_dirs.len())));
         }
     });
 }

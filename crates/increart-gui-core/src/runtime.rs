@@ -642,7 +642,7 @@ fn pick(kind: PickKind, start: Option<PathBuf>) -> Vec<PathBuf> {
             .pick_folder()
             .into_iter()
             .collect(),
-        PickKind::ModelDir => {
+        PickKind::ModelDir(_) => {
             d.set_title("Models folder (KoboldCpp and sd-server)").pick_folder().into_iter().collect()
         }
         PickKind::SdServerBinary => d.set_title("sd-server binary").pick_file().into_iter().collect(),
@@ -656,7 +656,7 @@ fn pick(kind: PickKind, start: Option<PathBuf>) -> Vec<PathBuf> {
                 .collect()
         }
         PickKind::RecipeLora(_) => d
-            .set_title("A LoRA (in the Models folder's loras folder)")
+            .set_title("A LoRA (in a Models folder's loras folder)")
             .add_filter("LoRA files", &["safetensors", "gguf", "sft", "ckpt"])
             .add_filter("All files", &["*"])
             .pick_file()
@@ -1263,6 +1263,7 @@ fn work_on(shared: &Arc<Mutex<Shared>>, wake: &Wake, fx: Effect) -> Vec<Msg> {
                 LibOp::CreateSweep { queue, .. } => Some(*queue),
                 _ => None,
             };
+            hash_ahead(&lib, &op);
             let result = {
                 let mut l = lib.lock().unwrap();
                 lib_op(&mut l, op)
@@ -1566,18 +1567,18 @@ pub fn lib_op(lib: &mut Library, op: LibOp) -> Result<OpOk, String> {
         LibOp::Rename(tree, path, name) => lib.rename_node(tree, &path, &name).map(|_| OpOk::Done).map_err(err),
         LibOp::MoveNode(tree, path, parent) => lib.move_node(tree, &path, &parent).map(|_| OpOk::Done).map_err(err),
         LibOp::DeleteNode(tree, path) => lib.delete_node(tree, &path).map(|_| OpOk::Done).map_err(err),
-        LibOp::CreateSweep { project, runs, model_dir, queued, .. } => {
+        LibOp::CreateSweep { project, runs, model_dirs, queued, .. } => {
             let name = runs.first().map(|(_, t, _)| t.name.clone()).unwrap_or_default();
             let mut ids = vec![];
             for (form, tag, preset) in runs {
-                let mut run = new_run(lib, &form, &preset, model_dir.as_deref());
+                let mut run = new_run(lib, &form, &preset, &model_dirs);
                 run.sweep = Some(tag);
                 ids.push(lib.create_run(&project, run).map_err(err)?);
             }
             Ok(OpOk::Sweep(ids, name, queued))
         }
-        LibOp::CreateRun { project, form, preset, model_dir, queued, .. } => {
-            let run = new_run(lib, &form, &preset, model_dir.as_deref());
+        LibOp::CreateRun { project, form, preset, model_dirs, queued, .. } => {
+            let run = new_run(lib, &form, &preset, &model_dirs);
             lib.create_run(&project, run).map(|id| OpOk::Run(id, queued)).map_err(err)
         }
         LibOp::PrepareProject { parent, name, copy_of, form } => {
@@ -1691,14 +1692,32 @@ fn promote(lib: &mut Library, ids: &[Id], folder: &Path, name: &str) -> Result<O
     Ok(OpOk::Promoted { project, prompt, refs, idea: ids.first().cloned() })
 }
 
+/// Hashes a new run's model files into the library's cache before the
+/// library is locked for it: reading a model of many GB takes minutes,
+/// and the engine (starting the runs queued before) needs the library.
+fn hash_ahead(lib: &Mutex<Library>, op: &LibOp) {
+    let (presets, model_dirs): (Vec<&RecipePreset>, _) = match op {
+        LibOp::CreateRun { preset, model_dirs, .. } => (vec![preset], model_dirs),
+        LibOp::CreateSweep { runs, model_dirs, .. } => (runs.iter().map(|(_, _, p)| p).collect(), model_dirs),
+        _ => return,
+    };
+    let cache = lib.lock().unwrap().root().join("cache/model-hashes.rsn");
+    let ids = presets.iter().flat_map(|p| p.files.values().chain(p.loras.iter().map(|l| &l.file)));
+    let files: std::collections::BTreeSet<PathBuf> = ids
+        .filter(|id| !id.starts_with('@'))
+        .filter_map(|id| increart_core::config::model_file_on_disk(id, model_dirs))
+        .collect();
+    for f in files {
+        let _ = modelhash::sha256_cached(&cache, &f);
+    }
+}
+
 /// A run from the Generate form. Model files are hashed (cached in the
-/// library's `cache/`) when they can be found under the first model dir.
-fn new_run(lib: &Library, f: &GenerateForm, preset: &RecipePreset, model_dir: Option<&str>) -> NewRun {
+/// library's `cache/`) when they can be found in a Models folder.
+fn new_run(lib: &Library, f: &GenerateForm, preset: &RecipePreset, model_dirs: &[String]) -> NewRun {
     let cache = lib.root().join("cache/model-hashes.rsn");
-    let sha256 = |id: &str| match model_dir {
-        Some(dir) if !id.starts_with('@') => {
-            modelhash::sha256_cached(&cache, &Path::new(dir).join(id)).unwrap_or_default()
-        }
+    let sha256 = |id: &str| match increart_core::config::model_file_on_disk(id, model_dirs) {
+        Some(file) if !id.starts_with('@') => modelhash::sha256_cached(&cache, &file).unwrap_or_default(),
         _ => String::new(),
     };
     let files = preset

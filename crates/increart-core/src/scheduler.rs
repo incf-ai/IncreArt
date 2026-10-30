@@ -493,12 +493,23 @@ impl Scheduler {
                 self.servers[i].state = ServerState::Draining { target: model.clone() };
             }
         }
-        // A server with nothing to do for its model helps with the most due one.
+        // A server with nothing to do for its model helps with the most due
+        // one that no server is loading: until that load is done it stays
+        // free for another model's work, queued meanwhile (loads on a machine
+        // go one at a time anyway).
         for i in 0..self.servers.len() {
             let srv = &self.servers[i];
             let idle = srv.state == ServerState::Ready && srv.loaded.as_ref().is_none_or(|m| !demand.contains(m));
-            if idle {
-                self.servers[i].state = ServerState::Draining { target: demand[0].clone() };
+            if !idle {
+                continue;
+            }
+            let loading = |m: &ModelKey| {
+                self.servers.iter().any(|s| {
+                    matches!(&s.state, ServerState::Draining { target } | ServerState::Loading { target } if target == m)
+                })
+            };
+            if let Some(m) = demand.iter().find(|m| !loading(m)) {
+                self.servers[i].state = ServerState::Draining { target: m.clone() };
             }
         }
     }
@@ -749,6 +760,28 @@ mod tests {
         // server 1 has no work for b and nothing in flight: it loads a at once
         assert!(acts.contains(&Action::Load { server: 1, model: model("a") }));
         assert_eq!(s.server_state(1), &ServerState::Loading { target: model("a") });
+    }
+
+    #[test]
+    fn a_helper_waits_for_the_first_load() {
+        let (mut s, now) = up(&[None, None]);
+        s.add_seeds(&run(0), model("a"), seeds(4));
+        assert_eq!(s.poll(now), [Action::Load { server: 0, model: model("a") }]);
+        // server 1 doesn't load a too while server 0 loads it...
+        assert_eq!(s.server_state(1), &ServerState::Ready);
+        // ...so it's free for b, queued meanwhile
+        s.add_seeds(&run(1), model("b"), seeds(4));
+        assert_eq!(s.poll(now), [Action::Load { server: 1, model: model("b") }]);
+        // with nothing else to do, it helps once the load is done
+        let (mut s, now) = up(&[None, None]);
+        s.add_seeds(&run(0), model("a"), seeds(10));
+        s.poll(now);
+        s.loaded(0, LoadResult::Ok, now);
+        let acts = s.poll(now);
+        assert!(
+            acts.contains(&Action::WarmUp { server: 0 })
+                && acts.contains(&Action::Load { server: 1, model: model("a") })
+        );
     }
 
     #[test]

@@ -304,9 +304,13 @@ asks among them):
   elsewhere), and kept; else `koboldcpp`; the wizard sets it), with its version from
   `--version` (checked when the settings open, the field is left or a file
   picked) or why it can't run. **sd-server**: the binary and the devices
-  (`sd-server --list-devices`, **List again**). **Both**: the models
-  folder (KoboldCpp loads the recipes' files from it too) and leave started
-  servers running. **Timeouts** (also a tab in Settings): see Timeouts below. When a preset starts sd-servers and the binary or
+  (`sd-server --list-devices`, **List again**). **Both**: the **Models**
+  folders (`sdserver.model_dirs`), a row each, in order: typed or Browse…,
+  Show, ↑ / ↓ to search it earlier or later, × to drop it from the list (not
+  from disk), and **Add folder…** (browses to another; one already listed
+  isn't added twice). The wizard adds its download folder when it isn't
+  listed. Both servers search all of them, the first that has a path
+  winning (see Models folders); and leave started servers running. **Timeouts** (also a tab in Settings): see Timeouts below. When a preset starts sd-servers and the binary or
   models folder is missing, the dialog says so with **Fix…**, which opens
   it.
 - ✎ or **New preset** opens the editor modal: the name, then the server
@@ -930,6 +934,15 @@ Config {
   `--model-dir` per `model_dirs` entry, then `sdserver.args`, then the
   server's own `args`. Output goes to `sd-server-<name>.log` in the app's log
   directory.
+- **Models folders** (`model_dirs`, edited in Server settings): a model
+  preset names each file by its path inside the folder that holds it
+  (`vae/x.safetensors`), the first folder that has the path winning, as
+  KoboldCpp searches them. sd-server names a file outside its first
+  `--model-dir` `@<folder hash>/<path>`: loading a model looks each path up
+  in its `model-files` (the first folder's file, else another's at that
+  path) and sends its name; what it reports loaded, and what it lists as
+  loadable, are read back without the `@<hash>/`. Runs record each file's
+  SHA-256 from whichever folder holds it.
 - `Connect` servers take a `url`; `device` is optional and only recorded in
   recipes.
 - `Chat` is the preset's chat server for prompt enhance, at most one (see
@@ -1430,7 +1443,10 @@ its details window, and for every run at once in the Jobs header:
   Concretely: work for a model no server has makes one server drain for it
   (an idle one first, else the one with fewest jobs in flight), but never
   the last server of a model that still has pending work; a server with
-  nothing to do for its own model switches to the most due one. With a
+  nothing to do for its own model switches to the most due one that no
+  server is loading (until that load is done it stays free for another
+  model's work queued meanwhile: runs queued together arrive one by one,
+  and loads on this machine go one at a time anyway). With a
   single server, runs for a second model therefore wait until the first
   model's work is done (no reload ping-pong). A model whose load fails
   leaves its runs waiting (shown as stuck) instead of retrying in a loop.
@@ -1871,17 +1887,19 @@ and its tooltip says how many more are generating.
   the form takes them, and if it was deleted the first preset is chosen.
   Other projects' drafts name their preset, so a rename moves them to the
   form's current one when opened. **Reset to built-ins** replaces the list.
-  Each file row has Browse… (writes the path relative to the Models folder,
-  shown above the rows, or says why a file outside it can't be used) and
-  Show (its folder in the file manager).
+  Each file row has Browse… (writes the path relative to the Models folder
+  that holds it, the folders shown above the rows, or says why a file
+  outside them can't be used) and Show (its folder in the file manager).
 - A model preset's **LoRAs**: a file and a weight per row (−4–4; 1 as
-  trained, below 0 against it), applied to every image. The file is in the
-  first Models folder's `loras/` (or `Lora/`), named as `loras/x.safetensors`
+  trained, below 0 against it), applied to every image. The file is in a
+  Models folder's `loras/` (or `Lora/`), named as `loras/x.safetensors`
   (Browse… refuses one elsewhere). Both servers take LoRAs per request
-  (`lora: [{path, multiplier}]`, the path inside that folder), so changing
-  them needs no reload and they're no part of what a server loads. sd-server
-  finds them in its model dirs; a started KoboldCpp is given
-  `--sdlora <that folder>` with each model, lists what it found then (at
+  (`lora: [{path, multiplier}]`, the path inside that folder; sd-server's
+  name for one outside the first Models folder's `loras/` is looked up in
+  its `/sdapi/v1/loras`), so changing them needs no reload and they're no
+  part of what a server loads. sd-server finds them in its model dirs; a
+  started KoboldCpp is given `--sdlora` with every Models folder's LoRA
+  folder with each model, lists what it found then (at
   most one folder down), takes at most 10, and skips one it doesn't have
   without a word, so the app checks `/sdapi/v1/loras` first and fails the
   seed saying why. The run and each image's recipe record them (ID,

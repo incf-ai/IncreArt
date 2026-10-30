@@ -1051,7 +1051,7 @@ pub enum LibOp {
         project: Id,
         form: GenerateForm,
         preset: RecipePreset,
-        model_dir: Option<String>,
+        model_dirs: Vec<String>,
         queue: bool,
         /// Handed back with the run, for the history's queued checkpoint.
         queued: Box<Queued>,
@@ -1061,7 +1061,7 @@ pub enum LibOp {
         project: Id,
         /// Each with its model preset.
         runs: Vec<(GenerateForm, SweepTag, RecipePreset)>,
-        model_dir: Option<String>,
+        model_dirs: Vec<String>,
         queue: bool,
         queued: Box<Queued>,
     },
@@ -5062,7 +5062,7 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
                 project,
                 form: f.clone(),
                 preset,
-                model_dir: state.config.sdserver.model_dirs.first().cloned(),
+                model_dirs: state.config.sdserver.model_dirs.clone(),
                 queue: state.engine_running,
                 queued,
             };
@@ -5555,7 +5555,10 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
                     }
                     _ => None,
                 },
-                PickKind::ModelDir => state.config.sdserver.model_dirs.first().map(PathBuf::from),
+                PickKind::ModelDir(i) => {
+                    let dirs = &state.config.sdserver.model_dirs;
+                    dirs.get(i).or(dirs.last()).filter(|d| !d.trim().is_empty()).map(PathBuf::from)
+                }
                 // the current file's folder, else the models folder
                 PickKind::RecipeFile(slot) => {
                     let dirs = &state.config.sdserver.model_dirs;
@@ -5570,11 +5573,13 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
                     let dirs = &state.config.sdserver.model_dirs;
                     let on_disk = state.recipe_editor.as_ref().and_then(|e| {
                         let lora = e.rows.get(e.selected)?.preset.loras.get(i)?;
-                        increart_core::config::model_file_on_disk(&lora.file, &dirs[..dirs.len().min(1)])
+                        increart_core::config::model_file_on_disk(&lora.file, dirs)
                     });
                     on_disk.and_then(|p| p.parent().map(PathBuf::from)).or_else(|| {
-                        let first = dirs.first()?;
-                        Some(increart_core::config::lora_dir(first).unwrap_or_else(|| PathBuf::from(first)))
+                        increart_core::config::lora_dirs(dirs)
+                            .into_iter()
+                            .next()
+                            .or_else(|| dirs.first().map(PathBuf::from))
                     })
                 }
                 PickKind::SdServerBinary => PathBuf::from(&state.config.sdserver.binary).parent().map(PathBuf::from),
@@ -5781,12 +5786,13 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
                 }
                 vec![]
             }
-            PickKind::ModelDir => {
+            PickKind::ModelDir(i) => {
                 let mut c = state.config.sdserver.clone();
                 let dir = paths.remove(0).to_string_lossy().into_owned();
-                match c.model_dirs.first_mut() {
-                    Some(first) => *first = dir,
-                    None => c.model_dirs.push(dir),
+                if let Some(d) = c.model_dirs.get_mut(i) {
+                    *d = dir;
+                } else if !c.model_dirs.contains(&dir) {
+                    c.model_dirs.push(dir);
                 }
                 update(state, Msg::SetSdServer(c))
             }
@@ -6776,7 +6782,7 @@ fn queue_sweep(state: &mut AppState, confirmed: bool) -> Vec<Effect> {
     let op = LibOp::CreateSweep {
         project,
         runs,
-        model_dir: state.config.sdserver.model_dirs.first().cloned(),
+        model_dirs: state.config.sdserver.model_dirs.clone(),
         queue: state.engine_running,
         queued,
     };
