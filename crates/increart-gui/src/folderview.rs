@@ -237,7 +237,8 @@ fn keys(ui: &egui::Ui, st: &AppState, out: &mut Vec<Msg>) {
 
 fn toolbar(ui: &mut egui::Ui, st: &AppState, out: &mut Vec<Msg>) {
     let fv = &st.folder_view;
-    ui.horizontal(|ui| {
+    // wraps: the view buttons go under the path when they don't fit beside it
+    ui.horizontal_wrapped(|ui| {
         if ui
             .add_enabled(!fv.back.is_empty(), egui::Button::new(ph::ARROW_LEFT))
             .on_hover_text("back (Alt+←)")
@@ -296,31 +297,31 @@ fn toolbar(ui: &mut egui::Ui, st: &AppState, out: &mut Vec<Msg>) {
                 }
             }
         }
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if ui.button(ph::FOLDER_OPEN).on_hover_text("open in the system file manager").clicked() {
-                out.push(Msg::ShowInFileManager(fv.path.clone()));
-            }
-            if ui.button(ph::ARROWS_CLOCKWISE).on_hover_text("refresh").clicked() {
-                out.push(Msg::FvRefresh);
-            }
-            let mut meta = fv.show_meta;
-            if ui.checkbox(&mut meta, "metadata").on_hover_text("show project.rsn / run.rsn … (Ctrl+H)").changed() {
-                out.push(Msg::FvShowMeta(meta));
-            }
-            if ui.selectable_label(fv.mode == FvMode::Details, ic(ph::LIST, "Details")).clicked() {
-                out.push(Msg::FvMode(FvMode::Details));
-            }
-            if ui.selectable_label(fv.mode == FvMode::Compact, ic(ph::ROWS, "Compact")).clicked() {
-                out.push(Msg::FvMode(FvMode::Compact));
-            }
-            if ui.selectable_label(fv.mode == FvMode::Icons, ic(ph::SQUARES_FOUR, "Icons")).clicked() {
-                out.push(Msg::FvMode(FvMode::Icons));
-            }
+        crate::widgets::right_group(ui, "fv_right", |ui| {
             if fv.mode == FvMode::Icons {
                 let mut size = fv.icon_size;
                 if ui.add(egui::Slider::new(&mut size, 64.0..=256.0).show_value(false)).changed() {
                     out.push(Msg::FvIconSize(size));
                 }
+            }
+            if ui.selectable_label(fv.mode == FvMode::Icons, ic(ph::SQUARES_FOUR, "Icons")).clicked() {
+                out.push(Msg::FvMode(FvMode::Icons));
+            }
+            if ui.selectable_label(fv.mode == FvMode::Compact, ic(ph::ROWS, "Compact")).clicked() {
+                out.push(Msg::FvMode(FvMode::Compact));
+            }
+            if ui.selectable_label(fv.mode == FvMode::Details, ic(ph::LIST, "Details")).clicked() {
+                out.push(Msg::FvMode(FvMode::Details));
+            }
+            let mut meta = fv.show_meta;
+            if ui.checkbox(&mut meta, "metadata").on_hover_text("show project.rsn / run.rsn … (Ctrl+H)").changed() {
+                out.push(Msg::FvShowMeta(meta));
+            }
+            if ui.button(ph::ARROWS_CLOCKWISE).on_hover_text("refresh").clicked() {
+                out.push(Msg::FvRefresh);
+            }
+            if ui.button(ph::FOLDER_OPEN).on_hover_text("open in the system file manager").clicked() {
+                out.push(Msg::ShowInFileManager(fv.path.clone()));
             }
         });
     });
@@ -526,11 +527,13 @@ pub fn view(ui: &mut egui::Ui, st: &AppState, tex: &mut Textures, out: &mut Vec<
                 ui.weak(format!("· {} {} on the clipboard", c.paths.len(), if c.cut { "cut" } else { "copied" }));
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if is_smart(&fv.path) {
-                    ui.weak(format!("{} (virtual: computed from the library, nothing on disk)", fv.path.display()));
+                // cut short (whole on hover) when the panel is narrow
+                let text = if is_smart(&fv.path) {
+                    format!("{} (virtual: computed from the library, nothing on disk)", fv.path.display())
                 } else {
-                    ui.weak(root.join(&fv.path).display().to_string());
-                }
+                    root.join(&fv.path).display().to_string()
+                };
+                ui.add(egui::Label::new(RichText::new(text).weak()).truncate());
             });
         });
     });

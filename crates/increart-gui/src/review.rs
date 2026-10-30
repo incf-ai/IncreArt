@@ -1518,7 +1518,7 @@ pub fn output_library(ui: &mut egui::Ui, st: &AppState, tex: &mut Textures, out:
         Panel::right("out_lineage").default_size(300.0).show(ui, |ui| {
             ScrollArea::vertical().auto_shrink([false, true]).id_salt("lineage_scroll").show(ui, |ui| {
                 match st.output_selected.clone() {
-                    Some(sel) => lineage_panel(ui, st, &root, tex, &sel, out),
+                    Some(sel) => lineage_panel(ui, st, &root, tex, &sel, InfoPanel::Output, out),
                     None => crate::widgets::nothing_selected(
                         ui,
                         "Lineage",
@@ -2017,18 +2017,20 @@ fn lineage_row(
 }
 
 /// Source idea → parent ← image → children, and the recipe.
-fn lineage_panel(
+/// `panel`: the details panel it is in (its × hides that one).
+pub fn lineage_panel(
     ui: &mut egui::Ui,
     st: &AppState,
     root: &Path,
     tex: &mut Textures,
     image: &increart_core::ImageRef,
+    panel: InfoPanel,
     out: &mut Vec<Msg>,
 ) {
     ui.horizontal(|ui| {
         ui.label(RichText::new("Lineage").strong());
         if ui.small_button(ph::X).on_hover_text("close").clicked() {
-            out.push(Msg::ShowInfo(InfoPanel::Output, false));
+            out.push(Msg::ShowInfo(panel, false));
         }
     });
     let link = st.output_link(image);

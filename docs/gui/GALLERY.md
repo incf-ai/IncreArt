@@ -40,9 +40,21 @@ Input library: folder tree, selection actions, cards
 
 ## 06-projects-grid
 
-Projects: tree and project tiles (cover, counts)
+Projects: tree and project tiles (cover, counts); the details pane on the right with the folder's totals
 
 ![06-projects-grid](06-projects-grid.png)
+
+## 06b-projects-pane
+
+Projects → Grid, a project selected: the details pane (cover, counts, source ideas, latest run, recent runs, best outputs; Generate / Review / Show outputs / Open folder pinned at the bottom)
+
+![06b-projects-pane](06b-projects-pane.png)
+
+## 06c-projects-pane-run
+
+Projects → Folder inside a run: the details pane shows the run (prompt, settings, input images, seeds, revisions; Open in Generate / Show outputs / Details)
+
+![06c-projects-pane-run](06c-projects-pane-run.png)
 
 ## 07-projects-generate
 

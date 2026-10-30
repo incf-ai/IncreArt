@@ -21,7 +21,9 @@ size (regenerate it with `scripts/make-gui-gallery.sh`).
 | [03-idea-inbox-grid](03-idea-inbox-grid.png) | Idea inbox grid: keys panel, card-size zoom, the drop-folder hint |
 | [04-idea-inbox-new-idea](04-idea-inbox-new-idea.png) | New idea form |
 | [05-input-library](05-input-library.png) | Input library: folder tree, selection actions, cards |
-| [06-projects-grid](06-projects-grid.png) | Projects: tree and project tiles (cover, counts) |
+| [06-projects-grid](06-projects-grid.png) | Projects: tree and project tiles (cover, counts); the details pane on the right with the folder's totals |
+| [06b-projects-pane](06b-projects-pane.png) | Projects → Grid, a project selected: the details pane (cover, counts, source ideas, latest run, recent runs, best outputs; Generate / Review / Show outputs / Open folder pinned at the bottom) |
+| [06c-projects-pane-run](06c-projects-pane-run.png) | Projects → Folder inside a run: the details pane shows the run (prompt, settings, input images, seeds, revisions; Open in Generate / Show outputs / Details) |
 | [07-projects-generate](07-projects-generate.png) | Generate: the form, and the Images pane on the right (each image a `<imageN>` reference, the start image, both, or parked) |
 | [07b-generate-blanks](07b-generate-blanks.png) | Generate, a single run whose prompt has blanks: the **Blanks** table under the prompt (a value each, prompt enhance's suggestions, Suggest for the empty ones), filled in when queued |
 | [08-projects-jobs](08-projects-jobs.png) | Jobs: servers and running runs |

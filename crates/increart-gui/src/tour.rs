@@ -35,6 +35,8 @@ const SCENES: &[&str] = &[
     "04-idea-inbox-new-idea",
     "05-input-library",
     "06-projects-grid",
+    "06b-projects-pane",
+    "06c-projects-pane-run",
     "07-projects-generate",
     "07b-generate-blanks",
     "08-projects-jobs",
@@ -934,6 +936,25 @@ impl Tour {
                 Msg::ProjectsTab(ProjectsTab::Grid),
                 Msg::SelectProjectFolder(Some(PathBuf::new())),
             ],
+            // the details pane: the project with the most runs, then one of its runs
+            "06b-projects-pane" => {
+                let mut v =
+                    vec![Msg::ContinueWithoutServers, Msg::Tab(Tab::Projects), Msg::ProjectsTab(ProjectsTab::Grid)];
+                if let Some(p) = st.index.projects.iter().max_by_key(|p| p.runs.len()) {
+                    v.push(Msg::SelectProject(p.project.id.clone()));
+                }
+                v
+            }
+            "06c-projects-pane-run" => {
+                let mut v =
+                    vec![Msg::ContinueWithoutServers, Msg::Tab(Tab::Projects), Msg::ProjectsTab(ProjectsTab::Folder)];
+                if let Some(p) = st.index.projects.iter().max_by_key(|p| p.runs.len())
+                    && let Some(r) = st.latest_run(p)
+                {
+                    v.push(Msg::FvGo(p.dir.join("runs").join(r.id.as_str())));
+                }
+                v
+            }
             "87-messages-popover" => vec![
                 Msg::ContinueWithoutServers,
                 Msg::Info("Copied 1 image".into()),
