@@ -306,20 +306,25 @@ pub fn overlay_button(b: egui::Button<'static>) -> egui::Button<'static> {
     b.fill(Color32::from_rgba_unmultiplied(20, 20, 20, 220))
 }
 
+/// Where [`cover_buttons`] puts button `i` of `n` on `cover`.
+pub fn cover_button_rect(cover: egui::Rect, n: usize, i: usize) -> egui::Rect {
+    let n = n.max(1) as f32;
+    let w = (cover.width() - 12.0 - 4.0 * (n - 1.0)) / n;
+    let at = egui::pos2(cover.left() + 6.0 + i as f32 * (w + 4.0), cover.bottom() - 34.0);
+    egui::Rect::from_min_size(at, egui::vec2(w, 28.0))
+}
+
 /// Two buttons along the bottom of a tile's `cover` (its picture), each
 /// (icon, label, hover): labelled when there's room, else icons with the
 /// label on hover. Returns which was clicked.
 pub fn cover_buttons(ui: &mut egui::Ui, cover: egui::Rect, buttons: &[(&str, &str, &str)]) -> Option<usize> {
-    let n = buttons.len().max(1) as f32;
-    let w = (cover.width() - 12.0 - 4.0 * (n - 1.0)) / n;
-    let labelled = w >= 70.0;
+    let labelled = cover_button_rect(cover, buttons.len(), 0).width() >= 70.0;
     let mut clicked = None;
     for (i, (icon, label, hover)) in buttons.iter().enumerate() {
-        let at = egui::pos2(cover.left() + 6.0 + i as f32 * (w + 4.0), cover.bottom() - 34.0);
+        let rect = cover_button_rect(cover, buttons.len(), i);
         let text = if labelled { ic(icon, label) } else { icon.to_string() };
         let hover = if labelled { hover.to_string() } else { format!("{label}: {hover}") };
-        let r =
-            overlay(ui, egui::Rect::from_min_size(at, egui::vec2(w, 28.0)), overlay_button(egui::Button::new(text)));
+        let r = overlay(ui, rect, overlay_button(egui::Button::new(text)));
         if r.on_hover_text(hover).clicked() {
             clicked = Some(i);
         }

@@ -176,6 +176,9 @@ const EXTRA_SCENES: &[&str] = &[
     // after 02, with a config whose first preset's server can't start (a
     // KoboldCpp binary that isn't there): the error under its row
     "98i-server-start-failed",
+    // checks, not screenshots: the selected idea card's own buttons
+    "98j-check-library-card-refs",
+    "98k-check-inbox-card-keep",
     "99-quit-with-unsaved-draft",
     // the README's shots, on the demo library (scripts/demo-library.json),
     // after 02-server-dialog and 03-idea-inbox-grid
@@ -221,6 +224,8 @@ pub struct Tour {
     /// Synthetic input for the next frame (click checks).
     inject: Vec<egui::Event>,
     clicked: bool,
+    /// A click check's before: the idea clicked, and a count.
+    card_before: (Option<increart_core::Id>, usize),
     /// Tile rects before the hover check.
     before: Vec<Option<egui::Rect>>,
     /// The reveal check's step (each restarts the scene's clock).
@@ -255,6 +260,7 @@ impl Tour {
             started: 0.0,
             inject: vec![],
             clicked: false,
+            card_before: (None, 0),
             before: vec![],
             stage: 0,
         })
@@ -683,6 +689,22 @@ impl Tour {
                 }
                 v
             }
+            "98j-check-library-card-refs" => {
+                let first = st.library_ideas().iter().find(|e| !e.idea.images.is_empty()).map(|e| e.idea.id.clone());
+                let mut v = vec![
+                    Msg::ContinueWithoutServers,
+                    Msg::Tab(Tab::InputLibrary),
+                    Msg::LibTab(increart_gui_core::LibTab::Grid),
+                    Msg::LibFolder(None),
+                ];
+                if let Some(id) = first {
+                    v.push(Msg::LibSelect { id, additive: false });
+                }
+                v
+            }
+            "98k-check-inbox-card-keep" => {
+                vec![Msg::ContinueWithoutServers, Msg::Tab(Tab::IdeaInbox), Msg::InboxTab(InboxTab::Grid)]
+            }
             "97i-check-output-double-click" => vec![
                 Msg::ContinueWithoutServers,
                 Msg::Tab(Tab::OutputLibrary),
@@ -1110,7 +1132,9 @@ impl Tour {
                     Msg::ProjectsTab(ProjectsTab::Grid),
                     Msg::SelectProjectFolder(Some(PathBuf::new())),
                 ];
-                if let Some(p) = st.index.projects.iter().find(|p| p.name() == "stickers") {
+                // (the tour library has no stickers: its first project)
+                let projects = &st.index.projects;
+                if let Some(p) = projects.iter().find(|p| p.name() == "stickers").or(projects.first()) {
                     v.push(Msg::SelectProject(p.project.id.clone()));
                 }
                 v
@@ -1542,6 +1566,52 @@ impl Tour {
         true
     }
 
+    /// Click a button on the selected idea card (the library's Add as refs,
+    /// the inbox's Keep), then check it did what it says.
+    fn card_click_check(&mut self, name: &str, ctx: &egui::Context, st: &AppState) {
+        let library = name == "98j-check-library-card-refs";
+        match self.settled {
+            5 if !self.clicked => {
+                let Some(cover) = ctx.data(|d| d.get_temp::<egui::Rect>(egui::Id::unique("tour_idea_cover"))) else {
+                    eprintln!("CHECK {name}: FAILED (no selected card drawn)");
+                    self.clicked = true;
+                    return;
+                };
+                // Add as refs is the second of two; Keep the first
+                let pos = crate::widgets::cover_button_rect(cover, 2, usize::from(library)).center();
+                self.card_before = if library {
+                    (st.lib_selected.iter().next().cloned(), st.generate.refs().len())
+                } else {
+                    (st.inbox_queue().get(st.inbox_cursor).map(|e| e.idea.id.clone()), st.inbox_queue().len())
+                };
+                let button = |pressed| egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: Default::default(),
+                };
+                self.inject = vec![egui::Event::PointerMoved(pos), button(true), button(false)];
+                self.clicked = true;
+            }
+            14 if self.clicked => {
+                let (id, n) = (self.card_before.0.clone(), self.card_before.1);
+                let (ok, what) = if library {
+                    let images = id.as_ref().and_then(|id| st.idea(id)).map_or(0, |e| e.idea.images.len());
+                    let now = st.generate.refs().len();
+                    (images > 0 && now == n + images, format!("refs {n} → {now}, its images {images}"))
+                } else {
+                    let kept = id
+                        .as_ref()
+                        .and_then(|id| st.idea(id))
+                        .is_some_and(|e| matches!(e.loc, increart_core::IdeaLoc::Library(_)));
+                    (kept && st.inbox_queue().len() + 1 == n, format!("inbox {n} → {}", st.inbox_queue().len()))
+                };
+                eprintln!("CHECK {name}: {} ({what})", if ok { "ok" } else { "FAILED" });
+            }
+            _ => {}
+        }
+    }
+
     pub fn step(&mut self, ctx: &egui::Context, st: &AppState, tex: &Textures, out: &mut Vec<Msg>) {
         ctx.request_repaint();
         let Some(name) = self.scenes.get(self.scene).copied() else {
@@ -1617,6 +1687,9 @@ impl Tour {
             // once loaded (loading selects the newest): the entry before the
             // rewrite, compared with the current prompt
             out.push(Msg::HistorySelect(2));
+        }
+        if name == "98j-check-library-card-refs" || name == "98k-check-inbox-card-keep" {
+            self.card_click_check(name, ctx, st);
         }
         if name == "25-check-grid-click" && self.settled == 5 && !self.clicked {
             self.click_check(ctx, st);

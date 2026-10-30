@@ -64,6 +64,10 @@ fn idea_card(
         // along the bottom of the picture, as on project tiles
         let cover = egui::Rect::from_min_size(r.rect.min + egui::vec2(7.0, 7.0), egui::vec2(w, w));
         let id = &e.idea.id;
+        if selected {
+            // where its buttons are, for the screenshot tour's click checks
+            ui.ctx().data_mut(|d| d.insert_temp(egui::Id::unique("tour_idea_cover"), cover));
+        }
         match buttons {
             CardButtons::Triage => {
                 let picked = cover_buttons(
