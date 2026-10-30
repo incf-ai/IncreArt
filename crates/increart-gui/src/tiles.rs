@@ -330,7 +330,7 @@ pub fn window(ctx: &egui::Context, st: &AppState, tex: &mut Textures, out: &mut 
                     .on_hover_text("an image (or an image file) from the clipboard, after the last tile   Ctrl+V")
                     .clicked()
                 {
-                    paste(None, out);
+                    paste(st, None, out);
                 }
             });
             ui.weak(
@@ -451,7 +451,7 @@ fn preview(
                     ui.close();
                 }
                 if ui.button(ic(ph::CLIPBOARD, "Paste image here   Ctrl+V")).clicked() {
-                    paste(Some((c, r)), out);
+                    paste(st, Some((c, r)), out);
                     ui.close();
                 }
             });
@@ -549,7 +549,7 @@ fn preview(
                 }
                 // text: image files' paths (copied in a file manager)
                 egui::Event::Paste(text) => {
-                    add_files(paths_in(&text), under, out);
+                    add_files(st, paths_in(&text), under, out);
                 }
                 _ => {}
             }
@@ -557,7 +557,7 @@ fn preview(
     }
     let files: Vec<PathBuf> = dropped_files.iter().map(|f| f.path().to_path_buf()).filter(|p| p.is_file()).collect();
     if !files.is_empty() && pos.is_some() {
-        add_files(files, under, out);
+        add_files(st, files, under, out);
     }
     // the tile being dragged follows the pointer
     let held = ui.ctx().data(|m| m.get_temp::<usize>(dragging));
@@ -590,26 +590,37 @@ fn preview(
     }
 }
 
-/// The clipboard's image into the tiling (at a cell): image data, else
-/// image files' paths or `file://` URIs as text.
-fn paste(at: Option<(u32, u32)>, out: &mut Vec<Msg>) {
+/// The clipboard's images, as tiles: image data, else what its text names
+/// a line each (see [`files_tiles`]). Nothing there is told.
+pub fn clipboard_tiles(st: &AppState, out: &mut Vec<Msg>) -> Vec<TileContent> {
     let mut cb = match arboard::Clipboard::new() {
         Ok(cb) => cb,
-        Err(e) => return out.push(Msg::Problem(format!("Clipboard: {e}"))),
+        Err(e) => {
+            out.push(Msg::Problem(format!("Clipboard: {e}")));
+            return vec![];
+        }
     };
     if let Ok(img) = cb.get_image()
         && let Some(buf) = image::RgbaImage::from_raw(img.width as u32, img.height as u32, img.bytes.into_owned())
     {
-        return out.push(Msg::TileAdd(vec![TileContent::Pasted(TileImage(Arc::new(buf)))], at));
+        return vec![TileContent::Pasted(TileImage(Arc::new(buf)))];
     }
-    let files = paths_in(&cb.get_text().unwrap_or_default());
-    if files.is_empty() {
+    let tiles = files_tiles(st, paths_in(&cb.get_text().unwrap_or_default()), out);
+    if tiles.is_empty() {
         out.push(Msg::Info("No image on the clipboard".into()));
     }
-    add_files(files, at, out);
+    tiles
 }
 
-/// Paths in pasted text, one a line (`file://` URIs decoded); only files.
+/// The clipboard's images into the tiling (at a cell).
+fn paste(st: &AppState, at: Option<(u32, u32)>, out: &mut Vec<Msg>) {
+    let tiles = clipboard_tiles(st, out);
+    if !tiles.is_empty() {
+        out.push(Msg::TileAdd(tiles, at));
+    }
+}
+
+/// Paths in pasted text, one a line (`file://` URIs decoded).
 fn paths_in(text: &str) -> Vec<PathBuf> {
     text.lines()
         .map(str::trim)
@@ -618,7 +629,6 @@ fn paths_in(text: &str) -> Vec<PathBuf> {
             Some(rest) => PathBuf::from(percent_decode(rest)),
             None => PathBuf::from(l),
         })
-        .filter(|p| p.is_absolute() && p.is_file())
         .collect()
 }
 
@@ -642,17 +652,31 @@ fn percent_decode(s: &str) -> String {
     String::from_utf8_lossy(&v).into_owned()
 }
 
-/// Image files read into the tiling; those that aren't images are named.
-fn add_files(files: Vec<PathBuf>, at: Option<(u32, u32)>, out: &mut Vec<Msg>) {
-    let mut images = vec![];
+/// Paths as tiles: the library's images stay library images (a store file,
+/// an image link, an idea's folder: absolute, or relative to the library as
+/// the folder view copies them); other image files are read in, those that
+/// aren't images named.
+fn files_tiles(st: &AppState, files: Vec<PathBuf>, out: &mut Vec<Msg>) -> Vec<TileContent> {
+    let mut tiles = vec![];
     for f in files {
-        match image::open(&f) {
-            Ok(i) => images.push(TileContent::Pasted(TileImage(Arc::new(i.to_rgba8())))),
-            Err(e) => out.push(Msg::Problem(format!("{}: {e}", f.display()))),
+        let images = st.images_at(&f);
+        if !images.is_empty() {
+            tiles.extend(images.into_iter().map(TileContent::Image));
+        } else if f.is_absolute() && f.is_file() {
+            match image::open(&f) {
+                Ok(i) => tiles.push(TileContent::Pasted(TileImage(Arc::new(i.to_rgba8())))),
+                Err(e) => out.push(Msg::Problem(format!("{}: {e}", f.display()))),
+            }
         }
     }
-    if !images.is_empty() {
-        out.push(Msg::TileAdd(images, at));
+    tiles
+}
+
+/// [`files_tiles`] into the tiling (at a cell).
+fn add_files(st: &AppState, files: Vec<PathBuf>, at: Option<(u32, u32)>, out: &mut Vec<Msg>) {
+    let tiles = files_tiles(st, files, out);
+    if !tiles.is_empty() {
+        out.push(Msg::TileAdd(tiles, at));
     }
 }
 

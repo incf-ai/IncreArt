@@ -494,6 +494,17 @@ fn background_menu(ui: &mut egui::Ui, st: &AppState, out: &mut Vec<Msg>) {
         out.push(Msg::FvPaste(None));
         ui.close();
     }
+    if ui
+        .button(ic(ph::SQUARES_FOUR, "Tile the clipboard…"))
+        .on_hover_text("its image, or the images it names (copied here or in a file manager)")
+        .clicked()
+    {
+        let tiles = crate::tiles::clipboard_tiles(st, out);
+        if !tiles.is_empty() {
+            out.push(Msg::TileStart(tiles));
+        }
+        ui.close();
+    }
     if let Some(source) = outputs_of(st, &fv.path)
         && crate::review::show_outputs_button(ui, st, source, out)
     {

@@ -770,6 +770,9 @@ pub enum Msg {
     OpenTile,
     /// The Tile dialog, from the images in Generate (all, parked too).
     TileGenerateImages,
+    /// The Tile dialog, from these (the clipboard's); with one open, they
+    /// go after its last tile.
+    TileStart(Vec<crate::tile::TileContent>),
     // ---- Crop / mark…
     /// The editor on an image; from Generate, the image's index there.
     OpenMarkup(ImageRef, Option<usize>),
@@ -4531,7 +4534,7 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
             } else {
                 crate::tile::TileLayout::square(picked)
             };
-            state.tile = Some(TileDialog { layout, selected: None, working: 0, start: None });
+            open_tile(state, layout, None);
             vec![]
         }
         Msg::TileGenerateImages => {
@@ -4541,8 +4544,19 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
             if images.is_empty() {
                 return vec![];
             }
-            let layout = crate::tile::TileLayout::square(images);
-            state.tile = Some(TileDialog { layout, selected: None, working: 0, start: f.init() });
+            let start = f.init();
+            open_tile(state, crate::tile::TileLayout::square(images), start);
+            vec![]
+        }
+        Msg::TileStart(contents) => {
+            if contents.is_empty() {
+                state.messages_info("Nothing to tile");
+                return vec![];
+            }
+            if state.tile.is_some() {
+                return update(state, Msg::TileAdd(contents, None));
+            }
+            open_tile(state, crate::tile::TileLayout::square_of(contents), None);
             vec![]
         }
         Msg::CloseTile => {
@@ -6704,6 +6718,11 @@ fn queue_sweep(state: &mut AppState, confirmed: bool) -> Vec<Effect> {
 
 /// Compare with…'s pick: A in the Output library's Grid compare, or
 /// Review's A/B compare (B stays the image it was opened on).
+/// The Tile dialog on this layout (`start`: Generate's start image).
+fn open_tile(state: &mut AppState, layout: crate::tile::TileLayout, start: Option<ImageRef>) {
+    state.tile = Some(TileDialog { layout, selected: None, working: 0, start });
+}
+
 fn compare_against(state: &mut AppState, a: ImageRef) -> Vec<Effect> {
     if state.tab == Tab::OutputLibrary {
         state.output_tab = OutputTab::Grid;
