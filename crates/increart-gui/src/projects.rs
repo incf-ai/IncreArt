@@ -84,8 +84,18 @@ pub fn view(ui: &mut egui::Ui, st: &AppState, tex: &mut Textures, out: &mut Vec<
                     out.push(Msg::ProjectsTab(t));
                 }
             }
+            if matches!(st.projects_tab, ProjectsTab::Grid | ProjectsTab::Folder) {
+                crate::widgets::right_group(ui, "right", |ui| {
+                    crate::widgets::details_toggle(ui, st, increart_gui_core::InfoPanel::Projects, out)
+                });
+            }
         });
     });
+    if matches!(st.projects_tab, ProjectsTab::Grid | ProjectsTab::Folder)
+        && !st.info_hidden.contains(&increart_gui_core::InfoPanel::Projects)
+    {
+        crate::project_pane::pane(ui, st, tex, out);
+    }
     egui::CentralPanel::default().show(ui, |ui| match st.projects_tab {
         ProjectsTab::Grid => grid(ui, st, tex, out),
         ProjectsTab::Folder => crate::folderview::view(ui, st, tex, out),

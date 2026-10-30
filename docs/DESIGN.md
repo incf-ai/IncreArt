@@ -2549,6 +2549,32 @@ the keys and mouse buttons go through that view's own history instead.
   marker while runs are generating. A breadcrumb changes the scope; click a
   project to select it, double-click it to review it; right-click gives the
   same menu as the tree.
+- **Projects → Grid and Folder: the details pane** on the right (300 px),
+  shown by default; × or the tab bar's **Details** toggle hides it (for the
+  session, like the Output library's). Its buttons are pinned to its
+  bottom, the rest scrolls. It shows:
+  - **A project** (selected in Grid; in Folder, selected or the one the
+    view is in): cover, name, folder, created and last run; counts (runs,
+    images, good / neutral / bad, new to review, seeds queued); its source
+    ideas (a click opens one in the Input library); the latest run (prompt
+    with a copy button, size, model, steps / CFG, mode, input images);
+    **Recent runs**, newest 8 (label, images, date; a click shows its images
+    in the Output library, ⓘ its details); and its best outputs (good, then
+    neutral, then new). Buttons: **Generate**, **Review N**, **Show
+    outputs**, **Open folder**; Rename, Duplicate and Delete stay in the
+    right-click menu.
+  - **A run** (Folder: selected, or inside `runs/<id>/`): label, project,
+    prompt and negative prompt, settings, input images, images made, seeds
+    queued / cancelled / failed, time per image and its revisions. Buttons:
+    **Open in Generate** (a new run with its settings), **Show outputs**,
+    **Details** (the run window).
+  - **An image** (Folder): the Output library's Lineage pane.
+  - **A folder** (Grid with no project selected, or Folder): totals for the
+    projects under it, and those with images to review. Buttons: **New
+    project** (in it), **Show outputs**, **Open folder**.
+  - **Several entries** (Folder): their count.
+  - Later: size on disk, the project's "use outputs as references" setting,
+    and a note when Generate has unsaved changes.
 - **Projects → Folder**, and the same as **Input library → Folder**: a
   file-manager view (like Thunar) of the tree's on-disk layout. For projects
   that includes each project's `runs/`, `unreviewed/` and
@@ -2559,7 +2585,8 @@ the keys and mouse buttons go through that view's own history instead.
     metadata toggle (`Ctrl+H`, shows `project.rsn` / `run.rsn` / `idea.rsn`),
     and **Icons** (with a size slider) / **Details** (name, kind, info, size,
     modified) / **Compact** modes. Directories are plain folder icons; image
-    files show thumbnails.
+    files show thumbnails. The view buttons go to a second line when they
+    don't fit beside the path.
   - Side pane: the tree, kept in sync both ways.
   - Selection: click, `Ctrl`-click, `Shift`-click, rubber band on empty
     space, `Ctrl+A`, arrow keys, type-ahead. `Enter` or double-click opens: a
@@ -2576,7 +2603,8 @@ the keys and mouse buttons go through that view's own history instead.
     revision and seed) or copied; deleting one moves the link to the trash,
     the image stays in the store until Clean up. Project subfolders, idea
     images and metadata files are managed by the app.
-  - Status bar: item count, selection count and size, current path.
+  - Status bar: item count, selection count and size, current path (cut
+    short when narrow).
   - Later: a dual-pane split (`F3`).
 - **Projects sidebar**: the project folder tree (see Project folders), with
   per-project unreviewed counts; the selected project lists its runs under

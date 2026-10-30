@@ -72,6 +72,9 @@ pub enum InfoPanel {
     Output,
     /// Review Grid's current image.
     Review,
+    /// Projects → Grid and Folder: the selected project, run, image or
+    /// folder.
+    Projects,
 }
 
 /// Where an idea came from, as the Idea inbox's source filter groups it.

@@ -16,6 +16,7 @@ mod logs;
 mod markup;
 mod pe_settings;
 mod presets;
+mod project_pane;
 mod projects;
 mod refpicker;
 mod review;
