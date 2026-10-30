@@ -770,6 +770,14 @@ pub enum Msg {
     OpenTile,
     /// The Tile dialog, from the images in Generate (all, parked too).
     TileGenerateImages,
+    /// The Tile dialog, from these ideas' images (Idea inbox, Input library).
+    TileIdeas(Vec<Id>),
+    /// The Idea inbox Grid's picks.
+    InboxPick(Vec<Id>),
+    /// Keep (Good, Neutral) or Discard the Idea inbox's picks.
+    ReviewPickedIdeas(Verdict),
+    /// The Input library's selection (Shift+click's range, the rubber band).
+    LibSelectSet(Vec<Id>),
     // ---- Crop / mark…
     /// The editor on an image; from Generate, the image's index there.
     OpenMarkup(ImageRef, Option<usize>),
@@ -2579,6 +2587,7 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
         Msg::Tab(t) => {
             if t != state.tab {
                 state.picked.clear();
+                state.inbox_picked.clear();
             }
             if t == Tab::IdeaInbox && state.tab != Tab::IdeaInbox {
                 state.inbox_tab = if state.unreviewed_ideas().is_empty() { InboxTab::NewIdea } else { InboxTab::Grid };
@@ -2588,6 +2597,9 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
             relist(state)
         }
         Msg::InboxTab(t) => {
+            if t != state.inbox_tab {
+                state.inbox_picked.clear();
+            }
             state.inbox_tab = t;
             fv_sync(state);
             relist_if_stale(state)
@@ -4534,6 +4546,32 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
             state.tile = Some(TileDialog { layout, selected: None, working: 0, start: None });
             vec![]
         }
+        Msg::TileIdeas(ids) => {
+            let images: Vec<ImageRef> = ids
+                .iter()
+                .filter_map(|id| state.index.idea(id))
+                .flat_map(|e| e.idea.images.iter().cloned().map(ImageRef::input))
+                .collect();
+            if images.is_empty() {
+                state.messages_info("Nothing to tile: those ideas have no images");
+                return vec![];
+            }
+            let layout = crate::tile::TileLayout::square(images);
+            state.tile = Some(TileDialog { layout, selected: None, working: 0, start: None });
+            vec![]
+        }
+        Msg::InboxPick(ids) => {
+            state.inbox_picked = ids;
+            vec![]
+        }
+        Msg::ReviewPickedIdeas(v) => {
+            let ids = std::mem::take(&mut state.inbox_picked);
+            ids.into_iter().flat_map(|id| lib(state, LibOp::ReviewIdea(id, v))).collect()
+        }
+        Msg::LibSelectSet(ids) => {
+            state.lib_selected = ids.into_iter().collect();
+            vec![]
+        }
         Msg::TileGenerateImages => {
             // all of its images (parked ones too), in the strip's order
             let f = &state.generate;
@@ -4728,14 +4766,16 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
         }
         Msg::TileCaptions(fill) => {
             let Some(t) = &state.tile else { return vec![] };
-            // text blocks keep none
+            // only generated images have a seed, run and settings to fill
+            // in: pasted ones, inputs and marked-up copies keep their own
+            // (hand-written) captions, unless clearing; text blocks keep none
             let captions: Vec<String> = t
                 .layout
                 .tiles
                 .iter()
                 .map(|x| match &x.content {
-                    TileContent::Image(i) => state.caption(i, fill),
-                    TileContent::Pasted(_) if fill != CaptionFill::Clear => "pasted".into(),
+                    TileContent::Image(i) if state.output_link(i).is_some() => state.caption(i, fill),
+                    TileContent::Image(_) | TileContent::Pasted(_) if fill != CaptionFill::Clear => x.caption.clone(),
                     _ => String::new(),
                 })
                 .collect();
@@ -4747,8 +4787,13 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
             vec![]
         }
         Msg::TileCaptionFormat(template) => {
+            // generated images only: the others have no seed or run for
+            // its placeholders, and keep their hand-written captions
+            let Some(t) = &state.tile else { return vec![] };
+            let runs: Vec<bool> =
+                t.layout.tiles.iter().map(|x| x.image().is_some_and(|i| state.output_link(i).is_some())).collect();
             if let Some(t) = &mut state.tile {
-                for x in t.layout.tiles.iter_mut().filter(|x| !matches!(x.content, TileContent::Text { .. })) {
+                for (x, _) in t.layout.tiles.iter_mut().zip(runs).filter(|(_, run)| *run) {
                     x.caption = template.clone();
                 }
             }
@@ -4993,6 +5038,11 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
             lib(state, op)
         }
         Msg::CancelRun(id, how) => {
+            // its GPUs going quiet is no news (Finish & stop still says
+            // when the last images are done)
+            if how == Stop::Now {
+                state.alerts.stopped_now.insert(id.clone());
+            }
             if how == Stop::Finish {
                 state.finishing.insert(id.clone());
             } else {
@@ -6779,6 +6829,8 @@ fn set_index(state: &mut AppState, ix: Index) {
         state.project = None;
     }
     state.lib_selected.retain(|id| state.index.idea(id).is_some());
+    let queue: Vec<Id> = state.inbox_queue().iter().map(|e| e.idea.id.clone()).collect();
+    state.inbox_picked.retain(|id| queue.contains(id));
 }
 
 /// The Review / Output library actions that put an output image into a
@@ -8182,7 +8234,8 @@ fn op_done(state: &mut AppState, ok: OpOk) -> Vec<Effect> {
 
 fn engine_event(state: &mut AppState, e: Event) -> Vec<Effect> {
     match e {
-        Event::Server { server, state: s, model, idle } => {
+        Event::Server { server, state: s, model, idle, runs } => {
+            state.alerts.server_runs.entry(server).or_default().extend(runs);
             if let Some(st) = state.servers.get_mut(server) {
                 st.model = model.map(|m| m.recipe);
                 let was_idle = st.idle_since.is_some();
@@ -8191,9 +8244,15 @@ fn engine_event(state: &mut AppState, e: Event) -> Vec<Effect> {
                     st.worked = true;
                     state.alerts.cleared_text = None;
                 } else if idle && !was_idle && std::mem::take(&mut st.worked) {
-                    state.alerts.cleared.push(server);
+                    // not when the user stopped all it was doing (Stop now)
+                    let runs = state.alerts.server_runs.remove(&server).unwrap_or_default();
+                    let by_user = !runs.is_empty() && runs.is_subset(&state.alerts.stopped_now);
+                    if !by_user {
+                        state.alerts.cleared.push(server);
+                    }
                 } else if s == "connecting" || s.starts_with("unreachable") {
                     st.worked = false;
+                    state.alerts.server_runs.remove(&server);
                 }
                 st.state = s;
             }

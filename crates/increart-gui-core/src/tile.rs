@@ -47,6 +47,8 @@ pub struct TileLayout {
 /// Bigger than this (output pixels) is refused.
 pub const MAX_PIXELS: u64 = 250_000_000;
 pub const MAX_COLS: u32 = 32;
+/// A set cell's largest side, in pixels.
+pub const MAX_CELL: u32 = 8192;
 
 impl TileLayout {
     /// The images in order, left to right, `cols` per row.
@@ -365,8 +367,10 @@ fn px(size: TextSize, cell_h: u32, auto: f64) -> u32 {
 }
 
 impl Geometry {
-    /// For images whose largest are `largest` (w, h) at 100%.
+    /// For images whose largest are `largest` (w, h) at 100% (the cells',
+    /// unless the settings give theirs).
     pub fn new(layout: &TileLayout, s: &TileSettings, largest: (u32, u32)) -> Geometry {
+        let largest = s.cell.map_or(largest, |[w, h]| (w.clamp(1, MAX_CELL), h.clamp(1, MAX_CELL)));
         let scale = s.scale.clamp(1, 100) as f64 / 100.0;
         let cell = (((largest.0 as f64 * scale) as u32).max(1), ((largest.1 as f64 * scale) as u32).max(1));
         let cols = layout.cols;
@@ -849,6 +853,10 @@ mod tests {
         let set = TileSettings { caption_text: TextSize::Cell(10.0), title_text: TextSize::Px(40), ..s.clone() };
         let g = Geometry::new(&three, &set, (1024, 1024));
         assert_eq!((g.caption_px, g.title_px), (102, 40));
+        // a set cell size instead of the largest image's, scaled too
+        let wide = TileSettings { cell: Some([512, 256]), gap: 0, scale: 50, ..s.clone() };
+        let g = Geometry::new(&three, &wide, (1024, 1024));
+        assert_eq!((g.cell, g.size.0), ((256, 128), 3 * 256));
 
         // a text block: as large as fits, up to the title's size
         let mut l = three.clone();

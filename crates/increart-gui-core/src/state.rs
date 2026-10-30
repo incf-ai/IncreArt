@@ -2391,6 +2391,11 @@ pub struct Alerts {
     pub backlog_text: Option<String>,
     /// Servers whose queue just cleared, for the next check.
     pub cleared: Vec<usize>,
+    /// The runs each server has had jobs of since it was last idle.
+    pub server_runs: HashMap<usize, BTreeSet<Id>>,
+    /// Runs stopped with Stop now: a server that clears from one of them
+    /// was stopped by the user, who saw it, so there's no alert.
+    pub stopped_now: BTreeSet<Id>,
     /// The last queue clearing, e.g. "GPU 0 finished its queue", until the
     /// window has the focus or a GPU gets work again.
     pub cleared_text: Option<String>,
@@ -2561,6 +2566,9 @@ pub struct AppState {
     pub draft: IdeaDraft,
     /// Selected card in the Idea inbox grid (index into `inbox_queue`).
     pub inbox_cursor: usize,
+    /// The Idea inbox Grid's picks (Ctrl/Shift+click, the rubber band), in
+    /// pick order: what the picks bar and their menu act on.
+    pub inbox_picked: Vec<Id>,
     pub inbox_filter: InboxFilter,
     /// Details panels hidden this session (all are shown at start).
     pub info_hidden: BTreeSet<InfoPanel>,
@@ -2915,6 +2923,7 @@ impl AppState {
             info_hidden: BTreeSet::new(),
             lib_folder: None,
             lib_selected: BTreeSet::new(),
+            inbox_picked: vec![],
             lib_info: None,
             project: None,
             proj_folder: None,

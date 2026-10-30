@@ -32,8 +32,10 @@ const SCENES: &[&str] = &[
     "54d-server-wizard-pe-on-one",
     "54b-server-wizard-sd-server",
     "03-idea-inbox-grid",
+    "03b-idea-inbox-picked",
     "04-idea-inbox-new-idea",
     "05-input-library",
+    "05b-input-library-tile",
     "06-projects-grid",
     "06b-projects-pane",
     "06c-projects-pane-run",
@@ -929,8 +931,40 @@ impl Tour {
                     images: vec![],
                 }),
             ],
-            "05-input-library" => vec![Msg::ContinueWithoutServers, Msg::Tab(Tab::InputLibrary), Msg::LibFolder(None)],
+            "03b-idea-inbox-picked" => {
+                let picks = st.inbox_queue().iter().take(3).map(|e| e.idea.id.clone()).collect();
+                vec![Msg::InboxPick(picks)]
+            }
+            "05-input-library" => {
+                vec![
+                    Msg::InboxPick(vec![]),
+                    Msg::ContinueWithoutServers,
+                    Msg::Tab(Tab::InputLibrary),
+                    Msg::LibFolder(None),
+                ]
+            }
+            "05b-input-library-tile" => {
+                // the ideas with images, tiled at a set cell size
+                let ids: Vec<_> = st
+                    .library_ideas()
+                    .iter()
+                    .filter(|e| !e.idea.images.is_empty())
+                    .take(4)
+                    .map(|e| e.idea.id.clone())
+                    .collect();
+                let tile = increart_core::config::TileSettings { cell: Some([512, 384]), ..st.config.tile.clone() };
+                vec![
+                    Msg::LibSelectSet(ids.clone()),
+                    Msg::TileIdeas(ids),
+                    Msg::TileSettings(tile),
+                    Msg::TileSelect(Some(0)),
+                ]
+            }
             "06-projects-grid" => vec![
+                // 05b's tiling closed, its cell size back to auto
+                Msg::CloseTile,
+                Msg::LibClearSelection,
+                Msg::TileSettings(increart_core::config::TileSettings { cell: None, ..st.config.tile.clone() }),
                 Msg::ContinueWithoutServers,
                 Msg::Tab(Tab::Projects),
                 Msg::ProjectsTab(ProjectsTab::Grid),

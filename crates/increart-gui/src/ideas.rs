@@ -514,7 +514,8 @@ fn new_idea(ui: &mut egui::Ui, st: &AppState, tex: &mut Textures, out: &mut Vec<
 fn inbox_grid(ui: &mut egui::Ui, st: &AppState, tex: &mut Textures, out: &mut Vec<Msg>) {
     let ideas = st.inbox_queue();
     let current = ideas.get(st.inbox_cursor).map(|e| e.idea.id.clone());
-    if !ui.ctx().egui_wants_keyboard_input() && st.preview.is_none() {
+    let picks = &st.inbox_picked;
+    if !ui.ctx().egui_wants_keyboard_input() && st.preview.is_none() && st.tile.is_none() {
         ui.input(|i| {
             for (keys, v) in [
                 ([Key::Num1, Key::G], Verdict::Good),
@@ -522,8 +523,24 @@ fn inbox_grid(ui: &mut egui::Ui, st: &AppState, tex: &mut Textures, out: &mut Ve
                 ([Key::Num3, Key::B], Verdict::Bad),
             ] {
                 if keys.iter().any(|k| i.key_pressed(*k)) {
-                    out.push(Msg::ReviewCurrentIdea(v));
+                    // with picks, they all go
+                    out.push(if picks.is_empty() { Msg::ReviewCurrentIdea(v) } else { Msg::ReviewPickedIdeas(v) });
                 }
+            }
+            if i.modifiers.command && i.key_pressed(Key::A) {
+                out.push(Msg::InboxPick(ideas.iter().map(|e| e.idea.id.clone()).collect()));
+            }
+            if !picks.is_empty() {
+                if i.key_pressed(Key::Escape) {
+                    out.push(Msg::InboxPick(vec![]));
+                }
+                if i.key_pressed(Key::P) || i.key_pressed(Key::Space) {
+                    out.push(Msg::Promote(picks.clone()));
+                }
+                if i.key_pressed(Key::T) && !i.modifiers.command {
+                    out.push(Msg::TileIdeas(picks.clone()));
+                }
+                return;
             }
             if i.key_pressed(Key::ArrowRight) || i.key_pressed(Key::ArrowDown) {
                 out.push(Msg::InboxCursor(st.inbox_cursor + 1));
@@ -599,23 +616,59 @@ fn inbox_grid(ui: &mut egui::Ui, st: &AppState, tex: &mut Textures, out: &mut Ve
             });
             ui.add_space(6.0);
         }
+        picks_bar(ui, st, picks, true, out);
         crate::review::grid_ctrl_scroll(ui, st, ZoomGrid::Inbox, out);
         let w = st.grid_cell_size(ZoomGrid::Inbox) as f32;
+        let bg = pick_background(ui, !picks.is_empty(), Msg::InboxPick(vec![]), out);
+        let mut rects = vec![];
         ScrollArea::vertical().auto_shrink([false, true]).show(ui, |ui| {
             ui.horizontal_wrapped(|ui| {
                 for (i, e) in ideas.iter().enumerate() {
-                    let r = idea_card(ui, st, root, tex, e, w, i == st.inbox_cursor, CardButtons::Triage, out);
+                    let on = i == st.inbox_cursor && picks.is_empty();
+                    let r = idea_card(ui, st, root, tex, e, w, on, CardButtons::Triage, out);
+                    let id = &e.idea.id;
+                    rects.push((id.clone(), r.rect));
+                    if let Some(n) = picks.iter().position(|p| p == id) {
+                        crate::tiles::mark_n(ui, r.rect, n);
+                    }
                     if i == st.inbox_cursor {
-                        crate::widgets::reveal_cursor(ui, "inbox", e.idea.id.clone(), &r);
+                        crate::widgets::reveal_cursor(ui, "inbox", id.clone(), &r);
                     }
                     if r.clicked() {
-                        out.push(Msg::InboxCursor(i));
+                        let view: Vec<_> = ideas.iter().map(|e| &e.idea.id).collect();
+                        match pick_click(ui, picks, current.as_ref(), &view, id) {
+                            Some(p) => out.push(Msg::InboxPick(p)),
+                            None => {
+                                if !picks.is_empty() {
+                                    out.push(Msg::InboxPick(vec![]));
+                                }
+                                out.push(Msg::InboxCursor(i));
+                            }
+                        }
                     }
                     r.context_menu(|ui| {
-                        let id = &e.idea.id;
+                        if picks.contains(id) {
+                            picks_menu(ui, st, picks, true, out);
+                            ui.separator();
+                            ui.weak("this idea");
+                        } else if ui.button(ic(ph::CHECK_SQUARE, "Pick")).on_hover_text("also Ctrl+click").clicked() {
+                            let mut p = picks.clone();
+                            if p.is_empty() {
+                                p.extend(current.clone().filter(|c| c != id));
+                            }
+                            p.push(id.clone());
+                            out.push(Msg::InboxPick(p));
+                            ui.close();
+                        }
                         let item = |ui: &mut egui::Ui, label: String, key: &str| {
                             ui.add(egui::Button::new(label).shortcut_text(key)).clicked()
                         };
+                        if !e.idea.images.is_empty() && ui.button(ic(ph::SQUARES_FOUR, "Tile its images…")).clicked()
+                        {
+                            out.push(Msg::TileIdeas(vec![id.clone()]));
+                            ui.close();
+                        }
+                        ui.separator();
                         if item(ui, ic(ph::ROCKET_LAUNCH, "Promote into project"), "P") {
                             out.push(Msg::Promote(vec![id.clone()]));
                             ui.close();
@@ -644,7 +697,142 @@ fn inbox_grid(ui: &mut egui::Ui, st: &AppState, tex: &mut Textures, out: &mut Ve
                 }
             });
         });
+        if let Some(p) = crate::tiles::band_of(ui, &bg, picks, &rects, |add| match add {
+            true if picks.is_empty() => current.clone().into_iter().collect(),
+            true => picks.clone(),
+            false => vec![],
+        }) {
+            out.push(Msg::InboxPick(p));
+        }
     });
+}
+
+/// The empty space of an idea grid: a click there drops the picks
+/// (`clear`), a drag draws the rubber band. Before the cards.
+fn pick_background(ui: &mut egui::Ui, any: bool, clear: Msg, out: &mut Vec<Msg>) -> egui::Response {
+    let bg = ui.interact(ui.available_rect_before_wrap(), ui.scope_id().with("idea_pick_bg"), Sense::click_and_drag());
+    if bg.clicked() && any {
+        out.push(clear);
+    }
+    bg
+}
+
+/// A card's click with Ctrl (toggle) or Shift (the range from the last
+/// picked, or the cursor): the new picks. None for a plain click.
+fn pick_click(
+    ui: &egui::Ui,
+    picks: &[increart_core::Id],
+    cursor: Option<&increart_core::Id>,
+    view: &[&increart_core::Id],
+    id: &increart_core::Id,
+) -> Option<Vec<increart_core::Id>> {
+    let m = ui.input(|i| i.modifiers);
+    if !m.command && !m.shift {
+        return None;
+    }
+    // picking starts from the idea the cursor is on
+    let mut p = picks.to_vec();
+    if p.is_empty()
+        && let Some(c) = cursor
+    {
+        p.push(c.clone());
+    }
+    if m.shift {
+        let to = view.iter().position(|x| *x == id)?;
+        let from = p.last().and_then(|a| view.iter().position(|x| *x == a)).unwrap_or(to);
+        let range: Vec<_> =
+            if from <= to { view[from..=to].to_vec() } else { view[to..=from].iter().rev().copied().collect() };
+        for x in range {
+            if !p.contains(x) {
+                p.push(x.clone());
+            }
+        }
+    } else if let Some(at) = p.iter().position(|x| x == id) {
+        p.remove(at);
+    } else {
+        p.push(id.clone());
+    }
+    Some(p)
+}
+
+/// What to do with the picked ideas (`picks`): tile their images, promote,
+/// add as refs; in the Idea inbox (`inbox`) keep or discard them all too.
+fn picks_menu(ui: &mut egui::Ui, st: &AppState, picks: &[increart_core::Id], inbox: bool, out: &mut Vec<Msg>) {
+    let n = picks.len();
+    let images: Vec<ImageRef> = picks
+        .iter()
+        .filter_map(|id| st.idea(id))
+        .flat_map(|e| e.idea.images.iter().cloned().map(ImageRef::input))
+        .collect();
+    ui.weak(format!("the {n} picked"));
+    let tile = egui::Button::new(ic(ph::SQUARES_FOUR, &format!("Tile their {} images…", images.len())));
+    if ui.add_enabled(!images.is_empty(), tile).on_disabled_hover_text("they have no images").clicked() {
+        out.push(Msg::TileIdeas(picks.to_vec()));
+        ui.close();
+    }
+    if ui.button(ic(ph::ROCKET_LAUNCH, &format!("Promote the {n} into a project…"))).clicked() {
+        out.push(Msg::Promote(picks.to_vec()));
+        ui.close();
+    }
+    if ui
+        .add_enabled(!images.is_empty(), egui::Button::new(ic(ph::IMAGES, "Add their images as refs")))
+        .on_hover_text("to the Generate panel of the current project")
+        .clicked()
+    {
+        out.push(Msg::AddRefs(images));
+        ui.close();
+    }
+    if inbox {
+        for (label, v) in [
+            (ic(ph::STAR, "Keep them ★"), Verdict::Good),
+            (ic(ph::CHECK, "Keep them"), Verdict::Neutral),
+            (ic(ph::TRASH, "Discard them"), Verdict::Bad),
+        ] {
+            if ui.button(label).clicked() {
+                out.push(Msg::ReviewPickedIdeas(v));
+                ui.close();
+            }
+        }
+    }
+}
+
+/// "3 picked · Tile… · Promote… · Keep · Discard · Clear", over an idea
+/// grid while anything is picked.
+fn picks_bar(ui: &mut egui::Ui, st: &AppState, picks: &[increart_core::Id], inbox: bool, out: &mut Vec<Msg>) {
+    if picks.is_empty() {
+        return;
+    }
+    ui.horizontal_wrapped(|ui| {
+        ui.label(RichText::new(format!("{} picked", picks.len())).color(ACCENT).strong());
+        let images: usize = picks.iter().filter_map(|id| st.idea(id)).map(|e| e.idea.images.len()).sum();
+        if ui
+            .add_enabled(images > 0, egui::Button::new(ic(ph::SQUARES_FOUR, "Tile…")))
+            .on_hover_text(format!("their {images} images in the Tile window   T"))
+            .clicked()
+        {
+            out.push(Msg::TileIdeas(picks.to_vec()));
+        }
+        if ui.button(ic(ph::ROCKET_LAUNCH, "Promote…")).on_hover_text("P").clicked() {
+            out.push(Msg::Promote(picks.to_vec()));
+        }
+        if inbox {
+            for (label, v, key) in [
+                (ic(ph::STAR, "Keep ★"), Verdict::Good, "1"),
+                (ic(ph::CHECK, "Keep"), Verdict::Neutral, "2"),
+                (ic(ph::TRASH, "Discard"), Verdict::Bad, "3"),
+            ] {
+                if ui.button(label).on_hover_text(key).clicked() {
+                    out.push(Msg::ReviewPickedIdeas(v));
+                }
+            }
+        }
+        let clear = if inbox { Msg::InboxPick(vec![]) } else { Msg::LibClearSelection };
+        if ui.button(ic(ph::X, "Clear")).on_hover_text("Esc").clicked() {
+            out.push(clear);
+        }
+        ui.weak("Ctrl+click: pick · Shift+click: range · drag: box · Ctrl+A: all");
+    });
+    ui.add_space(4.0);
 }
 
 /// The Idea inbox Grid's sidebar: search, order, filters (each with how
@@ -661,6 +849,10 @@ fn inbox_side(ui: &mut egui::Ui, st: &AppState, out: &mut Vec<Msg>) {
                     ("3 / B", "discard"),
                     ("P / Space", "promote"),
                     ("Enter / T", "edit"),
+                    ("Ctrl/Shift+click", "pick / range"),
+                    ("drag", "pick a box"),
+                    ("Ctrl+A", "pick all"),
+                    ("T (picks)", "tile their images"),
                     ("← →", "previous / next"),
                     ("Home / End", "first / last"),
                     ("Ctrl+N", "new idea"),
@@ -812,8 +1004,11 @@ pub fn input_library(ui: &mut egui::Ui, st: &AppState, tex: &mut Textures, out: 
                         ("← →", "previous / next"),
                         ("Home / End", "first / last"),
                         ("Ctrl+click", "select more"),
+                        ("Shift+click", "select a range"),
+                        ("drag", "select a box"),
                         ("Ctrl+A", "select all"),
                         ("P / Space", "promote selected"),
+                        ("T", "tile the selected (several)"),
                         ("Enter / T", "edit"),
                         ("Double-click", "full size"),
                         ("Ctrl+N", "new idea"),
@@ -886,6 +1081,11 @@ pub fn input_library(ui: &mut egui::Ui, st: &AppState, tex: &mut Textures, out: 
                     .flat_map(|e| e.idea.images.iter().cloned().map(ImageRef::input))
                     .collect();
                 out.push(Msg::AddRefs(refs));
+            }
+            if ui.button(ic(ph::SQUARES_FOUR, "Tile their images…")).on_hover_text("T, with several selected").clicked()
+            {
+                let view: Vec<_> = st.library_ideas().iter().map(|e| e.idea.id.clone()).collect();
+                out.push(Msg::TileIdeas(view.into_iter().filter(|id| st.lib_selected.contains(id)).collect()));
             }
             if ui.button(ic(ph::X, "Clear selection")).clicked() {
                 out.push(Msg::LibClearSelection);
@@ -962,14 +1162,25 @@ pub fn input_library(ui: &mut egui::Ui, st: &AppState, tex: &mut Textures, out: 
             });
             return;
         }
-        ui.weak("Click to select and see it on the right, Ctrl+click to add to the selection; double-click: full size; right-click for actions.");
+        // the selection in the grid's order
+        let view: Vec<_> = ideas.iter().map(|e| &e.idea.id).collect();
+        let sel: Vec<_> = view.iter().filter(|id| st.lib_selected.contains(*id)).map(|id| (*id).clone()).collect();
+        let current = lib_current(st);
+        if sel.len() > 1 {
+            picks_bar(ui, st, &sel, false, out);
+        } else {
+            ui.weak("Click to select and see it on the right, Ctrl+click to add to the selection, Shift+click: a range, drag: a box; double-click: full size; right-click for actions.");
+        }
         crate::review::grid_ctrl_scroll(ui, st, ZoomGrid::Library, out);
         let w = st.grid_cell_size(ZoomGrid::Library) as f32;
+        let bg = pick_background(ui, !sel.is_empty(), Msg::LibClearSelection, out);
+        let mut rects = vec![];
         ScrollArea::vertical().auto_shrink([false, true]).show(ui, |ui| {
             ui.horizontal_wrapped(|ui| {
-                for (i, e) in ideas.into_iter().enumerate() {
+                for (i, e) in ideas.iter().enumerate() {
                     let id = e.idea.id.clone();
                     let r = idea_card(ui, st, &root, tex, e, w, st.lib_selected.contains(&id), CardButtons::Library, out);
+                    rects.push((id.clone(), r.rect));
                     if lib_current(st).as_ref() == Some(&id) {
                         crate::widgets::reveal_cursor(ui, "library", id.clone(), &r);
                     }
@@ -978,7 +1189,12 @@ pub fn input_library(ui: &mut egui::Ui, st: &AppState, tex: &mut Textures, out: 
                         ui.ctx().data_mut(|d| d.insert_temp(egui::Id::unique("tour_first_idea"), r.rect));
                     }
                     if r.clicked() {
-                        out.push(Msg::LibSelect { id: id.clone(), additive: ui.input(|i| i.modifiers.command) });
+                        if ui.input(|i| i.modifiers.shift) {
+                            let p = pick_click(ui, &sel, current.as_ref(), &view, &id).unwrap_or_default();
+                            out.push(Msg::LibSelectSet(p));
+                        } else {
+                            out.push(Msg::LibSelect { id: id.clone(), additive: ui.input(|i| i.modifiers.command) });
+                        }
                     }
                     // the side panel opens on a single click only (a double-click
                     // previews); while it's open, a click shows the idea in it at once
@@ -987,6 +1203,15 @@ pub fn input_library(ui: &mut egui::Ui, st: &AppState, tex: &mut Textures, out: 
                         out.push(Msg::LibInfo(Some(id.clone())));
                     }
                     r.context_menu(|ui| {
+                        if sel.len() > 1 && sel.contains(&id) {
+                            picks_menu(ui, st, &sel, false, out);
+                            ui.separator();
+                            ui.weak("this idea");
+                        }
+                        if !e.idea.images.is_empty() && ui.button(ic(ph::SQUARES_FOUR, "Tile its images…")).clicked() {
+                            out.push(Msg::TileIdeas(vec![id.clone()]));
+                            ui.close();
+                        }
                         if ui.button(ic(ph::ROCKET_LAUNCH, "Promote into project")).clicked() {
                             out.push(Msg::Promote(vec![id.clone()]));
                             ui.close();
@@ -1022,6 +1247,9 @@ pub fn input_library(ui: &mut egui::Ui, st: &AppState, tex: &mut Textures, out: 
                 }
             });
         });
+        if let Some(p) = crate::tiles::band_of(ui, &bg, &sel, &rects, |add| if add { sel.clone() } else { vec![] }) {
+            out.push(Msg::LibSelectSet(p));
+        }
     });
 }
 
@@ -1073,7 +1301,15 @@ fn library_keys(ui: &egui::Ui, st: &AppState, out: &mut Vec<Msg>) {
                 out.push(Msg::Promote(sel));
             }
         }
-        if let Some(id) = &current
+        let sel: Vec<_> = ideas.iter().filter(|id| st.lib_selected.contains(*id)).cloned().collect();
+        if sel.len() > 1 {
+            if i.key_pressed(Key::T) && !i.modifiers.command {
+                out.push(Msg::TileIdeas(sel));
+            }
+            if i.key_pressed(Key::Escape) {
+                out.push(Msg::LibClearSelection);
+            }
+        } else if let Some(id) = &current
             && (i.key_pressed(Key::Enter) || i.key_pressed(Key::T))
         {
             out.push(Msg::OpenIdea(id.clone()));

@@ -669,6 +669,10 @@ pub struct TileSettings {
     pub title_text: TextSize,
     /// Output scale in percent of the images' own size.
     pub scale: u32,
+    /// The cells' size (w, h) at 100 %, in pixels; none: the largest
+    /// image's. Images fit (or fill) inside it either way.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cell: Option<[u32; 2]>,
     /// What Save writes.
     pub save_format: TileFormat,
     /// JPEG and AVIF quality, in percent.
@@ -754,6 +758,7 @@ impl Default for TileSettings {
             caption_format: "{style} · seed {seed}".into(),
             title_text: TextSize::Auto,
             scale: 100,
+            cell: None,
             save_format: TileFormat::Png,
             save_quality: 70,
         }

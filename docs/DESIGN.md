@@ -2148,6 +2148,18 @@ Several images can be picked in Review (Grid, the contact sheet, Single's
 filmstrip) and in the Output library's Grid, then rated together or laid
 out as one image.
 
+- **Ideas**: the Idea inbox Grid picks ideas the same way (Ctrl+click,
+  Shift+click, a box, Ctrl+A, Esc; numbered in pick order). While any are
+  picked, a bar shows **N picked · Tile… · Promote… · Keep ★ · Keep ·
+  Discard · Clear**, 1/2/3 keep or discard them all, P promotes them and T
+  tiles them (without picks the keys act on the cursor's idea, as before).
+  The Input library's selection gains Shift+click (a range) and the box;
+  with several selected the same bar (no Keep / Discard) is shown above the
+  grid and T tiles them. A picked or selected card's right-click starts
+  with what to do with them all; every card with images has **Tile its
+  images…**. Tiling ideas tiles all their images, in pick order (the
+  grid's order in the library); ideas without images add none.
+
 - **Picking**: Ctrl+click toggles an image (starting from the one the cursor
   is on), Shift+click adds the range from the last picked, a drag on empty
   space draws a box (Ctrl+drag adds to the picks), Ctrl+A picks everything
@@ -2164,7 +2176,10 @@ out as one image.
   their rows and columns as shown (bands side by side; holes included); others start about square
   (⌈√n⌉ columns). Drag a tile onto another to swap them, or onto any empty
   cell (an extra row below takes drops); click one to give it a caption or
-  a span (2 × 1, 2 × 2, …: the tiles in its way move to free cells).
+  a span (2 × 1, 2 × 2, …: the tiles in its way move to free cells). The
+  **×** on a hovered or selected tile, Delete (or Backspace) on the
+  selected one, or its right-click → **Remove from the tiling** takes it
+  out (the image itself stays where it was).
   **Columns** re-places what no longer fits; **Reflow** packs the tiles in
   order.
 - **Text blocks**: right-click an empty cell (or double-click it) → **Add
@@ -2208,8 +2223,9 @@ out as one image.
   Auto and % follow the scale, so 25 % looks like 100 % only smaller.
   Switching keeps the size it came to. A caption too wide shrinks (down to
   60 %) before it's cut short with "…".
-- Cells are the size of the largest image (at the chosen **scale**: 25 /
-  50 / 100 % or any), with a **gap** between and around them; images
+- Cells are the size of the largest image, or a set **cell** size (w × h
+  px; **auto** unticked starts from the largest image's), at the chosen
+  **scale** (25 / 50 / 100 % or any), with a **gap** between and around them; images
   **fit** (letterboxed) or **fill** (cropped to the cell). **Background**:
   transparent, dark, white, black or any colour. **Captions**: one line
   under each tile (shrunk, then cut short with …), all filled from the style or setting
@@ -2219,10 +2235,11 @@ out as one image.
   image when shown and composed: `{n}` (the tile's number), `{style}`,
   `{seed}`, `{settings}`, `{steps}`, `{cfg}`, `{shift}`, `{strength}`,
   `{title}`, `{run}`, `{prompt}`, `{project}`, `{kind}` (output, input,
-  start or pasted); unknown ones stay as typed. Captions from… gives an input
-  "input" (its idea's title for Title) and a pasted image "pasted".
-  **Format … Apply** gives every image the same one (the format is kept in
-  `tile`). The
+  start or pasted); unknown ones stay as typed. Captions from… and
+  **Format … Apply** (the format is kept in `tile`) fill generated images'
+  captions only: inputs, marked-up copies and pasted images have no seed,
+  run or settings, so they keep the captions written by hand (Captions
+  from **clear** empties them all). The
   settings are kept in `config.rsn` (`tile`); the layout is not.
 - **Copy** puts the tiled image on the clipboard, **Save {format}…** writes a
   file in the format chosen under **Save**: PNG, WebP (lossless, at most
@@ -2948,7 +2965,10 @@ The third is a moment, not a condition: **GPU queue cleared** sounds once, at
 once, when a GPU that had work goes idle (ready, no job in flight and none
 left for it in the pool), for **each GPU** or **only when all GPUs are done**
 (no server still has work). A server that was idle from the start, or that
-dropped out (connecting, unreachable), doesn't count. It doesn't repeat, and
+dropped out (connecting, unreachable), doesn't count; nor does one whose runs
+were all stopped with **Stop now** (the user did it and saw it; the engine
+says which runs each server has jobs of). **Finish & stop** still sounds when
+the last images are done. It doesn't repeat, and
 a snoozed or held-back one is not played later; the bell shows it until the
 window gets the focus or a GPU gets work again.
 

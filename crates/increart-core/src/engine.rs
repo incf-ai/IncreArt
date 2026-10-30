@@ -59,8 +59,9 @@ impl Default for EngineOptions {
 #[derive(Clone, Debug, PartialEq)]
 pub enum Event {
     /// A server's scheduler state changed (`state` is for display; `idle`:
-    /// ready with no job in flight).
-    Server { server: ServerIdx, state: String, model: Option<ModelKey>, idle: bool },
+    /// ready with no job in flight; `runs`: those with a job in flight
+    /// there).
+    Server { server: ServerIdx, state: String, model: Option<ModelKey>, idle: bool, runs: Vec<Id> },
     /// Sampling progress of a seed, with the latest preview PNG if any.
     Progress { run: Id, rev: u32, seed: u64, server: ServerIdx, step: u32, total: u32, preview: Option<Vec<u8>> },
     /// An image was stored and linked into the project's `unreviewed/`.
@@ -72,6 +73,9 @@ pub enum Event {
     /// Something the user should see that isn't about one seed.
     Problem(String),
 }
+
+/// A server's last reported state, model, idleness and runs in flight.
+type Shown = (String, Option<ModelKey>, bool, Vec<Id>);
 
 /// How a cancel treats the images being generated.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -242,7 +246,7 @@ struct Coordinator {
     /// Definitions of queued runs.
     runs: HashMap<Id, Run>,
     /// Last server state sent as an event.
-    shown: Vec<Option<(String, Option<ModelKey>, bool)>>,
+    shown: Vec<Option<Shown>>,
     /// Why a server's load waits, shown in place of "loading …".
     waiting: Vec<Option<String>>,
     events: Sender<Event>,
@@ -305,9 +309,17 @@ impl Coordinator {
             let model = self.sched.model_of(i).cloned();
             let idle =
                 matches!(self.sched.server_state(i), ServerState::Ready) && self.sched.in_flight(i).next().is_none();
-            if self.shown[i].as_ref() != Some(&(state.clone(), model.clone(), idle)) {
-                self.shown[i] = Some((state.clone(), model.clone(), idle));
-                self.emit(Event::Server { server: i, state, model, idle });
+            let mut runs: Vec<Id> = vec![];
+            for (_, r) in self.sched.in_flight(i) {
+                if !runs.contains(&r.run) {
+                    runs.push(r.run.clone());
+                }
+            }
+            let now = (state, model, idle, runs);
+            if self.shown[i].as_ref() != Some(&now) {
+                self.shown[i] = Some(now.clone());
+                let (state, model, idle, runs) = now;
+                self.emit(Event::Server { server: i, state, model, idle, runs });
             }
         }
     }

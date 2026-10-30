@@ -287,6 +287,66 @@ fn dropped_files_become_ideas() {
 }
 
 #[test]
+fn idea_picks_tile_and_triage_together() {
+    let mut h = Harness::new();
+    let dir = h._tmp.path().join("drop");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("note.txt"), "otter with a teacup\n").unwrap();
+    for (n, c) in [("red", 200), ("green", 100)] {
+        image::RgbImage::from_pixel(8, 8, image::Rgb([c, 10, 10])).save(dir.join(format!("{n}.png"))).unwrap();
+    }
+    h.send(Msg::DropFiles(vec![dir.join("note.txt"), dir.join("red.png"), dir.join("green.png")]));
+    h.settle();
+    h.send(Msg::Tab(Tab::IdeaInbox));
+    let ids: Vec<_> = h.state.inbox_queue().iter().map(|e| e.idea.id.clone()).collect();
+    assert_eq!(ids.len(), 3);
+    let images = |h: &Harness, ids: &[increart_core::Id]| -> Vec<increart_core::ImageRef> {
+        ids.iter()
+            .flat_map(|id| h.state.idea(id).unwrap().idea.images.clone())
+            .map(increart_core::ImageRef::input)
+            .collect()
+    };
+
+    // the picks' images tiled, in pick order; the text idea adds none
+    let picks: Vec<_> = ids.iter().rev().cloned().collect();
+    h.send(Msg::InboxPick(picks.clone()));
+    h.send(Msg::TileIdeas(h.state.inbox_picked.clone()));
+    let tiled: Vec<_> = h.state.tile.as_ref().unwrap().layout.images().cloned().collect();
+    assert_eq!(tiled, images(&h, &picks));
+    assert_eq!(tiled.len(), 2);
+    // an input has no seed or run: the caption format leaves it alone
+    h.send(Msg::TileCaption(0, "red, by hand".into()));
+    h.send(Msg::TileCaptionFormat("seed {seed}".into()));
+    assert_eq!(h.state.tile.as_ref().unwrap().layout.tiles[0].caption, "red, by hand");
+    h.send(Msg::CloseTile);
+    let text = ids.iter().find(|id| h.state.idea(id).unwrap().idea.images.is_empty()).unwrap().clone();
+    h.send(Msg::TileIdeas(vec![text.clone()]));
+    assert!(h.state.tile.is_none(), "no images: nothing to tile");
+
+    // all the picks kept at once; they leave the inbox and the picks
+    let (two, rest): (Vec<_>, Vec<_>) = ids.iter().cloned().partition(|id| *id != text);
+    h.send(Msg::InboxPick(two.clone()));
+    h.send(Msg::ReviewPickedIdeas(Verdict::Neutral));
+    h.settle();
+    assert!(h.state.inbox_picked.is_empty());
+    let inbox: Vec<_> = h.state.inbox_queue().iter().map(|e| e.idea.id.clone()).collect();
+    assert_eq!(inbox, rest);
+    // a pick that leaves the inbox leaves the picks; a tab change drops them
+    h.send(Msg::InboxPick(rest.clone()));
+    h.send(Msg::Tab(Tab::InputLibrary));
+    assert!(h.state.inbox_picked.is_empty());
+
+    // the Input library's selection set at once (a range, the band)
+    h.send(Msg::LibSelectSet(two.clone()));
+    assert_eq!(
+        h.state.lib_selected.iter().cloned().collect::<std::collections::BTreeSet<_>>(),
+        two.iter().cloned().collect()
+    );
+    h.send(Msg::TileIdeas(two.clone()));
+    assert_eq!(h.state.tile.as_ref().unwrap().layout.images().count(), 2);
+}
+
+#[test]
 fn trees_create_rename_move_delete() {
     let mut h = Harness::new();
     h.send(Msg::NewFolder(increart_core::Tree::Projects, PathBuf::new()));
@@ -3045,11 +3105,18 @@ fn style_sweeps_queue_review_on_a_contact_sheet_and_reuse_a_style() {
     // pasted: a tile, captioned as such, composed but not a source
     let pasted = increart_gui_core::tile::TileImage(std::sync::Arc::new(image::RgbaImage::new(8, 8)));
     h.send(Msg::TileAdd(vec![increart_gui_core::tile::TileContent::Pasted(pasted)], None));
+    h.send(Msg::TileCaption(5, "by hand".into()));
+    // the format and the fills are for generated images only: the input
+    // and the pasted one (no seed, no run) keep their own captions
+    h.send(Msg::TileCaptionFormat("{kind}".into()));
+    h.send(Msg::TileCaptions(CaptionFill::Seed));
     h.send(Msg::TileCaptionFormat("{kind}".into()));
     let t = h.state.tile.as_ref().unwrap();
     let kinds: Vec<_> =
         t.layout.tiles.iter().enumerate().map(|(n, x)| h.state.caption_text(&x.caption, x.image(), n + 1)).collect();
-    assert_eq!(kinds, ["output", "output", "output", "", "input", "pasted"]);
+    assert_eq!(kinds, ["output", "output", "output", "", "", "by hand"]);
+    h.send(Msg::TileCaptions(CaptionFill::Clear));
+    assert!(h.state.tile.as_ref().unwrap().layout.tiles.iter().all(|x| x.caption.is_empty()), "Clear clears all");
     let errors = h.errors().len();
     h.send(Msg::Picked(PickKind::TileFile(increart_core::config::TileFormat::Png), vec![file.clone()]));
     h.settle();
@@ -3252,7 +3319,13 @@ fn plays(fx: &[Effect]) -> usize {
 fn idle_server(s: &mut AppState, i: usize, idle: bool) {
     update(
         s,
-        Msg::Engine(increart_core::engine::Event::Server { server: i, state: "ready".into(), model: None, idle }),
+        Msg::Engine(increart_core::engine::Event::Server {
+            server: i,
+            state: "ready".into(),
+            model: None,
+            idle,
+            runs: vec![],
+        }),
     );
 }
 
@@ -3431,9 +3504,44 @@ fn queue_cleared_alert_sounds_once_when_a_gpu_finishes() {
     idle_server(&mut s, 0, true);
     assert_eq!(at(&mut s, 403.0), 0);
     assert_eq!(at(&mut s, 500.0), 0);
+    update(&mut s, Msg::Unsnooze);
+
+    // stopped now by the user, who saw it: no alert; Finish & stop, or
+    // another run after it, still sounds
+    let t0 = increart_core::id::now();
+    let (x, y) = (increart_core::Id::new(t0, 1), increart_core::Id::new(t0, 2));
+    let mut n = s.config.notifications.clone();
+    n.queue_cleared_all = false;
+    update(&mut s, Msg::SetNotifications(n));
+    let work = |s: &mut AppState, run: &increart_core::Id| {
+        let e = increart_core::engine::Event::Server {
+            server: 0,
+            state: "ready".into(),
+            model: None,
+            idle: false,
+            runs: vec![run.clone()],
+        };
+        update(s, Msg::Engine(e));
+    };
+    work(&mut s, &x);
+    update(&mut s, Msg::CancelRun(x.clone(), increart_core::engine::Stop::Now));
+    idle_server(&mut s, 0, true);
+    assert_eq!(at(&mut s, 510.0), 0, "stopped by the user");
+    work(&mut s, &y);
+    update(&mut s, Msg::CancelRun(y.clone(), increart_core::engine::Stop::Finish));
+    idle_server(&mut s, 0, true);
+    assert_eq!(at(&mut s, 520.0), 1, "Finish & stop: its last images done");
+    work(&mut s, &y);
+    idle_server(&mut s, 0, true);
+    assert_eq!(at(&mut s, 530.0), 1);
+    // one of its runs stopped now, another not: the other finished
+    work(&mut s, &x);
+    let z = increart_core::Id::new(t0, 3);
+    work(&mut s, &z);
+    idle_server(&mut s, 0, true);
+    assert_eq!(at(&mut s, 540.0), 1);
 
     // off
-    update(&mut s, Msg::Unsnooze);
     let mut n = s.config.notifications.clone();
     n.queue_cleared.on = false;
     update(&mut s, Msg::SetNotifications(n));

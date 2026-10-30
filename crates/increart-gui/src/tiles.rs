@@ -54,54 +54,74 @@ pub fn cursor(st: &AppState, on_it: bool) -> bool {
 /// A picked image: outlined, with its number in the pick order.
 pub fn mark(ui: &egui::Ui, st: &AppState, rect: Rect, image: &ImageRef) {
     let Some(n) = st.picked.iter().position(|i| i == image) else { return };
-    let p = ui.painter_at(rect.expand(2.0));
-    p.rect_stroke(rect, 2.0, Stroke::new(3.0, ACCENT), egui::StrokeKind::Inside);
-    let c = rect.left_top() + Vec2::splat(12.0);
-    p.circle_filled(c, 10.0, ACCENT);
-    p.text(c, Align2::CENTER_CENTER, (n + 1).to_string(), FontId::proportional(12.0), Color32::BLACK);
+    mark_n(ui, rect, n);
 }
 
 /// Dragging on empty space picks what the band touches, in the view's
 /// order (Ctrl adds to the picks).
 pub fn band(ui: &egui::Ui, st: &AppState, bg: &egui::Response, rects: &[(ImageRef, Rect)], out: &mut Vec<Msg>) {
-    type Band = (egui::Pos2, Vec<ImageRef>);
+    // Ctrl adds, starting from the cursor as Ctrl+click does; else the
+    // band replaces the picks (and the cursor's selection, see `cursor`)
+    let base = |add: bool| match add {
+        true if st.picked.is_empty() => st.current_image().into_iter().collect(),
+        true => st.picked.clone(),
+        false => vec![],
+    };
+    if let Some(picked) = band_of(ui, bg, &st.picked, rects, base) {
+        out.push(Msg::PickSet(picked));
+    }
+}
+
+/// The rubber band over `bg`, for any view: the picks it makes when they
+/// differ from `now`; `base` gives what it starts from (true: Ctrl held,
+/// adding).
+pub fn band_of<T: Clone + PartialEq + Send + Sync + 'static>(
+    ui: &egui::Ui,
+    bg: &egui::Response,
+    now: &[T],
+    rects: &[(T, Rect)],
+    base: impl FnOnce(bool) -> Vec<T>,
+) -> Option<Vec<T>> {
+    type Band<T> = (egui::Pos2, Vec<T>);
     let id = bg.id.with("band");
     if bg.drag_started()
         && let Some(origin) = bg.interact_pointer_pos()
     {
-        // Ctrl adds, starting from the cursor as Ctrl+click does; else the
-        // band replaces the picks (and the cursor's selection, see `cursor`)
-        let base = match ui.input(|i| i.modifiers.command) {
-            true if st.picked.is_empty() => st.current_image().into_iter().collect(),
-            true => st.picked.clone(),
-            false => vec![],
-        };
-        ui.ctx().data_mut(|d| d.insert_temp::<Band>(id, (origin, base)));
+        let base = base(ui.input(|i| i.modifiers.command));
+        ui.ctx().data_mut(|d| d.insert_temp::<Band<T>>(id, (origin, base)));
     }
     if bg.drag_stopped() {
-        ui.ctx().data_mut(|d| d.remove::<Band>(id));
-        return;
+        ui.ctx().data_mut(|d| d.remove::<Band<T>>(id));
+        return None;
     }
-    let (Some((origin, base)), Some(now)) = (ui.ctx().data(|d| d.get_temp::<Band>(id)), ui.ctx().pointer_latest_pos())
+    let (Some((origin, base)), Some(pos)) =
+        (ui.ctx().data(|d| d.get_temp::<Band<T>>(id)), ui.ctx().pointer_latest_pos())
     else {
-        return;
+        return None;
     };
     if !bg.dragged() {
-        return;
+        return None;
     }
-    let r = Rect::from_two_pos(origin, now);
+    let r = Rect::from_two_pos(origin, pos);
     let p = ui.ctx().layer_painter(egui::LayerId::new(egui::Order::Foreground, id.with("paint")));
     p.rect_filled(r, 2.0, Color32::from_rgba_unmultiplied(90, 160, 255, 40));
     p.rect_stroke(r, 2.0, Stroke::new(1.0, ACCENT), egui::StrokeKind::Inside);
     let mut picked = base;
-    for (img, _) in rects.iter().filter(|(_, x)| x.intersects(r)) {
-        if !picked.contains(img) {
-            picked.push(img.clone());
+    for (x, _) in rects.iter().filter(|(_, x)| x.intersects(r)) {
+        if !picked.contains(x) {
+            picked.push(x.clone());
         }
     }
-    if picked != st.picked {
-        out.push(Msg::PickSet(picked));
-    }
+    (picked != now).then_some(picked)
+}
+
+/// A picked thing's outline and its number in the pick order (`n`, from 0).
+pub fn mark_n(ui: &egui::Ui, rect: Rect, n: usize) {
+    let p = ui.painter_at(rect.expand(2.0));
+    p.rect_stroke(rect, 2.0, Stroke::new(3.0, ACCENT), egui::StrokeKind::Inside);
+    let c = rect.left_top() + Vec2::splat(12.0);
+    p.circle_filled(c, 10.0, ACCENT);
+    p.text(c, Align2::CENTER_CENTER, (n + 1).to_string(), FontId::proportional(12.0), Color32::BLACK);
 }
 
 /// The top of a pickable image's right-click menu: for a picked image,
@@ -389,8 +409,13 @@ fn paint_text(p: &egui::Painter, r: Rect, text: &str, (px, w): (u32, u32), k: f3
     }
 }
 
+/// Whether no tile is being dragged.
+fn held_none(ui: &egui::Ui, dragging: egui::Id) -> bool {
+    ui.ctx().data(|m| m.get_temp::<usize>(dragging)).is_none()
+}
+
 /// The layout at the window's scale: drag tiles between cells; an extra
-/// row below takes drops.
+/// row below takes drops; Delete (or Backspace) removes the selected tile.
 fn preview(
     ui: &mut egui::Ui,
     st: &AppState,
@@ -401,6 +426,12 @@ fn preview(
 ) {
     let s = &st.config.tile;
     let l = &d.layout;
+    if let Some(i) = d.selected
+        && !ui.ctx().egui_wants_keyboard_input()
+        && ui.input(|x| x.key_pressed(Key::Delete) || x.key_pressed(Key::Backspace))
+    {
+        out.push(Msg::TileRemove(i));
+    }
     let g = Geometry::new(l, s, largest(st, l, root, tex));
     // one more row to drop into
     let rows = l.rows() + 1;
@@ -515,7 +546,21 @@ fn preview(
             Stroke::NONE
         };
         p.rect_stroke(r, 2.0, stroke, egui::StrokeKind::Inside);
-        if resp.clicked() {
+        // × in the corner, while hovered or selected: out of the tiling
+        // (the image itself stays where it is)
+        let x = Rect::from_min_size(r.right_top() + Vec2::new(-26.0, 4.0), Vec2::splat(22.0));
+        let mut removed = false;
+        if (sel || ui.rect_contains_pointer(r)) && r.width() > 40.0 && held_none(ui, dragging) {
+            let b = ui.interact(x, egui::Id::unique(("tile_x", i)), Sense::click());
+            let fill = if b.hovered() { Color32::from_rgb(170, 50, 50) } else { Color32::from_black_alpha(170) };
+            p.rect_filled(x, 4.0, fill);
+            p.text(x.center(), Align2::CENTER_CENTER, ph::X, FontId::proportional(14.0), Color32::WHITE);
+            if b.on_hover_text("Remove from the tiling   Delete").clicked() {
+                out.push(Msg::TileRemove(i));
+                removed = true;
+            }
+        }
+        if resp.clicked() && !removed {
             out.push(Msg::TileSelect(Some(i)));
         }
         resp.context_menu(|ui| tile_menu(ui, st, d, &g, i, out));
@@ -716,7 +761,11 @@ fn tile_menu(ui: &mut egui::Ui, st: &AppState, d: &TileDialog, g: &Geometry, i: 
         out.push(Msg::TileSelect(Some(i)));
         ui.close();
     }
-    if ui.button(ic(ph::MINUS_CIRCLE, "Remove from the tiling")).clicked() {
+    if ui
+        .button(ic(ph::MINUS_CIRCLE, "Remove from the tiling"))
+        .on_hover_text("Delete · the image itself stays")
+        .clicked()
+    {
         out.push(Msg::TileRemove(i));
         ui.close();
     }
@@ -834,7 +883,29 @@ fn settings(
         ui.add(egui::DragValue::new(&mut s.scale).range(1..=100)).on_hover_text("drag, or double-click to type");
         ui.weak("%");
     });
-    let g = Geometry::new(l, &s, largest(st, l, root, tex));
+    let big = largest(st, l, root, tex);
+    ui.horizontal(|ui| {
+        ui.label("cell");
+        let mut auto = s.cell.is_none();
+        if ui
+            .checkbox(&mut auto, "auto")
+            .on_hover_text(format!("the largest image's size, {} × {}", big.0, big.1))
+            .changed()
+        {
+            s.cell = if auto { None } else { Some([big.0, big.1]) };
+        }
+        if let Some([w, h]) = &mut s.cell {
+            let max = increart_gui_core::tile::MAX_CELL;
+            ui.spacing_mut().interact_size.x = 44.0;
+            ui.add(egui::DragValue::new(w).range(16..=max).speed(4.0));
+            ui.weak("×");
+            ui.add(egui::DragValue::new(h).range(16..=max).speed(4.0));
+            ui.weak("px");
+        }
+    })
+    .response
+    .on_hover_text("each cell's size at 100 %; images fit (or fill) inside it");
+    let g = Geometry::new(l, &s, big);
     ui.weak(format!("{} × {} px · {} cells of {} × {}", g.size.0, g.size.1, l.cols * l.rows(), g.cell.0, g.cell.1));
 
     ui.add_space(8.0);
@@ -874,7 +945,7 @@ fn settings(
     ui.add_space(8.0);
     ui.label(RichText::new("Captions").strong());
     ui.horizontal_wrapped(|ui| {
-        ui.weak("all from:");
+        ui.weak("all from:").on_hover_text("generated images only: the others keep their own captions");
         for f in CaptionFill::EVERY {
             if ui.small_button(f.label()).clicked() {
                 out.push(Msg::TileCaptions(f));
@@ -883,7 +954,9 @@ fn settings(
     });
     ui.horizontal(|ui| {
         ui.weak("format");
-        let apply = ui.button("Apply").on_hover_text("to every image's caption");
+        let apply = ui
+            .button("Apply")
+            .on_hover_text("to every generated image's caption (pasted and input images, marked-up copies included, keep their own: they have no seed or run)");
         let edit = egui::TextEdit::singleline(&mut s.caption_format).desired_width(f32::INFINITY);
         let r = ui.add(edit).on_hover_ui(placeholders);
         if apply.clicked() || (r.lost_focus() && ui.input(|x| x.key_pressed(Key::Enter))) {
@@ -916,7 +989,11 @@ fn settings(
                     out.push(Msg::TileSpan(i, w, h));
                 }
             });
-            if ui.button(ic(ph::MINUS_CIRCLE, "Remove from the tiling")).clicked() {
+            if ui
+                .button(ic(ph::MINUS_CIRCLE, "Remove from the tiling"))
+                .on_hover_text("Delete · the image itself stays")
+                .clicked()
+            {
                 out.push(Msg::TileRemove(i));
             }
         }
@@ -950,7 +1027,11 @@ fn settings(
             {
                 out.push(Msg::TileCaption(i, c));
             }
-            if ui.button(ic(ph::MINUS_CIRCLE, "Remove from the tiling")).clicked() {
+            if ui
+                .button(ic(ph::MINUS_CIRCLE, "Remove from the tiling"))
+                .on_hover_text("Delete · the image itself stays")
+                .clicked()
+            {
                 out.push(Msg::TileRemove(i));
             }
         }
