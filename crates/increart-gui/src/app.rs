@@ -265,6 +265,10 @@ impl App {
                         if ui.small_button(ph::X).clicked() {
                             out.push(Msg::DismissMessage(i));
                         }
+                        // before the text, which is cut to what's left
+                        if m.alert {
+                            crate::settings::alert_links(ui, out);
+                        }
                         let force_open = self.tour.as_ref().is_some_and(|t| t.messages_popover());
                         messages_line(ui, st, m, out, force_open);
                     }
@@ -627,6 +631,9 @@ fn messages_line(
                     ui.horizontal(|ui| {
                         if ui.small_button(ph::X).on_hover_text("dismiss").clicked() {
                             out.push(Msg::DismissMessage(i));
+                        }
+                        if m.alert {
+                            crate::settings::alert_links(ui, out);
                         }
                         let (icon, c) = if m.error { (ph::WARNING, BAD) } else { (ph::INFO, Color32::LIGHT_GRAY) };
                         ui.add(egui::Label::new(RichText::new(format!("{icon} {}", m.text)).color(c)).wrap());

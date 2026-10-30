@@ -345,6 +345,31 @@ fn player(ui: &mut egui::Ui, n: &mut Notifications) {
     );
 }
 
+const OPEN_BELL: &str = "open_bell";
+
+/// Opens the status bar's bell menu (its snooze) on the next frame.
+pub fn open_bell(ctx: &egui::Context) {
+    ctx.data_mut(|d| d.insert_temp(egui::Id::unique(OPEN_BELL), true));
+    ctx.request_repaint();
+}
+
+/// Settings, on its Notifications tab.
+pub fn notification_settings() -> [Msg; 2] {
+    [Msg::Settings(true), Msg::SettingsTab(increart_gui_core::state::SettingsTab::Notifications)]
+}
+
+/// An alert message's links: the bell's snooze menu and the settings.
+pub fn alert_links(ui: &mut egui::Ui, out: &mut Vec<Msg>) {
+    if ui.small_button(ic(ph::BELL_Z, "Snooze…")).on_hover_text("the bell's snooze menu").clicked() {
+        egui::Popup::close_all(ui.ctx());
+        open_bell(ui.ctx());
+    }
+    if ui.small_button(ph::GEAR).on_hover_text("notification settings").clicked() {
+        egui::Popup::close_all(ui.ctx());
+        out.extend(notification_settings());
+    }
+}
+
 /// The status bar's bell: alerts on, off, sounding or snoozed; click for
 /// what holds, snooze and the settings.
 /// `force_open`: for the screenshot tour.
@@ -352,7 +377,7 @@ pub fn bell(ui: &mut egui::Ui, st: &AppState, out: &mut Vec<Msg>, force_open: bo
     let n = &st.config.notifications;
     if !n.gpu_idle.on && !n.queue_cleared.on && !n.review_backlog.on {
         if ui.small_button(ph::BELL_SLASH).on_hover_text("No notifications: click to set them up").clicked() {
-            out.push(Msg::Settings(true));
+            out.extend(notification_settings());
         }
         return;
     }
@@ -382,7 +407,9 @@ pub fn bell(ui: &mut egui::Ui, st: &AppState, out: &mut Vec<Msg>, force_open: bo
     let r = ui.add(button).on_hover_text(tip);
     // closed by the buttons themselves: a click in the minutes field keeps it open
     let mut popup = egui::Popup::menu(&r).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside);
-    if force_open {
+    // asked for by an alert's message (see `open_bell`)
+    let asked = ui.ctx().data_mut(|d| d.remove_temp::<bool>(egui::Id::unique(OPEN_BELL))).unwrap_or(false);
+    if force_open || asked {
         popup = popup.open_memory(egui::SetOpenCommand::Bool(true));
     }
     popup.show(|ui| {
@@ -413,34 +440,51 @@ pub fn bell(ui: &mut egui::Ui, st: &AppState, out: &mut Vec<Msg>, force_open: bo
                 ui.close();
             }
         } else {
-            for (label, secs) in [
-                ("Snooze 5 min", Some(300.0)),
-                ("Snooze 30 min", Some(1800.0)),
-                ("Snooze 1 h", Some(3600.0)),
-                ("Until restart", None),
-            ] {
-                if ui.button(ic(ph::BELL_Z, label)).clicked() {
-                    out.push(Msg::Snooze(secs));
-                    ui.close();
-                }
+            let snooze = |ui: &mut egui::Ui, label: &str| ui.button(ic(ph::BELL_Z, label)).clicked();
+            let mut picked = None;
+            if snooze(ui, "Snooze 5 min") {
+                picked = Some(Some(300.0));
             }
-            // a duration of your own, in minutes (kept for the session)
+            if snooze(ui, "Snooze 30 min") {
+                picked = Some(Some(1800.0));
+            }
+            if snooze(ui, "Snooze 1 h") {
+                picked = Some(Some(3600.0));
+            }
+            // a duration of your own, in minutes (kept for the session); the
+            // submenu stays open while the field is clicked and typed in
             let key = egui::Id::unique("snooze_custom_min");
             let mut min = ui.ctx().data(|d| d.get_temp::<u32>(key)).unwrap_or(15);
-            ui.horizontal(|ui| {
-                let go = ui.button(ic(ph::BELL_Z, "Snooze")).on_hover_text("for the minutes beside it").clicked();
-                let field = ui.add(egui::DragValue::new(&mut min).range(1..=1440).suffix(" min"));
-                let enter = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-                if go || enter {
-                    out.push(Msg::Snooze(Some(min as f64 * 60.0)));
-                    ui.close();
-                }
+            let config =
+                egui::containers::menu::MenuConfig::new().close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside);
+            let mut custom = None;
+            egui::containers::menu::SubMenuButton::new(ic(ph::BELL_Z, "Snooze for…")).config(config).ui(ui, |ui| {
+                ui.horizontal(|ui| {
+                    let field = ui.add(egui::DragValue::new(&mut min).range(1..=1440).suffix(" min"));
+                    let enter = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                    let go = ui.button(ic(ph::BELL_Z, "Snooze")).clicked();
+                    if go || enter {
+                        custom = Some(min);
+                        ui.close_kind(egui::UiKind::Menu);
+                    }
+                });
+                ui.weak("1 min to 24 h; drag or type, Enter snoozes");
             });
             ui.ctx().data_mut(|d| d.insert_temp(key, min));
+            if let Some(m) = custom {
+                picked = Some(Some(m as f64 * 60.0));
+            }
+            if snooze(ui, "Until restart") {
+                picked = Some(None);
+            }
+            if let Some(secs) = picked {
+                out.push(Msg::Snooze(secs));
+                ui.close();
+            }
         }
         ui.separator();
         if ui.button(ic(ph::GEAR, "Notification settings…")).clicked() {
-            out.push(Msg::Settings(true));
+            out.extend(notification_settings());
             ui.close();
         }
     });

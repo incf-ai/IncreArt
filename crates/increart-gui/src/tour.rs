@@ -746,6 +746,7 @@ impl Tour {
                 let mut n = st.config.notifications.clone();
                 n.review_backlog.on = true;
                 n.review_backlog.threshold = 1;
+                n.show_message = true;
                 vec![Msg::ContinueWithoutServers, Msg::Settings(false), Msg::SetNotifications(n)]
             }
             "75-promote-in-folder" => {
