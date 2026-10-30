@@ -748,7 +748,7 @@ fn export(admin: &Admin, flags: &[(String, String)]) -> Result<String, String> {
     for (f, p) in flags {
         args.extend([f.clone(), p.clone()]);
     }
-    // LoRAs chosen per request from every Models folder's loras/, as
+    // LoRAs chosen per request from every model directory's loras/, as
     // sd-server finds them (KoboldCpp loads none until asked; a path in
     // more than one is the first folder's)
     let loras = crate::config::lora_dirs(&admin.model_dirs);
@@ -923,8 +923,8 @@ fn generate(inner: &Inner, id: &str, path: &str, body: &Value) -> Result<String,
         let known = inner.get("/sdapi/v1/loras").map_err(|e| format!("listing its LoRAs: {e}"))?;
         if let Some(missing) = missing_lora(asked, &known) {
             return Err(format!(
-                "KoboldCpp doesn't have the LoRA {missing}: it finds LoRAs in the loras folder of each Models \
-                 folder, at most one folder down, when it loads the model (load it again after adding one; one started \
+                "KoboldCpp doesn't have the LoRA {missing}: it finds LoRAs in the loras folder of each model \
+                 directory, at most one folder down, when it loads the model (load it again after adding one; one started \
                  by hand needs --sdlora <that folder>)"
             ));
         }

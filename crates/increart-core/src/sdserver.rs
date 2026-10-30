@@ -508,8 +508,8 @@ impl Client {
     }
 }
 
-/// A model or LoRA file as IncreArt names it: its path inside the Models
-/// folder (or LoRA folder) that has it, as KoboldCpp finds it. sd-server
+/// A model or LoRA file as IncreArt names it: its path inside the model
+/// directory (or LoRA folder) that has it, as KoboldCpp finds it. sd-server
 /// names those outside its first `--model-dir` `@<folder hash>/<path>`.
 pub fn portable_id(id: &str) -> &str {
     match id.split_once('/') {

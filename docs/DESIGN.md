@@ -160,7 +160,7 @@ Each start-up screen can be skipped from the command line (`increart
 
 A screen is only skipped when its argument is valid: a folder without
 `library.rsn`, an unknown or empty preset, or a preset with Start servers
-while sd-server or a models folder is missing leaves that screen up, with a
+while sd-server or a model directory is missing leaves that screen up, with a
 line saying why. `--servers` is used once, when the first library opens.
 Unknown arguments print the usage and exit with status 2.
 
@@ -220,7 +220,7 @@ asks among them):
   at once. A preset with only a chat server stops the sd-servers in use.
 - With no presets, **Set up servers…** opens a wizard. It starts on
   **KoboldCpp, Qwen-Image set up for your GPUs (recommended)**: the
-  KoboldCpp binary and a models folder, then the GPUs **through** a GPU
+  KoboldCpp binary and a model directory, then the GPUs **through** a GPU
   runtime (Vulkan, CUDA or ROCm; CUDA when `nvidia-smi` runs, else Vulkan;
   on a Mac only Metal)
   as that runtime's tool lists them (`tiers::detect_gpus`: `vulkaninfo`,
@@ -282,7 +282,7 @@ asks among them):
   it later in Server settings. Setting the shared binary there moves the
   presets' entries that had the one before along with it. The other
   choice, **sd-server, with your own models**, is the sd-server
-  binary and models folder, then the devices from `--list-devices` with
+  binary and model directory, then the devices from `--list-devices` with
   every GPU ticked (not the CPU) on ports 1234, 1235, …, or a server
   already running to connect to, then optionally **Add a chat server…**
   for prompt enhance (the chat server settings below). **Save as preset
@@ -310,8 +310,8 @@ asks among them):
   from disk), and **Add folder…** (browses to another; one already listed
   isn't added twice). The wizard adds its download folder when it isn't
   listed. Both servers search all of them, the first that has a path
-  winning (see Models folders); and leave started servers running. **Timeouts** (also a tab in Settings): see Timeouts below. When a preset starts sd-servers and the binary or
-  models folder is missing, the dialog says so with **Fix…**, which opens
+  winning (see Model directories); and leave started servers running. **Timeouts** (also a tab in Settings): see Timeouts below. When a preset starts sd-servers and the binary or
+  model directory is missing, the dialog says so with **Fix…**, which opens
   it.
 - ✎ or **New preset** opens the editor modal: the name, then the server
   rows. **+ KoboldCpp** (first, in the accent colour) adds a KoboldCpp
@@ -324,7 +324,7 @@ asks among them):
   model for a started one, labelled **Model**, **mmproj** and **Context** (ticked: the wizard's Qwen3-VL and projector if
   they're in a model folder's `koboldcpp/`, context 8192; see KoboldCpp as
   an image server). Every path (binary, settings, chat model, mmproj, and
-  the wizard's binary and models folder) has a Browse… picker starting in
+  the wizard's binary and model directory) has a Browse… picker starting in
   its folder, else the first model folder. **+ sd-server** adds a device and
   port (1234, 1235, … by default); the app launches it and stops it when it
   exits. **+ Connect to sd-server** adds a URL; connected servers are left
@@ -934,7 +934,8 @@ Config {
   `--model-dir` per `model_dirs` entry, then `sdserver.args`, then the
   server's own `args`. Output goes to `sd-server-<name>.log` in the app's log
   directory.
-- **Models folders** (`model_dirs`, edited in Server settings): a model
+- **Model directories** (`model_dirs`, edited in Server settings and Model
+  presets): a model
   preset names each file by its path inside the folder that holds it
   (`vae/x.safetensors`), the first folder that has the path winning, as
   KoboldCpp searches them. sd-server names a file outside its first
@@ -1887,18 +1888,23 @@ and its tooltip says how many more are generating.
   the form takes them, and if it was deleted the first preset is chosen.
   Other projects' drafts name their preset, so a rename moves them to the
   form's current one when opened. **Reset to built-ins** replaces the list.
-  Each file row has Browse… (writes the path relative to the Models folder
-  that holds it, the folders shown above the rows, or says why a file
-  outside them can't be used) and Show (its folder in the file manager).
+  Above the file rows is the model directories list, Server settings' own
+  editor (type, browse, ↑ ↓ to reorder, × to remove, Add folder…), saved
+  as it's changed (Cancel doesn't undo it), with what the order means: a
+  path is the first folder's that has it, LoRAs are in each one's
+  `loras/`, and a running sd-server sees a change once restarted. Each
+  file row has Browse… (writes the path relative to the model directory
+  that holds it, or says why a file outside them can't be used) and Show
+  (its folder in the file manager; its hover names the file found).
 - A model preset's **LoRAs**: a file and a weight per row (−4–4; 1 as
   trained, below 0 against it), applied to every image. The file is in a
-  Models folder's `loras/` (or `Lora/`), named as `loras/x.safetensors`
+  Model directory's `loras/` (or `Lora/`), named as `loras/x.safetensors`
   (Browse… refuses one elsewhere). Both servers take LoRAs per request
   (`lora: [{path, multiplier}]`, the path inside that folder; sd-server's
-  name for one outside the first Models folder's `loras/` is looked up in
+  name for one outside the first model directory's `loras/` is looked up in
   its `/sdapi/v1/loras`), so changing them needs no reload and they're no
   part of what a server loads. sd-server finds them in its model dirs; a
-  started KoboldCpp is given `--sdlora` with every Models folder's LoRA
+  started KoboldCpp is given `--sdlora` with every model directory's LoRA
   folder with each model, lists what it found then (at
   most one folder down), takes at most 10, and skips one it doesn't have
   without a word, so the app checks `/sdapi/v1/loras` first and fails the
@@ -2356,7 +2362,7 @@ in the app's state folder (`$XDG_STATE_HOME/increart` when set, else
   log's first line will (the admin password as `***`), with Copy.
 - Under a preset's image servers a greyed **Image model** line says no
   image model is set there: each run's comes from its model preset (files
-  in the Models folder); its ⚙ opens Model presets. A KoboldCpp entry's
+  in the model directory); its ⚙ opens Model presets. A KoboldCpp entry's
   Chat model is the one model a server preset names.
 - On the Servers screen a failed server's row says **failed**, and why on
   its own lines under it, wrapped to the dialog's width; of a long log tail

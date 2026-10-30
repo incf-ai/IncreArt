@@ -380,7 +380,7 @@ fn log_file(s: &ServerConfig) -> String {
 /// The label column of the wizard's KoboldCpp rows.
 const LABEL_W: f32 = 76.0;
 
-/// An example models folder, as this OS writes one (`~` works too).
+/// An example model directory, as this OS writes one (`~` works too).
 fn models_hint() -> &'static str {
     if cfg!(windows) { r"C:\models" } else { "~/models" }
 }
@@ -674,7 +674,9 @@ pub fn servers(ui: &mut egui::Ui, st: &AppState, d: &ServerDialog, out: &mut Vec
                 let settings = !d.opening
                     && ui
                         .button(ic(ph::GEAR, "Server settings…"))
-                        .on_hover_text("KoboldCpp and sd-server binaries, the models folder: shared by every preset")
+                        .on_hover_text(
+                            "KoboldCpp and sd-server binaries, the model directories: shared by every preset",
+                        )
                         .clicked();
                 let logs = ui
                     .button(ic(ph::SCROLL, "Logs…"))
@@ -751,7 +753,7 @@ fn ways_out(ui: &mut egui::Ui, st: &AppState, d: &ServerDialog, modal: bool, out
 }
 
 /// What is wrong with the sd-server settings, when a preset starts servers:
-/// a missing binary or models folder.
+/// a missing binary or model directory.
 fn settings_problem(st: &AppState) -> Option<String> {
     let starts =
         st.config.server_presets.iter().flat_map(|p| &p.servers).any(|s| matches!(s, ServerConfig::Start { .. }));
@@ -976,7 +978,7 @@ fn without_window(ctx: &egui::Context, st: &AppState, w: &Without, out: &mut Vec
 /// The setup wizard's button.
 const WIZARD: &str = "Set up KoboldCpp for your GPUs…";
 
-/// **Server settings…**: KoboldCpp, sd-server and the models folder,
+/// **Server settings…**: KoboldCpp, sd-server and the model directories,
 /// shared by every preset.
 fn settings_window(ctx: &egui::Context, st: &AppState, d: &ServerDialog, out: &mut Vec<Msg>) {
     let m = egui::Modal::new(egui::Id::unique("sd_server_settings")).show(ctx, |ui| {
@@ -1029,7 +1031,7 @@ fn settings(ui: &mut egui::Ui, st: &AppState, d: &ServerDialog, out: &mut Vec<Ms
     }
     ui.add_space(12.0);
     ui.label(RichText::new(ic(ph::FOLDER, "Both")).strong());
-    models_field(ui, &mut c, out);
+    models_field(ui, &mut c, MODEL_DIRS_NOTE, out);
     let wizard = match c.model_dirs.first() {
         Some(d) => format!("into {}", std::path::Path::new(d).join(tiers::MODEL_SUBDIR).display()),
         None => format!("into {}/ in it", tiers::MODEL_SUBDIR),
@@ -1090,7 +1092,7 @@ fn kobold_binary_field(ui: &mut egui::Ui, st: &AppState, d: &ServerDialog, out: 
 /// No image model is set here: each run asks for its model preset's files.
 fn image_model_line(ui: &mut egui::Ui, out: &mut Vec<Msg>) {
     ui.horizontal(|ui| {
-        ui.weak(ic(ph::CUBE, "Image model: each run's, from its model preset (files in the Models folder)"))
+        ui.weak(ic(ph::CUBE, "Image model: each run's, from its model preset (files in the model directories)"))
             .on_hover_text(
                 "The servers load the files of the model preset a run is made with (Generate's Model preset list); \
              KoboldCpp reloads with them, sd-server takes them per request.",
@@ -1138,75 +1140,84 @@ fn leave_running_field(ui: &mut egui::Ui, c: &mut increart_core::config::SdServe
         .on_hover_text("The model stays loaded, so the next start is instant; the GPU memory stays in use meanwhile");
 }
 
-/// The sd-server binary, models folder and leave-running setting.
+/// The sd-server binary, model directories and leave-running setting.
 fn sdserver_fields(ui: &mut egui::Ui, st: &AppState, out: &mut Vec<Msg>) {
     let mut c = st.config.sdserver.clone();
     sdserver_binary_field(ui, &mut c, out);
-    models_field(ui, &mut c, out);
+    models_field(ui, &mut c, MODEL_DIRS_NOTE, out);
     leave_running_field(ui, &mut c);
     if c != st.config.sdserver {
         out.push(Msg::SetSdServer(c));
     }
 }
 
-/// The Models folders, in order: sd-server's `--model-dir`s, where
-/// KoboldCpp's files and both servers' LoRAs are looked up too. Each can
-/// be typed, browsed to, moved or removed; Add folder… browses to another.
-fn models_field(ui: &mut egui::Ui, c: &mut increart_core::config::SdServerConfig, out: &mut Vec<Msg>) {
-    let n = c.model_dirs.len().max(1);
-    let mut moved = None;
-    // one width for every row (↑ ↓ × after each)
-    let sp = ui.spacing().item_spacing.x;
-    let w = ui.available_width() - 56.0 - sp - 3.0 * (ui.spacing().interact_size.y + 8.0 + sp);
-    for i in 0..n {
-        ui.horizontal(|ui| {
-            if i == 0 {
-                ui.add_sized([56.0, 18.0], egui::Label::new("Models")).on_hover_text(
-                    "Folders searched for model files and LoRAs (in each one's loras/), in order: \
-                     a file in more than one is the first one's. sd-server is started with each.",
-                );
-            } else {
-                ui.add_space(56.0 + sp);
-            }
-            let mut dir = c.model_dirs.get(i).cloned().unwrap_or_default();
-            ui.allocate_ui(egui::vec2(w, 18.0), |ui| {
-                path_edit(ui, &mut dir, models_hint(), PickKind::ModelDir(i), out)
-            });
-            if dir != c.model_dirs.get(i).cloned().unwrap_or_default() {
-                match c.model_dirs.get_mut(i) {
-                    Some(d) => *d = dir,
-                    None => c.model_dirs.push(dir),
+/// The model directories' list editor on its own (the model presets editor
+/// has it too, with `note` saying what they mean there): saved as it's
+/// changed.
+pub(crate) fn models_list(ui: &mut egui::Ui, st: &AppState, note: &str, out: &mut Vec<Msg>) {
+    let mut c = st.config.sdserver.clone();
+    models_field(ui, &mut c, note, out);
+    if c != st.config.sdserver {
+        out.push(Msg::SetSdServer(c));
+    }
+}
+
+/// What the order of the model directories means, under their title.
+const MODEL_DIRS_NOTE: &str = "Searched in this order for model files and LoRAs (in each one's loras/): \
+     a path in more than one is the first one's. sd-server is started with each.";
+
+/// The model directories, in order, in a frame of their own: sd-server's
+/// `--model-dir`s, where KoboldCpp's files and both servers' LoRAs are
+/// looked up too. Each can be typed, browsed to, moved or removed; Add
+/// folder… browses to another.
+fn models_field(ui: &mut egui::Ui, c: &mut increart_core::config::SdServerConfig, note: &str, out: &mut Vec<Msg>) {
+    egui::Frame::group(ui.style()).show(ui, |ui| {
+        ui.label(RichText::new(ic(ph::FOLDERS, "Model directories")).strong());
+        ui.add(egui::Label::new(RichText::new(note).weak()).wrap());
+        let n = c.model_dirs.len().max(1);
+        let mut moved = None;
+        // one width for every row (↑ ↓ × after each)
+        let sp = ui.spacing().item_spacing.x;
+        let w = ui.available_width() - 3.0 * (ui.spacing().interact_size.y + 8.0 + sp);
+        for i in 0..n {
+            ui.horizontal(|ui| {
+                let mut dir = c.model_dirs.get(i).cloned().unwrap_or_default();
+                ui.allocate_ui(egui::vec2(w, 18.0), |ui| {
+                    path_edit(ui, &mut dir, models_hint(), PickKind::ModelDir(i), out)
+                });
+                if dir != c.model_dirs.get(i).cloned().unwrap_or_default() {
+                    match c.model_dirs.get_mut(i) {
+                        Some(d) => *d = dir,
+                        None => c.model_dirs.push(dir),
+                    }
                 }
-            }
-            let many = c.model_dirs.len() > 1;
-            if ui
-                .add_enabled(many && i > 0, egui::Button::new(ph::ARROW_UP))
-                .on_hover_text("Search it earlier")
-                .clicked()
-            {
-                moved = Some((i, i - 1));
-            }
-            if ui
-                .add_enabled(many && i + 1 < c.model_dirs.len(), egui::Button::new(ph::ARROW_DOWN))
-                .on_hover_text("Search it later")
-                .clicked()
-            {
-                moved = Some((i, i + 1));
-            }
-            if ui
-                .add_enabled(i < c.model_dirs.len(), egui::Button::new(ph::X))
-                .on_hover_text("Remove it from the list (the folder stays on disk)")
-                .clicked()
-            {
-                c.model_dirs.remove(i);
-            }
-        });
-    }
-    if let Some((from, to)) = moved {
-        c.model_dirs.swap(from, to);
-    }
-    ui.horizontal(|ui| {
-        ui.add_space(56.0 + sp);
+                let many = c.model_dirs.len() > 1;
+                if ui
+                    .add_enabled(many && i > 0, egui::Button::new(ph::ARROW_UP))
+                    .on_hover_text("Search it earlier")
+                    .clicked()
+                {
+                    moved = Some((i, i - 1));
+                }
+                if ui
+                    .add_enabled(many && i + 1 < c.model_dirs.len(), egui::Button::new(ph::ARROW_DOWN))
+                    .on_hover_text("Search it later")
+                    .clicked()
+                {
+                    moved = Some((i, i + 1));
+                }
+                if ui
+                    .add_enabled(i < c.model_dirs.len(), egui::Button::new(ph::X))
+                    .on_hover_text("Remove it from the list (the folder stays on disk)")
+                    .clicked()
+                {
+                    c.model_dirs.remove(i);
+                }
+            });
+        }
+        if let Some((from, to)) = moved {
+            c.model_dirs.swap(from, to);
+        }
         if ui
             .button(ic(ph::FOLDER_PLUS, "Add folder…"))
             .on_hover_text("Browse to another folder with model files")
@@ -1373,7 +1384,7 @@ fn server_wizard(ctx: &egui::Context, st: &AppState, d: &ServerDialog, out: &mut
     }
 }
 
-/// The wizard's KoboldCpp page: the binary, the models folder, the GPUs
+/// The wizard's KoboldCpp page: the binary, the model directory, the GPUs
 /// (each one's memory picks its preset), how two or more share the work;
 /// then the models downloaded and the servers opened.
 /// `version`: the binary's `--version` (None while asking).
@@ -1643,7 +1654,7 @@ fn wizard_files(ui: &mut egui::Ui, p: &tiers::Plan, dir: &str, out: &mut Vec<Msg
         let to = std::path::Path::new(dir).join(tiers::MODEL_SUBDIR);
         let there = to.is_dir();
         let tip = if there { "Open it in the file manager" } else { "Not made yet: it is when the models download" };
-        let b = ui.add_enabled(there, egui::Button::new(ic(ph::ARROW_SQUARE_OUT, "Open the models folder")).small());
+        let b = ui.add_enabled(there, egui::Button::new(ic(ph::ARROW_SQUARE_OUT, "Open the model directory")).small());
         if b.on_hover_text(tip).on_disabled_hover_text(tip).clicked() {
             out.push(Msg::ShowInFileManager(to));
         }

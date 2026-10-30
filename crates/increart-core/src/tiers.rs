@@ -31,7 +31,7 @@ const MEASURED: [(u32, u32, f64, f64); 5] =
 /// KoboldCpp's own RAM per server, beyond the pinned weights (GiB).
 const SERVER_RAM_GIB: f64 = 1.5;
 
-/// Where the wizard downloads the files, under the models folder.
+/// Where the wizard downloads the files, under the model directory.
 pub const MODEL_SUBDIR: &str = "koboldcpp";
 
 /// The chat model's PE port, after the image servers' (5001, …).
@@ -373,7 +373,7 @@ pub enum Layout {
     ImagePerCard,
 }
 
-/// A model file to fetch: from `url` to `file` (under the models folder).
+/// A model file to fetch: from `url` to `file` (under the model directory).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Download {
     pub url: String,

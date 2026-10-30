@@ -2123,7 +2123,7 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
             }
             let dir = k.models_dir.trim().to_string();
             d.draft.servers = plan.servers;
-            // the recipe's files are under the models folder
+            // the recipe's files are under the model directory
             let c = &mut state.config;
             c.koboldcpp = k.binary.trim().to_string();
             let open = k.open;
@@ -5559,7 +5559,7 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
                     let dirs = &state.config.sdserver.model_dirs;
                     dirs.get(i).or(dirs.last()).filter(|d| !d.trim().is_empty()).map(PathBuf::from)
                 }
-                // the current file's folder, else the models folder
+                // the current file's folder, else the model directory
                 PickKind::RecipeFile(slot) => {
                     let dirs = &state.config.sdserver.model_dirs;
                     let on_disk = state.recipe_editor.as_ref().and_then(|e| {

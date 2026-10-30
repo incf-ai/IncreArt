@@ -5853,7 +5853,7 @@ fn generate_offers_the_model_presets_the_servers_can_run() {
     };
     update(&mut s, Msg::ServerModels(vec![("gpu1".into(), refusing)]));
     assert_eq!(s.why_file_unlisted("int8.safetensors"), "gpu1: is in sd-server's int8 format");
-    assert!(s.why_file_unlisted("none.gguf").starts_with("Not in the Models folders"));
+    assert!(s.why_file_unlisted("none.gguf").starts_with("Not in the model directories"));
 
     // only the open servers count
     s.servers.retain(|x| x.name == "gpu1");
@@ -5870,7 +5870,7 @@ fn a_model_preset_file_picked_is_named_inside_its_models_folder() {
     let mut s = AppState::new(config, None);
     update(&mut s, Msg::OpenRecipes);
     let vae = increart_core::config::MODEL_SLOTS.iter().position(|n| *n == "vae").unwrap();
-    // starts in the models folder (the built-in's vae isn't there)
+    // starts in the model directory (the built-in's vae isn't there)
     let fx = update(&mut s, Msg::Pick(PickKind::RecipeFile(vae)));
     assert!(matches!(&fx[..], [Effect::Pick { start: Some(p), .. }] if *p == models), "{fx:?}");
     update(&mut s, Msg::Picked(PickKind::RecipeFile(vae), vec![models.join("vae").join("mine.safetensors")]));
@@ -5881,7 +5881,7 @@ fn a_model_preset_file_picked_is_named_inside_its_models_folder() {
     update(&mut s, Msg::Picked(PickKind::RecipeFile(vae), vec![dir.path().join("other.safetensors")]));
     let e = s.recipe_editor.clone().unwrap();
     assert_eq!(e.rows[e.selected].preset.files["vae"], "vae/mine.safetensors");
-    assert!(e.error.unwrap().contains("isn't in a Models folder"));
+    assert!(e.error.unwrap().contains("isn't in a model directory"));
 }
 
 #[test]

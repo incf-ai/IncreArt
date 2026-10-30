@@ -1276,7 +1276,7 @@ pub struct ServerDialog {
     /// Opened from the main window: it can be closed again, keeping the
     /// servers in use.
     pub from_main: bool,
-    /// The server settings window (KoboldCpp, sd-server, models folder).
+    /// The server settings window (KoboldCpp, sd-server, model directory).
     pub settings: bool,
     /// Why the command line's `--servers` didn't skip this screen.
     pub notice: Option<String>,
@@ -2334,7 +2334,7 @@ pub enum PickKind {
     TileFile(increart_core::config::TileFormat),
     SdServerBinary,
     KoboldBinary,
-    /// A Models folder (its index; one past the last adds one).
+    /// A model directory (its index; one past the last adds one).
     ModelDir(usize),
     /// A file for the PE server being edited.
     Pe(PeFile),
@@ -2342,7 +2342,7 @@ pub enum PickKind {
     Kobold(usize, PeFile),
     /// The KoboldCpp wizard's binary.
     WizardBinary,
-    /// The KoboldCpp wizard's models folder.
+    /// The KoboldCpp wizard's model directory.
     WizardModels,
     /// Where Export library saves its archive, in this format.
     LibraryArchiveOut(increart_core::archive::ArchiveFormat),
@@ -2899,7 +2899,7 @@ impl AppState {
     /// Why no open server lists a model file, for its row in Model presets:
     /// each server that has it but can't load it says why
     /// ("kcpp-gpu1: is in sd-server's int8 format, …"), else whether it's
-    /// in the Models folders at all.
+    /// in the model directories at all.
     pub fn why_file_unlisted(&self, id: &str) -> String {
         use increart_core::sdserver::Loadable;
         let refused: Vec<String> = self
@@ -2914,9 +2914,9 @@ impl AppState {
             return refused.join("\n");
         }
         if increart_core::config::model_file_on_disk(id, &self.config.sdserver.model_dirs).is_none() {
-            "Not in the Models folders, so no open server lists it".into()
+            "Not in the model directories, so no open server lists it".into()
         } else {
-            "No open server lists it (a server you connect to lists its own Models folders)".into()
+            "No open server lists it (a server you connect to lists its own model directories)".into()
         }
     }
 
@@ -3206,7 +3206,7 @@ impl AppState {
     }
 
     /// What keeps Start servers from starting: no sd-server binary, or a
-    /// missing one or models folder. A bare binary name is looked up on PATH
+    /// missing one or model directory. A bare binary name is looked up on PATH
     /// and not checked.
     pub fn sdserver_problem(&self) -> Option<String> {
         let c = &self.config.sdserver;
@@ -3219,7 +3219,7 @@ impl AppState {
         c.model_dirs
             .iter()
             .find(|m| !m.trim().is_empty() && !Path::new(m).is_dir())
-            .map(|m| format!("Models folder not found: {m}"))
+            .map(|m| format!("Model directory not found: {m}"))
     }
 
     pub fn place(&self) -> Place {

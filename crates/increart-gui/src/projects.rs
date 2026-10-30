@@ -1517,35 +1517,22 @@ pub fn recipes_window(ctx: &egui::Context, st: &AppState, out: &mut Vec<Msg>) {
                 });
                 let p = &mut r.preset;
                 ui.add_space(6.0);
+                crate::startup::models_list(
+                    ui,
+                    st,
+                    "A preset's files are found in these, searched in this order. Each is written \
+                     relative to its folder (vae/x.safetensors), so a preset keeps working wherever the \
+                     folders are; a path in more than one folder is the first one's. LoRAs are in each \
+                     folder's loras/. The list is Server settings' own, for every preset and both servers, \
+                     and saved as it's changed (Cancel keeps it); a running sd-server sees a change once \
+                     it's restarted.",
+                    &mut picks,
+                );
+                ui.add_space(6.0);
                 ui.label(RichText::new("Files").strong());
                 let dirs = &st.config.sdserver.model_dirs;
-                match dirs.split_first() {
-                    Some((first, more)) => {
-                        ui.add(
-                            egui::Label::new(
-                                RichText::new(
-                                    "Paths inside a Models folder, written relative to it (vae/x.safetensors): \
-                                     the servers load only files inside these, in this order (Server settings). \
-                                     Browse… writes them so.",
-                                )
-                                .weak(),
-                            )
-                            .wrap(),
-                        );
-                        for d in std::iter::once(first).chain(more.iter()) {
-                            ui.horizontal(|ui| {
-                                ui.weak(ph::FOLDER);
-                                ui.add(egui::Label::new(RichText::new(d.as_str()).monospace().weak()).truncate())
-                                    .on_hover_text(d.as_str());
-                            });
-                        }
-                    }
-                    None => {
-                        ui.colored_label(
-                            NEUTRAL,
-                            "No Models folder is set: set one in Server settings, then pick the files here.",
-                        );
-                    }
+                if dirs.iter().all(|d| d.trim().is_empty()) {
+                    ui.colored_label(NEUTRAL, "No model directory yet: add the one holding the model files.");
                 }
                 if let Some(why) = &e.error {
                     ui.add(egui::Label::new(RichText::new(why).color(BAD)).wrap());
@@ -1571,7 +1558,7 @@ pub fn recipes_window(ctx: &egui::Context, st: &AppState, out: &mut Vec<Msg>) {
                             ui.add_sized([300.0, 20.0], edit.text_color(NEUTRAL))
                                 .on_hover_text(st.why_file_unlisted(&f))
                         };
-                        // a full path inside a models folder: written relative to it
+                        // a full path inside a model directory: written relative to it
                         if r.lost_focus()
                             && Path::new(&f).is_absolute()
                             && let Ok(id) = increart_core::config::model_file_id(Path::new(&f), dirs)
@@ -1595,18 +1582,17 @@ pub fn recipes_window(ctx: &egui::Context, st: &AppState, out: &mut Vec<Msg>) {
                             .on_hover_text("the files the open servers list");
                         }
                         let at = MODEL_SLOTS.iter().position(|n| *n == s.as_str()).unwrap_or(0);
-                        if ui.small_button(ph::FOLDER_OPEN).on_hover_text("Browse… (in the Models folder)").clicked()
+                        if ui.small_button(ph::FOLDER_OPEN).on_hover_text("Browse… (in a model directory)").clicked()
                         {
                             picks.push(Msg::Pick(PickKind::RecipeFile(at)));
                         }
                         let on_disk = increart_core::config::model_file_on_disk(&f, dirs);
-                        let tip = if on_disk.is_some() {
-                            "Show it in the file manager"
-                        } else {
-                            "Not found in the Models folders"
+                        let tip = match &on_disk {
+                            Some(p) => format!("Found at {}: show it in the file manager", p.display()),
+                            None => "Not found in any model directory".into(),
                         };
                         let show = ui.add_enabled(on_disk.is_some(), egui::Button::new(ph::ARROW_SQUARE_OUT).small());
-                        if show.on_hover_text(tip).on_disabled_hover_text(tip).clicked()
+                        if show.on_hover_text(&tip).on_disabled_hover_text(&tip).clicked()
                             && let Some(p) = on_disk
                         {
                             picks.push(Msg::ShowInFileManager(p));
@@ -1636,9 +1622,9 @@ pub fn recipes_window(ctx: &egui::Context, st: &AppState, out: &mut Vec<Msg>) {
                 ui.add(
                     egui::Label::new(
                         RichText::new(
-                            "Applied to every image at their weight, with no reload. They go in the Models \
-                             folder's loras folder (loras/x.safetensors); KoboldCpp sees the ones there when it \
-                             loads the model, at most one folder down.",
+                            "Applied to every image at their weight, with no reload. They go in a model \
+                             directory's loras folder (loras/x.safetensors), any of the folders above; KoboldCpp sees \
+                             the ones there when it loads the model, at most one folder down.",
                         )
                         .weak(),
                     )

@@ -1,6 +1,6 @@
 //! The app on two GPUs at once, in one project: Z-Image Turbo on an
 //! sd-server and on a KoboldCpp, each with and without a LoRA, the files
-//! spread over three Models folders. What it shows:
+//! spread over three model directories. What it shows:
 //!
 //! - each model preset's files found in whichever folder holds them, by
 //!   both servers (sd-server names those outside its first `--model-dir`

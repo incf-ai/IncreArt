@@ -643,12 +643,12 @@ fn pick(kind: PickKind, start: Option<PathBuf>) -> Vec<PathBuf> {
             .into_iter()
             .collect(),
         PickKind::ModelDir(_) => {
-            d.set_title("Models folder (KoboldCpp and sd-server)").pick_folder().into_iter().collect()
+            d.set_title("Model directory (KoboldCpp and sd-server)").pick_folder().into_iter().collect()
         }
         PickKind::SdServerBinary => d.set_title("sd-server binary").pick_file().into_iter().collect(),
         PickKind::RecipeFile(slot) => {
             let slot = increart_core::config::MODEL_SLOTS.get(slot).copied().unwrap_or("model");
-            d.set_title(format!("The {slot} file (in a Models folder)"))
+            d.set_title(format!("The {slot} file (in a model directory)"))
                 .add_filter("Model files", &["gguf", "safetensors", "sft", "ckpt", "pt", "pth", "bin"])
                 .add_filter("All files", &["*"])
                 .pick_file()
@@ -656,7 +656,7 @@ fn pick(kind: PickKind, start: Option<PathBuf>) -> Vec<PathBuf> {
                 .collect()
         }
         PickKind::RecipeLora(_) => d
-            .set_title("A LoRA (in a Models folder's loras folder)")
+            .set_title("A LoRA (in a model directory's loras folder)")
             .add_filter("LoRA files", &["safetensors", "gguf", "sft", "ckpt"])
             .add_filter("All files", &["*"])
             .pick_file()
@@ -665,7 +665,7 @@ fn pick(kind: PickKind, start: Option<PathBuf>) -> Vec<PathBuf> {
         PickKind::KoboldBinary | PickKind::WizardBinary => {
             d.set_title("KoboldCpp binary").pick_file().into_iter().collect()
         }
-        PickKind::WizardModels => d.set_title("Models folder for KoboldCpp").pick_folder().into_iter().collect(),
+        PickKind::WizardModels => d.set_title("Model directory for KoboldCpp").pick_folder().into_iter().collect(),
         PickKind::Pe(f) | PickKind::Kobold(_, f) => {
             let d = match f {
                 crate::state::PeFile::Binary => d.set_title("KoboldCpp binary"),
@@ -1713,7 +1713,7 @@ fn hash_ahead(lib: &Mutex<Library>, op: &LibOp) {
 }
 
 /// A run from the Generate form. Model files are hashed (cached in the
-/// library's `cache/`) when they can be found in a Models folder.
+/// library's `cache/`) when they can be found in a model directory.
 fn new_run(lib: &Library, f: &GenerateForm, preset: &RecipePreset, model_dirs: &[String]) -> NewRun {
     let cache = lib.root().join("cache/model-hashes.rsn");
     let sha256 = |id: &str| match increart_core::config::model_file_on_disk(id, model_dirs) {
