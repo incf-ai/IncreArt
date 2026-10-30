@@ -23,7 +23,7 @@ fn model(recipe: &str) -> ModelSelection {
         .iter()
         .map(|(slot, id)| (slot.to_string(), ModelFile { id: id.to_string(), sha256: "cd".repeat(32) }))
         .collect::<BTreeMap<_, _>>();
-    ModelSelection { recipe: recipe.into(), files }
+    ModelSelection { recipe: recipe.into(), files, loras: vec![] }
 }
 
 struct Setup {
@@ -49,7 +49,19 @@ fn setup() -> Setup {
 }
 
 fn new_run(s: &Setup, recipe: &str, seeds: u64, alpha: bool) -> Id {
-    let run = NewRun {
+    let run = the_run(s, recipe, seeds, alpha);
+    s.lib.lock().unwrap().create_run(&s.project, run).unwrap()
+}
+
+/// A run of `seeds` changed by `f`.
+fn new_run_with(s: &Setup, seeds: u64, f: impl FnOnce(&mut NewRun)) -> Id {
+    let mut run = the_run(s, "qwen-image-21", seeds, false);
+    f(&mut run);
+    s.lib.lock().unwrap().create_run(&s.project, run).unwrap()
+}
+
+fn the_run(s: &Setup, recipe: &str, seeds: u64, alpha: bool) -> NewRun {
+    NewRun {
         sweep: None,
         label: "r01".into(),
         prompt: "cute robot sticker".into(),
@@ -71,8 +83,7 @@ fn new_run(s: &Setup, recipe: &str, seeds: u64, alpha: bool) -> Id {
         source_idea: None,
         first_seed: 0,
         seeds,
-    };
-    s.lib.lock().unwrap().create_run(&s.project, run).unwrap()
+    }
 }
 
 fn opts() -> EngineOptions {
@@ -146,6 +157,7 @@ fn run_end_to_end_on_two_servers() {
     let body = &sa[0];
     assert_eq!(body["output_format"], "png");
     assert_eq!(body["sample_params"]["guidance"]["txt_cfg"], 6.0);
+    assert!(body.get("lora").is_none(), "none without LoRAs");
     assert!(
         body["prompt"].as_str().unwrap().starts_with("This is an RGBA image with transparency. cute robot sticker.")
     );
@@ -199,6 +211,25 @@ fn loads_the_model_a_run_needs() {
     assert_eq!(loads[0]["recipe"], "qwen-image-21");
     assert_eq!(loads[0]["models"]["vae"], "vae/v.safetensors");
     assert!(events.iter().any(|e| matches!(e, Event::Server { state, .. } if state.starts_with("loading"))));
+}
+
+#[test]
+fn sd_server_is_sent_the_runs_loras() {
+    let s = setup();
+    let a = Fake::start(LOADED);
+    let run = new_run_with(&s, 1, |r| {
+        r.model.loras = vec![
+            LoraFile { id: "loras/style.safetensors".into(), sha256: String::new(), weight: 0.8 },
+            LoraFile { id: "Lora/sub/x.gguf".into(), sha256: String::new(), weight: -0.5 },
+        ];
+    });
+    let engine = start(&s, &[&a]);
+    engine.queue_run(&run);
+    collect(&engine, run_done(&run));
+    assert_eq!(
+        a.submissions()[0]["lora"],
+        serde_json::json!([{ "path": "style.safetensors", "multiplier": 0.8 }, { "path": "sub/x.gguf", "multiplier": -0.5 }])
+    );
 }
 
 #[test]
@@ -494,6 +525,46 @@ fn koboldcpp_loads_the_model_and_generates() {
     let lib = s.lib.lock().unwrap();
     let recipe = lib.recipe(&outputs(&events)[0].1).unwrap().unwrap();
     assert_eq!((recipe.sdcpp.as_str(), recipe.device.as_str()), ("koboldcpp 1.123.1", "Vulkan1"));
+}
+
+#[test]
+#[cfg(unix)]
+fn koboldcpp_applies_the_runs_loras() {
+    let s = setup();
+    let tmp = tempfile::tempdir().unwrap();
+    let k = FakeKobold::start("");
+    let admin = admin(&k, tmp.path());
+    let models = admin.model_dirs[0].clone();
+    std::fs::create_dir_all(format!("{models}/loras")).unwrap();
+    std::fs::write(format!("{models}/loras/style.safetensors"), "").unwrap();
+    let run = new_run_with(&s, 1, |r| {
+        r.model.loras = vec![LoraFile { id: "loras/style.safetensors".into(), sha256: "ab".into(), weight: 0.8 }];
+    });
+    let missing = new_run_with(&s, 1, |r| {
+        r.model.loras = vec![LoraFile { id: "loras/none.safetensors".into(), sha256: String::new(), weight: 1.0 }];
+    });
+    let engine = kobold_engine(&s, &k, Some(admin));
+    engine.queue_run(&run);
+    let events = collect(&engine, run_done(&run));
+    // launched with the loras folder; sent the path inside it
+    let kcpps = std::fs::read_dir(tmp.path().join("admin")).unwrap().flatten().next().unwrap().path();
+    assert!(std::fs::read_to_string(kcpps).unwrap().contains(&format!("--sdlora\n{models}/loras\n")));
+    let gens = k.generations();
+    assert_eq!(gens[0].1["lora"], serde_json::json!([{ "path": "style.safetensors", "multiplier": 0.8 }]));
+    let lib = s.lib.lock().unwrap();
+    let recipe = lib.recipe(&outputs(&events)[0].1).unwrap().unwrap();
+    assert_eq!(recipe.model.loras[0].id, "loras/style.safetensors");
+    drop(lib);
+    // one it doesn't have: refused, said, not generated without it
+    engine.queue_run(&missing);
+    let events = collect(&engine, run_done(&missing));
+    assert!(
+        events.iter().any(
+            |e| matches!(e, Event::SeedFailed { error, .. } if error.contains("doesn't have the LoRA none.safetensors"))
+        ),
+        "{events:?}"
+    );
+    assert_eq!(k.generations().len(), 1);
 }
 
 #[test]

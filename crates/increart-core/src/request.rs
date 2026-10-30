@@ -6,7 +6,7 @@ use serde_json::{Value, json};
 
 use crate::error::Result;
 use crate::library::Library;
-use crate::model::{Mode, Recipe, Run};
+use crate::model::{LoraFile, Mode, Recipe, Run};
 
 /// Qwen-Image 2.1 decides on alpha from the prompt (DESIGN.md, Transparency).
 pub fn prompt_sent(prompt: &str, alpha: bool) -> String {
@@ -58,6 +58,9 @@ pub fn img_gen_body(lib: &Library, run: &Run, seed: u64, opts: &GenOptions) -> R
     }
     let prompt = prompt_sent(&run.prompt, run.alpha);
     let mut body = img_gen_body_from(&prompt, &run.negative_prompt, run.width, run.height, seed, sample, &refs, opts);
+    if !run.model.loras.is_empty() {
+        body["lora"] = lora_field(&run.model.loras);
+    }
     if let Mode::Edit { init, strength } = &run.mode {
         body["strength"] = json!(strength);
         if let Some(init) = init {
@@ -65,6 +68,21 @@ pub fn img_gen_body(lib: &Library, run: &Run, seed: u64, opts: &GenOptions) -> R
         }
     }
     Ok(body)
+}
+
+/// The request's `lora` list (both servers take this): each LoRA's path
+/// inside the LoRA folder, and its weight.
+pub fn lora_field(loras: &[LoraFile]) -> Value {
+    loras
+        .iter()
+        .map(|l| {
+            json!({
+                "path": crate::config::lora_request_path(&l.id),
+                // as typed, not as f32 widened (0.8, not 0.800000011920929)
+                "multiplier": (f64::from(l.weight) * 1e4).round() / 1e4,
+            })
+        })
+        .collect()
 }
 
 /// The `img_gen` body from its parts: `sample` is `sample_params`, `refs`
@@ -161,6 +179,15 @@ mod tests {
         assert_eq!(
             prompt_sent("cute robot sticker.", true),
             "This is an RGBA image with transparency. cute robot sticker. The image has alpha channel and the background is transparent."
+        );
+    }
+
+    #[test]
+    fn loras_are_sent_as_paths_inside_their_folder() {
+        let l = |id: &str, weight| LoraFile { id: id.into(), sha256: String::new(), weight };
+        assert_eq!(
+            lora_field(&[l("loras/style.safetensors", 0.8), l("Lora/sub/x.gguf", 1.0)]),
+            json!([{ "path": "style.safetensors", "multiplier": 0.8 }, { "path": "sub/x.gguf", "multiplier": 1.0 }])
         );
     }
 }

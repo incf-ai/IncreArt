@@ -38,6 +38,8 @@ const LOAD_TIMEOUT: Duration = Duration::from_secs(60 * 60);
 const STOP_TIMEOUT: Duration = Duration::from_secs(30);
 /// One image: generous, a cancel ends it sooner.
 const GENERATE_TIMEOUT: Duration = Duration::from_secs(60 * 60);
+/// LoRAs per image (`lora_filenames_max` in koboldcpp.py).
+const MAX_LORAS: usize = 10;
 /// Finished jobs kept for the engine to read.
 const KEEP_DONE: usize = 64;
 
@@ -746,6 +748,11 @@ fn export(admin: &Admin, flags: &[(String, String)]) -> Result<String, String> {
     for (f, p) in flags {
         args.extend([f.clone(), p.clone()]);
     }
+    // LoRAs chosen per request from the first Models folder's loras/, as
+    // sd-server finds them (KoboldCpp loads none until asked)
+    if let Some(dir) = admin.model_dirs.first().and_then(|d| crate::config::lora_dir(d)) {
+        args.extend(["--sdlora".to_string(), dir.to_string_lossy().into_owned()]);
+    }
     let mut h = std::collections::hash_map::DefaultHasher::new();
     args.hash(&mut h);
     let name = format!("increart-{:016x}.kcpps", h.finish());
@@ -842,6 +849,12 @@ pub fn a1111_body(body: &Value, genkey: &str, samplers: &[String]) -> Result<(St
     if let Some(f) = sp.get("flow_shift") {
         out["flow_shift"] = f.clone();
     }
+    if let Some(loras) = body.get("lora").and_then(Value::as_array).filter(|l| !l.is_empty()) {
+        if loras.len() > MAX_LORAS {
+            return Err(format!("KoboldCpp takes at most {MAX_LORAS} LoRAs ({} given)", loras.len()));
+        }
+        out["lora"] = json!(loras);
+    }
     match body.get("init_image").and_then(Value::as_str) {
         Some(init) => {
             out["init_images"] = json!([init]);
@@ -902,6 +915,17 @@ fn run_jobs(inner: &Inner, rx: &Receiver<String>) {
 /// POSTs one generation on a connection of its own (so a cancel can close
 /// it) and returns the image as base64.
 fn generate(inner: &Inner, id: &str, path: &str, body: &Value) -> Result<String, String> {
+    // KoboldCpp skips a LoRA it doesn't have without a word
+    if let Some(asked) = body.get("lora").and_then(Value::as_array) {
+        let known = inner.get("/sdapi/v1/loras").map_err(|e| format!("listing its LoRAs: {e}"))?;
+        if let Some(missing) = missing_lora(asked, &known) {
+            return Err(format!(
+                "KoboldCpp doesn't have the LoRA {missing}: it finds LoRAs in the loras folder of the first Models \
+                 folder, at most one folder down, when it loads the model (load it again after adding one; one started \
+                 by hand needs --sdlora <that folder>)"
+            ));
+        }
+    }
     let hostport = inner.base.trim_start_matches("http://").trim_end_matches('/');
     if inner.base.starts_with("https://") {
         return Err("KoboldCpp over https isn't supported".into());
@@ -934,6 +958,23 @@ fn generate(inner: &Inner, id: &str, path: &str, body: &Value) -> Result<String,
         // what KoboldCpp answers with no image model, or when generating failed
         _ => Err("KoboldCpp returned no image (see its log)".into()),
     }
+}
+
+/// The first LoRA path in `asked` that `known` (`/sdapi/v1/loras`) lacks.
+fn missing_lora(asked: &[Value], known: &Value) -> Option<String> {
+    // its paths are joined with the OS's separator
+    let known: Vec<String> = known
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|l| l.get("path").and_then(Value::as_str))
+        .map(|p| p.replace('\\', "/"))
+        .collect();
+    asked
+        .iter()
+        .filter_map(|l| l.get("path").and_then(Value::as_str))
+        .find(|p| !known.iter().any(|k| k == p))
+        .map(str::to_string)
 }
 
 /// How often a generation's read looks whether its job was cancelled.
@@ -1105,6 +1146,18 @@ mod tests {
                 .contains("no place")
         );
         assert!(model_flags(&key(&[("vae", "vae/v.safetensors")]), &dirs).is_err());
+    }
+
+    #[test]
+    fn loras_go_through_and_unknown_ones_are_found() {
+        let body = json!({ "prompt": "p", "lora": [{ "path": "sub/a.safetensors", "multiplier": 0.5 }] });
+        let (_, out) = a1111_body(&body, "k", &[]).unwrap();
+        assert_eq!(out["lora"], body["lora"]);
+        let eleven: Vec<Value> = (0..11).map(|i| json!({ "path": format!("{i}.gguf"), "multiplier": 1.0 })).collect();
+        assert!(a1111_body(&json!({ "lora": eleven }), "k", &[]).unwrap_err().contains("at most 10"));
+        let known = json!([{ "name": "a", "path": "sub\\a.safetensors" }]);
+        assert_eq!(missing_lora(body["lora"].as_array().unwrap(), &known), None);
+        assert_eq!(missing_lora(&[json!({ "path": "b.gguf" })], &known).as_deref(), Some("b.gguf"));
     }
 
     #[test]

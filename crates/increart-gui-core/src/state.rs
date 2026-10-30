@@ -883,6 +883,8 @@ pub enum ScaleBy {
 pub struct RecipeEditor {
     pub rows: Vec<RecipeRow>,
     pub selected: usize,
+    /// A file picked outside the model folders, said in the editor.
+    pub error: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -906,7 +908,7 @@ impl RecipeEditor {
                 sigmas: p.custom_sigmas.iter().map(f32::to_string).collect::<Vec<_>>().join(", "),
             })
             .collect();
-        RecipeEditor { rows, selected: selected.min(recipes.len().saturating_sub(1)) }
+        RecipeEditor { rows, selected: selected.min(recipes.len().saturating_sub(1)), error: None }
     }
 
     /// Why it can't be saved, if it can't.
@@ -1185,17 +1187,24 @@ pub enum OutputSource {
 }
 
 /// A question with a button named for what it does (`verb`) and Cancel;
-/// the button sends `then`.
+/// the button sends `then`. `fix`: another way out, offered first (its
+/// button's name and message).
 #[derive(Clone, Debug, PartialEq)]
 pub struct Confirm {
     pub text: String,
     pub verb: String,
     pub then: Box<crate::Msg>,
+    pub fix: Option<(String, Box<crate::Msg>)>,
 }
 
 impl Confirm {
     pub fn new(text: impl Into<String>, verb: impl Into<String>, then: crate::Msg) -> Self {
-        Self { text: text.into(), verb: verb.into(), then: Box::new(then) }
+        Self { text: text.into(), verb: verb.into(), then: Box::new(then), fix: None }
+    }
+
+    pub fn with_fix(mut self, name: impl Into<String>, then: crate::Msg) -> Self {
+        self.fix = Some((name.into(), Box::new(then)));
+        self
     }
 }
 
@@ -1312,12 +1321,32 @@ pub struct WizardGpu {
     pub by_hand: bool,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct WizardDownload {
+    /// Still finding what's there already (each file's size asked, the ones
+    /// on disk linked) before any is fetched.
+    pub checking: bool,
     /// Index into the plan's downloads.
     pub file: usize,
     pub done: u64,
     pub total: Option<u64>,
+    /// All the files to fetch: bytes so far (a `.part` carried on counts)
+    /// and in all (None: a size the server didn't say).
+    pub all_done: u64,
+    pub all_total: Option<u64>,
+    /// Bytes a second fetched so far this run (None: none yet).
+    pub rate: Option<f64>,
+    /// Files not fetched: linked to one on disk (file, where it is), or
+    /// there already (where empty).
+    pub reused: Vec<(String, String)>,
+}
+
+impl WizardDownload {
+    /// Seconds left at the rate so far.
+    pub fn eta_secs(&self) -> Option<f64> {
+        let left = self.all_total?.saturating_sub(self.all_done);
+        self.rate.filter(|r| *r > 0.0).map(|r| left as f64 / r)
+    }
 }
 
 impl KoboldWizard {
@@ -2317,6 +2346,11 @@ pub enum PickKind {
     LibraryArchiveIn,
     /// The folder to unpack [`AppState::unpack_from`] into.
     LibraryUnpackInto,
+    /// A file of the model presets editor's selected preset: its slot (an
+    /// index into [`increart_core::config::MODEL_SLOTS`]).
+    RecipeFile(usize),
+    /// A LoRA of the model presets editor's selected preset (its index).
+    RecipeLora(usize),
 }
 
 /// Which of a KoboldCpp PE server's files is picked.
@@ -2795,6 +2829,43 @@ impl AppState {
                 Loadable::Only(_) => vec![],
             })
             .collect()
+    }
+
+    /// Why no open server lists a model file, for its row in Model presets:
+    /// each server that has it but can't load it says why
+    /// ("kcpp-gpu1: is in sd-server's int8 format, …"), else whether it's
+    /// in the Models folders at all.
+    pub fn why_file_unlisted(&self, id: &str) -> String {
+        use increart_core::sdserver::Loadable;
+        let refused: Vec<String> = self
+            .servers
+            .iter()
+            .filter_map(|s| match self.server_models.get(&s.name)? {
+                Loadable::Files { refused, .. } => refused.get(id).map(|why| format!("{}: {why}", s.name)),
+                Loadable::Only(_) => None,
+            })
+            .collect();
+        if !refused.is_empty() {
+            return refused.join("\n");
+        }
+        if increart_core::config::model_file_on_disk(id, &self.config.sdserver.model_dirs).is_none() {
+            "Not in the Models folders, so no open server lists it".into()
+        } else {
+            "No open server lists it (a server you connect to lists its own Models folders)".into()
+        }
+    }
+
+    /// For a model preset no open server can run, one they can with the
+    /// same sd-server recipe (sd-server's int8 files → KoboldCpp's GGUFs):
+    /// the same model, so a draft's settings still fit it. None when it
+    /// runs, or no server has said.
+    pub fn runnable_alternative(&self, preset: usize) -> Option<usize> {
+        let runnable = self.runnable_recipes();
+        if self.open_loadable().next().is_none() || runnable.contains(&preset) {
+            return None;
+        }
+        let recipe = &self.config.recipes.get(preset)?.recipe;
+        runnable.into_iter().find(|&i| self.config.recipes[i].recipe == *recipe)
     }
 
     /// The model presets (indices into `config.recipes`) an open server

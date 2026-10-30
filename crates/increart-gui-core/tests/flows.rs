@@ -479,6 +479,7 @@ impl Library_ {
                 model: increart_core::model::ModelSelection {
                     recipe: "qwen-image-21".into(),
                     files: Default::default(),
+                    loras: vec![],
                 },
                 source_idea: None,
                 first_seed: 0,
@@ -955,7 +956,7 @@ fn kobold_wizard_plans_by_vram_downloads_then_opens() {
     let [Effect::DownloadModels { dir, files, .. }] = &fx[..] else { panic!("{fx:?}") };
     assert_eq!((dir.as_str(), files.len()), (m, 4));
     assert!(files[0].file.ends_with("qwen_image_2.1-Q4_K.gguf"));
-    update(&mut s, Msg::WizardDownload(WizardDownload { file: 1, done: 5, total: Some(10) }));
+    update(&mut s, Msg::WizardDownload(WizardDownload { file: 1, done: 5, total: Some(10), ..Default::default() }));
     assert_eq!(dialog(&s).kobold.as_ref().unwrap().downloading.as_ref().unwrap().1.file, 1);
     assert!(update(&mut s, Msg::FinishKoboldWizard).is_empty(), "once");
 
@@ -965,6 +966,17 @@ fn kobold_wizard_plans_by_vram_downloads_then_opens() {
     let k = dialog(&s).kobold.clone().unwrap();
     assert!(k.downloading.is_none() && k.error.unwrap().contains("cancelled"));
     assert!(s.config.recipes.iter().all(|r| !r.name.contains("GGUF Q4_K")));
+
+    // Save, download later: saved, nothing fetched, the files said
+    let mut later = s.clone();
+    let fx = update(&mut later, Msg::SaveKoboldWizardLater);
+    assert!(!fx.iter().any(|f| matches!(f, Effect::DownloadModels { .. })), "{fx:?}");
+    assert!(fx.iter().any(|f| matches!(f, Effect::SaveConfig(..))), "{fx:?}");
+    assert!(!dialog(&later).wizard && dialog(&later).kobold.is_none() && !dialog(&later).opening);
+    assert_eq!(later.config.server_presets.last().unwrap().name, "KoboldCpp Vulkan1 + KoboldCpp Vulkan2");
+    let said = later.messages.iter().map(|m| m.text.clone()).collect::<Vec<_>>().join("\n");
+    assert!(said.contains("Saved without its models") && said.contains("qwen_image_2.1-Q4_K.gguf"), "{said}");
+    assert!(dialog(&later).notice.as_ref().is_some_and(|n| n.contains("Saved without its models")));
 
     // KoboldCpp not found: Save anyway downloads and saves, doesn't open
     update(&mut s, Msg::KoboldVersion("koboldcpp".into(), Err("koboldcpp not found".into())));
@@ -5633,6 +5645,7 @@ fn generate_offers_the_model_presets_the_servers_can_run() {
         cfg: 2.0,
         flow_shift: None,
         custom_sigmas: vec![],
+        loras: vec![],
     };
     let config = Config {
         recipes: vec![preset("Int8", "int8.safetensors"), preset("Q8", "koboldcpp/q8.gguf")],
@@ -5665,9 +5678,67 @@ fn generate_offers_the_model_presets_the_servers_can_run() {
     update(&mut s, Msg::ServerModels(vec![("gpu1".into(), Loadable::Only(Some("other.gguf".into())))]));
     assert_eq!(s.models_without_preset(), vec![("gpu1", "other.gguf")]);
 
+    // a file a server has but can't load says why, not that it isn't listed
+    let refusing = Loadable::Files {
+        ids: Default::default(),
+        refused: [("int8.safetensors".to_string(), "is in sd-server's int8 format".to_string())].into(),
+    };
+    update(&mut s, Msg::ServerModels(vec![("gpu1".into(), refusing)]));
+    assert_eq!(s.why_file_unlisted("int8.safetensors"), "gpu1: is in sd-server's int8 format");
+    assert!(s.why_file_unlisted("none.gguf").starts_with("Not in the Models folders"));
+
     // only the open servers count
     s.servers.retain(|x| x.name == "gpu1");
     assert!(s.runnable_recipes().is_empty());
+}
+
+#[test]
+fn a_model_preset_file_picked_is_named_inside_its_models_folder() {
+    let dir = tempfile::tempdir().unwrap();
+    let models = dir.path().join("models");
+    let mut config = Config::default();
+    config.sdserver.model_dirs = vec![models.to_string_lossy().into()];
+    config.recipes = increart_core::config::builtin_recipes();
+    let mut s = AppState::new(config, None);
+    update(&mut s, Msg::OpenRecipes);
+    let vae = increart_core::config::MODEL_SLOTS.iter().position(|n| *n == "vae").unwrap();
+    // starts in the models folder (the built-in's vae isn't there)
+    let fx = update(&mut s, Msg::Pick(PickKind::RecipeFile(vae)));
+    assert!(matches!(&fx[..], [Effect::Pick { start: Some(p), .. }] if *p == models), "{fx:?}");
+    update(&mut s, Msg::Picked(PickKind::RecipeFile(vae), vec![models.join("vae").join("mine.safetensors")]));
+    let e = s.recipe_editor.clone().unwrap();
+    assert_eq!(e.rows[e.selected].preset.files["vae"], "vae/mine.safetensors");
+    assert!(e.error.is_none());
+    // outside it: said, the file kept
+    update(&mut s, Msg::Picked(PickKind::RecipeFile(vae), vec![dir.path().join("other.safetensors")]));
+    let e = s.recipe_editor.clone().unwrap();
+    assert_eq!(e.rows[e.selected].preset.files["vae"], "vae/mine.safetensors");
+    assert!(e.error.unwrap().contains("isn't in a Models folder"));
+}
+
+#[test]
+fn a_model_presets_lora_picked_is_named_inside_the_loras_folder() {
+    use increart_core::config::PresetLora;
+    let dir = tempfile::tempdir().unwrap();
+    let models = dir.path().join("models");
+    std::fs::create_dir_all(models.join("loras")).unwrap();
+    let mut config = Config::default();
+    config.sdserver.model_dirs = vec![models.to_string_lossy().into()];
+    config.recipes = increart_core::config::builtin_recipes();
+    config.recipes[0].loras = vec![PresetLora { file: String::new(), weight: 1.0 }];
+    let mut s = AppState::new(config, None);
+    update(&mut s, Msg::OpenRecipes);
+    // starts in the loras folder
+    let fx = update(&mut s, Msg::Pick(PickKind::RecipeLora(0)));
+    assert!(matches!(&fx[..], [Effect::Pick { start: Some(p), .. }] if *p == models.join("loras")), "{fx:?}");
+    update(&mut s, Msg::Picked(PickKind::RecipeLora(0), vec![models.join("loras").join("style.safetensors")]));
+    let e = s.recipe_editor.clone().unwrap();
+    assert_eq!(e.rows[e.selected].preset.loras[0].file, "loras/style.safetensors");
+    // a model file isn't a LoRA: said, the LoRA kept
+    update(&mut s, Msg::Picked(PickKind::RecipeLora(0), vec![models.join("vae").join("v.safetensors")]));
+    let e = s.recipe_editor.clone().unwrap();
+    assert_eq!(e.rows[e.selected].preset.loras[0].file, "loras/style.safetensors");
+    assert!(e.error.unwrap().contains("isn't in the loras folder"));
 }
 
 #[test]
@@ -5681,6 +5752,7 @@ fn model_presets_edit_and_generate_keeps_its_model() {
         cfg: 2.0,
         flow_shift: None,
         custom_sigmas: vec![],
+        loras: vec![],
     };
     let config = Config { recipes: vec![preset("A", 20), preset("B", 30)], ..Default::default() };
     let mut s = AppState::new(config, None);
@@ -5752,9 +5824,15 @@ fn queueing_a_preset_no_server_runs_asks_first() {
         cfg: 2.0,
         flow_shift: None,
         custom_sigmas: vec![],
+        loras: vec![],
     };
     let mut h = Harness::new();
-    h.state.config.recipes = vec![preset("Int8", "int8.safetensors"), preset("Q8", "q8.gguf")];
+    let mut other = preset("Other", "other.gguf");
+    other.recipe = "flux".into();
+    h.state.config.recipes = vec![preset("Int8", "int8.safetensors"), preset("Q8", "q8.gguf"), other];
+    // a draft on Int8, its steps changed
+    h.state.generate.preset = 0;
+    h.state.generate.steps = 31;
     h.state.servers = vec![ServerStatus {
         config: None,
         name: "kcpp".into(),
@@ -5770,6 +5848,12 @@ fn queueing_a_preset_no_server_runs_asks_first() {
     };
     update(&mut h.state, Msg::ServerModels(vec![("kcpp".into(), kobold)]));
     assert_eq!(h.state.runnable_recipes(), vec![1]);
+    // the same model in a preset it runs: switched to, the draft's steps kept, said
+    assert_eq!((h.state.generate.preset, h.state.generate.steps), (1, 31));
+    assert!(h.state.messages.iter().any(|m| m.text.contains("Model preset Q8 instead of Int8")));
+    // no other preset of that recipe: nothing to switch to
+    assert_eq!(h.state.runnable_alternative(2), None);
+    assert_eq!(h.state.runnable_alternative(1), None, "it runs");
 
     // chosen anyway (e.g. a draft from before): the warning, with the reason
     h.state.generate.preset = 0;
@@ -5780,6 +5864,18 @@ fn queueing_a_preset_no_server_runs_asks_first() {
     assert!(c.text.contains("Int8:\n  kcpp: int8.safetensors is in sd-server's int8 format"), "{}", c.text);
     assert_eq!(c.verb, "Queue anyway");
     assert_eq!(*c.then, Msg::QueueModelChecked);
+    // the fix offered: that model on a preset the server runs
+    let (name, then) = c.fix.clone().unwrap();
+    assert_eq!((name.as_str(), *then), ("Use Q8 and queue", Msg::QueueWithPreset(1)));
+    update(&mut h.state, Msg::ConfirmFix);
+    assert_eq!(h.state.generate.preset, 1);
+    assert!(h.state.confirm.as_ref().is_none_or(|c| c.verb != "Queue anyway"), "not asked again");
+    // a preset with no runnable twin: no fix
+    h.state.confirm = None;
+    h.state.generate.preset = 2;
+    update(&mut h.state, Msg::QueueGenerate);
+    assert!(h.state.confirm.clone().unwrap().fix.is_none());
+    h.state.generate.preset = 0;
 
     // one the server runs: straight on
     h.state.confirm = None;
@@ -5816,7 +5912,11 @@ fn opening_a_library_with_lost_output_links_warns() {
         },
         mode: increart_core::model::Mode::Generate,
         refs: vec![],
-        model: increart_core::model::ModelSelection { recipe: "qwen-image-21".into(), files: Default::default() },
+        model: increart_core::model::ModelSelection {
+            recipe: "qwen-image-21".into(),
+            files: Default::default(),
+            loras: vec![],
+        },
         source_idea: None,
         first_seed: 0,
         seeds: 1,

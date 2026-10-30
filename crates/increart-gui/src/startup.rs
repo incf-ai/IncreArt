@@ -8,7 +8,7 @@ use increart_core::pe::PeDevice;
 use increart_core::tiers::{self, Gpu, Layout};
 use increart_gui_core::{
     AppState, Confirm, Editing, KoboldWizard, LibraryDialog, LibraryWizard, Msg, PeFile, PickKind, ServerDialog,
-    ServerProgress, Without, WizardGpu,
+    ServerProgress, Without, WizardDownload, WizardGpu,
 };
 
 use crate::widgets::{ACCENT, ACCENT_MUTED, BAD, GOOD, NEUTRAL, dialog_buttons, dialog_footer, ic, ph, short_name};
@@ -385,17 +385,92 @@ fn models_hint() -> &'static str {
     if cfg!(windows) { r"C:\models" } else { "~/models" }
 }
 
-fn path_edit(ui: &mut egui::Ui, s: &mut String, hint: &str, pick: PickKind, out: &mut Vec<Msg>) -> bool {
-    let binary = matches!(pick, PickKind::WizardBinary | PickKind::Kobold(_, PeFile::Binary));
-    ui.horizontal(|ui| {
-        let r = ui.add(egui::TextEdit::singleline(s).desired_width(ui.available_width() - 36.0).hint_text(hint));
-        if ui.button(ph::FOLDER_OPEN).on_hover_text("Browse…").clicked() {
-            out.push(Msg::Pick(pick));
-        }
+/// What a path field holds, for the note under it.
+#[derive(Clone, Copy, PartialEq)]
+enum PathKind {
+    /// A file, a name on `PATH` or a command line: not checked (its
+    /// `--version` or the server's start says).
+    Binary,
+    File,
+    Folder,
+    /// A folder made when it's needed.
+    NewFolder,
+}
+
+fn path_kind(pick: PickKind) -> PathKind {
+    match pick {
+        PickKind::WizardBinary
+        | PickKind::KoboldBinary
+        | PickKind::SdServerBinary
+        | PickKind::Kobold(_, PeFile::Binary)
+        | PickKind::Pe(PeFile::Binary) => PathKind::Binary,
+        PickKind::WizardModels => PathKind::NewFolder,
+        PickKind::ModelDir => PathKind::Folder,
+        _ => PathKind::File,
+    }
+}
+
+/// Opens `path`'s folder (a file's: the folder it's in) in the file
+/// manager; greyed while there's none.
+fn show_button(ui: &mut egui::Ui, path: &str, kind: PathKind, out: &mut Vec<Msg>) {
+    let p = std::path::Path::new(path);
+    // (a bare binary name or a command line: no folder)
+    let named = p.is_absolute() && (kind != PathKind::Binary || p.exists());
+    let dir = if kind == PathKind::Folder || kind == PathKind::NewFolder { Some(p) } else { p.parent() };
+    let there = named && dir.is_some_and(|d| d.is_dir());
+    let tip = if there {
+        if dir == Some(p) { "Open the folder in the file manager" } else { "Show its folder in the file manager" }
+    } else if kind == PathKind::NewFolder {
+        "Not made yet: it is when the models download"
+    } else {
+        "Not there"
+    };
+    let b = ui.add_enabled(there, egui::Button::new(ph::ARROW_SQUARE_OUT));
+    if b.on_hover_text(tip).on_disabled_hover_text(tip).clicked() {
+        out.push(Msg::ShowInFileManager(p.to_path_buf()));
+    }
+}
+
+/// A path field and its Browse… and Show buttons, made a full path when left; its
+/// text box's response. Under it: while typing, the full path it becomes; once left, a
+/// file or folder that isn't there.
+pub(crate) fn path_edit(
+    ui: &mut egui::Ui,
+    s: &mut String,
+    hint: &str,
+    pick: PickKind,
+    out: &mut Vec<Msg>,
+) -> egui::Response {
+    let kind = path_kind(pick);
+    let full = |s: &str| if kind == PathKind::Binary { config::full_binary(s) } else { config::full_path(s) };
+    ui.vertical(|ui| {
+        let r = ui
+            .horizontal(|ui| {
+                let r =
+                    ui.add(egui::TextEdit::singleline(s).desired_width(ui.available_width() - 68.0).hint_text(hint));
+                if ui.button(ph::FOLDER_OPEN).on_hover_text("Browse…").clicked() {
+                    out.push(Msg::Pick(pick));
+                }
+                show_button(ui, &full(s), kind, out);
+                r
+            })
+            .inner;
         if r.lost_focus() {
-            *s = if binary { config::full_binary(s) } else { config::full_path(s) };
+            *s = full(s);
         }
-        r.lost_focus()
+        let f = full(s);
+        if r.has_focus() {
+            if f != s.trim() {
+                ui.weak(format!("→ {f}"));
+            }
+        } else if !f.is_empty() && kind != PathKind::Binary && !std::path::Path::new(&f).exists() {
+            match kind {
+                PathKind::NewFolder => ui.weak("A new folder, made when the models download."),
+                PathKind::Folder => ui.colored_label(BAD, "No such folder"),
+                _ => ui.colored_label(BAD, "No such file"),
+            };
+        }
+        r
     })
     .inner
 }
@@ -955,9 +1030,11 @@ fn settings(ui: &mut egui::Ui, st: &AppState, d: &ServerDialog, out: &mut Vec<Ms
     ui.add_space(12.0);
     ui.label(RichText::new(ic(ph::FOLDER, "Both")).strong());
     models_field(ui, &mut c, out);
-    ui.weak(
-        "KoboldCpp loads the recipes' model files from here too; the setup wizard downloads into koboldcpp/ in it.",
-    );
+    let wizard = match c.model_dirs.first() {
+        Some(d) => format!("into {}", std::path::Path::new(d).join(tiers::MODEL_SUBDIR).display()),
+        None => format!("into {}/ in it", tiers::MODEL_SUBDIR),
+    };
+    ui.weak(format!("KoboldCpp loads the recipes' model files from here too; the setup wizard downloads {wizard}."));
     leave_running_field(ui, &mut c);
     if c != st.config.sdserver {
         out.push(Msg::SetSdServer(c));
@@ -972,22 +1049,14 @@ fn settings(ui: &mut egui::Ui, st: &AppState, d: &ServerDialog, out: &mut Vec<Ms
 fn kobold_binary_field(ui: &mut egui::Ui, st: &AppState, d: &ServerDialog, out: &mut Vec<Msg>) {
     let mut b = st.config.koboldcpp.clone();
     let fallback = increart_gui_core::kobold_binary(st);
-    let edit = ui.horizontal(|ui| {
+    let left = ui.horizontal(|ui| {
         ui.add_sized([56.0, 18.0], egui::Label::new("Binary"));
-        let r =
-            ui.add(egui::TextEdit::singleline(&mut b).desired_width(ui.available_width() - 36.0).hint_text(&fallback));
-        if ui.button(ph::FOLDER_OPEN).on_hover_text("Browse…").clicked() {
-            out.push(Msg::Pick(PickKind::KoboldBinary));
-        }
-        if r.lost_focus() {
-            b = config::full_binary(&b);
-        }
-        r
+        path_edit(ui, &mut b, &fallback, PickKind::KoboldBinary, out)
     });
     if b != st.config.koboldcpp {
         out.push(Msg::SetKoboldBinary(b));
     }
-    if edit.inner.lost_focus() {
+    if left.inner.lost_focus() {
         out.push(Msg::CheckKoboldVersion);
     }
     ui.horizontal(|ui| {
@@ -999,7 +1068,7 @@ fn kobold_binary_field(ui: &mut egui::Ui, st: &AppState, d: &ServerDialog, out: 
             Some((binary, Err(e))) if *binary == fallback => {
                 ui.colored_label(BAD, e);
             }
-            _ if edit.inner.has_focus() => {}
+            _ if left.inner.has_focus() => {}
             _ => {
                 ui.spinner();
                 ui.weak("--version…");
@@ -1050,13 +1119,7 @@ fn command_line(ui: &mut egui::Ui, st: &AppState, i: usize, s: &ServerConfig) {
 fn sdserver_binary_field(ui: &mut egui::Ui, c: &mut increart_core::config::SdServerConfig, out: &mut Vec<Msg>) {
     ui.horizontal(|ui| {
         ui.add_sized([56.0, 18.0], egui::Label::new("Binary"));
-        let r = ui.add(egui::TextEdit::singleline(&mut c.binary).desired_width(ui.available_width() - 36.0));
-        if r.lost_focus() {
-            c.binary = config::full_binary(&c.binary);
-        }
-        if ui.button(ph::FOLDER_OPEN).on_hover_text("Browse…").clicked() {
-            out.push(Msg::Pick(PickKind::SdServerBinary));
-        }
+        path_edit(ui, &mut c.binary, "sd-server", PickKind::SdServerBinary, out);
     });
 }
 
@@ -1082,15 +1145,7 @@ fn models_field(ui: &mut egui::Ui, c: &mut increart_core::config::SdServerConfig
     ui.horizontal(|ui| {
         ui.add_sized([56.0, 18.0], egui::Label::new("Models"));
         let mut dir = c.model_dirs.first().cloned().unwrap_or_default();
-        let r = ui.add(
-            egui::TextEdit::singleline(&mut dir).desired_width(ui.available_width() - 36.0).hint_text(models_hint()),
-        );
-        if r.lost_focus() {
-            dir = config::full_path(&dir);
-        }
-        if ui.button(ph::FOLDER_OPEN).on_hover_text("Browse…").clicked() {
-            out.push(Msg::Pick(PickKind::ModelDir));
-        }
+        path_edit(ui, &mut dir, models_hint(), PickKind::ModelDir, out);
         if dir != c.model_dirs.first().cloned().unwrap_or_default() {
             match c.model_dirs.first_mut() {
                 Some(first) => *first = dir,
@@ -1133,6 +1188,17 @@ fn server_wizard(ctx: &egui::Context, st: &AppState, d: &ServerDialog, out: &mut
         ui.add_space(8.0);
         ui.label(RichText::new("1. sd-server").strong());
         sdserver_fields(ui, st, out);
+        // its models are yours: the presets say which files each one is
+        ui.horizontal(|ui| {
+            let n = st.config.recipes.len();
+            ui.weak(format!(
+                "Image models: {n} model preset{}, each naming its files in Models",
+                if n == 1 { "" } else { "s" }
+            ));
+            if ui.small_button(ic(ph::GEAR, "Edit model presets…")).clicked() {
+                out.push(Msg::OpenRecipes);
+            }
+        });
         ui.add_space(10.0);
         ui.horizontal(|ui| {
             ui.label(RichText::new("2. GPUs to start it on").strong());
@@ -1226,16 +1292,20 @@ fn server_wizard(ctx: &egui::Context, st: &AppState, d: &ServerDialog, out: &mut
             ui.weak(d.draft.servers.iter().map(describe).collect::<Vec<_>>().join(" · "));
         }
         ui.add_space(6.0);
-        dialog_buttons(ui, |ui| {
-            let ok = !d.draft.servers.is_empty();
-            let finish = egui::Button::new(RichText::new(ic(ph::PLAY, "Save as preset and open")).strong());
-            if ui.add_enabled(ok, finish).clicked() {
-                out.push(Msg::FinishServerWizard);
-            }
-            if ui.button("Cancel   Esc").clicked() {
-                out.push(Msg::ServerWizard(false));
-            }
-        });
+        let (cancel, _) = dialog_footer(
+            ui,
+            |ui| ui.button("Cancel").clicked(),
+            |ui| {
+                let ok = !d.draft.servers.is_empty();
+                let finish = egui::Button::new(RichText::new(ic(ph::PLAY, "Save as preset and open")).strong());
+                if ui.add_enabled(ok, finish).clicked() {
+                    out.push(Msg::FinishServerWizard);
+                }
+            },
+        );
+        if cancel {
+            out.push(Msg::ServerWizard(false));
+        }
     });
     if m.should_close() {
         out.push(Msg::ServerWizard(false));
@@ -1256,216 +1326,227 @@ fn kobold_wizard(
     let mut new = k.clone();
     let busy = k.downloading.is_some();
     let plan = k.plan();
-    ui.label("IncreArt starts KoboldCpp with Qwen-Image 2.1 and prompt enhance, set up for each GPU's memory.");
-    ui.add_space(8.0);
-    ui.add_enabled_ui(!busy, |ui| {
-        ui.label(RichText::new("1. KoboldCpp").strong());
-        ui.horizontal(|ui| {
-            ui.add_sized([LABEL_W, 18.0], egui::Label::new("Binary"));
-            if path_edit(ui, &mut new.binary, "koboldcpp", PickKind::WizardBinary, out) {
-                out.push(Msg::CheckWizardBinary);
-            }
-        });
-        ui.horizontal(|ui| {
-            ui.add_space(LABEL_W + 8.0);
-            match version {
-                Some(Ok(v)) => {
-                    ui.colored_label(GOOD, ic(ph::CHECK, &format!("KoboldCpp {v}")));
+    // (scrolls when taller than the window; the progress and buttons stay)
+    let room = ui.ctx().content_rect().height() - 260.0;
+    egui::ScrollArea::vertical().max_height(room.max(200.0)).auto_shrink([false, true]).show(ui, |ui| {
+        ui.label("IncreArt starts KoboldCpp with Qwen-Image 2.1 and prompt enhance, set up for each GPU's memory.");
+        ui.add_space(8.0);
+        ui.add_enabled_ui(!busy, |ui| {
+            ui.label(RichText::new("1. KoboldCpp").strong());
+            ui.horizontal(|ui| {
+                ui.add_sized([LABEL_W, 18.0], egui::Label::new("Binary"));
+                if path_edit(ui, &mut new.binary, "koboldcpp", PickKind::WizardBinary, out).lost_focus() {
+                    out.push(Msg::CheckWizardBinary);
                 }
-                Some(Err(e)) => {
-                    ui.add(egui::Label::new(RichText::new(e).color(BAD)).wrap());
-                }
-                None => {
-                    ui.spinner();
-                    ui.weak("--version…");
-                }
-            }
-        });
-        if matches!(version, Some(Err(_))) {
+            });
             ui.horizontal(|ui| {
                 ui.add_space(LABEL_W + 8.0);
-                ui.weak(
-                    "Download KoboldCpp from github.com/LostRuins/koboldcpp/releases and pick it with Browse…, \
-                     or Save anyway and set it later in Server settings.",
-                );
+                match version {
+                    Some(Ok(v)) => {
+                        ui.colored_label(GOOD, ic(ph::CHECK, &format!("KoboldCpp {v}")));
+                    }
+                    Some(Err(e)) => {
+                        ui.add(egui::Label::new(RichText::new(e).color(BAD)).wrap());
+                    }
+                    None => {
+                        ui.spinner();
+                        ui.weak("--version…");
+                    }
+                }
             });
-        }
-        ui.horizontal(|ui| {
-            ui.add_sized([LABEL_W, 18.0], egui::Label::new("Download to"));
-            path_edit(ui, &mut new.models_dir, models_hint(), PickKind::WizardModels, out);
-        });
-        let dir = config::full_path(&new.models_dir);
-        let to = std::path::Path::new(&dir).join(tiers::MODEL_SUBDIR);
-        let mut found: Vec<&str> = model_dirs.iter().map(String::as_str).filter(|d| *d != dir).collect();
-        found.push("Hugging Face's cache");
-        ui.weak(format!(
-            "{} (about 10 GB for 8–12 GB cards, 13 GB for bigger ones). \
-             Files already in {} are linked, not downloaded again.",
-            if dir.is_empty() { "Choose where the models go".into() } else { format!("They go in {}", to.display()) },
-            found.join(", ")
-        ));
-        ui.add_space(10.0);
-        ui.horizontal(|ui| {
-            ui.label(RichText::new("2. GPUs").strong());
-            if ui.small_button(ic(ph::ARROWS_CLOCKWISE, "Detect again")).clicked() {
-                out.push(Msg::WizardKobold(true));
-            }
-            ui.add_space(12.0);
-            ui.label("through");
-            let mut runtime = k.runtime;
-            if crate::pe_settings::runtime_choice(ui, "wizard_runtime", &mut runtime) {
-                out.push(Msg::WizardRuntime(runtime));
-            }
-        });
-        match &mut new.gpus {
-            None => {
+            if matches!(version, Some(Err(_))) {
                 ui.horizontal(|ui| {
-                    ui.spinner();
-                    ui.weak(format!("{}…", k.runtime.tool()));
+                    ui.add_space(LABEL_W + 8.0);
+                    // (wrapped: a line this long would widen the dialog)
+                    let text = "Download KoboldCpp from github.com/LostRuins/koboldcpp/releases and pick it with Browse…, \
+                                or Save anyway and set it later in Server settings.";
+                    ui.add(egui::Label::new(RichText::new(text).weak()).wrap());
                 });
             }
-            Some(Err(e)) => {
-                ui.colored_label(BAD, e.as_str());
-                if ui.button(ic(ph::PLUS, "Add a GPU by hand")).clicked() {
-                    let gpu = Gpu { number: 0, name: "GPU 0".into(), vram_gib: 8.0, integrated: false };
-                    new.gpus = Some(Ok(vec![WizardGpu { gpu, on: true, preset: None, by_hand: true }]));
-                }
-            }
-            Some(Ok(list)) => {
-                let cards = plan.as_ref().map(|p| p.cards.clone()).unwrap_or_default();
-                egui::Grid::new("wizard_gpus").num_columns(4).spacing([12.0, 4.0]).show(ui, |ui| {
-                    for w in list.iter_mut() {
-                        ui.checkbox(&mut w.on, format!("{}  {}", w.gpu.number, w.gpu.name));
-                        if w.by_hand {
-                            ui.add(
-                                egui::DragValue::new(&mut w.gpu.vram_gib)
-                                    .range(0.0..=1024.0)
-                                    .speed(0.5)
-                                    .max_decimals(1)
-                                    .suffix(" GB"),
-                            )
-                            .on_hover_text("Its memory");
-                        } else {
-                            ui.label(format!("{} GB", tiers::show_gb(w.gpu.vram_gib)));
-                        }
-                        let card = cards.iter().find(|c| c.gpu == w.gpu.number);
-                        gpu_preset(ui, w, k.choose, card);
-                        match card {
-                            Some(c) if w.on => ui.label(c.role.describe()),
-                            _ if w.on => ui.label(""),
-                            _ => ui.weak("not used"),
-                        };
-                        ui.end_row();
-                    }
-                });
-                if ui.small_button(ic(ph::PLUS, "Add a GPU by hand")).clicked() {
-                    let number = list.iter().map(|w| w.gpu.number + 1).max().unwrap_or(0);
-                    let gpu = Gpu { number, name: format!("GPU {number}"), vram_gib: 8.0, integrated: false };
-                    list.push(WizardGpu { gpu, on: true, preset: None, by_hand: true });
-                }
-            }
-        }
-        let ticked = k.ticked();
-        if ticked.len() > 1 {
-            ui.add_space(10.0);
-            ui.label(RichText::new(format!("3. How to use {} GPUs", ticked.len())).strong());
-            for layout in [Layout::ImagePerCard, Layout::PeOwnCard] {
-                let text = match k.plan_as(layout) {
-                    Ok(p) => {
-                        let n = p.images_at_once();
-                        let roles: Vec<String> =
-                            p.cards.iter().map(|c| format!("GPU {}: {}", c.gpu, c.role.short())).collect();
-                        let at_once = if n == 1 { "1 image at a time".into() } else { format!("{n} images at a time") };
-                        format!("{at_once} — {}", roles.join(", "))
-                    }
-                    Err(_) if layout == Layout::PeOwnCard => "Prompt enhance on a GPU of its own".into(),
-                    Err(_) => "Images on every GPU".into(),
-                };
-                let hover = match layout {
-                    Layout::ImagePerCard => "More images at once; prompt enhance shares a GPU with images",
-                    Layout::PeOwnCard => "Prompt enhance answers at once and is never swapped; fewer images at once",
-                };
-                ui.radio_value(&mut new.layout, layout, text).on_hover_text(hover);
-            }
-            let current: Vec<u32> = plan
-                .as_ref()
-                .map(|p| p.pe_cards().iter().map(|c| c.gpu).collect())
-                .unwrap_or_else(|_| k.pe_gpus.clone());
             ui.horizontal(|ui| {
-                ui.label("Prompt enhance on");
-                for (g, _) in &ticked {
-                    let mut on = current.contains(&g.number);
-                    let only = on && current.len() == 1;
-                    let hover = if only {
-                        "Prompt enhance needs a GPU"
-                    } else {
-                        "Each GPU ticked runs a chat model; asks are shared among them"
-                    };
-                    let r = ui.add_enabled(!only, egui::Checkbox::new(&mut on, format!("GPU {}", g.number)));
-                    if r.on_hover_text(hover).on_disabled_hover_text(hover).changed() {
-                        new.pe_gpus = current.iter().copied().filter(|&n| n != g.number).collect();
-                        if on {
-                            new.pe_gpus.push(g.number);
-                        }
-                    }
+                ui.add_sized([LABEL_W, 18.0], egui::Label::new("Download to"));
+                path_edit(ui, &mut new.models_dir, models_hint(), PickKind::WizardModels, out);
+            });
+            let dir = config::full_path(&new.models_dir);
+            let to = std::path::Path::new(&dir).join(tiers::MODEL_SUBDIR);
+            let mut found: Vec<&str> = model_dirs.iter().map(String::as_str).filter(|d| *d != dir).collect();
+            found.push("Hugging Face's cache");
+            ui.weak(format!(
+                "{} (about 10 GB for 8–12 GB cards, 13 GB for bigger ones). \
+                 Files already in {} are linked, not downloaded again.",
+                if dir.is_empty() { "Choose where the models go".into() } else { format!("They go in {}", to.display()) },
+                found.join(", ")
+            ));
+            ui.add_space(10.0);
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("2. GPUs").strong());
+                if ui.small_button(ic(ph::ARROWS_CLOCKWISE, "Detect again")).clicked() {
+                    out.push(Msg::WizardKobold(true));
+                }
+                ui.add_space(12.0);
+                ui.label("through");
+                let mut runtime = k.runtime;
+                if crate::pe_settings::runtime_choice(ui, "wizard_runtime", &mut runtime) {
+                    out.push(Msg::WizardRuntime(runtime));
                 }
             });
-        }
+            match &mut new.gpus {
+                None => {
+                    ui.horizontal(|ui| {
+                        ui.spinner();
+                        ui.weak(format!("{}…", k.runtime.tool()));
+                    });
+                }
+                Some(Err(e)) => {
+                    ui.colored_label(BAD, e.as_str());
+                    if ui.button(ic(ph::PLUS, "Add a GPU by hand")).clicked() {
+                        let gpu = Gpu { number: 0, name: "GPU 0".into(), vram_gib: 8.0, integrated: false };
+                        new.gpus = Some(Ok(vec![WizardGpu { gpu, on: true, preset: None, by_hand: true }]));
+                    }
+                }
+                Some(Ok(list)) => {
+                    let cards = plan.as_ref().map(|p| p.cards.clone()).unwrap_or_default();
+                    egui::Grid::new("wizard_gpus").num_columns(4).spacing([12.0, 4.0]).show(ui, |ui| {
+                        for w in list.iter_mut() {
+                            ui.checkbox(&mut w.on, format!("{}  {}", w.gpu.number, w.gpu.name));
+                            if w.by_hand {
+                                ui.add(
+                                    egui::DragValue::new(&mut w.gpu.vram_gib)
+                                        .range(0.0..=1024.0)
+                                        .speed(0.5)
+                                        .max_decimals(1)
+                                        .suffix(" GB"),
+                                )
+                                .on_hover_text("Its memory");
+                            } else {
+                                ui.label(format!("{} GB", tiers::show_gb(w.gpu.vram_gib)));
+                            }
+                            let card = cards.iter().find(|c| c.gpu == w.gpu.number);
+                            gpu_preset(ui, w, k.choose, card);
+                            match card {
+                                Some(c) if w.on => ui.label(c.role.describe()),
+                                _ if w.on => ui.label(""),
+                                _ => ui.weak("not used"),
+                            };
+                            ui.end_row();
+                        }
+                    });
+                    if ui.small_button(ic(ph::PLUS, "Add a GPU by hand")).clicked() {
+                        let number = list.iter().map(|w| w.gpu.number + 1).max().unwrap_or(0);
+                        let gpu = Gpu { number, name: format!("GPU {number}"), vram_gib: 8.0, integrated: false };
+                        list.push(WizardGpu { gpu, on: true, preset: None, by_hand: true });
+                    }
+                }
+            }
+            let ticked = k.ticked();
+            if ticked.len() > 1 {
+                ui.add_space(10.0);
+                ui.label(RichText::new(format!("3. How to use {} GPUs", ticked.len())).strong());
+                for layout in [Layout::ImagePerCard, Layout::PeOwnCard] {
+                    let text = match k.plan_as(layout) {
+                        Ok(p) => {
+                            let n = p.images_at_once();
+                            let roles: Vec<String> =
+                                p.cards.iter().map(|c| format!("GPU {}: {}", c.gpu, c.role.short())).collect();
+                            let at_once = if n == 1 { "1 image at a time".into() } else { format!("{n} images at a time") };
+                            format!("{at_once} — {}", roles.join(", "))
+                        }
+                        Err(_) if layout == Layout::PeOwnCard => "Prompt enhance on a GPU of its own".into(),
+                        Err(_) => "Images on every GPU".into(),
+                    };
+                    let hover = match layout {
+                        Layout::ImagePerCard => "More images at once; prompt enhance shares a GPU with images",
+                        Layout::PeOwnCard => "Prompt enhance answers at once and is never swapped; fewer images at once",
+                    };
+                    ui.radio_value(&mut new.layout, layout, text).on_hover_text(hover);
+                }
+                let current: Vec<u32> = plan
+                    .as_ref()
+                    .map(|p| p.pe_cards().iter().map(|c| c.gpu).collect())
+                    .unwrap_or_else(|_| k.pe_gpus.clone());
+                ui.horizontal(|ui| {
+                    ui.label("Prompt enhance on");
+                    for (g, _) in &ticked {
+                        let mut on = current.contains(&g.number);
+                        let only = on && current.len() == 1;
+                        let hover = if only {
+                            "Prompt enhance needs a GPU"
+                        } else {
+                            "Each GPU ticked runs a chat model; asks are shared among them"
+                        };
+                        let r = ui.add_enabled(!only, egui::Checkbox::new(&mut on, format!("GPU {}", g.number)));
+                        if r.on_hover_text(hover).on_disabled_hover_text(hover).changed() {
+                            new.pe_gpus = current.iter().copied().filter(|&n| n != g.number).collect();
+                            if on {
+                                new.pe_gpus.push(g.number);
+                            }
+                        }
+                    }
+                });
+            }
+            ui.add_space(10.0);
+            presets_table(ui, &mut new, plan.as_ref().ok());
+        });
         ui.add_space(10.0);
-        presets_table(ui, &mut new, plan.as_ref().ok());
-    });
-    ui.add_space(10.0);
-    match &plan {
-        Ok(p) => {
-            ui.label(RichText::new(&p.summary).strong());
-            for n in &p.notes {
-                match n {
-                    tiers::Note::Plan(s) => ui.label(s),
-                    tiers::Note::Why(s) => ui.weak(s),
-                    tiers::Note::Warn(s) => ui.colored_label(NEUTRAL, ic(ph::WARNING, s)),
-                };
+        match &plan {
+            Ok(p) => {
+                ui.label(RichText::new(&p.summary).strong());
+                for n in &p.notes {
+                    match n {
+                        tiers::Note::Plan(s) => ui.label(s),
+                        tiers::Note::Why(s) => ui.weak(s),
+                        tiers::Note::Warn(s) => ui.colored_label(NEUTRAL, ic(ph::WARNING, s)),
+                    };
+                }
+                wizard_files(ui, p, &config::full_path(&k.models_dir), out);
+            }
+            Err(e) if !k.ticked().is_empty() => {
+                ui.colored_label(NEUTRAL, e);
+            }
+            Err(_) => {
+                ui.weak("Tick a GPU.");
             }
         }
-        Err(e) if !k.ticked().is_empty() => {
-            ui.colored_label(NEUTRAL, e);
+        if let Some(e) = &k.error {
+            ui.colored_label(BAD, e);
         }
-        Err(_) => {
-            ui.weak("Tick a GPU.");
-        }
-    }
-    if let Some(e) = &k.error {
-        ui.colored_label(BAD, e);
-    }
+    });
     if let Some((p, at)) = &k.downloading {
         ui.add_space(6.0);
-        let name = p.downloads.get(at.file).map(|d| d.file.as_str()).unwrap_or_default();
-        let gb = |b: u64| b as f64 / 1e9;
-        let (fraction, size) = match at.total {
-            Some(t) if t > 0 => (at.done as f32 / t as f32, format!("{:.1} of {:.1} GB", gb(at.done), gb(t))),
-            _ => (0.0, format!("{:.1} GB", gb(at.done))),
-        };
-        ui.label(format!("Downloading {} of {}: {name}", at.file + 1, p.downloads.len()));
-        ui.add(egui::ProgressBar::new(fraction).text(size));
+        download_progress(ui, p, at);
     }
     ui.add_space(6.0);
-    dialog_buttons(ui, |ui| {
-        if busy {
-            if ui.button("Cancel download").clicked() {
-                out.push(Msg::CancelWizardDownload);
+    // Cancel on its own at the left, away from the actions
+    let (cancel, _) = dialog_footer(
+        ui,
+        |ui| !busy && ui.button("Cancel").clicked(),
+        |ui| {
+            if busy {
+                if ui.button("Cancel download").clicked() {
+                    out.push(Msg::CancelWizardDownload);
+                }
+                return;
             }
-            return;
-        }
-        let found = matches!(version, Some(Ok(_)));
-        let finish =
-            egui::Button::new(RichText::new(ic(ph::DOWNLOAD_SIMPLE, "Download, save as preset and open")).strong());
-        let why = match version {
-            None => "Checking KoboldCpp (--version)…",
-            _ => "KoboldCpp isn't found: pick it under 1. KoboldCpp, or Save anyway",
-        };
-        if ui.add_enabled(plan.is_ok() && found, finish).on_disabled_hover_text(why).clicked() {
-            out.push(Msg::FinishKoboldWizard);
-        }
-        if matches!(version, Some(Err(_)))
+            let found = matches!(version, Some(Ok(_)));
+            let finish =
+                egui::Button::new(RichText::new(ic(ph::DOWNLOAD_SIMPLE, "Download, save as preset and open")).strong());
+            let why = match version {
+                None => "Checking KoboldCpp (--version)…",
+                _ => "KoboldCpp isn't found: pick it under 1. KoboldCpp, or Save anyway",
+            };
+            if ui.add_enabled(plan.is_ok() && found, finish).on_disabled_hover_text(why).clicked() {
+                out.push(Msg::FinishKoboldWizard);
+            }
+            if ui
+                .add_enabled(plan.is_ok(), egui::Button::new("Save, download later"))
+                .on_hover_text(
+                    "Save the preset without downloading: get the files under Files yourself, or run the wizard again",
+                )
+                .clicked()
+            {
+                out.push(Msg::SaveKoboldWizardLater);
+            }
+            if matches!(version, Some(Err(_)))
             && ui
                 .add_enabled(plan.is_ok(), egui::Button::new("Save anyway"))
                 .on_hover_text("Download the models and save the preset without opening it; set KoboldCpp later in Server settings")
@@ -1473,12 +1554,101 @@ fn kobold_wizard(
         {
             out.push(Msg::SaveKoboldWizard);
         }
-        if ui.button("Cancel   Esc").clicked() {
-            out.push(Msg::ServerWizard(false));
-        }
-    });
+        },
+    );
+    if cancel {
+        out.push(Msg::ServerWizard(false));
+    }
     if new != *k && !busy {
         out.push(Msg::EditKoboldWizard(new));
+    }
+}
+
+/// The plan's files: where each goes and comes from, and the commands
+/// that fetch them (for getting them by hand).
+fn wizard_files(ui: &mut egui::Ui, p: &tiers::Plan, dir: &str, out: &mut Vec<Msg>) {
+    let dest = |file: &str| std::path::Path::new(dir).join(file).to_string_lossy().into_owned();
+    egui::CollapsingHeader::new(format!("Files ({})", p.downloads.len())).id_salt("wizard_files").show(ui, |ui| {
+        // (the dialog is tall already)
+        egui::ScrollArea::vertical().max_height(150.0).show(ui, |ui| {
+            for d in &p.downloads {
+                ui.add(egui::Label::new(RichText::new(dest(&d.file)).monospace()).wrap().selectable(true));
+                ui.horizontal(|ui| {
+                    ui.add_space(12.0);
+                    ui.add(egui::Label::new(RichText::new(&d.url).weak()).wrap().selectable(true));
+                });
+            }
+        });
+        let to = std::path::Path::new(dir).join(tiers::MODEL_SUBDIR);
+        let there = to.is_dir();
+        let tip = if there { "Open it in the file manager" } else { "Not made yet: it is when the models download" };
+        let b = ui.add_enabled(there, egui::Button::new(ic(ph::ARROW_SQUARE_OUT, "Open the models folder")).small());
+        if b.on_hover_text(tip).on_disabled_hover_text(tip).clicked() {
+            out.push(Msg::ShowInFileManager(to));
+        }
+        if ui
+            .small_button(ic(ph::COPY, "Copy download commands"))
+            .on_hover_text("curl, one line a file; a broken one carries on")
+            .clicked()
+        {
+            let lines: Vec<String> = p
+                .downloads
+                .iter()
+                .map(|d| format!("curl -L -C - --create-dirs -o \"{}\" \"{}\"", dest(&d.file), d.url))
+                .collect();
+            ui.ctx().copy_text(lines.join("\n"));
+        }
+    });
+}
+
+/// The models downloading: all of them (size, speed, time left), then the
+/// file under way and the ones linked instead.
+fn download_progress(ui: &mut egui::Ui, p: &tiers::Plan, at: &WizardDownload) {
+    let gb = |b: u64| format!("{:.1}", b as f64 / 1e9);
+    let name = |i: usize| {
+        p.downloads.get(i).map(|d| d.file.trim_start_matches(&format!("{}/", tiers::MODEL_SUBDIR)).to_string())
+    };
+    if at.checking {
+        ui.horizontal(|ui| {
+            ui.spinner();
+            let file = name(at.file).unwrap_or_default();
+            ui.label(format!("Checking what's there already ({} of {}): {file}", at.file + 1, p.downloads.len()));
+        });
+    } else {
+        let mut line = match at.all_total {
+            Some(t) => format!("{} of {} GB", gb(at.all_done), gb(t)),
+            None => format!("{} GB", gb(at.all_done)),
+        };
+        if let Some(r) = at.rate {
+            line.push_str(&format!(" · {:.0} MB/s", r / 1e6));
+        }
+        if let Some(s) = at.eta_secs() {
+            line.push_str(&format!(" · about {} left", show_secs(s)));
+        }
+        let fraction = at.all_total.filter(|t| *t > 0).map_or(0.0, |t| at.all_done as f32 / t as f32);
+        ui.label("Downloading the models");
+        ui.add(egui::ProgressBar::new(fraction).text(line));
+        let file = name(at.file).unwrap_or_default();
+        let size = match at.total {
+            Some(t) => format!("{} of {} GB", gb(at.done), gb(t)),
+            None => format!("{} GB", gb(at.done)),
+        };
+        ui.weak(format!("File {} of {}: {file} ({size})", at.file + 1, p.downloads.len()));
+    }
+    for (file, from) in &at.reused {
+        let file = file.trim_start_matches(&format!("{}/", tiers::MODEL_SUBDIR));
+        let text = if from.is_empty() { format!("{file}: there already") } else { format!("{file}: linked to {from}") };
+        ui.weak(ic(ph::LINK, &text));
+    }
+}
+
+/// `s` seconds as "40 s", "5 min" or "1 h 20 min".
+fn show_secs(s: f64) -> String {
+    let s = s.round() as u64;
+    match s {
+        0..60 => format!("{s} s"),
+        60..3600 => format!("{} min", s.div_ceil(60)),
+        _ => format!("{} h {} min", s / 3600, (s % 3600) / 60),
     }
 }
 

@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 use increart_core::config::{RecipePreset, SdServerConfig, ServerConfig};
 use increart_core::engine::{Endpoint, Engine, EngineOptions};
 use increart_core::launcher::{self, ServerProcess};
-use increart_core::model::{IdeaSource, Mode, ModelFile, ModelSelection, Sample, StoreFormat};
+use increart_core::model::{IdeaSource, LoraFile, Mode, ModelFile, ModelSelection, Sample, StoreFormat};
 use increart_core::request::GenOptions;
 use increart_core::{Id, IdeaLoc, ImageRef, Library, NewIdea, NewRun, Tree, Verdict, modelhash};
 
@@ -646,6 +646,22 @@ fn pick(kind: PickKind, start: Option<PathBuf>) -> Vec<PathBuf> {
             d.set_title("Models folder (KoboldCpp and sd-server)").pick_folder().into_iter().collect()
         }
         PickKind::SdServerBinary => d.set_title("sd-server binary").pick_file().into_iter().collect(),
+        PickKind::RecipeFile(slot) => {
+            let slot = increart_core::config::MODEL_SLOTS.get(slot).copied().unwrap_or("model");
+            d.set_title(format!("The {slot} file (in a Models folder)"))
+                .add_filter("Model files", &["gguf", "safetensors", "sft", "ckpt", "pt", "pth", "bin"])
+                .add_filter("All files", &["*"])
+                .pick_file()
+                .into_iter()
+                .collect()
+        }
+        PickKind::RecipeLora(_) => d
+            .set_title("A LoRA (in the Models folder's loras folder)")
+            .add_filter("LoRA files", &["safetensors", "gguf", "sft", "ckpt"])
+            .add_filter("All files", &["*"])
+            .pick_file()
+            .into_iter()
+            .collect(),
         PickKind::KoboldBinary | PickKind::WizardBinary => {
             d.set_title("KoboldCpp binary").pick_file().into_iter().collect()
         }
@@ -1296,27 +1312,67 @@ fn download_models(
     wake: &Wake,
 ) -> Result<(), String> {
     use increart_core::tiers;
+    use std::sync::atomic::Ordering;
+    let mut at = crate::state::WizardDownload { checking: true, ..Default::default() };
+    let send = |at: &crate::state::WizardDownload| {
+        let _ = tx.send(Msg::WizardDownload(at.clone()));
+        wake();
+    };
+    send(&at);
+    // first what's there: each file there already, linked to one on disk
+    // (same name and size), or to fetch (its size)
+    let mut fetch: Vec<(usize, Option<u64>)> = vec![];
     for (i, f) in files.iter().enumerate() {
-        let mut last = Instant::now();
-        let report = |done, total| {
-            let _ = tx.send(Msg::WizardDownload(crate::state::WizardDownload { file: i, done, total }));
-            wake();
-        };
-        report(0, None);
+        if cancel.load(Ordering::Relaxed) {
+            return Err("cancelled".into());
+        }
+        at.file = i;
+        send(&at);
         let dest = std::path::Path::new(dir).join(&f.file);
-        // one on disk already (same name and size): linked, not fetched
-        if std::fs::symlink_metadata(&dest).is_err()
-            && let Some(src) = tiers::reusable(&f.url, search, || tiers::remote_size(&f.url))
-            && tiers::link(&src, &dest).is_ok()
-        {
+        if dest.is_file() {
+            at.reused.push((f.file.clone(), String::new()));
             continue;
         }
+        let size = tiers::remote_size(&f.url);
+        if std::fs::symlink_metadata(&dest).is_err()
+            && let Some(src) = tiers::reusable(&f.url, search, || size)
+            && tiers::link(&src, &dest).is_ok()
+        {
+            at.reused.push((f.file.clone(), src.to_string_lossy().into_owned()));
+            continue;
+        }
+        fetch.push((i, size));
+    }
+    at.checking = false;
+    at.all_total = fetch.iter().map(|(_, s)| *s).sum();
+    let started = Instant::now();
+    // fetched this run (not a .part carried on), for the rate
+    let mut fetched = 0u64;
+    let mut before = 0u64;
+    for (i, size) in fetch {
+        let f = &files[i];
+        (at.file, at.done, at.total) = (i, 0, size);
+        at.all_done = before;
+        send(&at);
+        let mut last = Instant::now();
+        let mut first: Option<u64> = None;
+        let mut seen = 0u64;
+        let dest = std::path::Path::new(dir).join(&f.file);
         tiers::download(&f.url, &dest, cancel, |done, total| {
+            // (the first report starts where a .part left off)
+            let from = *first.get_or_insert(done);
+            fetched += done.saturating_sub(seen.max(from));
+            seen = done;
             if last.elapsed().as_millis() >= 250 {
                 last = Instant::now();
-                report(done, total);
+                (at.done, at.total) = (done, total.or(size));
+                at.all_done = before + done;
+                let secs = started.elapsed().as_secs_f64();
+                at.rate = (fetched > 0 && secs > 1.0).then(|| fetched as f64 / secs);
+                send(&at);
             }
         })?;
+        before += size.or(at.total).unwrap_or(seen);
     }
     Ok(())
 }
@@ -1632,18 +1688,22 @@ fn promote(lib: &mut Library, ids: &[Id], folder: &Path, name: &str) -> Result<O
 /// library's `cache/`) when they can be found under the first model dir.
 fn new_run(lib: &Library, f: &GenerateForm, preset: &RecipePreset, model_dir: Option<&str>) -> NewRun {
     let cache = lib.root().join("cache/model-hashes.rsn");
+    let sha256 = |id: &str| match model_dir {
+        Some(dir) if !id.starts_with('@') => {
+            modelhash::sha256_cached(&cache, &Path::new(dir).join(id)).unwrap_or_default()
+        }
+        _ => String::new(),
+    };
     let files = preset
         .files
         .iter()
-        .map(|(slot, id)| {
-            let sha256 = match model_dir {
-                Some(dir) if !id.starts_with('@') => {
-                    modelhash::sha256_cached(&cache, &Path::new(dir).join(id)).unwrap_or_default()
-                }
-                _ => String::new(),
-            };
-            (slot.clone(), ModelFile { id: id.clone(), sha256 })
-        })
+        .map(|(slot, id)| (slot.clone(), ModelFile { id: id.clone(), sha256: sha256(id) }))
+        .collect();
+    let loras = preset
+        .loras
+        .iter()
+        .filter(|l| !l.file.is_empty())
+        .map(|l| LoraFile { id: l.file.clone(), sha256: sha256(&l.file), weight: l.weight })
         .collect();
     NewRun {
         sweep: None,
@@ -1667,9 +1727,66 @@ fn new_run(lib: &Library, f: &GenerateForm, preset: &RecipePreset, model_dir: Op
             None => Mode::Generate,
         },
         refs: f.refs(),
-        model: ModelSelection { recipe: preset.recipe.clone(), files },
+        model: ModelSelection { recipe: preset.recipe.clone(), files, loras },
         source_idea: f.source_idea.clone(),
         first_seed: f.first_seed,
         seeds: f.seeds,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Serves `files` (name, size) with HEAD and GET until dropped.
+    fn serve(files: Vec<(&'static str, usize)>) -> String {
+        let server = tiny_http::Server::http("127.0.0.1:0").unwrap();
+        let base = format!("http://{}", server.server_addr().to_ip().unwrap());
+        std::thread::spawn(move || {
+            for rq in server.incoming_requests() {
+                let name = rq.url().trim_start_matches('/');
+                let Some((_, size)) = files.iter().find(|(n, _)| *n == name) else {
+                    let _ = rq.respond(tiny_http::Response::empty(404));
+                    continue;
+                };
+                let _ = rq.respond(tiny_http::Response::from_data(vec![7u8; *size]));
+            }
+        });
+        base
+    }
+
+    #[test]
+    fn models_checked_then_fetched_with_overall_progress() {
+        let base = serve(vec![("a.gguf", 1000), ("b.gguf", 2000), ("c.gguf", 3000), ("d.gguf", 500)]);
+        let dir = tempfile::tempdir().unwrap();
+        let other = tempfile::tempdir().unwrap();
+        // a: there already; b: on disk elsewhere, same size (linked)
+        std::fs::create_dir_all(dir.path().join("koboldcpp")).unwrap();
+        std::fs::write(dir.path().join("koboldcpp/a.gguf"), [1u8; 10]).unwrap();
+        std::fs::write(other.path().join("b.gguf"), [7u8; 2000]).unwrap();
+        let files: Vec<_> = ["a", "b", "c", "d"]
+            .map(|n| increart_core::tiers::Download {
+                url: format!("{base}/{n}.gguf"),
+                file: format!("koboldcpp/{n}.gguf"),
+            })
+            .to_vec();
+        let (tx, rx) = mpsc::channel();
+        let wake: Wake = Arc::new(|| {});
+        let cancel = std::sync::atomic::AtomicBool::new(false);
+        let d = dir.path().to_string_lossy().into_owned();
+        download_models(&d, &files, &[other.path().to_path_buf()], &cancel, &tx, &wake).unwrap();
+        let said: Vec<crate::state::WizardDownload> =
+            rx.try_iter().filter_map(|m| if let Msg::WizardDownload(w) = m { Some(w) } else { None }).collect();
+        assert!(said[0].checking);
+        let last = said.last().unwrap();
+        assert!(!last.checking);
+        assert_eq!(last.all_total, Some(3500), "c and d only");
+        assert_eq!(last.reused.len(), 2);
+        assert_eq!(last.reused[0], ("koboldcpp/a.gguf".to_string(), String::new()));
+        assert!(last.reused[1].1.ends_with("b.gguf"));
+        assert_eq!(std::fs::read(dir.path().join("koboldcpp/b.gguf")).unwrap().len(), 2000, "linked");
+        assert_eq!(std::fs::metadata(dir.path().join("koboldcpp/d.gguf")).unwrap().len(), 500);
+        // the last file starts after the bytes before it
+        assert!(said.iter().any(|w| w.file == 3 && w.all_done == 3000), "{said:?}");
     }
 }

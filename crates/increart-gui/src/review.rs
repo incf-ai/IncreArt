@@ -610,9 +610,9 @@ pub fn recipe_grid(
         let mut rows: Vec<(&str, String)> = vec![("project", project), ("run", run)];
         rows.extend(queued.map(|q| ("queued", q)));
         rows.extend(generated.map(|g| ("generated", g)));
+        rows.extend([("seed", r.seed.to_string()), ("recipe", r.model.recipe.clone())]);
+        rows.extend(r.model.loras_text().map(|l| ("LoRAs", l)));
         rows.extend([
-            ("seed", r.seed.to_string()),
-            ("recipe", r.model.recipe.clone()),
             ("size", crate::widgets::size_info(r.width, r.height)),
             ("steps / cfg", format!("{} / {}", r.sample.steps, r.sample.cfg)),
             ("mode", mode),

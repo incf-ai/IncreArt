@@ -84,7 +84,7 @@ fn model() -> ModelSelection {
         "diffusion_model".to_string(),
         ModelFile { id: "diffusion_models/q.safetensors".into(), sha256: "ab".repeat(32) },
     )]);
-    ModelSelection { recipe: "qwen-image-21".into(), files }
+    ModelSelection { recipe: "qwen-image-21".into(), files, loras: vec![] }
 }
 
 fn new_run(refs: Vec<ImageRef>, mode: Mode, seeds: u64) -> NewRun {

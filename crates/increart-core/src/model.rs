@@ -492,6 +492,36 @@ pub struct ModelSelection {
     pub recipe: String,
     #[serde(default)]
     pub files: BTreeMap<String, ModelFile>,
+    /// Applied per request, so not part of what a server loads.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub loras: Vec<LoraFile>,
+}
+
+impl ModelSelection {
+    /// Its LoRAs for a details view (`style.safetensors 0.8, …`); None
+    /// without any.
+    pub fn loras_text(&self) -> Option<String> {
+        (!self.loras.is_empty()).then(|| {
+            let each: Vec<String> = self
+                .loras
+                .iter()
+                .map(|l| format!("{} {}", crate::config::lora_request_path(&l.id), l.weight))
+                .collect();
+            each.join(", ")
+        })
+    }
+}
+
+/// A LoRA an image was made with: its ID (`loras/…`, see
+/// `config::lora_file_id`), its file's SHA-256 (empty: not found), and its
+/// weight.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename = "Lora")]
+pub struct LoraFile {
+    pub id: String,
+    #[serde(default)]
+    pub sha256: String,
+    pub weight: f32,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

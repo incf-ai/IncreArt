@@ -4,7 +4,7 @@
 
 use std::path::PathBuf;
 
-use increart_core::config::{Config, RecipePreset, SdServerConfig, ServerConfig, ServerPreset};
+use increart_core::config::{Config, MODEL_SLOTS, RecipePreset, SdServerConfig, ServerConfig, ServerPreset};
 use increart_core::engine::{Event, Stop};
 use increart_core::launcher::device_name;
 use increart_core::scheduler::Order;
@@ -94,6 +94,9 @@ pub enum Msg {
     /// **Save anyway**: KoboldCpp not found (yet); downloaded and saved as
     /// a preset, not opened.
     SaveKoboldWizard,
+    /// **Save, download later**: saved as a preset, nothing fetched; the
+    /// files to get by hand are said in the messages.
+    SaveKoboldWizardLater,
     /// `--version` of the wizard's KoboldCpp binary, unless asked already.
     CheckWizardBinary,
     WizardDownload(crate::state::WizardDownload),
@@ -396,6 +399,10 @@ pub enum Msg {
     Ask(Confirm),
     ConfirmYes,
     ConfirmNo,
+    /// The question's other way out ([`Confirm::fix`]).
+    ConfirmFix,
+    /// Queue with this model preset instead (the model warning's fix).
+    QueueWithPreset(usize),
     // ---- from the runtime
     Scanned(Index),
     OpDone(Result<OpOk, String>, Option<Index>),
@@ -2025,8 +2032,9 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
                 _ => vec![Effect::KoboldVersion(binary)],
             }
         }
-        Msg::FinishKoboldWizard | Msg::SaveKoboldWizard => {
+        Msg::FinishKoboldWizard | Msg::SaveKoboldWizard | Msg::SaveKoboldWizardLater => {
             let open = matches!(msg, Msg::FinishKoboldWizard);
+            let later = matches!(msg, Msg::SaveKoboldWizardLater);
             let Phase::Servers(d) = &mut state.phase else { return vec![] };
             let Some(k) = &mut d.kobold else { return vec![] };
             if k.downloading.is_some() {
@@ -2043,6 +2051,31 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
                 Err(e) => {
                     k.error = Some(e);
                     vec![]
+                }
+                Ok(plan) if later => {
+                    k.error = None;
+                    let to = std::path::Path::new(&k.models_dir).join(increart_core::tiers::MODEL_SUBDIR);
+                    let names: Vec<String> = plan
+                        .downloads
+                        .iter()
+                        .map(|d| {
+                            d.file.trim_start_matches(&format!("{}/", increart_core::tiers::MODEL_SUBDIR)).to_string()
+                        })
+                        .collect();
+                    k.downloading = Some((plan, WizardDownload::default()));
+                    let fx = update(state, Msg::WizardDownloaded(Ok(())));
+                    let said = format!(
+                        "Saved without its models: put {} in {} (the setup wizard's Files lists where to get them, \
+                         or downloads them when run again).",
+                        names.join(", "),
+                        to.display()
+                    );
+                    // (shown on the servers screen, kept in the messages)
+                    if let Phase::Servers(d) = &mut state.phase {
+                        d.notice = Some(said.clone());
+                    }
+                    state.messages_info(said);
+                    fx
                 }
                 Ok(plan) => {
                     k.error = None;
@@ -2183,6 +2216,12 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
         Msg::ServerModels(found) => {
             state.server_models.extend(found);
             // the model chosen is one they run, if they run any
+            // (the same model in another preset first, keeping the form's settings)
+            if state.runnable_alternative(state.generate.preset).is_some() {
+                runnable_preset(state);
+                mark_generate(state);
+                return vec![];
+            }
             let runnable = state.runnable_recipes();
             if !runnable.is_empty() && !runnable.contains(&state.generate.preset) {
                 return update(state, Msg::SelectRecipe(runnable[0]));
@@ -4848,7 +4887,13 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
         }
         Msg::QueueGenerate => match model_warning(state) {
             Some(text) => {
-                state.confirm = Some(Confirm::new(text, "Queue anyway", Msg::QueueModelChecked));
+                let mut c = Confirm::new(text, "Queue anyway", Msg::QueueModelChecked);
+                let sweep =
+                    state.generate.sweep.on && state.generate.sweep.vary == increart_core::prompts::SweepVary::Model;
+                if !sweep && let Some(j) = state.runnable_alternative(state.generate.preset) {
+                    c = c.with_fix(format!("Use {} and queue", state.config.recipes[j].name), Msg::QueueWithPreset(j));
+                }
+                state.confirm = Some(c);
                 vec![]
             }
             None => update(state, Msg::QueueModelChecked),
@@ -5243,6 +5288,7 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
             f.sweep.batch_ask = state.generate.sweep.batch_ask.take();
             f.sweep.enhance_ask = state.generate.sweep.enhance_ask.take();
             state.generate = f;
+            runnable_preset(state);
             mark_generate(state);
             fx
         }
@@ -5365,6 +5411,17 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
             state.confirm = None;
             vec![]
         }
+        Msg::ConfirmFix => match state.confirm.take().and_then(|c| c.fix) {
+            Some((_, then)) => update(state, *then),
+            None => vec![],
+        },
+        Msg::QueueWithPreset(i) => {
+            if i < state.config.recipes.len() {
+                state.generate.preset = i;
+                mark_generate(state);
+            }
+            update(state, Msg::QueueGenerate)
+        }
         Msg::ReviewLink(link, verdict) => {
             lib(state, LibOp::ReviewOutputs { links: vec![(link, verdict)], undo: false })
         }
@@ -5415,6 +5472,27 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
                     _ => None,
                 },
                 PickKind::ModelDir => state.config.sdserver.model_dirs.first().map(PathBuf::from),
+                // the current file's folder, else the models folder
+                PickKind::RecipeFile(slot) => {
+                    let dirs = &state.config.sdserver.model_dirs;
+                    let on_disk = state.recipe_editor.as_ref().and_then(|e| {
+                        let file = e.rows.get(e.selected)?.preset.files.get(*MODEL_SLOTS.get(slot)?)?;
+                        increart_core::config::model_file_on_disk(file, dirs)
+                    });
+                    on_disk.and_then(|p| p.parent().map(PathBuf::from)).or_else(|| dirs.first().map(PathBuf::from))
+                }
+                // the current LoRA's folder, else the loras folder
+                PickKind::RecipeLora(i) => {
+                    let dirs = &state.config.sdserver.model_dirs;
+                    let on_disk = state.recipe_editor.as_ref().and_then(|e| {
+                        let lora = e.rows.get(e.selected)?.preset.loras.get(i)?;
+                        increart_core::config::model_file_on_disk(&lora.file, &dirs[..dirs.len().min(1)])
+                    });
+                    on_disk.and_then(|p| p.parent().map(PathBuf::from)).or_else(|| {
+                        let first = dirs.first()?;
+                        Some(increart_core::config::lora_dir(first).unwrap_or_else(|| PathBuf::from(first)))
+                    })
+                }
                 PickKind::SdServerBinary => PathBuf::from(&state.config.sdserver.binary).parent().map(PathBuf::from),
                 PickKind::KoboldBinary => PathBuf::from(kobold_binary(state)).parent().map(PathBuf::from),
                 PickKind::ExportDir => state.export.as_ref().map(|e| PathBuf::from(&e.dest)),
@@ -5589,6 +5667,35 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
                 let mut fx = update(state, Msg::EditKoboldWizard(k));
                 fx.extend(update(state, Msg::CheckWizardBinary));
                 fx
+            }
+            PickKind::RecipeFile(slot) => {
+                let id = increart_core::config::model_file_id(&paths.remove(0), &state.config.sdserver.model_dirs);
+                let Some(e) = &mut state.recipe_editor else { return vec![] };
+                let Some(name) = MODEL_SLOTS.get(slot) else { return vec![] };
+                match id {
+                    Ok(id) => {
+                        e.error = None;
+                        if let Some(r) = e.rows.get_mut(e.selected) {
+                            r.preset.files.insert(name.to_string(), id);
+                        }
+                    }
+                    Err(why) => e.error = Some(why),
+                }
+                vec![]
+            }
+            PickKind::RecipeLora(i) => {
+                let id = increart_core::config::lora_file_id(&paths.remove(0), &state.config.sdserver.model_dirs);
+                let Some(e) = &mut state.recipe_editor else { return vec![] };
+                match id {
+                    Ok(id) => {
+                        e.error = None;
+                        if let Some(l) = e.rows.get_mut(e.selected).and_then(|r| r.preset.loras.get_mut(i)) {
+                            l.file = id;
+                        }
+                    }
+                    Err(why) => e.error = Some(why),
+                }
+                vec![]
             }
             PickKind::ModelDir => {
                 let mut c = state.config.sdserver.clone();
@@ -7383,6 +7490,7 @@ fn restore_form(state: &mut AppState, d: &increart_core::model::GenerateDraft) {
     f.sweep.batch_ask = state.generate.sweep.batch_ask.take();
     f.sweep.enhance_ask = state.generate.sweep.enhance_ask.take();
     state.generate = f;
+    runnable_preset(state);
     if notes.is_empty() {
         state.messages_info("Restored the prompt and settings");
     } else {
@@ -7933,6 +8041,21 @@ fn load_generate(state: &mut AppState) {
     }
     state.generate = f;
     state.generate_dirty = None;
+    runnable_preset(state);
+}
+
+/// The form's model preset swapped for one an open server runs, when its
+/// own can't run anywhere and one with the same recipe can (a draft or run
+/// made for sd-server's int8 files, opened with KoboldCpp); said.
+fn runnable_preset(state: &mut AppState) {
+    let f = &state.generate;
+    if f.sweep.on && f.sweep.vary == increart_core::prompts::SweepVary::Model {
+        return;
+    }
+    let Some(j) = state.runnable_alternative(f.preset) else { return };
+    let (from, to) = (state.config.recipes[f.preset].name.clone(), state.config.recipes[j].name.clone());
+    state.generate.preset = j;
+    state.messages_info(format!("Model preset {to} instead of {from}, which no open server can run"));
 }
 
 fn op_done(state: &mut AppState, ok: OpOk) -> Vec<Effect> {

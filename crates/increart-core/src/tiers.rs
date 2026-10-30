@@ -619,6 +619,7 @@ pub fn plan(
         cfg: 2.0,
         flow_shift: None,
         custom_sigmas: vec![],
+        loras: vec![],
     };
     let mut downloads: Vec<Download> = vec![];
     let urls =

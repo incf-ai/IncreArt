@@ -29,6 +29,8 @@ pub struct State {
     pub log: Vec<(String, String, Value)>,
     /// Generations that ran to the end.
     pub finished: u32,
+    /// The LoRAs it found in the `--sdlora` folder when it loaded.
+    pub loras: Vec<String>,
 }
 
 pub struct FakeKobold {
@@ -143,6 +145,13 @@ fn handle(st: &Mutex<State>, method: &Method, path: &str, body: Value, auth: &st
             200,
             json!([{"name": "Euler", "aliases": ["euler", "k_euler"], "options": {}}, {"name": "Euler a", "aliases": ["euler_a"], "options": {}}]),
         ),
+        (Method::Get, "/sdapi/v1/loras") => (
+            200,
+            s.loras
+                .iter()
+                .map(|p| json!({"name": p.rsplit_once('.').map_or(p.as_str(), |x| x.0), "path": p}))
+                .collect(),
+        ),
         (Method::Get, "/sdapi/v1/progress") => {
             let step = s.step;
             let state = json!({"job_count": 1, "sampling_step": step, "sampling_steps": 20});
@@ -182,6 +191,14 @@ fn handle(st: &Mutex<State>, method: &Method, path: &str, body: Value, auth: &st
             };
             let model = args.iter().skip_while(|a| *a != "--sdmodel").nth(1).cloned().unwrap_or_default();
             s.sdmodel = if s.broken.contains(&model) { String::new() } else { model };
+            let lora_dir = args.iter().skip_while(|a| *a != "--sdlora").nth(1).cloned();
+            s.loras = lora_dir
+                .and_then(|d| std::fs::read_dir(d).ok())
+                .into_iter()
+                .flatten()
+                .flatten()
+                .map(|e| e.file_name().to_string_lossy().into_owned())
+                .collect();
             s.down_until = Some(Instant::now() + Duration::from_millis(s.restart_ms));
             (200, json!({"success": true}))
         }

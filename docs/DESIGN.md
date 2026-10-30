@@ -1842,9 +1842,14 @@ and its tooltip says how many more are generating.
   pinned for Qwen-Image's). Queueing a preset no open server runs (a draft
   from before, or a model sweep) asks first, OK/Cancel: "No open server
   can run this model preset", each server's reason, **Queue anyway** or
-  Cancel. If the chosen
-  preset isn't runnable, the first one that is is chosen; until a server
-  has answered, every preset is offered. A model sweep's checkboxes
+  Cancel; when a preset of the same sd-server recipe runs (the same model,
+  e.g. KoboldCpp's GGUFs for sd-server's int8 files) it's offered first:
+  **Use <preset> and queue**. A draft, a run's settings or a restored form
+  whose preset no open server runs moves to such a twin by itself, keeping
+  its steps and CFG, with a message (projects made elsewhere, like the
+  example library's, name presets from another setup). Otherwise, if the
+  chosen preset isn't runnable, the first one that is is chosen; until a
+  server has answered, every preset is offered. A model sweep's checkboxes
   follow the same list (a ticked preset stays to be unticked).
 - The **⚙** beside the Model preset list (and beside the server preset
   editor's Image model line) opens **Model presets**, a modal editor of
@@ -1861,6 +1866,21 @@ and its tooltip says how many more are generating.
   the form takes them, and if it was deleted the first preset is chosen.
   Other projects' drafts name their preset, so a rename moves them to the
   form's current one when opened. **Reset to built-ins** replaces the list.
+  Each file row has Browse… (writes the path relative to the Models folder,
+  shown above the rows, or says why a file outside it can't be used) and
+  Show (its folder in the file manager).
+- A model preset's **LoRAs**: a file and a weight per row (−4–4; 1 as
+  trained, below 0 against it), applied to every image. The file is in the
+  first Models folder's `loras/` (or `Lora/`), named as `loras/x.safetensors`
+  (Browse… refuses one elsewhere). Both servers take LoRAs per request
+  (`lora: [{path, multiplier}]`, the path inside that folder), so changing
+  them needs no reload and they're no part of what a server loads. sd-server
+  finds them in its model dirs; a started KoboldCpp is given
+  `--sdlora <that folder>` with each model, lists what it found then (at
+  most one folder down), takes at most 10, and skips one it doesn't have
+  without a word, so the app checks `/sdapi/v1/loras` first and fails the
+  seed saying why. The run and each image's recipe record them (ID,
+  SHA-256, weight); the image details and run info show them.
 - Generate's **Mode**: **Single prompt** | **Sweep**, and the sweep box's
   **Vary**: **Style** (a prompt preset per run, below) or a setting (see
   *Setting sweeps*). In a style sweep the prompt is a **template**: `{preset}` marks where each preset's prompt goes

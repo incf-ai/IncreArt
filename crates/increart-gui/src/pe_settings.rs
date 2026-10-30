@@ -213,16 +213,7 @@ fn kobold_from(run: &PeRun, runtime: GpuRuntime) -> PeRun {
 
 fn file_row(ui: &mut egui::Ui, label: &str, path: &mut String, hint: &str, f: PeFile, out: &mut Vec<Msg>) {
     ui.label(label);
-    ui.horizontal(|ui| {
-        let r = ui.add(egui::TextEdit::singleline(path).desired_width(ui.available_width() - 36.0).hint_text(hint));
-        if r.lost_focus() {
-            use increart_core::config::{full_binary, full_path};
-            *path = if f == PeFile::Binary { full_binary(path) } else { full_path(path) };
-        }
-        if ui.button(ph::FOLDER_OPEN).on_hover_text("Browse…").clicked() {
-            out.push(Msg::Pick(PickKind::Pe(f)));
-        }
-    });
+    crate::startup::path_edit(ui, path, hint, PickKind::Pe(f), out);
     ui.end_row();
 }
 

@@ -905,6 +905,11 @@ fn confirm_window(ctx: &egui::Context, c: &increart_gui_core::Confirm, out: &mut
         ui.label(&c.text);
         ui.add_space(8.0);
         dialog_buttons(ui, |ui| {
+            if let Some((name, _)) = &c.fix
+                && ui.button(RichText::new(name).strong()).clicked()
+            {
+                out.push(Msg::ConfirmFix);
+            }
             if ui.button(RichText::new(&c.verb).color(BAD).strong()).clicked() {
                 out.push(Msg::ConfirmYes);
             }

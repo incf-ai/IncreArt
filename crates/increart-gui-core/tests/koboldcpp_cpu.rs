@@ -144,6 +144,7 @@ fn config(kcpp: &str, models: &Path, vision: bool) -> Config {
         cfg: 1.0,
         flow_shift: None,
         custom_sigmas: vec![],
+        loras: vec![],
     }];
     // half the CPUs (the runners' vCPUs are hyperthreads: with all of them,
     // KoboldCpp on Windows stalled for minutes), but not KoboldCpp's own
