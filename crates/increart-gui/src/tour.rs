@@ -117,6 +117,7 @@ const EXTRA_SCENES: &[&str] = &[
     "73-promote",
     "74-notification-settings",
     "74b-timeout-settings",
+    "74c-bell-ringing",
     "75-promote-in-folder",
     "76-top-bar-wide",
     "77-top-bar-medium",
@@ -740,6 +741,13 @@ impl Tour {
                 vec![Msg::ContinueWithoutServers, Msg::SetNotifications(n), Msg::Settings(true)]
             }
             "74b-timeout-settings" => vec![Msg::SettingsTab(increart_gui_core::state::SettingsTab::Timeouts)],
+            // the review backlog over its threshold: the bell filled, its menu open
+            "74c-bell-ringing" => {
+                let mut n = st.config.notifications.clone();
+                n.review_backlog.on = true;
+                n.review_backlog.threshold = 1;
+                vec![Msg::ContinueWithoutServers, Msg::Settings(false), Msg::SetNotifications(n)]
+            }
             "75-promote-in-folder" => {
                 let idea = st.index.ideas.iter().find(|e| matches!(e.loc, increart_core::IdeaLoc::Library(_)));
                 let mut v = vec![Msg::ContinueWithoutServers, Msg::Settings(false), Msg::Tab(Tab::InputLibrary)];
@@ -1547,6 +1555,10 @@ impl Tour {
 
     pub fn messages_popover(&self) -> bool {
         self.scenes.get(self.scene) == Some(&"87-messages-popover")
+    }
+
+    pub fn bell_popover(&self) -> bool {
+        self.scenes.get(self.scene) == Some(&"74c-bell-ringing")
     }
 
     pub fn preview_keys(&self) -> bool {

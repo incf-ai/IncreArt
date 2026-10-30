@@ -2973,6 +2973,13 @@ in the status bar's messages. The attention request is withdrawn (on X11 the
 urgency hint cleared) once the window has the focus or nothing holds any more,
 so the taskbar entry doesn't stay lit.
 
+The **bell** at the right of the status bar shows the state: plain, ringing
+(filled solid amber while an alert holds and isn't snoozed, so it's seen at a
+glance; plain again once nothing holds), snoozed, or a warning (filled red)
+when a sound couldn't play. Its menu lists what holds and snoozes for 5 min,
+30 min, 1 h, until restart, or **a number of minutes of your own** (1–1440,
+remembered for the session; Enter or **Snooze**).
+
 The **bell** in the status bar shows the state: crossed out when every alert
 is off (a click opens the settings), ringing while an alert holds, `zz` when
 snoozed, a warning when the last sound failed. Its menu says what holds, and

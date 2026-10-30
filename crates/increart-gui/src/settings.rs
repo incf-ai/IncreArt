@@ -347,7 +347,8 @@ fn player(ui: &mut egui::Ui, n: &mut Notifications) {
 
 /// The status bar's bell: alerts on, off, sounding or snoozed; click for
 /// what holds, snooze and the settings.
-pub fn bell(ui: &mut egui::Ui, st: &AppState, out: &mut Vec<Msg>) {
+/// `force_open`: for the screenshot tour.
+pub fn bell(ui: &mut egui::Ui, st: &AppState, out: &mut Vec<Msg>, force_open: bool) {
     let n = &st.config.notifications;
     if !n.gpu_idle.on && !n.queue_cleared.on && !n.review_backlog.on {
         if ui.small_button(ph::BELL_SLASH).on_hover_text("No notifications: click to set them up").clicked() {
@@ -358,17 +359,33 @@ pub fn bell(ui: &mut egui::Ui, st: &AppState, out: &mut Vec<Msg>) {
     let a = &st.alerts;
     let holding: Vec<&String> = [&a.idle_text, &a.cleared_text, &a.backlog_text].into_iter().flatten().collect();
     let snoozed = a.snoozed(st.now);
-    let (icon, color) = if a.sound_error.is_some() {
-        (ph::WARNING, BAD)
+    // while an alert holds (and isn't snoozed) the button is filled solid,
+    // so it's seen from across the room; back to plain once nothing holds
+    let ringing = !snoozed && !holding.is_empty();
+    let (icon, color, fill) = if a.sound_error.is_some() {
+        (ph::WARNING, egui::Color32::BLACK, Some(BAD))
     } else if snoozed {
-        (ph::BELL_Z, ui.visuals().weak_text_color())
-    } else if !holding.is_empty() {
-        (ph::BELL_RINGING, crate::widgets::NEUTRAL)
+        (ph::BELL_Z, ui.visuals().weak_text_color(), None)
+    } else if ringing {
+        (ph::BELL_RINGING, egui::Color32::BLACK, Some(crate::widgets::NEUTRAL))
     } else {
-        (ph::BELL, ui.visuals().text_color())
+        (ph::BELL, ui.visuals().text_color(), None)
     };
-    let r = ui.add(egui::Button::new(RichText::new(icon).color(color)).small()).on_hover_text("Notifications");
-    egui::Popup::menu(&r).show(|ui| {
+    let mut button = egui::Button::new(RichText::new(icon).color(color).strong()).small();
+    if let Some(f) = fill {
+        button = button.fill(f);
+    }
+    let tip = match holding.first() {
+        Some(h) if ringing => format!("Notifications: {h}"),
+        _ => "Notifications".to_string(),
+    };
+    let r = ui.add(button).on_hover_text(tip);
+    // closed by the buttons themselves: a click in the minutes field keeps it open
+    let mut popup = egui::Popup::menu(&r).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside);
+    if force_open {
+        popup = popup.open_memory(egui::SetOpenCommand::Bool(true));
+    }
+    popup.show(|ui| {
         ui.set_min_width(260.0);
         if holding.is_empty() {
             ui.weak("Nothing to report.");
@@ -384,11 +401,16 @@ pub fn bell(ui: &mut egui::Ui, st: &AppState, out: &mut Vec<Msg>) {
             let until = if a.muted {
                 "until IncreArt restarts".to_string()
             } else {
-                format!("for {} more min", ((a.snooze_until.unwrap_or(0.0) - st.now) / 60.0).ceil())
+                let left = ((a.snooze_until.unwrap_or(0.0) - st.now) / 60.0).ceil() as u64;
+                match left {
+                    0..60 => format!("for {left} more min"),
+                    _ => format!("for {} h {:02} min more", left / 60, left % 60),
+                }
             };
             ui.weak(format!("Snoozed {until}"));
             if ui.button(ic(ph::BELL, "Unsnooze")).clicked() {
                 out.push(Msg::Unsnooze);
+                ui.close();
             }
         } else {
             for (label, secs) in [
@@ -399,12 +421,27 @@ pub fn bell(ui: &mut egui::Ui, st: &AppState, out: &mut Vec<Msg>) {
             ] {
                 if ui.button(ic(ph::BELL_Z, label)).clicked() {
                     out.push(Msg::Snooze(secs));
+                    ui.close();
                 }
             }
+            // a duration of your own, in minutes (kept for the session)
+            let key = egui::Id::unique("snooze_custom_min");
+            let mut min = ui.ctx().data(|d| d.get_temp::<u32>(key)).unwrap_or(15);
+            ui.horizontal(|ui| {
+                let go = ui.button(ic(ph::BELL_Z, "Snooze")).on_hover_text("for the minutes beside it").clicked();
+                let field = ui.add(egui::DragValue::new(&mut min).range(1..=1440).suffix(" min"));
+                let enter = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                if go || enter {
+                    out.push(Msg::Snooze(Some(min as f64 * 60.0)));
+                    ui.close();
+                }
+            });
+            ui.ctx().data_mut(|d| d.insert_temp(key, min));
         }
         ui.separator();
         if ui.button(ic(ph::GEAR, "Notification settings…")).clicked() {
             out.push(Msg::Settings(true));
+            ui.close();
         }
     });
 }

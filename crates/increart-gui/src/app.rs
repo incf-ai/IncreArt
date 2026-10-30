@@ -206,7 +206,8 @@ impl App {
             let force_open = self.tour.as_ref().is_some_and(|t| t.jobs_popover());
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 jobs_indicator(ui, st, out, force_open);
-                crate::settings::bell(ui, st, out);
+                let bell_open = self.tour.as_ref().is_some_and(|t| t.bell_popover());
+                crate::settings::bell(ui, st, out, bell_open);
                 ui.add_space(4.0);
                 ui.separator();
                 ui.add_space(2.0);
