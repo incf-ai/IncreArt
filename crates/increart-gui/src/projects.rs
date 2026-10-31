@@ -2791,10 +2791,16 @@ fn sampling_bars(ui: &mut egui::Ui, j: &increart_gui_core::RunProgress) {
 /// A run's generation log: what was asked of which server and what it
 /// answered, for finding out why a run fails or waits.
 fn job_log(ui: &mut egui::Ui, st: &AppState, file: &std::path::Path, out: &mut Vec<Msg>) {
+    // paths as their file names, unless asked for in full
+    let full_id = egui::Id::unique("job_log_full_paths");
+    let mut full = ui.data(|d| d.get_temp::<bool>(full_id)).unwrap_or(false);
     ui.horizontal(|ui| {
         ui.label(RichText::new(ic(ph::SCROLL, "Generation log")).strong());
         if st.job_log.is_empty() {
             return;
+        }
+        if ui.checkbox(&mut full, "full paths").on_hover_text("the model files' folders too").changed() {
+            ui.data_mut(|d| d.insert_temp(full_id, full));
         }
         if ui.small_button(ic(ph::COPY, "Copy")).on_hover_text("copy the log, e.g. into a bug report").clicked() {
             ui.ctx().copy_text(st.job_log.join("\n"));
@@ -2809,7 +2815,7 @@ fn job_log(ui: &mut egui::Ui, st: &AppState, file: &std::path::Path, out: &mut V
     }
     egui::ScrollArea::vertical().id_salt("job_log").max_height(220.0).stick_to_bottom(true).show(ui, |ui| {
         for line in &st.job_log {
-            ui.add(egui::Label::new(RichText::new(line).monospace().small()).wrap());
+            ui.add(egui::Label::new(crate::logs::line_job(ui, line, "", false, !full)).wrap());
         }
     });
 }

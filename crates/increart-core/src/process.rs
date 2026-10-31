@@ -70,6 +70,55 @@ pub fn spawn_error(program: &str, e: &io::Error) -> String {
     }
 }
 
+/// Sends `cmd`'s output (stdout and stderr) to `log`: with `stamped`
+/// through a pipe returned for [`stamp_into`], which puts the time before
+/// each line; else straight into the file (a server left running when the
+/// app goes, which would lose the pipe's reader).
+pub fn output_to(cmd: &mut Command, log: &std::fs::File, stamped: bool) -> io::Result<Option<io::PipeReader>> {
+    if !stamped {
+        cmd.stdout(log.try_clone()?).stderr(log.try_clone()?);
+        return Ok(None);
+    }
+    let (reader, writer) = io::pipe()?;
+    cmd.stdout(writer.try_clone()?).stderr(writer);
+    Ok(Some(reader))
+}
+
+/// Copies a started server's output from `pipe` to `log` on a thread of its
+/// own, [the time](crate::logview::stamp) before each line, until the server
+/// (and whatever it started) has closed the pipe. Written as it comes, a
+/// line's start before its end (progress bars rewrite theirs with `\r`).
+pub fn stamp_into(pipe: io::PipeReader, log: std::fs::File) {
+    use std::io::{Read, Write};
+    let copy = move || {
+        let (mut pipe, mut log) = (pipe, log);
+        let (mut buf, mut line_start, mut out) = ([0u8; 16 << 10], true, Vec::new());
+        loop {
+            let n = match pipe.read(&mut buf) {
+                Ok(0) => break,
+                Ok(n) => n,
+                Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
+                Err(_) => break,
+            };
+            let stamp = crate::logview::stamp(chrono::Local::now());
+            out.clear();
+            for &b in &buf[..n] {
+                if line_start {
+                    out.extend_from_slice(stamp.as_bytes());
+                }
+                out.push(b);
+                line_start = b == b'\n';
+            }
+            // a log that can't be written: the pipe is still read (a full
+            // one would stop the server)
+            let _ = log.write_all(&out);
+        }
+    };
+    if let Err(e) = std::thread::Builder::new().name("server output".into()).spawn(copy) {
+        eprintln!("increart: can't read a server's output: {e}");
+    }
+}
+
 /// The line a started server's log gets before its output: when, and the
 /// command line ([`command_text`]).
 pub fn log_header(cmd: &Command) -> String {
