@@ -2413,6 +2413,8 @@ pub struct ApiTest {
     /// Stop asked, the run not over yet.
     pub stopping: bool,
     pub cases: Vec<ApiCase>,
+    /// The server preset shown (its cases only); None: all of them.
+    pub preset: Option<String>,
     /// The case shown on the right; None: the run's own log.
     pub selected: Option<usize>,
     /// The case shown follows the one running (until one is clicked).
@@ -2453,15 +2455,54 @@ impl ApiTest {
         self.cases.iter().position(|c| c.case.id == id)
     }
 
-    /// The IDs `which` runs (empty for all).
+    /// Whether case `i` is shown: of the preset shown, if one is.
+    pub fn shown(&self, i: usize) -> bool {
+        self.cases.get(i).is_some_and(|c| self.preset.as_ref().is_none_or(|p| &c.case.preset == p))
+    }
+
+    /// The cases shown.
+    pub fn shown_cases(&self) -> Vec<usize> {
+        (0..self.cases.len()).filter(|&i| self.shown(i)).collect()
+    }
+
+    /// The server presets, in the order listed.
+    pub fn presets(&self) -> Vec<&str> {
+        let mut v: Vec<&str> = vec![];
+        for c in &self.cases {
+            if !v.contains(&c.case.preset.as_str()) {
+                v.push(&c.case.preset);
+            }
+        }
+        v
+    }
+
+    /// Shows `preset`'s cases only, checking those for its setup (not the
+    /// n/a ones) and no other's; None shows all, the checks as they are.
+    pub fn show_preset(&mut self, preset: Option<String>) {
+        let preset = preset.filter(|p| self.cases.iter().any(|c| &c.case.preset == p));
+        if let Some(p) = &preset {
+            for c in &mut self.cases {
+                c.checked = &c.case.preset == p && c.case.not_applicable.is_none();
+            }
+        }
+        self.preset = preset;
+        if self.selected.is_some_and(|i| !self.shown(i)) {
+            self.selected = None;
+        }
+    }
+
+    /// The IDs `which` runs (empty for all), of the cases shown.
     pub fn ids(&self, which: ApiRun) -> Vec<String> {
         use increart_core::apitest::Outcome;
-        let pick = |c: &&ApiCase| match which {
+        if which == ApiRun::All && self.preset.is_none() {
+            return vec![];
+        }
+        let pick = |c: &ApiCase| match which {
             ApiRun::Checked => c.checked,
-            ApiRun::All => false,
+            ApiRun::All => true,
             ApiRun::Failed => matches!(c.outcome, Some(Outcome::Fail | Outcome::Skipped)),
         };
-        self.cases.iter().filter(pick).map(|c| c.case.id.clone()).collect()
+        self.shown_cases().into_iter().map(|i| &self.cases[i]).filter(|c| pick(c)).map(|c| c.case.id.clone()).collect()
     }
 }
 

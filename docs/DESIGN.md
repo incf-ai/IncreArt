@@ -2491,8 +2491,12 @@ ends, is stopped, or loses the app (its stdin closing).
   expects of each call, each case's result, log and traffic), `report.json`,
   `traffic.log` and the started servers' logs, zipped beside it. The app's
   runs go to `apitest/<date-time>` in the log folder.
-- The window: left, the cases as a tree, preset, then server (or "servers
-  together"), then group; each branch's checkbox checks all in it (half
+- The window: **Server preset** shows one preset's cases only, those for
+  its setup checked and no other preset's (so only its servers start), or
+  **All presets**, the checks as they were; it opens on the last used
+  preset. Check all, Uncheck all, Light only, Run all and Rerun failed are
+  of the cases shown. Left, the cases as a tree, preset, then server (or
+  "servers together"), then group; each branch's checkbox checks all in it (half
   checked: some), its mark the worst of theirs. n/a cases start unchecked.
   **Check all**, **Uncheck all**, **Light only**. Right, the case clicked
   (what it expects, its result, its log and traffic), else the run's log;

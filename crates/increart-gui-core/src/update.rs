@@ -166,6 +166,8 @@ pub enum Msg {
     ApiTestCheck(Vec<usize>, bool),
     /// Shows a case's log (None: the run's).
     ApiTestSelect(Option<usize>),
+    /// Shows one server preset's cases, checking those (None: all presets).
+    ApiTestPreset(Option<String>),
     ApiTestRun(crate::state::ApiRun),
     /// Stops the run: the case going on, then the servers it started.
     ApiTestStop,
@@ -1397,6 +1399,7 @@ fn api_test_event(t: &mut crate::state::ApiTest, event: increart_core::apitest::
         Event::Plan { cases } if !t.running => {
             let was: std::collections::HashMap<String, bool> =
                 t.cases.iter().map(|c| (c.case.id.clone(), c.checked)).collect();
+            let first = t.cases.is_empty();
             t.cases = cases
                 .into_iter()
                 .map(|c| crate::state::ApiCase {
@@ -1411,6 +1414,10 @@ fn api_test_event(t: &mut crate::state::ApiTest, event: increart_core::apitest::
                 })
                 .collect();
             t.selected = None;
+            if first {
+                let preset = t.preset.take();
+                t.show_preset(preset);
+            }
         }
         Event::Plan { .. } => {}
         Event::Start { id } => {
@@ -2639,7 +2646,9 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
             }
             state.server_tests += 1;
             let run = state.server_tests;
-            let mut t = crate::state::ApiTest { run, follow: true, ..Default::default() };
+            // on the last used preset, once its cases are listed
+            let preset = state.config.last_preset.clone();
+            let mut t = crate::state::ApiTest { run, follow: true, preset, ..Default::default() };
             let fx = match &state.config_path {
                 Some(config) => {
                     t.listing = true;
@@ -2692,6 +2701,12 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
                         c.checked = on;
                     }
                 }
+            }
+            vec![]
+        }
+        Msg::ApiTestPreset(preset) => {
+            if let Some(t) = &mut state.api_test {
+                t.show_preset(preset);
             }
             vec![]
         }

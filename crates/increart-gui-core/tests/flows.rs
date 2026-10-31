@@ -6435,6 +6435,49 @@ fn validate_servers_lists_runs_checked_cases_and_stops() {
 }
 
 #[test]
+fn validate_servers_opens_on_the_last_used_preset_and_shows_one_at_a_time() {
+    use increart_core::apitest::{Case, Cost, Event};
+    let preset = |name: &str| ServerPreset { name: name.into(), servers: vec![start("gpu0", 1234)] };
+    let mut s = dialog_state(vec![preset("Kobold"), preset("Sd")], Some("Sd"));
+    let fx = update(&mut s, Msg::ApiTest(true));
+    let [Effect::ApiTestList { run, .. }] = fx.as_slice() else { panic!("{fx:?}") };
+    let case = |preset: &str, key: &str, na: bool| Case {
+        id: format!("{preset}/gpu0/{key}"),
+        preset: preset.into(),
+        server: Some("gpu0".into()),
+        group: "connect".into(),
+        title: key.into(),
+        cost: Cost::Light,
+        not_applicable: na.then(|| "no LoRA".into()),
+        expects: String::new(),
+    };
+    let cases = vec![case("Kobold", "latency", false), case("Sd", "latency", false), case("Sd", "lora", true)];
+    update(&mut s, Msg::ApiTestEvent(*run, Event::Plan { cases }));
+    let t = s.api_test.as_ref().unwrap();
+    // the last used one, its cases for its setup checked, no other's
+    assert_eq!(t.preset.as_deref(), Some("Sd"));
+    assert_eq!(t.presets(), ["Kobold", "Sd"]);
+    assert_eq!(t.shown_cases(), [1, 2]);
+    assert_eq!(t.cases.iter().map(|c| c.checked).collect::<Vec<_>>(), [false, true, false]);
+    // Run all: all of the preset shown
+    assert_eq!(t.ids(ApiRun::All), ["Sd/gpu0/latency", "Sd/gpu0/lora"]);
+    // another: its cases, and only those
+    update(&mut s, Msg::ApiTestPreset(Some("Kobold".into())));
+    let t = s.api_test.as_ref().unwrap();
+    assert_eq!(t.shown_cases(), [0]);
+    assert_eq!(t.cases.iter().map(|c| c.checked).collect::<Vec<_>>(), [true, false, false]);
+    // all presets: all shown, the checks kept; Run all runs everything
+    update(&mut s, Msg::ApiTestPreset(None));
+    let t = s.api_test.as_ref().unwrap();
+    assert_eq!(t.shown_cases(), [0, 1, 2]);
+    assert_eq!(t.cases.iter().map(|c| c.checked).collect::<Vec<_>>(), [true, false, false]);
+    assert!(t.ids(ApiRun::All).is_empty());
+    // one that isn't there: all presets
+    update(&mut s, Msg::ApiTestPreset(Some("Gone".into())));
+    assert_eq!(s.api_test.as_ref().unwrap().preset, None);
+}
+
+#[test]
 fn a_server_problem_links_the_servers_log() {
     let mut s = dialog_state(vec![], None);
     let status = |name: &str, config: Option<ServerConfig>| ServerStatus {

@@ -27,6 +27,10 @@ pub fn window(ctx: &egui::Context, st: &AppState, t: &ApiTest, out: &mut Vec<Msg
             .wrap(),
         );
         ui.add_space(6.0);
+        if !t.cases.is_empty() {
+            preset_choice(ui, t, out);
+            ui.add_space(4.0);
+        }
         ui.horizontal_top(|ui| {
             let tree_w = (width * 0.42).max(340.0);
             ui.allocate_ui_with_layout(egui::vec2(tree_w, height), egui::Layout::top_down(egui::Align::Min), |ui| {
@@ -54,6 +58,38 @@ pub fn window(ctx: &egui::Context, st: &AppState, t: &ApiTest, out: &mut Vec<Msg
     }
 }
 
+/// **Server preset**: one preset's cases only (those for its setup
+/// checked), or all presets'.
+fn preset_choice(ui: &mut egui::Ui, t: &ApiTest, out: &mut Vec<Msg>) {
+    const ALL: &str = "All presets";
+    ui.horizontal(|ui| {
+        ui.label("Server preset");
+        let shown = t.preset.as_deref().unwrap_or(ALL);
+        let mut chosen = None;
+        ui.add_enabled_ui(!t.running, |ui| {
+            egui::ComboBox::from_id_salt("api_preset").selected_text(shown).show_ui(ui, |ui| {
+                for p in t.presets() {
+                    if ui.selectable_label(t.preset.as_deref() == Some(p), p).clicked() {
+                        chosen = Some(Some(p.to_string()));
+                    }
+                }
+                ui.separator();
+                if ui.selectable_label(t.preset.is_none(), ALL).clicked() {
+                    chosen = Some(None);
+                }
+            })
+        })
+        .response
+        .on_hover_text("choosing one checks its cases (not those n/a for it) and only those; its servers are the only ones started");
+        let shown = t.shown_cases();
+        let checked = shown.iter().filter(|&&i| t.cases[i].checked).count();
+        ui.weak(format!("{checked} of {} cases checked", shown.len()));
+        if let Some(p) = chosen.filter(|p| p != &t.preset) {
+            out.push(Msg::ApiTestPreset(p));
+        }
+    });
+}
+
 fn tree(ui: &mut egui::Ui, t: &ApiTest, out: &mut Vec<Msg>) {
     if t.listing {
         ui.horizontal(|ui| {
@@ -62,7 +98,7 @@ fn tree(ui: &mut egui::Ui, t: &ApiTest, out: &mut Vec<Msg>) {
         });
         return;
     }
-    let all: Vec<usize> = (0..t.cases.len()).collect();
+    let all = t.shown_cases();
     for preset in firsts(&all, |i| t.cases[i].case.preset.as_str(), t) {
         let ix: Vec<usize> = all.iter().copied().filter(|&i| t.cases[i].case.preset == preset).collect();
         let id = format!("preset {preset}");
@@ -276,20 +312,21 @@ fn footer(ui: &mut egui::Ui, st: &AppState, t: &ApiTest, out: &mut Vec<Msg>) {
         ui,
         |ui| {
             let mut out = vec![];
-            let every: Vec<usize> = (0..t.cases.len()).collect();
+            // of the preset shown: a hidden one's servers aren't started unseen
+            let every = t.shown_cases();
             if ui.button("Check all").clicked() {
                 out.push(Msg::ApiTestCheck(every.clone(), true));
             }
             if ui.button("Uncheck all").clicked() {
-                out.push(Msg::ApiTestCheck(every, false));
+                out.push(Msg::ApiTestCheck(every.clone(), false));
             }
-            let light: Vec<usize> = (0..t.cases.len()).filter(|&i| t.cases[i].case.cost == Cost::Light).collect();
+            let light: Vec<usize> = every.iter().copied().filter(|&i| t.cases[i].case.cost == Cost::Light).collect();
             if ui
                 .button("Light only")
                 .on_hover_text("checks only the cases that load nothing and generate nothing")
                 .clicked()
             {
-                out.push(Msg::ApiTestCheck((0..t.cases.len()).collect(), false));
+                out.push(Msg::ApiTestCheck(every.clone(), false));
                 out.push(Msg::ApiTestCheck(light, true));
             }
             ui.separator();
@@ -369,8 +406,11 @@ fn command_line(st: &AppState, t: &ApiTest) -> String {
     if let Some(p) = &st.config_path {
         cmd.push_str(&format!(" --config {}", quote(&p.display().to_string())));
     }
+    if let Some(p) = &t.preset {
+        cmd.push_str(&format!(" --preset {}", quote(p)));
+    }
     let ids = t.ids(ApiRun::Checked);
-    if !ids.is_empty() && ids.len() < t.cases.len() {
+    if !ids.is_empty() && ids.len() < t.shown_cases().len() {
         cmd.push_str(&format!(" --cases {}", quote(&ids.join(","))));
     }
     cmd
