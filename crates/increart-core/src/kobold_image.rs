@@ -107,6 +107,8 @@ struct JobState {
     completed: Option<i64>,
     image: Option<String>,
     error: Option<String>,
+    /// The connection to KoboldCpp went while it ran ([`Failure::Lost`]).
+    lost: bool,
     cancel: bool,
     conn: Option<TcpStream>,
 }
@@ -369,6 +371,7 @@ impl KoboldImage {
             completed: None,
             image: None,
             error: None,
+            lost: false,
             cancel: false,
             conn: None,
         };
@@ -381,6 +384,10 @@ impl KoboldImage {
         let (mut job, progress) = {
             let jobs = self.inner.jobs.lock().unwrap();
             let j = jobs.get(id).ok_or(ApiError::JobGone)?;
+            if j.lost {
+                // as asking an sd-server that went: the server is down
+                return Err(ApiError::Transport(j.error.clone().unwrap_or_default()));
+            }
             (to_job(id, j), j.state == State::Generating)
         };
         if progress {
@@ -462,26 +469,36 @@ impl Inner {
         if self.password.is_empty() { rq } else { rq.header("Authorization", format!("Bearer {}", self.password)) }
     }
 
-    fn read(resp: Result<ureq::http::Response<ureq::Body>, ureq::Error>) -> ApiResult<Value> {
-        let mut resp = resp.map_err(|e| ApiError::Transport(e.to_string()))?;
-        let status = resp.status().as_u16();
-        let body = resp.body_mut().read_to_string().map_err(|e| ApiError::Transport(e.to_string()))?;
+    /// The answer to a request (sent at `since`), written to the
+    /// [traffic log](crate::traffic).
+    fn read(
+        resp: Result<ureq::http::Response<ureq::Body>, ureq::Error>,
+        (url, body, since): (&str, Option<&Value>, Instant),
+    ) -> ApiResult<Value> {
+        let answer = resp.map_err(|e| e.to_string()).and_then(|mut r| {
+            let status = r.status().as_u16();
+            Ok((status, r.body_mut().read_to_string().map_err(|e| e.to_string())?))
+        });
+        crate::traffic::exchange(if body.is_some() { "POST" } else { "GET" }, url, body, &answer, since.elapsed());
+        let (status, text) = answer.map_err(ApiError::Transport)?;
         if !(200..300).contains(&status) {
-            return Err(crate::sdserver::classify(status, &body, false));
+            return Err(crate::sdserver::classify(status, &text, false));
         }
-        serde_json::from_str(&body).map_err(|e| ApiError::Transport(format!("unexpected response ({e}): {body:.200}")))
+        serde_json::from_str(&text).map_err(|e| ApiError::Transport(format!("unexpected response ({e}): {text:.200}")))
     }
 
     fn get(&self, path: &str) -> ApiResult<Value> {
-        Self::read(self.auth(self.agent.get(format!("{}{path}", self.base))).call())
+        let (url, t) = (format!("{}{path}", self.base), Instant::now());
+        Self::read(self.auth(self.agent.get(&url)).call(), (&url, None, t))
     }
 
     fn post(&self, path: &str, body: &Value, password: &str) -> ApiResult<Value> {
-        let mut rq = self.agent.post(format!("{}{path}", self.base));
+        let (url, t) = (format!("{}{path}", self.base), Instant::now());
+        let mut rq = self.agent.post(&url);
         if !password.is_empty() {
             rq = rq.header("Authorization", format!("Bearer {password}"));
         }
-        Self::read(rq.send_json(body))
+        Self::read(rq.send_json(body), (&url, Some(body), t))
     }
 
     /// The image model file KoboldCpp runs (None: no image model).
@@ -896,17 +913,27 @@ fn run_jobs(inner: &Inner, rx: &Receiver<String>) {
             match inner.take_turn(Side::Image, None) {
                 Ok(()) => {
                     let cancelled = inner.jobs.lock().unwrap().get(&id).is_none_or(|j| j.cancel);
-                    let r = if cancelled { Err("cancelled".into()) } else { generate(inner, &id, &path, &body) };
+                    let r = if cancelled {
+                        Err(Failure::Failed("cancelled".into()))
+                    } else {
+                        generate(inner, &id, &path, &body)
+                    };
                     inner.end_turn(Side::Image);
                     r
                 }
-                Err(e) => Err(format!("loading the image model: {e}")),
+                Err(e) => Err(Failure::Failed(format!("loading the image model: {e}"))),
             }
         } else {
             generate(inner, &id, &path, &body)
         };
         let mut jobs = inner.jobs.lock().unwrap();
         let Some(j) = jobs.get_mut(&id) else { continue };
+        // KoboldCpp went (stopped, crashed, restarted): its jobs went with
+        // it, and asking for one fails as asking an sd-server that went does,
+        // not as a failed job: the engine sends the seeds again once it is
+        // back, or to another server (a user's seeds failed for good when
+        // one stopped; told gone, they went straight back to it)
+        j.lost = matches!(result, Err(Failure::Lost(_))) && !j.cancel;
         j.conn = None;
         j.completed = Some(now_ms());
         j.state = State::Done(match result {
@@ -915,7 +942,7 @@ fn run_jobs(inner: &Inner, rx: &Receiver<String>) {
                 j.image = Some(image);
                 JobStatus::Completed
             }
-            Err(e) => {
+            Err(Failure::Failed(e) | Failure::Lost(e)) => {
                 j.error = Some(e);
                 JobStatus::Failed
             }
@@ -925,9 +952,30 @@ fn run_jobs(inner: &Inner, rx: &Receiver<String>) {
     }
 }
 
+/// Why a generation gave no image.
+#[derive(Debug)]
+enum Failure {
+    /// KoboldCpp answered (an error, no image), or the job can't be done.
+    Failed(String),
+    /// The connection to it went: it isn't there, or went meanwhile.
+    Lost(String),
+}
+
+impl From<String> for Failure {
+    fn from(e: String) -> Failure {
+        Failure::Failed(e)
+    }
+}
+
+impl From<&str> for Failure {
+    fn from(e: &str) -> Failure {
+        Failure::Failed(e.into())
+    }
+}
+
 /// POSTs one generation on a connection of its own (so a cancel can close
 /// it) and returns the image as base64.
-fn generate(inner: &Inner, id: &str, path: &str, body: &Value) -> Result<String, String> {
+fn generate(inner: &Inner, id: &str, path: &str, body: &Value) -> Result<String, Failure> {
     // KoboldCpp skips a LoRA it doesn't have without a word
     if let Some(asked) = body.get("lora").and_then(Value::as_array) {
         let known = inner.get("/sdapi/v1/loras").map_err(|e| format!("listing its LoRAs: {e}"))?;
@@ -936,7 +984,8 @@ fn generate(inner: &Inner, id: &str, path: &str, body: &Value) -> Result<String,
                 "KoboldCpp doesn't have the LoRA {missing}: it finds LoRAs in the loras folder of each model \
                  directory, at most one folder down, when it loads the model (load it again after adding one; one started \
                  by hand needs --sdlora <that folder>)"
-            ));
+            )
+            .into());
         }
     }
     let hostport = inner.base.trim_start_matches("http://").trim_end_matches('/');
@@ -944,7 +993,8 @@ fn generate(inner: &Inner, id: &str, path: &str, body: &Value) -> Result<String,
         return Err("KoboldCpp over https isn't supported".into());
     }
     let addr = hostport.to_socket_addrs().map_err(|e| e.to_string())?.next().ok_or("no address")?;
-    let mut stream = TcpStream::connect_timeout(&addr, Duration::from_secs(5)).map_err(|e| e.to_string())?;
+    let lost = |e: std::io::Error| Failure::Lost(format!("KoboldCpp: {e}"));
+    let mut stream = TcpStream::connect_timeout(&addr, Duration::from_secs(5)).map_err(lost)?;
     stream.set_read_timeout(Some(CANCEL_CHECK)).map_err(|e| e.to_string())?;
     if let Some(j) = inner.jobs.lock().unwrap().get_mut(id) {
         j.conn = stream.try_clone().ok();
@@ -956,20 +1006,34 @@ fn generate(inner: &Inner, id: &str, path: &str, body: &Value) -> Result<String,
         "POST {path} HTTP/1.1\r\nHost: {hostport}\r\nContent-Type: application/json\r\n{auth}Content-Length: {}\r\nConnection: close\r\n\r\n",
         data.len()
     );
-    stream.write_all(head.as_bytes()).and_then(|_| stream.write_all(&data)).map_err(|e| e.to_string())?;
-    let reader = Cancellable { stream, inner, id, deadline: Instant::now() + GENERATE_TIMEOUT };
-    let (status, reply) = read_response(reader).map_err(|e| format!("KoboldCpp: {e}"))?;
+    stream.write_all(head.as_bytes()).and_then(|_| stream.write_all(&data)).map_err(lost)?;
+    let since = Instant::now();
+    let reader = Cancellable { stream, inner, id, deadline: since + GENERATE_TIMEOUT };
+    let read = read_response(reader).map(|(status, reply)| (status, String::from_utf8_lossy(&reply).into_owned()));
+    crate::traffic::exchange(
+        "POST",
+        &format!("{}{path}", inner.base),
+        Some(body),
+        &read.as_ref().map(|r| r.clone()).map_err(|e| e.to_string()),
+        since.elapsed(),
+    );
+    let (status, reply) = read.map_err(|e| {
+        use std::io::ErrorKind::{TimedOut, WouldBlock};
+        // a timeout (stuck) or a cancel fails; a closed or reset connection is lost
+        if matches!(e.kind(), TimedOut | WouldBlock) || e.to_string() == "cancelled" {
+            Failure::Failed(format!("KoboldCpp: {e}"))
+        } else {
+            lost(e)
+        }
+    })?;
     if !(200..300).contains(&status) {
-        return Err(format!(
-            "HTTP {status}: {}",
-            String::from_utf8_lossy(&reply).chars().take(300).collect::<String>()
-        ));
+        return Err(format!("HTTP {status}: {}", reply.chars().take(300).collect::<String>()).into());
     }
-    let v: Value = serde_json::from_slice(&reply).map_err(|e| format!("unexpected response: {e}"))?;
+    let v: Value = serde_json::from_str(&reply).map_err(|e| format!("unexpected response: {e}"))?;
     match v.get("images").and_then(|i| i.get(0)).and_then(Value::as_str) {
         Some(img) if !img.is_empty() => Ok(img.to_string()),
         // what KoboldCpp answers with no image model, or when generating failed
-        _ => Err("KoboldCpp returned no image (see its log)".into()),
+        _ => Err(Failure::Failed("KoboldCpp returned no image (see its log)".into())),
     }
 }
 

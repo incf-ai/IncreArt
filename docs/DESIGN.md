@@ -348,7 +348,8 @@ asks among them):
   asked* when another chat server is there) and **Vision** (whether those
   see the reference images: ✓ with an mmproj, *text only* started without
   one, *assumed* when it can't be told, as for a server connected to; the
-  images are sent then). The presets list shows the same in a line under
+  images are sent then; to a text-only one they aren't, a KoboldCpp image
+  server's chat side included). The presets list shows the same in a line under
   each preset ("images: kobold, proxy · text: PE · vision: PE", or "·
   no prompt enhance"), and the top bar's server tooltips say which model
   presets each image server can generate (from its model list) and
@@ -1485,6 +1486,26 @@ its details window, and for every run at once in the Jobs header:
   stuck the run for every server). A model no server can take is said
   once in the messages and in its runs' logs, with each server's reason
   ("no server can load krea2, so its runs wait (kobold: …; proxy: …)").
+  A list that fails (not a 404: no list there) leaves the one before; it
+  had made the server one that may have anything. A KoboldCpp started
+  elsewhere, matched by its running file's name alone, goes after a
+  server whose list has the files: it takes the model only once none
+  that lists them is left (a load there failed). Its file of that name may
+  be another one (a user's connected KoboldCpp took the runs of an
+  sd-server proxy's model and never finished them).
+- **A failing server is said**: one not answering its probe, failing to
+  list its files, to load (not refusing: an error, a 5xx), to take a seed
+  or to say how its jobs are is said once in the messages (and the logs
+  of its runs there) until it answers again; the engine retries
+  meanwhile, as before, when that was silent. A load answered with
+  another model than asked says both ("asked to load {recipe, models},
+  it answered {state, recipe, models}"): the answer must name the recipe
+  and the files as asked.
+- **Jobs that don't move**: when none of a server's jobs has changed
+  (status, place in its queue, step) for 10 minutes, or 3 times its
+  longest job yet if more (previews off, a job's steps aren't seen), that
+  is said once, each job with its ID and status; Stop now lets the runs
+  go.
 - **Generation log**: each run's `generation.log` (next to its `run.rsn`)
   has a timestamped line, tagged with the server, for everything the
   engine does for it: queued, which server loads its model (and why not
@@ -1514,7 +1535,10 @@ its details window, and for every run at once in the Jobs header:
   the wait and the message. Remote servers load freely.
 - **Warm-up**: after launch or load, each server runs one small throwaway job
   (e.g. 512², 1 step) so lazy weight loading doesn't land on the first real
-  seed.
+  seed. One not done after 20 minutes is cancelled and counts as a failed
+  warm-up (a server that never ends it had kept its worker for good, its
+  runs waiting with no word); commands coming meanwhile wait for it, and
+  the engine closing ends the wait.
 
 32 GB per GPU fits the int8 diffusion model + int8 text encoder;
 `--offload-to-cpu` is a per-server config option if it doesn't (on ROCm it
@@ -2398,6 +2422,128 @@ in the app's state folder (`$XDG_STATE_HOME/increart` when set, else
 - What a server writes (its output and errors, one stream) is timed as it
   comes: each line starts `HH:MM:SS.mmm `. A server left running when the
   app quits (`leave_running`) writes to the file itself, untimed.
+- **Server traffic** (Server settings: **Log server traffic**, or
+  `INCREART_TRAFFIC_LOG=1` for one start): `server-traffic.log` there
+  gets every request to the image servers, sd-server's API and
+  KoboldCpp's alike, connected-to ones included: time, method, URL,
+  status and time taken, the body sent and the answer (base64 data as its
+  length, a body cut after 4000 characters, `server-traffic-previous.log`
+  past 8 MB). A GET answered as the last time isn't written again; the
+  next different answer says "(after N answers as the one before)". For
+  finding what a server, such as a proxy in front of sd-server, does
+  wrong: a user's proxy answered nothing and IncreArt said nothing either.
+  The Logs window has the same checkbox.
+- **Testing a server**: a server the app connects to (sd-server at, and a
+  KoboldCpp connected to) has **Test** in the preset editor. It makes the
+  engine's calls one by one through the same client, each a step with
+  what came back: it answers (capabilities), its model list (and which
+  model presets it can load, and why not the others), its status, then it
+  loads a model preset (the answer must name it), makes a small image
+  (the warm-up's: a PNG must come back) and cancels a job (it must end
+  cancelled). A step that fails skips the rest, saying why; one that works
+  but not as IncreArt needs (no list: any model may go to it) is a
+  warning. With the engine using that server it stops after the status.
+  **Stop** cancels its job on the server; **Copy** gives the steps as text,
+  to send to whoever runs the server; **Traffic log…** opens the traffic
+  log. A test's traffic is always logged, the log setting on or not, each
+  line tagged `[test <server>]`.
+- **Validating servers** (`increart-apitest`, beside the app in each
+  release; see below).
+
+### Validating servers
+
+`increart-apitest` is a command-line suite that tests a config's server
+presets as the app uses them, case by case; the startup Servers screen's
+**Validate servers…** is a window around it. The suite starts the servers
+it needs itself, opening each preset's servers together as the app does,
+so the button is there only while no servers are open or opening, and
+nothing else uses the GPUs. Started servers are stopped when the suite
+ends, is stopped, or loses the app (its stdin closing).
+
+- Its cases, by ID: `preset/server/group.key` for one server,
+  `preset/group.key` for the preset's servers together.
+  - **together**: `open` (always first: a port already taken is said, and
+    nothing is started), `routing` (each model preset has a server, by
+    listed files, by a running file of that name, or "may get it"),
+    `parallel`, `pe-with-images`, `end-to-end` (a run through the engine
+    in a scratch library) and `failover` (the same with a started server
+    stopped after its first image: the rest go to the others).
+  - **connect**: `capabilities`, `latency`, `parallel-clients`,
+    `poll-burst`, `unknown-job` (a 404, not an error).
+  - **models**: `list`, `status`, `load-each` (the answer must name what
+    was asked), `load-missing` (a clean refusal).
+  - **generate**: `basic` (the Test button's steps), `txt2img`,
+    `same-seed`, `reference`, `large-request` (about 12 MB of reference
+    images: a proxy's body limit shows here), `lora`, `custom-sigmas`.
+  - **jobs**: `queue`, `cancel-running`, `cancel-queued`, `after-cancel`,
+    `poll-finished`.
+  - **prompt-enhance** (chat servers): `answers`, `chat`, `stop`, `vision`.
+- A case that isn't for the setup (no LoRA in any model preset, a
+  text-only chat server, failover with nothing started) is **n/a**, saying
+  why; one whose server didn't open is **skipped**. Outcomes: pass,
+  warning (works, not as well as it could), fail, skipped, n/a. Each is
+  `light` (asks only), `loads a model` or `GPU time`.
+- `increart-apitest list [--json]` lists the cases;
+  `increart-apitest run` runs them: `--config` (default
+  `$INCREART_CONFIG`, else the app's), `--preset` (again for more),
+  `--cases` (comma-separated, `*` for any text: `"*/jobs.*"`), `--light`,
+  `--basic`, `--url <url> --kind sd-server|koboldcpp|chat` (one running
+  server, no preset), `--out`, `--no-stamp`, `--verbose`, `--jsonl` (events
+  as JSON lines, a `stop` line on stdin stops: what the app reads). Exit
+  status: 0 all passed, 1 a failure, 2 warnings only, 3 it couldn't run.
+- **Basic validation**: the basic cases are `together.open`,
+  `connect.capabilities`, `models.list`, `generate.txt2img` (one small
+  image per image server), `prompt-enhance.answers`, `together.routing`
+  and `together.end-to-end`: a few minutes, the first image the longest.
+  A run with all of a preset's basic cases (`--basic`, **Basic only**,
+  **Run all**) notes it in `validated.json` in the app's state folder: a
+  stamp with the preset, its settings' fingerprint (a hash of its servers
+  and, for a started sd-server, the sd-server binary, model folders and
+  arguments; not its name, nor the model presets), the time, passed
+  (warnings allowed) or failed (a case failed or skipped), the basic
+  cases' counts, what each server said it runs, the suite's version, the
+  run's zip and the SHA-256 of its `report.json`. `--no-stamp` and `--url`
+  note nothing. Each preset keeps its newest 5. A stamp holds for the
+  settings it was run with: editing the preset, or the sd-server settings
+  a started one uses, makes it not validated again. Its seal (a hash of its
+  fields) catches a stamp edited by hand; it's no secret (the source is
+  public), so what shows a setup was validated is the report the stamp
+  names, with its hash: a bug report carries `validated.json` and each
+  preset's newest report zip (up to 16 MB each).
+- On the Servers screen each preset has a mark: **validated** (green, the
+  date and any warnings on hover), **validation failed** (red), or **not
+  validated** (never, or not since its settings changed). With no servers
+  open, clicking it validates the preset: the window opens on it and runs
+  its basic cases. Opening a preset not validated asks once per settings
+  (the fingerprints asked are noted in `validated.json` too) **Validate
+  these servers first?**, strongly recommending it: **Validate now** (the
+  same as the mark), **Open without**, or Cancel. Not asked while servers
+  are open (the suite can't run then), when the suite isn't beside the
+  app, or for `--servers`.
+- Every request of a case and its answer is logged to the case (the same
+  lines as the traffic log, tagged with the case). The `--out` folder gets
+  `report.md` (written to be handed to a person or an LLM: what the app
+  expects of each call, each case's result, log and traffic), `report.json`,
+  `traffic.log` and the started servers' logs, zipped beside it. The app's
+  runs go to `apitest/<date-time>` in the log folder.
+- The window: **Server preset** shows one preset's cases only, those for
+  its setup checked and no other preset's (so only its servers start), or
+  **All presets**, the checks as they were; it opens on the last used
+  preset. Check all, Uncheck all, Light only, Basic only, Run all and Rerun failed are
+  of the cases shown. Left, the cases as a tree, preset, then server (or
+  "servers together"), then group; each branch's checkbox checks all in it (half
+  checked: some), its mark the worst of theirs. n/a cases start unchecked.
+  **Check all**, **Uncheck all**, **Light only**, **Basic only**. Right, the case clicked
+  (what it expects, its result, its log and traffic), else the run's log;
+  it follows the case running until one is clicked. **Run N checked**,
+  **Run all**, **Rerun failed** (failed and skipped), **Stop** (the case
+  going on, then the servers), **Copy report** (`report.md`), **Show
+  zip**, **Copy command** (the same run from a terminal). Close stops a
+  run first. A suite that isn't beside the app is said, with where it
+  comes from.
+- CI runs the suite against servers it starts: `increart-fake-sd-server`
+  (the `fake` feature), increart-core's test fake as a binary taking
+  sd-server's `--listen-ip` and `--listen-port`.
 
 - Each start first adds a line of the app's own to the log:
   `--- IncreArt, <date time>: <command line>` (the environment it set

@@ -507,6 +507,19 @@ pub fn window(ctx: &egui::Context, st: &AppState, view: &LogsView, cache: &mut C
         ui.horizontal(|ui| {
             ui.heading(ic(ph::SCROLL, "Logs"));
             ui.weak(dir.display().to_string());
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let mut on = st.config.log_traffic;
+                if ui
+                    .checkbox(&mut on, "Log server traffic")
+                    .on_hover_text(
+                        "Every request to the image servers and its answer, in server-traffic.log: for \
+                         debugging a server, a proxy in front of sd-server especially (Server settings has it too)",
+                    )
+                    .changed()
+                {
+                    out.push(Msg::SetLogTraffic(on));
+                }
+            });
         });
         ui.add_space(4.0);
         let body = (full.y - 90.0).max(120.0);

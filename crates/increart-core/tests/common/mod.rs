@@ -1,5 +1,6 @@
 #![allow(dead_code)]
 
+pub mod cut;
 pub mod fake;
 pub mod fake_kobold;
 pub mod sample;

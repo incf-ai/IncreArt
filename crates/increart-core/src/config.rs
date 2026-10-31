@@ -63,6 +63,10 @@ pub struct Config {
     /// offloads its weights otherwise waits until they fit, 8 GiB to spare).
     #[serde(skip_serializing_if = "is_default")]
     pub skip_ram_check: bool,
+    /// Every request to the image servers and their answers go to
+    /// `server-traffic.log` (see [`crate::traffic`]).
+    #[serde(skip_serializing_if = "is_default")]
+    pub log_traffic: bool,
     /// Sounds when a GPU is idle or the review queue is long.
     #[serde(skip_serializing_if = "is_default")]
     pub notifications: crate::notify::Notifications,
@@ -422,38 +426,16 @@ pub struct Roles {
 impl ServerPreset {
     /// What each of its servers is used for, in order.
     pub fn roles(&self) -> Vec<Roles> {
-        use crate::pe::PeRun;
         let pool = self.chat_pool();
         self.servers
             .iter()
             .map(|s| {
-                let (chat, vision) = match s {
-                    ServerConfig::Chat(c) => {
-                        let vision = match &c.run {
-                            PeRun::KoboldCpp { mmproj, .. } if !mmproj.is_empty() => Some(true),
-                            PeRun::KoboldCpp { model, config, .. } if model.is_empty() && !config.is_empty() => None,
-                            PeRun::KoboldCpp { .. } => Some(false),
-                            PeRun::Connect { .. } => None,
-                        };
-                        (Some(c.clone()), vision)
-                    }
-                    ServerConfig::Kobold(k) => {
-                        let vision = match (&k.run, &k.chat) {
-                            (crate::kobold::KoboldRun::Start { config, .. }, Some(c)) => {
-                                if !c.mmproj.is_empty() {
-                                    Some(true)
-                                } else if c.model.is_empty() && !config.is_empty() {
-                                    None
-                                } else {
-                                    Some(false)
-                                }
-                            }
-                            _ => None,
-                        };
-                        (k.chat_server(), vision)
-                    }
-                    _ => (None, None),
+                let chat = match s {
+                    ServerConfig::Chat(c) => Some(c.clone()),
+                    ServerConfig::Kobold(k) => k.chat_server(),
+                    _ => None,
                 };
+                let vision = chat.as_ref().and_then(|c| c.vision_known());
                 let text = chat.as_ref().is_some_and(|c| pool.iter().any(|p| p.same_process(c)));
                 let note = (chat.is_some() && !text).then(|| {
                     "not asked for prompt enhance: it swaps its chat model with images, and another chat server is there"
@@ -686,7 +668,12 @@ impl Config {
             self.pe.system_prompts = first.system_prompts.clone();
             self.pe.sampling = first.sampling.clone();
         }
-        let server = |o: &crate::pe::OldPeServer| PeServer { name: o.name.clone(), run: o.run.clone(), start: o.start };
+        let server = |o: &crate::pe::OldPeServer| PeServer {
+            name: o.name.clone(),
+            run: o.run.clone(),
+            start: o.start,
+            ..Default::default()
+        };
         let had_presets = !self.server_presets.is_empty();
         for p in self.server_presets.iter_mut().filter(|p| p.chat().is_none()) {
             p.servers.push(ServerConfig::Chat(server(first)));
@@ -1438,6 +1425,19 @@ mod tests {
         let p: ServerPreset = rsnfmt::from_str(text).unwrap();
         assert_eq!(p.roles()[0].vision, Some(false));
         assert_eq!(p.roles_line(), "images: k · text: k · vision: none (asks go without images)");
+        // and prompt enhance's asks to it go without the images
+        assert!(!p.chat_server().unwrap().vision());
+        // with a projector, or one its .kcpps may name, or connected to: with them
+        for run in [
+            r#"run: Start { binary: "k", port: 5001 }, chat: Some(KoboldChat { model: "m", mmproj: "mm" })"#,
+            r#"run: Start { binary: "k", port: 5001, config: "my.kcpps" }, chat: Some(KoboldChat { })"#,
+            r#"run: Connect { url: "http://k:5001" }, chat: Some(KoboldChat { })"#,
+        ] {
+            let text =
+                format!(r#"ServerPreset {{ name: "one", servers: [Kobold(KoboldServer {{ name: "k", {run} }})] }}"#);
+            let p: ServerPreset = rsnfmt::from_str(&text).unwrap();
+            assert!(p.chat_server().unwrap().vision(), "{run}");
+        }
         let p = ServerPreset {
             name: "sd".into(),
             servers: vec![ServerConfig::Connect { name: "box".into(), url: "u".into(), device: String::new() }],

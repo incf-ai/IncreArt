@@ -15,6 +15,7 @@ epaint_default_fonts = "0.37.0"
 image = { version = "0.25.10", default-features = false, features = ["png"] }
 rfd = { version = "0.17.2", default-features = false, features = ["xdg-portal"] }
 notify = "8.2"
+serde_json = "1.0.154"
 similar = "2"
 
 [dev-dependencies]

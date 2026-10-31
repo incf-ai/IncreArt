@@ -117,6 +117,10 @@ pub struct PeServer {
     /// Started (or connected to) when first asked, or when its preset opens.
     #[serde(skip_serializing_if = "is_default")]
     pub start: PeStart,
+    /// Known to have no vision though `run` connects: a KoboldCpp image
+    /// server's chat side started without a projector. Not saved.
+    #[serde(skip)]
+    pub text_only: bool,
 }
 
 /// A PE server as config files had them, with its own system prompts and
@@ -266,13 +270,22 @@ impl PeServer {
         }
     }
 
-    /// Whether requests carry images (a KoboldCpp without `mmproj` has no
-    /// vision; a Connect server is assumed to have it).
-    pub fn vision(&self) -> bool {
+    /// Whether it sees images, when that's known: a KoboldCpp with
+    /// `mmproj` does, one without doesn't (unless its `.kcpps` names the
+    /// model: unknown), a Connect server is unknown.
+    pub fn vision_known(&self) -> Option<bool> {
         match &self.run {
-            PeRun::KoboldCpp { mmproj, .. } => !mmproj.is_empty(),
-            PeRun::Connect { .. } => true,
+            _ if self.text_only => Some(false),
+            PeRun::KoboldCpp { mmproj, .. } if !mmproj.is_empty() => Some(true),
+            PeRun::KoboldCpp { model, config, .. } if model.is_empty() && !config.is_empty() => None,
+            PeRun::KoboldCpp { .. } => Some(false),
+            PeRun::Connect { .. } => None,
         }
+    }
+
+    /// Whether requests carry images: unless it's known to have no vision.
+    pub fn vision(&self) -> bool {
+        self.vision_known() != Some(false)
     }
 }
 
@@ -472,7 +485,15 @@ impl Client {
     /// Whether a chat server answers.
     pub fn ready(&self) -> bool {
         let quick = agent(Some(Duration::from_secs(3)), None);
-        quick.get(format!("{}/v1/models", self.base)).call().is_ok_and(|r| r.status().is_success())
+        let url = format!("{}/v1/models", self.base);
+        let t = std::time::Instant::now();
+        let answer = quick
+            .get(&url)
+            .call()
+            .map_err(|e| e.to_string())
+            .and_then(|mut r| Ok((r.status().as_u16(), r.body_mut().read_to_string().map_err(|e| e.to_string())?)));
+        crate::traffic::exchange("GET", &url, None, &answer, t.elapsed());
+        answer.is_ok_and(|(status, _)| (200..300).contains(&status))
     }
 
     /// One chat completion: the system prompt, then the user's text with
@@ -498,7 +519,7 @@ impl Client {
         images: &[Vec<u8>],
         max_tokens: u32,
         sampling: Sampling,
-        mut on: impl FnMut(u32, &str) -> bool,
+        on: impl FnMut(u32, &str) -> bool,
     ) -> ChatResult {
         // the images first: asks that share them then share the start of
         // the request, which KoboldCpp doesn't read again (an image costs
@@ -523,9 +544,18 @@ impl Client {
             "stream": true,
         });
         let url = format!("{}/v1/chat/completions", self.base);
+        let t = std::time::Instant::now();
+        let r = self.send_chat(&url, &body, on);
+        // the answer as one text (streamed or not); an error as no answer
+        let logged = r.as_ref().map(|a| (200, a.clone())).map_err(Clone::clone);
+        crate::traffic::exchange("POST", &url, Some(&body), &logged, t.elapsed());
+        r
+    }
+
+    fn send_chat(&self, url: &str, body: &Value, mut on: impl FnMut(u32, &str) -> bool) -> ChatResult {
         // a KoboldCpp swapping with images: after the image it's making
         let _turn = crate::kobold_image::chat_turn(&self.base).map_err(|e| format!("{url}: {e}"))?;
-        let mut resp = self.agent.post(&url).send_json(&body).map_err(|e| format!("{url}: {e}"))?;
+        let mut resp = self.agent.post(url).send_json(body).map_err(|e| format!("{url}: {e}"))?;
         let status = resp.status().as_u16();
         let sse = resp
             .headers()

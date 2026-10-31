@@ -10,7 +10,7 @@ use increart_gui_core::{AppState, Msg, Phase, ProjectsTab, Runtime, Tab, update}
 
 use crate::textures::Textures;
 use crate::tour::Tour;
-use crate::widgets::{BAD, GOOD, NEUTRAL, dialog_buttons, dialog_footer, ic, ph};
+use crate::widgets::{ACCENT, BAD, GOOD, NEUTRAL, dialog_buttons, dialog_footer, ic, ph};
 use crate::{home, ideas, projects, review};
 
 pub struct App {
@@ -39,6 +39,11 @@ impl App {
         let rt = Runtime::new(move || ctx.request_repaint());
         let mut st = AppState::new(config, config_path);
         st.gpu_runtime = increart_core::pe::GpuRuntime::likely();
+        st.validations_path = increart_core::validation::path();
+        if let Some(p) = &st.validations_path {
+            st.validations = increart_core::validation::Validations::load(p);
+        }
+        st.suite_found = increart_core::apitest::binary().is_file();
         for w in warnings {
             st.messages_info(w);
         }
@@ -961,16 +966,18 @@ fn nav_keys(ctx: &egui::Context, st: &AppState, out: &mut Vec<Msg>) {
 fn confirm_window(ctx: &egui::Context, c: &increart_gui_core::Confirm, out: &mut Vec<Msg>) {
     let m = egui::Modal::new(egui::Id::unique("confirm")).show(ctx, |ui| {
         ui.set_max_width(420.0);
-        ui.heading("Are you sure?");
+        ui.heading(c.heading.as_deref().unwrap_or("Are you sure?"));
         ui.label(&c.text);
         ui.add_space(8.0);
+        // a recommendation: its verb the way on, not a warning
+        let verb = if c.heading.is_some() { ACCENT } else { BAD };
         dialog_buttons(ui, |ui| {
             if let Some((name, _)) = &c.fix
                 && ui.button(RichText::new(name).strong()).clicked()
             {
                 out.push(Msg::ConfirmFix);
             }
-            if ui.button(RichText::new(&c.verb).color(BAD).strong()).clicked() {
+            if ui.button(RichText::new(&c.verb).color(verb).strong()).clicked() {
                 out.push(Msg::ConfirmYes);
             }
             if ui.button("Cancel   Esc").clicked() {
@@ -1144,6 +1151,14 @@ impl eframe::App for App {
         crate::presets::added_blanks_window(&ctx, &self.st, &mut out);
         if let Some(c) = &self.st.confirm {
             confirm_window(&ctx, c, &mut out);
+        }
+        // over the preset editor
+        if let Some(t) = &self.st.server_test {
+            crate::startup::server_test_window(&ctx, t, &mut out);
+        }
+        // over the server dialog
+        if let Some(t) = &self.st.api_test {
+            crate::apitest::window(&ctx, &self.st, t, &mut out);
         }
         // over whichever window it was opened from
         if let Some(v) = &self.st.logs {

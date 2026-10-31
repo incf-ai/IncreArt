@@ -5058,7 +5058,12 @@ fn chat_servers_go_with_their_preset() {
         args: vec![],
     };
     let a = PeServer { name: "A".into(), run: kobold(1), ..Default::default() };
-    let b = PeServer { name: "B".into(), run: PeRun::Connect { url: "http://x:2".into() }, start: PeStart::AtLaunch };
+    let b = PeServer {
+        name: "B".into(),
+        run: PeRun::Connect { url: "http://x:2".into() },
+        start: PeStart::AtLaunch,
+        ..Default::default()
+    };
     let gpu0 = start("gpu0", 1234);
     let presets = vec![
         ServerPreset { name: "GPU + A".into(), servers: vec![gpu0.clone(), ServerConfig::Chat(a.clone())] },
@@ -6489,6 +6494,275 @@ fn skipping_the_ram_check_is_saved_and_reaches_the_engine() {
     assert!(s.config.skip_ram_check);
     assert!(fx.iter().any(|f| matches!(f, Effect::SetSkipRamCheck(true))));
     assert!(update(&mut s, Msg::SetSkipRamCheck(true)).is_empty());
+}
+
+#[test]
+fn the_traffic_log_setting_is_saved_and_applied() {
+    let mut s = dialog_state(vec![], None);
+    assert!(!s.config.log_traffic);
+    let fx = update(&mut s, Msg::SetLogTraffic(true));
+    assert!(s.config.log_traffic);
+    assert!(fx.iter().any(|f| matches!(f, Effect::SetLogTraffic(true))));
+    assert!(fx.iter().any(|f| matches!(f, Effect::SaveConfig(..))), "{fx:?}");
+    assert!(update(&mut s, Msg::SetLogTraffic(true)).is_empty());
+    let text = increart_core::rsnfmt::to_string(&s.config);
+    assert!(text.contains("log_traffic: true"), "{text}");
+}
+
+#[test]
+fn a_server_test_shows_its_steps_and_stops() {
+    use increart_core::servertest::{Outcome, Step};
+    let mut s = dialog_state(vec![], None);
+    let proxy =
+        ServerConfig::Connect { name: "proxy".into(), url: "http://127.0.0.1:7800/".into(), device: String::new() };
+    let fx = update(&mut s, Msg::TestServer(proxy.clone()));
+    let [Effect::TestServer { run, generate: Ok(()), .. }] = fx.as_slice() else { panic!("{fx:?}") };
+    let run = *run;
+    let step = |outcome| Step { title: "Answers".into(), outcome, detail: String::new() };
+    update(&mut s, Msg::ServerTestStep(run, 0, step(Outcome::Running)));
+    update(&mut s, Msg::ServerTestStep(run, 0, step(Outcome::Ok)));
+    // an older test's step is dropped
+    update(&mut s, Msg::ServerTestStep(run - 1, 1, step(Outcome::Failed)));
+    assert_eq!(s.server_test.as_ref().unwrap().steps, [step(Outcome::Ok)]);
+    assert_eq!(update(&mut s, Msg::StopServerTest), [Effect::StopServerTest]);
+    update(&mut s, Msg::ServerTestDone(run));
+    assert!(update(&mut s, Msg::StopServerTest).is_empty());
+    assert!(update(&mut s, Msg::CloseServerTest).is_empty());
+    assert!(s.server_test.is_none());
+    // one the engine uses doesn't load or make an image
+    s.engine_running = true;
+    s.servers = vec![ServerStatus {
+        config: Some(proxy.clone()),
+        name: "proxy".into(),
+        device: String::new(),
+        state: "ready".into(),
+        model: None,
+        idle_since: None,
+        worked: false,
+    }];
+    let fx = update(&mut s, Msg::TestServer(proxy));
+    let [Effect::TestServer { run: next, generate: Err(why), .. }] = fx.as_slice() else { panic!("{fx:?}") };
+    assert!(*next > run && why.contains("proxy"), "{why}");
+    // closing one still going stops it
+    assert_eq!(update(&mut s, Msg::CloseServerTest), [Effect::StopServerTest]);
+}
+
+#[test]
+fn validate_servers_lists_runs_checked_cases_and_stops() {
+    use increart_core::apitest::{Case, Cost, Counts, Event, Outcome};
+    let mut s = dialog_state(vec![], None);
+    let fx = update(&mut s, Msg::ApiTest(true));
+    let [Effect::ApiTestList { run, config }] = fx.as_slice() else { panic!("{fx:?}") };
+    assert_eq!(config, Path::new("/nonexistent/config.rsn"));
+    let run = *run;
+    assert!(s.api_test.as_ref().unwrap().listing);
+    let case = |id: &str, na: Option<&str>| Case {
+        id: id.into(),
+        preset: "Two".into(),
+        server: None,
+        group: "together".into(),
+        title: id.into(),
+        cost: Cost::Light,
+        basic: false,
+        not_applicable: na.map(String::from),
+        expects: String::new(),
+    };
+    let plan = vec![
+        case("Two/together.open", None),
+        case("Two/a/connect.latency", None),
+        case("Two/a/generate.lora", Some("no LoRA")),
+    ];
+    update(&mut s, Msg::ApiTestEvent(run, Event::Plan { cases: plan.clone() }));
+    update(&mut s, Msg::ApiTestEnded(run, None));
+    let t = s.api_test.as_ref().unwrap();
+    assert!(!t.listing && t.error.is_none());
+    // n/a ones start unchecked
+    assert_eq!(t.cases.iter().map(|c| c.checked).collect::<Vec<_>>(), [true, true, false]);
+    update(&mut s, Msg::ApiTestCheck(vec![0], false));
+    let fx = update(&mut s, Msg::ApiTestRun(ApiRun::Checked));
+    let [Effect::ApiTestRun { run, cases, .. }] = fx.as_slice() else { panic!("{fx:?}") };
+    assert_eq!(cases, &["Two/a/connect.latency"]);
+    let run = *run;
+    // a second run waits for the first
+    assert!(update(&mut s, Msg::ApiTestRun(ApiRun::All)).is_empty());
+    // its plan (the cases it runs) keeps the list as it is
+    update(&mut s, Msg::ApiTestEvent(run, Event::Plan { cases: plan[..2].to_vec() }));
+    assert_eq!(s.api_test.as_ref().unwrap().cases.len(), 3);
+    for e in [
+        Event::Start { id: "Two/together.open".into() },
+        Event::End { id: "Two/together.open".into(), outcome: Outcome::Pass, summary: "a answers".into(), secs: 0.1 },
+        Event::Start { id: "Two/a/connect.latency".into() },
+        Event::Log { id: Some("Two/a/connect.latency".into()), text: "20 asks".into() },
+        Event::Traffic { id: Some("Two/a/connect.latency".into()), text: "GET /sdcpp/v1/capabilities".into() },
+    ] {
+        update(&mut s, Msg::ApiTestEvent(run, e));
+    }
+    // an older run's event is dropped
+    update(&mut s, Msg::ApiTestEvent(run - 1, Event::Log { id: None, text: "old".into() }));
+    let t = s.api_test.as_ref().unwrap();
+    assert_eq!(t.selected, Some(1), "it follows the case running");
+    assert!(t.cases[1].running && t.cases[1].log == ["20 asks"] && t.cases[1].traffic.len() == 1);
+    assert_eq!(t.cases[0].outcome, Some(Outcome::Pass));
+    assert!(t.log.is_empty());
+    // closing while it runs stops it first, keeping the window
+    assert_eq!(update(&mut s, Msg::ApiTest(false)), [Effect::ApiTestStop]);
+    assert!(update(&mut s, Msg::ApiTestStop).is_empty());
+    assert!(s.api_test.is_some());
+    let end = Event::End {
+        id: "Two/a/connect.latency".into(),
+        outcome: Outcome::Fail,
+        summary: "slowest 9 s".into(),
+        secs: 9.0,
+    };
+    update(&mut s, Msg::ApiTestEvent(run, end));
+    let mut counts = Counts::default();
+    counts.add(Outcome::Pass);
+    counts.add(Outcome::Fail);
+    update(
+        &mut s,
+        Msg::ApiTestEvent(run, Event::Done { counts, report: Some("/r".into()), zip: Some("/r.zip".into()) }),
+    );
+    update(&mut s, Msg::ApiTestEnded(run, None));
+    let t = s.api_test.as_ref().unwrap();
+    assert!(!t.running && !t.stopping);
+    assert_eq!(t.done.as_ref().unwrap().2.as_deref(), Some(Path::new("/r.zip")));
+    // Rerun failed: the failed one
+    let fx = update(&mut s, Msg::ApiTestRun(ApiRun::Failed));
+    let [Effect::ApiTestRun { run, cases, .. }] = fx.as_slice() else { panic!("{fx:?}") };
+    assert_eq!(cases, &["Two/a/connect.latency"]);
+    // one that ends without a word says why
+    update(&mut s, Msg::ApiTestEnded(*run, Some("it ended (signal 9) before finishing".into())));
+    assert!(s.api_test.as_ref().unwrap().error.as_deref().unwrap().contains("signal 9"));
+    assert!(update(&mut s, Msg::ApiTest(false)).is_empty());
+    assert!(s.api_test.is_none());
+    // not with servers open: the suite starts its own
+    s.servers = vec![ServerStatus {
+        config: None,
+        name: "a".into(),
+        device: String::new(),
+        state: "ready".into(),
+        model: None,
+        idle_since: None,
+        worked: false,
+    }];
+    assert!(update(&mut s, Msg::ApiTest(true)).is_empty());
+    assert!(s.api_test.is_none());
+}
+
+#[test]
+fn validate_servers_opens_on_the_last_used_preset_and_shows_one_at_a_time() {
+    use increart_core::apitest::{Case, Cost, Event};
+    let preset = |name: &str| ServerPreset { name: name.into(), servers: vec![start("gpu0", 1234)] };
+    let mut s = dialog_state(vec![preset("Kobold"), preset("Sd")], Some("Sd"));
+    let fx = update(&mut s, Msg::ApiTest(true));
+    let [Effect::ApiTestList { run, .. }] = fx.as_slice() else { panic!("{fx:?}") };
+    let case = |preset: &str, key: &str, na: bool| Case {
+        id: format!("{preset}/gpu0/{key}"),
+        preset: preset.into(),
+        server: Some("gpu0".into()),
+        group: "connect".into(),
+        title: key.into(),
+        cost: Cost::Light,
+        basic: false,
+        not_applicable: na.then(|| "no LoRA".into()),
+        expects: String::new(),
+    };
+    let cases = vec![case("Kobold", "latency", false), case("Sd", "latency", false), case("Sd", "lora", true)];
+    update(&mut s, Msg::ApiTestEvent(*run, Event::Plan { cases }));
+    let t = s.api_test.as_ref().unwrap();
+    // the last used one, its cases for its setup checked, no other's
+    assert_eq!(t.preset.as_deref(), Some("Sd"));
+    assert_eq!(t.presets(), ["Kobold", "Sd"]);
+    assert_eq!(t.shown_cases(), [1, 2]);
+    assert_eq!(t.cases.iter().map(|c| c.checked).collect::<Vec<_>>(), [false, true, false]);
+    // Run all: all of the preset shown
+    assert_eq!(t.ids(ApiRun::All), ["Sd/gpu0/latency", "Sd/gpu0/lora"]);
+    // another: its cases, and only those
+    update(&mut s, Msg::ApiTestPreset(Some("Kobold".into())));
+    let t = s.api_test.as_ref().unwrap();
+    assert_eq!(t.shown_cases(), [0]);
+    assert_eq!(t.cases.iter().map(|c| c.checked).collect::<Vec<_>>(), [true, false, false]);
+    // all presets: all shown, the checks kept; Run all runs everything
+    update(&mut s, Msg::ApiTestPreset(None));
+    let t = s.api_test.as_ref().unwrap();
+    assert_eq!(t.shown_cases(), [0, 1, 2]);
+    assert_eq!(t.cases.iter().map(|c| c.checked).collect::<Vec<_>>(), [true, false, false]);
+    assert!(t.ids(ApiRun::All).is_empty());
+    // one that isn't there: all presets
+    update(&mut s, Msg::ApiTestPreset(Some("Gone".into())));
+    assert_eq!(s.api_test.as_ref().unwrap().preset, None);
+}
+
+#[test]
+fn opening_a_preset_not_validated_asks_once_to_validate_it_first() {
+    use increart_core::apitest::{Case, Cost, Counts, Event, Outcome};
+    use increart_core::validation::{Stamp, fingerprint};
+    let tmp = tempfile::tempdir().unwrap();
+    let preset = |name: &str, port| ServerPreset { name: name.into(), servers: vec![start("gpu0", port)] };
+    let mut s = dialog_state(vec![preset("Sd", 1234), preset("Checked", 1240)], Some("Sd"));
+    // tests have no stamps file: nothing asked
+    update(&mut s, Msg::OpenPreset(0));
+    assert!(s.confirm.is_none());
+    let mut s = dialog_state(vec![preset("Sd", 1234), preset("Checked", 1240)], Some("Sd"));
+    let path = tmp.path().join("validated.json");
+    s.validations_path = Some(path.clone());
+    s.suite_found = true;
+    // one validated with the settings it has
+    let checked = s.config.server_presets[1].clone();
+    s.validations.stamps.push(
+        Stamp {
+            preset: "Checked".into(),
+            fingerprint: fingerprint(&s.config, &checked),
+            when: "2026-10-31T17:00:00+01:00".into(),
+            outcome: Outcome::Warn,
+            counts: Counts::default(),
+            servers: vec![],
+            suite: String::new(),
+            report_sha256: String::new(),
+            zip: None,
+            seal: String::new(),
+        }
+        .sealed(),
+    );
+    update(&mut s, Msg::OpenPreset(1));
+    assert!(s.confirm.is_none(), "validated: opened without asking");
+    let mut s2 = dialog_state(vec![preset("Sd", 1234)], Some("Sd"));
+    s2.validations_path = Some(path.clone());
+    s2.suite_found = true;
+    let mut s = s2;
+    let fx = update(&mut s, Msg::OpenPreset(0));
+    let fp = fingerprint(&s.config, &s.config.server_presets[0].clone());
+    assert!(fx.contains(&Effect::ValidationAsked(path.clone(), fp)), "{fx:?}");
+    let c = s.confirm.clone().expect("asked");
+    assert_eq!(c.heading.as_deref(), Some("Validate these servers first?"));
+    assert!(c.text.contains("Sd hasn't been validated") && c.text.contains("Strongly recommended"), "{}", c.text);
+    // Validate now: the window on it; once listed, its basic cases run
+    let fx = update(&mut s, Msg::ConfirmYes);
+    let [Effect::ApiTestList { run, .. }] = fx.as_slice() else { panic!("{fx:?}") };
+    let run = *run;
+    let case = |key: &str, basic: bool| Case {
+        id: format!("Sd/gpu0/{key}"),
+        preset: "Sd".into(),
+        server: Some("gpu0".into()),
+        group: "connect".into(),
+        title: key.into(),
+        cost: Cost::Light,
+        basic,
+        not_applicable: None,
+        expects: String::new(),
+    };
+    let cases = vec![case("connect.capabilities", true), case("connect.latency", false)];
+    update(&mut s, Msg::ApiTestEvent(run, Event::Plan { cases }));
+    let fx = update(&mut s, Msg::ApiTestEnded(run, None));
+    let [Effect::ApiTestRun { run, cases, .. }] = fx.as_slice() else { panic!("{fx:?}") };
+    assert_eq!(cases, &["Sd/gpu0/connect.capabilities"]);
+    // its end: the stamps read again
+    let fx = update(&mut s, Msg::ApiTestEnded(*run, None));
+    assert_eq!(fx, [Effect::LoadValidations(path.clone())]);
+    update(&mut s, Msg::ApiTest(false));
+    // asked once for these settings: opened now, not asked again
+    update(&mut s, Msg::OpenPreset(0));
+    assert!(s.confirm.is_none());
 }
 
 #[test]

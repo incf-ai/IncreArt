@@ -183,6 +183,7 @@ fn config(kcpp: &str, models: &Path, vision: bool) -> Config {
                     args: vec![],
                 },
                 start: PeStart::OnDemand,
+                ..Default::default()
             }),
         ],
     }];

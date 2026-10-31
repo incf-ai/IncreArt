@@ -118,6 +118,16 @@ const EXTRA_SCENES: &[&str] = &[
     "59-continue-without-servers",
     // after 02
     "60-server-settings",
+    // after 02: a connected-to server's Test, nothing answering there
+    "60b-server-test-button",
+    "60c-server-test",
+    // after 02, on a config whose sd-server is the suite's fake
+    // (increart-fake-sd-server): Validate servers…, its cases, a run
+    "60d-validate-servers-button",
+    "60e-validate-servers",
+    "60f-validate-servers-run",
+    // after 60d: opening a preset not validated asks to validate it first
+    "60g-validate-first",
     "61-duplicate-project",
     "62-rename",
     "63-projects-search",
@@ -358,6 +368,32 @@ impl Tour {
             "58-server-dialog-from-main" => vec![Msg::CloseNoServerWarning, Msg::OpenServerDialog],
             "59-continue-without-servers" => vec![Msg::AskContinueWithoutServers],
             "60-server-settings" => vec![Msg::CancelEdit, Msg::ServerSettings(true)],
+            "60b-server-test-button" => vec![Msg::CancelOpening, Msg::EditPreset(1)],
+            "60c-server-test" => vec![Msg::TestServer(increart_core::config::ServerConfig::Connect {
+                name: "box".into(),
+                url: "http://127.0.0.1:9".into(),
+                device: String::new(),
+            })],
+            "60d-validate-servers-button" => vec![Msg::CancelOpening, Msg::CloseServerTest, Msg::CancelEdit],
+            "60e-validate-servers" => vec![Msg::ApiTest(true)],
+            "60g-validate-first" => vec![Msg::OpenPreset(1)],
+            "60f-validate-servers-run" => {
+                // the first preset's light cases and its servers together
+                let Some(t) = &st.api_test else { return vec![] };
+                let first = t.cases.first().map(|c| c.case.preset.clone()).unwrap_or_default();
+                let pick: Vec<usize> = (0..t.cases.len())
+                    .filter(|&i| {
+                        let c = &t.cases[i].case;
+                        c.preset == first
+                            && (c.cost == increart_core::apitest::Cost::Light || c.id.ends_with("together.parallel"))
+                    })
+                    .collect();
+                vec![
+                    Msg::ApiTestCheck((0..t.cases.len()).collect(), false),
+                    Msg::ApiTestCheck(pick, true),
+                    Msg::ApiTestRun(increart_gui_core::ApiRun::Checked),
+                ]
+            }
             "63-projects-search" => vec![
                 Msg::CancelDuplicate,
                 Msg::CancelRename,
@@ -1821,6 +1857,7 @@ impl Tour {
                     .iter()
                     .any(|j| matches!(&j.step, increart_gui_core::PeStep::Writing { pieces, .. } if *pieces > 12)))
             || tex.busy()
+            || st.api_test.as_ref().is_some_and(|t| t.listing || t.running)
             || matches!(st.phase, Phase::Library(LibraryDialog { busy: true, .. }))
             || (!opening_ok && matches!(st.phase, Phase::Servers(ServerDialog { opening: true, .. })))
             || matches!(&st.phase, Phase::Servers(ServerDialog { wizard: true, devices: None, kobold: None, .. }))

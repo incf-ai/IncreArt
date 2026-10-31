@@ -47,6 +47,17 @@ pub struct State {
     pub model_files: Option<Vec<String>>,
     /// A cancel is taken but the job generates on, never ending.
     pub ignore_cancel: bool,
+    /// `model-files` answers 500 (the rest answers).
+    pub list_down: bool,
+    /// Jobs stay as they are (queued stays queued), never ending.
+    pub frozen: bool,
+    /// `models/load` answers this as the status, whatever was asked.
+    pub load_answer: Option<Value>,
+    /// `models/load` of a file `model_files` doesn't list answers 400
+    /// `invalid_model_config`, as sd-server does.
+    pub strict_files: bool,
+    /// Images of the size asked (else 32×32).
+    pub sized: bool,
 }
 
 pub struct Fake {
@@ -67,7 +78,12 @@ impl Drop for Fake {
 
 impl Fake {
     pub fn start(loaded: Option<(&str, &[(&str, &str)])>) -> Fake {
-        let server = Arc::new(Server::http("127.0.0.1:0").unwrap());
+        Fake::start_on("127.0.0.1:0", loaded)
+    }
+
+    /// On `addr` (`host:port`).
+    pub fn start_on(addr: &str, loaded: Option<(&str, &[(&str, &str)])>) -> Fake {
+        let server = Arc::new(Server::http(addr).unwrap());
         let url = format!("http://{}", server.server_addr().to_ip().unwrap());
         let state = Arc::new(Mutex::new(State {
             loaded: loaded
@@ -131,16 +147,20 @@ fn model_status(s: &State) -> Value {
 /// The PNG sd-server would return: a small image coloured by the seed, RGBA
 /// for an RGBA prompt, with its own `parameters` chunk.
 pub fn result_png(body: &Value) -> Vec<u8> {
+    sized_png(body, (32, 32))
+}
+
+/// [`result_png`] of `(w, h)`.
+pub fn sized_png(body: &Value, (w, h): (u32, u32)) -> Vec<u8> {
     let seed = body["seed"].as_u64().unwrap_or(0);
     let alpha = body["prompt"].as_str().unwrap_or("").starts_with("This is an RGBA image");
-    let (w, h) = (32, 32);
     let img = if alpha {
         image::DynamicImage::ImageRgba8(image::RgbaImage::from_fn(w, h, |x, y| {
-            image::Rgba([seed as u8, x as u8 * 8, y as u8 * 8, 128])
+            image::Rgba([seed as u8, (x * 8) as u8, (y * 8) as u8, 128])
         }))
     } else {
         image::DynamicImage::ImageRgb8(image::RgbImage::from_fn(w, h, |x, y| {
-            image::Rgb([seed as u8, x as u8 * 8, y as u8 * 8])
+            image::Rgb([seed as u8, (x * 8) as u8, (y * 8) as u8])
         }))
     };
     let mut png = Vec::new();
@@ -171,6 +191,7 @@ fn handle(s: &mut State, method: &Method, path: &str, body: Value) -> (u16, Valu
     match (method, rest) {
         (Method::Get, "capabilities") => (200, json!({"supported_modes": ["img_gen"], "runtime": model_status(s)})),
         (Method::Get, "models/status") => (200, model_status(s)),
+        (Method::Get, "model-files") if s.list_down => (500, json!({"error": "server_error"})),
         (Method::Get, "model-files") => match &s.model_files {
             Some(ids) => (200, json!({"files": ids.iter().map(|id| json!({"id": id})).collect::<Vec<_>>()})),
             None => (404, json!({"error": "not found"})),
@@ -183,6 +204,19 @@ fn handle(s: &mut State, method: &Method, path: &str, body: Value) -> (u16, Valu
             if s.unloadable.as_deref() == Some(&recipe) {
                 s.loaded = None;
                 return err(422, "model_load_failed", "Model initialization failed");
+            }
+            if let Some(answer) = &s.load_answer {
+                return (200, answer.clone());
+            }
+            if s.strict_files
+                && let Some(ids) = &s.model_files
+                && let Some(missing) = body["models"]
+                    .as_object()
+                    .into_iter()
+                    .flatten()
+                    .find_map(|(_, f)| f.as_str().filter(|f| !ids.iter().any(|id| id == f)).map(str::to_string))
+            {
+                return err(400, "invalid_model_config", &format!("model file not found: {missing}"));
             }
             let models = serde_json::from_value(body["models"].clone()).unwrap_or_default();
             s.loaded = Some((recipe, models));
@@ -212,9 +246,11 @@ fn handle(s: &mut State, method: &Method, path: &str, body: Value) -> (u16, Valu
             let steps = s.steps;
             let busy = s.serial && s.jobs.iter().any(|(k, j)| k != id && j.status == "generating");
             let (fail, lose) = (s.fail_seeds.clone(), s.lose_seeds.clone());
+            let sized = s.sized;
             let Some(j) = s.jobs.get_mut(id) else { return (404, json!({"error": "job not found"})) };
             let seed = j.body["seed"].as_u64().unwrap_or(0);
             match j.status {
+                _ if s.frozen => {}
                 "queued" if !busy => j.status = "generating",
                 "generating" if j.cancel_requested => j.status = "cancelled",
                 "generating" => {
@@ -232,7 +268,9 @@ fn handle(s: &mut State, method: &Method, path: &str, body: Value) -> (u16, Valu
                 return (410, json!({"error": "job expired"}));
             }
             let result = (j.status == "completed").then(|| {
-                let b64 = base64::engine::general_purpose::STANDARD.encode(result_png(&j.body));
+                let size = |k: &str| j.body[k].as_u64().unwrap_or(32) as u32;
+                let png = if sized { sized_png(&j.body, (size("width"), size("height"))) } else { result_png(&j.body) };
+                let b64 = base64::engine::general_purpose::STANDARD.encode(png);
                 json!({"output_format": "png", "images": [{"index": 0, "b64_json": b64}]})
             });
             let error = match j.status {

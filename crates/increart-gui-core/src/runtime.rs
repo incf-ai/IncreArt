@@ -50,6 +50,10 @@ struct Shared {
     convert_cancel: Arc<std::sync::atomic::AtomicBool>,
     archive_cancel: Arc<std::sync::atomic::AtomicBool>,
     download_cancel: Arc<std::sync::atomic::AtomicBool>,
+    /// Set to stop the server test going on.
+    server_test_cancel: Arc<std::sync::atomic::AtomicBool>,
+    /// The suite's run going on (its number): its stdin, for `stop`.
+    api_test_stdin: Option<(u32, std::process::ChildStdin)>,
     /// PE asks stopped: dropped if queued (or when they come), cut short
     /// if being answered.
     pe_stopped: std::collections::HashSet<u64>,
@@ -95,6 +99,39 @@ pub fn log_dir() -> PathBuf {
 }
 
 /// Where servers started now log: [`Runtime::set_log_dir`]'s, or [`log_dir`].
+/// The server validation suite (beside the app), without a console.
+fn apitest_command() -> std::process::Command {
+    let mut cmd = std::process::Command::new(increart_core::apitest::binary());
+    increart_core::process::background(&mut cmd, false);
+    cmd
+}
+
+/// The suite couldn't be started: most likely, it isn't there.
+fn apitest_missing(e: &std::io::Error) -> String {
+    let bin = increart_core::apitest::binary();
+    let mut why = increart_core::process::spawn_error(&bin.display().to_string(), e);
+    if e.kind() == std::io::ErrorKind::NotFound {
+        why.push_str(&format!(
+            ". {} comes with the app, in its release zip; built from source: cargo build -p {}",
+            increart_core::apitest::BINARY,
+            increart_core::apitest::BINARY
+        ));
+    }
+    why
+}
+
+fn apitest_silent(stderr: &str) -> String {
+    format!("{} said nothing: {}", increart_core::apitest::BINARY, last_lines(stderr, 12))
+}
+
+fn last_lines(s: &str, n: usize) -> String {
+    let lines: Vec<&str> = s.lines().filter(|l| !l.trim().is_empty()).collect();
+    if lines.is_empty() {
+        return "(no output)".into();
+    }
+    lines[lines.len().saturating_sub(n)..].join("\n")
+}
+
 fn logs(shared: &Mutex<Shared>) -> PathBuf {
     shared.lock().unwrap().log_dir.clone().unwrap_or_else(log_dir)
 }
@@ -207,6 +244,138 @@ impl Runtime {
             Effect::CancelDownload => {
                 self.shared.lock().unwrap().download_cancel.store(true, std::sync::atomic::Ordering::Relaxed);
             }
+            Effect::TestServer { run, server, models, generate } => {
+                let (tx, wake) = (self.tx.clone(), self.wake.clone());
+                let cancel = Arc::new(std::sync::atomic::AtomicBool::new(false));
+                self.shared.lock().unwrap().server_test_cancel = cancel.clone();
+                std::thread::Builder::new()
+                    .name("server test".into())
+                    .spawn(move || {
+                        use increart_core::servertest;
+                        if let Some(client) = servertest::client_for(&server) {
+                            // a test's traffic is always logged, tagged with it
+                            let tag = format!("test {}", server.name());
+                            increart_core::traffic::tagged(&tag, || {
+                                servertest::run(&client, &models, generate, &cancel, &mut |i, step| {
+                                    let _ = tx.send(Msg::ServerTestStep(run, i, step));
+                                    wake();
+                                })
+                            });
+                        }
+                        let _ = tx.send(Msg::ServerTestDone(run));
+                        wake();
+                    })
+                    .expect("spawn server test");
+            }
+            Effect::StopServerTest => {
+                self.shared.lock().unwrap().server_test_cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+            }
+            Effect::ApiTestList { run, config } => {
+                let (tx, wake) = (self.tx.clone(), self.wake.clone());
+                std::thread::Builder::new()
+                    .name("apitest list".into())
+                    .spawn(move || {
+                        let mut cmd = apitest_command();
+                        cmd.args(["list", "--json", "--config"]).arg(&config);
+                        let why = match cmd.output() {
+                            Ok(out) => {
+                                let mut said = false;
+                                for line in String::from_utf8_lossy(&out.stdout).lines() {
+                                    if let Ok(e) = serde_json::from_str(line) {
+                                        said = true;
+                                        let _ = tx.send(Msg::ApiTestEvent(run, e));
+                                    }
+                                }
+                                (!said).then(|| apitest_silent(&String::from_utf8_lossy(&out.stderr)))
+                            }
+                            Err(e) => Some(apitest_missing(&e)),
+                        };
+                        let _ = tx.send(Msg::ApiTestEnded(run, why));
+                        wake();
+                    })
+                    .expect("spawn apitest list");
+            }
+            Effect::ApiTestRun { run, config, cases } => {
+                let (tx, wake) = (self.tx.clone(), self.wake.clone());
+                let out =
+                    logs(&self.shared).join("apitest").join(chrono::Local::now().format("%Y%m%d-%H%M%S").to_string());
+                let mut cmd = apitest_command();
+                cmd.args(["run", "--jsonl", "--config"]).arg(&config).arg("--out").arg(&out);
+                if !cases.is_empty() {
+                    cmd.arg("--cases").arg(cases.join(","));
+                }
+                cmd.stdin(std::process::Stdio::piped())
+                    .stdout(std::process::Stdio::piped())
+                    .stderr(std::process::Stdio::piped());
+                let mut child = match cmd.spawn() {
+                    Ok(c) => c,
+                    Err(e) => {
+                        let _ = tx.send(Msg::ApiTestEnded(run, Some(apitest_missing(&e))));
+                        wake();
+                        return;
+                    }
+                };
+                if let Some(stdin) = child.stdin.take() {
+                    self.shared.lock().unwrap().api_test_stdin = Some((run, stdin));
+                }
+                let shared = self.shared.clone();
+                std::thread::Builder::new()
+                    .name("apitest run".into())
+                    .spawn(move || {
+                        use std::io::{BufRead, Read};
+                        let mut stderr = child.stderr.take();
+                        let errs = std::thread::spawn(move || {
+                            let mut s = String::new();
+                            if let Some(e) = stderr.as_mut() {
+                                let _ = e.read_to_string(&mut s);
+                            }
+                            s
+                        });
+                        let mut finished = false;
+                        if let Some(stdout) = child.stdout.take() {
+                            for line in std::io::BufReader::new(stdout).lines().map_while(Result::ok) {
+                                let e = serde_json::from_str(&line)
+                                    .unwrap_or(increart_core::apitest::Event::Log { id: None, text: line });
+                                finished |= matches!(
+                                    e,
+                                    increart_core::apitest::Event::Done { .. }
+                                        | increart_core::apitest::Event::Error { .. }
+                                );
+                                let _ = tx.send(Msg::ApiTestEvent(run, e));
+                                wake();
+                            }
+                        }
+                        let status = child.wait();
+                        let errs = errs.join().unwrap_or_default();
+                        {
+                            let mut sh = shared.lock().unwrap();
+                            if sh.api_test_stdin.as_ref().is_some_and(|(r, _)| *r == run) {
+                                sh.api_test_stdin = None;
+                            }
+                        }
+                        let why = (!finished).then(|| match status {
+                            Ok(s) => format!("it ended ({s}) before finishing: {}", last_lines(&errs, 12)),
+                            Err(e) => format!("it ended before finishing: {e}"),
+                        });
+                        let _ = tx.send(Msg::ApiTestEnded(run, why));
+                        wake();
+                    })
+                    .expect("spawn apitest run");
+            }
+            Effect::ApiTestStop => {
+                use std::io::Write;
+                if let Some((_, stdin)) = self.shared.lock().unwrap().api_test_stdin.as_mut() {
+                    let _ = writeln!(stdin, "stop").and_then(|_| stdin.flush());
+                }
+            }
+            Effect::LoadValidations(path) => {
+                let _ = self.tx.send(Msg::Validations(increart_core::validation::Validations::load(&path)));
+                (self.wake)();
+            }
+            Effect::ValidationAsked(path, fingerprint) => {
+                // not noted: asked again next time, no worse
+                let _ = increart_core::validation::mark_asked(&path, &fingerprint);
+            }
             Effect::FolderPreviews { root, dir, names } => {
                 let (tx, wake) = (self.tx.clone(), self.wake.clone());
                 std::thread::spawn(move || {
@@ -236,13 +405,14 @@ impl Runtime {
                     .spawn(move || convert_store(&lib, &shared, to, &cancel, &tx, &wake))
                     .expect("spawn store conversion");
             }
-            Effect::SaveBugReport { config, model_dirs, dest } => {
+            Effect::SaveBugReport { config, model_dirs, validations, dest } => {
                 let (tx, wake) = (self.tx.clone(), self.wake.clone());
                 let report = increart_core::bugreport::Report {
                     config,
                     logs: logs(&self.shared),
                     model_dirs: model_dirs.iter().map(|d| increart_core::config::full_path(d)).collect(),
                     about: increart_core::applog::about().unwrap_or("increart (version not known)").to_string(),
+                    validations,
                 };
                 std::thread::Builder::new()
                     .name("bug report".into())
@@ -1262,6 +1432,10 @@ fn work_on(shared: &Arc<Mutex<Shared>>, wake: &Wake, fx: Effect) -> Vec<Msg> {
             }
             vec![]
         }
+        Effect::SetLogTraffic(on) => {
+            increart_core::traffic::set_on(on);
+            vec![]
+        }
         Effect::StartEngine { shared: cfg, order, skip_ram_check } => {
             let Some(lib) = library(shared) else { return vec![] };
             // Runs with seeds left, found before taking any other lock (the
@@ -1344,6 +1518,13 @@ fn work_on(shared: &Arc<Mutex<Shared>>, wake: &Wake, fx: Effect) -> Vec<Msg> {
         | Effect::KoboldVersion(_)
         | Effect::DownloadModels { .. }
         | Effect::CancelDownload
+        | Effect::TestServer { .. }
+        | Effect::StopServerTest
+        | Effect::ApiTestList { .. }
+        | Effect::ApiTestRun { .. }
+        | Effect::ApiTestStop
+        | Effect::LoadValidations(_)
+        | Effect::ValidationAsked(..)
         | Effect::PlaySound { .. }
         | Effect::OpenServers { .. }
         | Effect::Pick { .. }
