@@ -1,0 +1,6 @@
+# `cargo nextest run --workspace`: every test binary's tests share one pool,
+# so a slow binary no longer holds up the next (cargo test runs them in turn).
+[profile.default]
+# as RUST_TEST_THREADS in .devcontainer: the machine's GPU runs keep the rest
+# (NEXTEST_TEST_THREADS overrides)
+test-threads = 8

@@ -16,6 +16,9 @@ struct Harness {
     root: PathBuf,
 }
 
+/// How long `settle` waits for nothing more to come.
+const QUIET_MS: u64 = 25;
+
 impl Harness {
     fn new() -> Harness {
         increart_core::fsutil::set_fsync(false);
@@ -27,6 +30,8 @@ impl Harness {
         // started servers (stand-ins) log here, not in the real log folder
         rt.set_log_dir(tmp.path().join("logs"));
         rt.set_trash_dir(tmp.path().join("trash"));
+        // stand-in servers answer at once: no half-second polls
+        rt.set_engine_timing(Duration::from_millis(10), Duration::from_millis(50));
         let mut h = Harness { state: AppState::new(config, None), rt, _tmp: tmp, root };
         h.send(Msg::SetLibraryPath(h.root.to_string_lossy().into()));
         h.send(Msg::CreateLibrary);
@@ -57,7 +62,9 @@ impl Harness {
             // before the wait: the worker sends what it did before it's idle
             // (effects with no reply, like reading a history, are done then)
             let idle = self.rt.idle();
-            let msgs = self.rt.wait(Duration::from_millis(300));
+            // a short quiet spell: what isn't the worker's (threads of their
+            // own, the engine) has its chance to answer
+            let msgs = self.rt.wait(Duration::from_millis(QUIET_MS));
             if msgs.is_empty() {
                 // a library still opening sends nothing until it's open
                 let opening = matches!(&self.state.phase, Phase::Library(d) if d.busy);

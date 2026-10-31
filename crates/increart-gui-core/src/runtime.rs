@@ -25,6 +25,9 @@ struct Shared {
     disposal: Option<increart_core::library::Disposal>,
     /// Where started servers log from now on (tests); None: [`log_dir`].
     log_dir: Option<PathBuf>,
+    /// How often engines started from now on poll their jobs, and their
+    /// first retry's wait (tests); None: the engine's defaults.
+    engine_timing: Option<(Duration, Duration)>,
     /// The sd-servers open, each with what it was opened as.
     servers: Vec<Option<(ServerConfig, ServerProcess)>>,
     /// The shared settings `servers` were opened with.
@@ -146,6 +149,12 @@ impl Runtime {
     /// Servers started after this log into `dir` rather than [`log_dir`].
     pub fn set_log_dir(&self, dir: PathBuf) {
         self.shared.lock().unwrap().log_dir = Some(dir);
+    }
+
+    /// Engines started after this poll every `poll` and first retry after
+    /// `backoff` (tests: the defaults keep a stand-in server's runs waiting).
+    pub fn set_engine_timing(&self, poll: Duration, backoff: Duration) {
+        self.shared.lock().unwrap().engine_timing = Some((poll, backoff));
     }
 
     /// `wake` is called whenever a message is ready (e.g. request a repaint).
@@ -1460,13 +1469,16 @@ fn work_on(shared: &Arc<Mutex<Shared>>, wake: &Wake, fx: Effect) -> Vec<Msg> {
                 .flatten()
                 .map(|(_, p)| Endpoint { name: p.name.clone(), device: p.device.clone(), client: p.client.clone() })
                 .collect();
-            let opts = EngineOptions {
+            let mut opts = EngineOptions {
                 generation: GenOptions { preview: cfg.preview.clone(), ..Default::default() },
                 sdcpp: cfg.commit.clone(),
                 order,
                 skip_ram_check,
                 ..Default::default()
             };
+            if let Some((poll, backoff)) = shared.lock().unwrap().engine_timing {
+                (opts.poll_interval, opts.backoff_base) = (poll, backoff);
+            }
             let w = wake.clone();
             let engine = Engine::start(lib.clone(), endpoints, opts, Some(Box::new(move || w())));
             for r in &pending {
