@@ -2427,7 +2427,37 @@ in the app's state folder (`$XDG_STATE_HOME/increart` when set, else
 - Footer left: **Open in editor** (`editor` in `config.rsn`, the file
   appended; else the desktop's default app for it, then gnome-text-editor,
   gedit, kate, mousepad, xed), **Show in folder**, **Copy** (the lines
-  shown). Esc or Close closes.
+  shown). Footer right: **Save for a bug report…**, then Close. Esc or
+  Close closes.
+
+The app keeps a log of its own there too, `increart.log`, listed with the
+servers' in the viewer (titled **Logs**):
+
+- At each start, `--- IncreArt, <date time>: started, increart <version>
+  (<commit>); config: <path> [(INCREART_CONFIG)]; arguments: …`.
+- Every message the Messages list gets, as `<date time> info|error|alert:
+  <text>` (config warnings at start among them), and a panic's, as
+  `<date time> panic: thread '<name>' at <file>:<line>: <what>`.
+- Grown past 2 MB, it's moved to `increart-previous.log` at the next start.
+- A screenshot tour (`INCREART_TOUR`) keeps none.
+
+**Save for a bug report…** asks where (Downloads to start with, named
+`increart-bug-report-<date>-<time>.zip`; `.zip` added to a name without it)
+and writes, on a thread of its own, a zip whose folder is named after it:
+
+- `config/`: `config.rsn` and the copies kept beside it (`config.rsn.*`:
+  unreadable ones, ones from before a migration).
+- `logs/`: each log in the log folder, its last 2 MB ("[the first … MB left
+  out]" above when cut), passwords masked (`…password='***'`,
+  `--…password ***`: KoboldCpp prints its admin password as it starts).
+- `model-directories.txt`: each model directory in order, the files under
+  it (four levels deep, at most 3000) with their sizes, or that it isn't
+  there.
+- `about.txt`: the version and the start line's config and arguments, the
+  system, the config and log folders, when, and what's in the zip.
+
+No images, prompts or library. Its hover says so, and that paths show the
+user name; saved, a message names the zip and its size.
 
 ### Project folders
 

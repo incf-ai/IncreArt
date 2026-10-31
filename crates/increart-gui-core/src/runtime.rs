@@ -232,6 +232,23 @@ impl Runtime {
                     .spawn(move || convert_store(&lib, &shared, to, &cancel, &tx, &wake))
                     .expect("spawn store conversion");
             }
+            Effect::SaveBugReport { config, model_dirs, dest } => {
+                let (tx, wake) = (self.tx.clone(), self.wake.clone());
+                let report = increart_core::bugreport::Report {
+                    config,
+                    logs: logs(&self.shared),
+                    model_dirs: model_dirs.iter().map(|d| increart_core::config::full_path(d)).collect(),
+                    about: increart_core::applog::about().unwrap_or("increart (version not known)").to_string(),
+                };
+                std::thread::Builder::new()
+                    .name("bug report".into())
+                    .spawn(move || {
+                        let r = increart_core::bugreport::write(&report, &dest);
+                        let _ = tx.send(Msg::BugReportSaved(r.map(|size| (dest, size))));
+                        wake();
+                    })
+                    .expect("spawn bug report");
+            }
             Effect::ExportLibrary { root, dest, format } => {
                 let (tx, wake) = (self.tx.clone(), self.wake.clone());
                 let cancel = Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -696,6 +713,13 @@ fn pick(kind: PickKind, start: Option<PathBuf>) -> Vec<PathBuf> {
             d.set_title("Images for the new idea").add_filter("Images", IMAGE_EXTS).pick_files().unwrap_or_default()
         }
         PickKind::ExportDir => d.set_title("Export to").pick_folder().into_iter().collect(),
+        PickKind::BugReport => d
+            .set_title("Save for a bug report")
+            .set_file_name(format!("increart-bug-report-{}.zip", chrono::Local::now().format("%Y-%m-%d-%H%M")))
+            .add_filter("Zip", &["zip"])
+            .save_file()
+            .into_iter()
+            .collect(),
         PickKind::TileFile(format) => d
             .set_title("Save the tiled image")
             .set_file_name(format!("tiles.{}", format.ext()))
@@ -1317,6 +1341,7 @@ fn work_on(shared: &Arc<Mutex<Shared>>, wake: &Wake, fx: Effect) -> Vec<Msg> {
         | Effect::ConvertStore(_)
         | Effect::CancelConvert
         | Effect::ExportLibrary { .. }
+        | Effect::SaveBugReport { .. }
         | Effect::UnpackArchive { .. }
         | Effect::CancelArchive
         | Effect::CheckUsage => {

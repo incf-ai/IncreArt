@@ -1,5 +1,5 @@
-//! The log viewer (**Logs…**): the logs of the servers the app started, in
-//! the log folder (DESIGN.md, Server logs).
+//! The log viewer (**Logs…**): the app's own log and those of the servers
+//! it started, in the log folder (DESIGN.md, Server logs).
 
 use std::path::Path;
 use std::time::{Duration, Instant, SystemTime};
@@ -11,6 +11,10 @@ use crate::widgets::{dialog_footer, ic, ph};
 
 /// How much of a log's end is read.
 const TAIL: u64 = 1 << 20;
+/// What **Save for a bug report…** saves (its hover).
+const BUG_REPORT_NOTE: &str = "A zip to attach to an issue: your config (and the copies kept beside it), the end of each \
+log here (passwords masked), the file names and sizes in your model directories, and the version and system. \
+No images, no prompts, nothing from the library. Paths in it show your user name.";
 /// Wrapped lines are laid out whole, so only this many of the last are shown.
 const WRAPPED: usize = 3000;
 
@@ -170,7 +174,7 @@ fn age(t: Option<SystemTime>) -> String {
 
 /// The viewer: the logs on the left (newest first), the chosen one's end
 /// on the right, following it as it grows.
-pub fn window(ctx: &egui::Context, _st: &AppState, view: &LogsView, cache: &mut Cache, out: &mut Vec<Msg>) {
+pub fn window(ctx: &egui::Context, st: &AppState, view: &LogsView, cache: &mut Cache, out: &mut Vec<Msg>) {
     let dir = increart_gui_core::runtime::log_dir();
     cache.refresh(&dir, view.file.as_deref());
     // the newest when none is asked for
@@ -186,7 +190,7 @@ pub fn window(ctx: &egui::Context, _st: &AppState, view: &LogsView, cache: &mut 
         ui.set_width(full.x);
         ui.set_height(full.y);
         ui.horizontal(|ui| {
-            ui.heading(ic(ph::SCROLL, "Server logs"));
+            ui.heading(ic(ph::SCROLL, "Logs"));
             ui.weak(dir.display().to_string());
         });
         ui.add_space(4.0);
@@ -302,8 +306,18 @@ pub fn window(ctx: &egui::Context, _st: &AppState, view: &LogsView, cache: &mut 
                     ui.ctx().copy_text(filtered.join("\n"));
                 }
             },
-            |ui| ui.button("Close   Esc").clicked(),
+            |ui| {
+                let save = ui
+                    .add_enabled(!st.saving_bug_report, egui::Button::new(ic(ph::BUG, "Save for a bug report…")))
+                    .on_hover_text(BUG_REPORT_NOTE)
+                    .on_disabled_hover_text("Saving…");
+                (save.clicked(), ui.button("Close   Esc").clicked())
+            },
         );
+        let (save, close) = close;
+        if save {
+            out.push(Msg::SaveBugReport);
+        }
         close
     });
     if m.inner || m.should_close() {

@@ -10,7 +10,9 @@
 //! - [`id`], [`pixel`], [`png`], [`link`]: IDs, the pixel hash, PNG chunks and
 //!   store links.
 
+pub mod applog;
 pub mod archive;
+pub mod bugreport;
 pub mod check;
 pub mod config;
 pub mod container;

@@ -2242,6 +2242,7 @@ dependencies = [
  "similar",
  "tempfile",
  "tiny_http",
+ "zip",
 ]
 
 [[package]]

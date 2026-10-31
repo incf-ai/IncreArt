@@ -152,6 +152,21 @@ fn main() -> eframe::Result {
         std::process::exit(2);
     });
     let config_path = std::env::var_os("INCREART_CONFIG").map(PathBuf::from).or_else(Config::default_path);
+    // the app's own log (not a tour's: its screenshots' messages aren't the user's)
+    if std::env::var_os("INCREART_TOUR").is_none() {
+        let config = match (&config_path, std::env::var_os("INCREART_CONFIG").is_some()) {
+            (Some(p), true) => format!("{} (INCREART_CONFIG)", p.display()),
+            (Some(p), false) => p.display().to_string(),
+            (None, _) => "none (no config folder)".into(),
+        };
+        let args: Vec<String> = std::env::args().skip(1).collect();
+        let args = if args.is_empty() { String::new() } else { format!("\narguments: {}", args.join(" ")) };
+        increart_core::applog::start(
+            &increart_gui_core::runtime::log_dir(),
+            &format!("{}\nconfig: {config}{args}", version()),
+        );
+        increart_core::applog::log_panics();
+    }
     let (mut config, warnings) = match &config_path {
         Some(p) => Config::load_or_default(p),
         None => {

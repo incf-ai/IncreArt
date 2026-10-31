@@ -2355,6 +2355,8 @@ pub enum PickKind {
     RecipeFile(usize),
     /// A LoRA of the model presets editor's selected preset (its index).
     RecipeLora(usize),
+    /// Where **Save for a bug report…** saves its zip.
+    BugReport,
 }
 
 /// Which of a KoboldCpp PE server's files is picked.
@@ -2711,6 +2713,8 @@ pub struct AppState {
     pub no_server_warning: bool,
     /// The log viewer (**Logs…**), when open.
     pub logs: Option<LogsView>,
+    /// A bug report zip being written.
+    pub saving_bug_report: bool,
     /// That warning was shown this session (it shows once per start).
     pub no_server_warned: bool,
     /// The runs and sweeps being saved (project, label): Queue again for
@@ -3025,6 +3029,7 @@ impl AppState {
             server_status: false,
             no_server_warning: false,
             logs: None,
+            saving_bug_report: false,
             no_server_warned: false,
             queueing: vec![],
             folder_view: FolderView::new(FvPlace::Projects),
@@ -4441,16 +4446,22 @@ impl AppState {
     }
 
     pub fn messages_error(&mut self, text: impl Into<String>) {
-        self.messages.push(Message { text: text.into(), error: true, alert: false });
+        let text = text.into();
+        increart_core::applog::line("error", &text);
+        self.messages.push(Message { text, error: true, alert: false });
     }
 
     pub fn messages_info(&mut self, text: impl Into<String>) {
-        self.messages.push(Message { text: text.into(), error: false, alert: false });
+        let text = text.into();
+        increart_core::applog::line("info", &text);
+        self.messages.push(Message { text, error: false, alert: false });
     }
 
     /// A notification alert's reason (its message, when so set).
     pub fn messages_alert(&mut self, text: impl Into<String>) {
-        self.messages.push(Message { text: text.into(), error: false, alert: true });
+        let text = text.into();
+        increart_core::applog::line("alert", &text);
+        self.messages.push(Message { text, error: false, alert: true });
     }
 }
 

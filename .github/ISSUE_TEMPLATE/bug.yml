@@ -48,6 +48,11 @@ body:
       label: Backend version and build
       placeholder: e.g. KoboldCpp 1.123.1 nocuda (Vulkan); sd.cpp fd21ecf HIP
   - type: textarea
+    id: report
+    attributes:
+      label: Bug report zip
+      description: "Logs… (the Servers screen, or the top bar's Servers window) → Save for a bug report…, then drag the zip here. It holds your config, the end of each log (passwords masked) and the file names in your model directories; no images or prompts. Paths in it show your user name."
+  - type: textarea
     id: log
     attributes:
       label: Server log

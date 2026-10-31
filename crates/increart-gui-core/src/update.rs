@@ -161,6 +161,10 @@ pub enum Msg {
     Converting(usize, usize),
     /// Export library: asks where, then writes the archive.
     ExportLibrary(increart_core::archive::ArchiveFormat),
+    /// **Save for a bug report…**: asks where, then writes the zip.
+    SaveBugReport,
+    /// The bug report zip written: where, and its size.
+    BugReportSaved(Result<(PathBuf, u64), String>),
     /// Unpack a library archive: asks which and into which folder, unpacks
     /// it there and opens the library.
     UnpackLibraryArchive,
@@ -972,6 +976,14 @@ pub enum Effect {
     ConvertStore(StoreFormat),
     /// Stops a conversion after the batch it is on.
     CancelConvert,
+    /// Writes a bug report zip ([`increart_core::bugreport`]) of the config
+    /// at `config`, the logs and what's in `model_dirs` to `dest`, on its
+    /// own thread; answers `BugReportSaved`.
+    SaveBugReport {
+        config: Option<PathBuf>,
+        model_dirs: Vec<String>,
+        dest: PathBuf,
+    },
     /// Writes the library at `root` to `dest`, on its own thread, reporting
     /// `Archiving`, then `LibraryExported`.
     ExportLibrary {
@@ -4951,6 +4963,23 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
             state.logs = view;
             vec![]
         }
+        Msg::SaveBugReport => match state.saving_bug_report {
+            true => vec![],
+            false => update(state, Msg::Pick(PickKind::BugReport)),
+        },
+        Msg::BugReportSaved(r) => {
+            state.saving_bug_report = false;
+            match r {
+                Ok((path, size)) => state.messages_info(format!(
+                    "Saved for a bug report: {} ({:.1} MB). Attach it to the issue; it holds your config, the logs \
+                     and the model directories' file names, no images",
+                    path.display(),
+                    size as f64 / 1e6
+                )),
+                Err(e) => state.messages_error(format!("Save for a bug report: {e}")),
+            }
+            vec![]
+        }
         Msg::OpenInEditor(path) => vec![Effect::OpenInEditor { path, command: state.config.editor.clone() }],
         Msg::Tick(t) => {
             state.now = t;
@@ -5676,6 +5705,8 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
                 }
                 PickKind::LibraryUnpackInto => state.unpack_from.as_ref().and_then(|a| a.parent()).map(PathBuf::from),
                 PickKind::ImportFiles | PickKind::IdeaImages | PickKind::GenerateRefs | PickKind::TileFile(_) => None,
+                // Downloads, where it's found to attach
+                PickKind::BugReport => Some(PathBuf::from(increart_core::config::full_path("~/Downloads"))),
             };
             vec![Effect::Pick { kind, start }]
         }
@@ -5728,6 +5759,15 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
                 let into = paths.remove(0);
                 state.archiving = Some(Archiving { archive: archive.clone(), export: false, done: 0, total: 0 });
                 vec![Effect::UnpackArchive { archive, into }]
+            }
+            PickKind::BugReport => {
+                let mut dest = paths.remove(0);
+                if dest.extension().is_none_or(|e| !e.eq_ignore_ascii_case("zip")) {
+                    dest.set_file_name(format!("{}.zip", dest.file_name().unwrap_or_default().to_string_lossy()));
+                }
+                state.saving_bug_report = true;
+                let config = state.config_path.clone();
+                vec![Effect::SaveBugReport { config, model_dirs: state.config.sdserver.model_dirs.clone(), dest }]
             }
             PickKind::ExportDir => {
                 if let Some(e) = &mut state.export {

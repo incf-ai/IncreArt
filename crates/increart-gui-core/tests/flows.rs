@@ -6167,6 +6167,32 @@ fn opening_a_library_with_lost_output_links_warns() {
     assert!(m.error && m.text.contains("1 generated image(s) have no output link"), "{}", m.text);
 }
 
+/// Save for a bug report: a zip where picked (`.zip` added) of the config
+/// and the logs; pressed again while it's written, nothing.
+#[test]
+fn a_bug_report_is_saved_where_picked() {
+    let mut h = Harness::new();
+    let tmp = h._tmp.path().to_path_buf();
+    std::fs::write(tmp.join("config.rsn"), "Config ()").unwrap();
+    h.state.config_path = Some(tmp.join("config.rsn"));
+    std::fs::create_dir_all(tmp.join("logs")).unwrap();
+    std::fs::write(tmp.join("logs/sd-server-a.log"), "loading\n").unwrap();
+    let fx = h.send(Msg::SaveBugReport);
+    assert!(matches!(&fx[..], [Effect::Pick { kind: PickKind::BugReport, .. }]));
+    let fx = h.send(Msg::Picked(PickKind::BugReport, vec![tmp.join("report")]));
+    assert!(matches!(&fx[..], [Effect::SaveBugReport { dest, .. }] if dest.ends_with("report.zip")));
+    assert!(h.send(Msg::SaveBugReport).is_empty(), "not again while saving");
+    h.settle();
+    assert!(!h.state.saving_bug_report);
+    let m = h.state.messages.last().unwrap();
+    assert!(!m.error && m.text.starts_with("Saved for a bug report: "), "{}", m.text);
+    let z = zip::ZipArchive::new(std::fs::File::open(tmp.join("report.zip")).unwrap()).unwrap();
+    let names: Vec<String> = z.file_names().map(|n| n.unwrap().into_owned()).collect();
+    for n in ["report/config/config.rsn", "report/logs/sd-server-a.log", "report/about.txt"] {
+        assert!(names.iter().any(|x| x == n), "{n} in {names:?}");
+    }
+}
+
 /// Export library writes the archive where picked (its extension added);
 /// Unpack a library archive: into a folder picked after it, then opened (from
 /// the library menu, and from the start-up library screen).
