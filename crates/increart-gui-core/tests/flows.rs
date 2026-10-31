@@ -5929,6 +5929,68 @@ fn prompt_enhance_shares_its_asks_among_its_servers() {
 }
 
 #[test]
+fn prompt_enhance_asks_stopped_are_never_answered() {
+    use increart_core::pe::{PeRun, PeServer};
+    use increart_gui_core::update::PeJob;
+    let server = tiny_http::Server::http("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", server.server_addr().to_ip().unwrap());
+    std::thread::spawn(move || {
+        for req in server.incoming_requests() {
+            let answer = if req.url().ends_with("/v1/models") {
+                r#"{"data": []}"#.to_string()
+            } else {
+                std::thread::sleep(Duration::from_millis(400));
+                serde_json::json!({"choices": [{"message": {"content": "ok"}}]}).to_string()
+            };
+            let _ = req.respond(tiny_http::Response::from_string(answer));
+        }
+    });
+    let servers = vec![PeServer { name: "A".into(), run: PeRun::Connect { url }, ..Default::default() }];
+    let job = |id| PeJob {
+        id,
+        key: PeKey::Text(id),
+        system: "s".into(),
+        sampling: increart_core::pe::Sampling { temperature: 0.9, min_p: 0.0 },
+        text: "t".into(),
+        images: vec![],
+        image_size: 0,
+        max_tokens: 10,
+    };
+    let rt = Runtime::new(|| {});
+    // until `want` is answered: what was started and answered
+    let until = |want: u64| {
+        let (mut on, mut answered) = (vec![], vec![]);
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while !answered.contains(&want) {
+            assert!(std::time::Instant::now() < deadline, "{want} not answered: {answered:?}");
+            for m in rt.wait(Duration::from_millis(50)) {
+                match m {
+                    Msg::PeOn(id, _) => on.push(id),
+                    Msg::PeAnswer(id, _) => answered.push(id),
+                    _ => {}
+                }
+            }
+        }
+        (on, answered)
+    };
+    rt.run(Effect::PeAsk { servers: servers.clone(), jobs: (1..=3).map(job).collect() });
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while !rt.wait(Duration::from_millis(50)).iter().any(|m| matches!(m, Msg::PeOn(1, _))) {
+        assert!(std::time::Instant::now() < deadline, "1 not started");
+    }
+    // the one being answered and one queued
+    rt.run(Effect::PeStop(vec![1, 2]));
+    let (on, answered) = until(3);
+    assert_eq!(answered, [3]);
+    assert!(!on.contains(&2), "{on:?}");
+    // one stopped before it comes
+    rt.run(Effect::PeStop(vec![4]));
+    rt.run(Effect::PeAsk { servers, jobs: vec![job(4), job(5)] });
+    let (on, answered) = until(5);
+    assert_eq!((on, answered), (vec![5], vec![5]));
+}
+
+#[test]
 fn another_chat_server_gets_its_own_name_and_port() {
     use increart_core::pe::{PeRun, PeServer};
     let kcpp = |port| PeRun::KoboldCpp {

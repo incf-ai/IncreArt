@@ -286,6 +286,12 @@ impl Engine {
         &self.events
     }
 
+    /// Takes the events, for a thread other than the one holding the engine
+    /// to read without a lock; [`Engine::events`] has none after.
+    pub fn take_events(&mut self) -> Receiver<Event> {
+        std::mem::replace(&mut self.events, mpsc::channel().1)
+    }
+
     /// Stops the coordinator. Workers finish their current request and exit.
     pub fn shutdown(mut self) {
         self.stop();

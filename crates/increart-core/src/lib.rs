@@ -43,6 +43,7 @@ pub mod rsnfmt;
 pub mod scan;
 pub mod scheduler;
 pub mod sdserver;
+pub mod sync;
 pub mod thumbs;
 pub mod tiers;
 pub mod webp;
