@@ -5,7 +5,7 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::error::Result;
+use crate::error::{PathParts, Result};
 use crate::fsutil;
 use crate::link;
 use crate::model::{DiscardedProject, GenerateDraft, Idea, IdeaDraftFile, ImageRef, OutputName, Project, Run, Store};
@@ -291,7 +291,7 @@ fn read_idea(root: &Path, dir: &Path, loc: IdeaLoc, ix: &mut Index) {
 
 fn scan_library(root: &Path, folder: &Path, ix: &mut Index) -> Result<()> {
     for dir in fsutil::subdirs(&root.join(INPUT_LIBRARY).join(folder))? {
-        let name = dir.file_name().unwrap();
+        let name = dir.name()?;
         if dir.join(IDEA_FILE).exists() {
             read_idea(root, &dir, IdeaLoc::Library(folder.to_path_buf()), ix);
         } else {
@@ -305,7 +305,7 @@ fn scan_library(root: &Path, folder: &Path, ix: &mut Index) -> Result<()> {
 
 fn scan_projects(root: &Path, folder: &Path, ix: &mut Index) -> Result<()> {
     for dir in fsutil::subdirs(&root.join(PROJECTS).join(folder))? {
-        let name = dir.file_name().unwrap();
+        let name = dir.name()?;
         if dir.join(PROJECT_FILE).exists() {
             read_project(root, &dir, ix)?;
         } else {
@@ -367,7 +367,7 @@ fn read_project(root: &Path, dir: &Path, ix: &mut Index) -> Result<()> {
             if fsutil::hidden(&p) || p.is_dir() {
                 continue;
             }
-            let file_name = p.file_name().unwrap().to_string_lossy();
+            let file_name = p.name()?.to_string_lossy();
             let Some(name) = OutputName::parse(&file_name) else {
                 ix.problems.push(format!("{}: not an output link name", p.display()));
                 continue;
@@ -394,9 +394,9 @@ fn read_project(root: &Path, dir: &Path, ix: &mut Index) -> Result<()> {
 fn scan_collections(root: &Path, ix: &mut Index) -> Result<()> {
     let base = root.join(COLLECTIONS);
     for p in fsutil::walk(&base)? {
-        let folder = p.parent().unwrap().strip_prefix(&base).unwrap().to_path_buf();
+        let folder = p.parent_dir()?.relative_to(&base)?.to_path_buf();
         if fs::symlink_metadata(&p).is_ok_and(|m| m.is_dir()) {
-            ix.collection_folders.push(p.strip_prefix(&base).unwrap().to_path_buf());
+            ix.collection_folders.push(p.relative_to(&base)?.to_path_buf());
         } else if !fsutil::hidden(&p) {
             match link::read_ref(&p, Store::Output) {
                 Ok(Some(image)) => ix.collection_links.push(CollectionLink { path: rel(root, &p), folder, image }),

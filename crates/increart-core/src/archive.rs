@@ -13,7 +13,7 @@ use std::fs::{self, File};
 use std::io::{self, Read, Write};
 use std::path::{Component, Path, PathBuf};
 
-use crate::error::{Error, IoContext, Result};
+use crate::error::{Error, IoContext, PathParts, Result};
 use crate::model::{LibraryMeta, Store, StoreFormat};
 use crate::{fsutil, link, rsnfmt};
 
@@ -70,7 +70,7 @@ fn plan(root: &Path) -> Result<Vec<(String, Item, u64)>> {
     let top = root.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "library".into());
     let (mut records, mut links, mut stores) = (vec![], vec![], vec![]);
     for p in fsutil::walk(root)? {
-        let rel = p.strip_prefix(root).expect("under the root");
+        let rel = p.relative_to(root)?;
         let parts: Vec<String> = rel.components().map(|c| c.as_os_str().to_string_lossy().into_owned()).collect();
         let first = parts[0].as_str();
         if matches!(first, "cache" | "thumbs" | ".link-probe" | "library.lock") || first.starts_with(".increart-") {
@@ -89,7 +89,8 @@ fn plan(root: &Path) -> Result<Vec<(String, Item, u64)>> {
         if parts.len() == 1 && first == "library.rsn" {
             let mut m: LibraryMeta = rsnfmt::read(&p)?;
             m.link_mode = None;
-            records.push((name, Item::Meta(rsnfmt::to_string(&m).into_bytes()), meta.len()));
+            let text = rsnfmt::to_string(&m).map_err(|e| Error::encode(&name, e))?;
+            records.push((name, Item::Meta(text.into_bytes()), meta.len()));
             continue;
         }
         let is_image = StoreFormat::of_name(&parts[parts.len() - 1]).is_some();
@@ -99,8 +100,8 @@ fn plan(root: &Path) -> Result<Vec<(String, Item, u64)>> {
         match target {
             Some(t) => {
                 let up = "../".repeat(parts.len() - 1);
-                let file = t.file_name().expect("a file").to_string_lossy();
-                let store_dir = t.parent().and_then(|d| d.file_name()).expect("in a store").to_string_lossy();
+                let file = t.name()?.to_string_lossy();
+                let store_dir = t.parent_dir()?.name()?.to_string_lossy();
                 links.push((name, Item::Link(format!("{up}{store_dir}/{file}")), 0));
             }
             // a broken symlink: left out (the check reports it at home)
@@ -369,7 +370,7 @@ fn unpack_zip<R: Read + io::Seek>(reader: R, to: &Path) -> Result<()> {
             fs::create_dir_all(&at).at(&at)?;
             continue;
         }
-        let dir = at.parent().expect("under the folder");
+        let dir = at.parent_dir()?;
         fs::create_dir_all(dir).at(dir)?;
         // a symlink's data is its target: written as its stand-in
         let mut out = File::create(&at).at(&at)?;
@@ -394,7 +395,7 @@ fn unpack_tar_gz<R: Read>(reader: R, to: &Path) -> Result<()> {
             fs::create_dir_all(&at).at(&at)?;
             continue;
         }
-        let dir = at.parent().expect("under the folder");
+        let dir = at.parent_dir()?;
         fs::create_dir_all(dir).at(dir)?;
         if kind.is_symlink() {
             let target = e.link_name_bytes().map(|b| String::from_utf8_lossy(&b).into_owned()).unwrap_or_default();

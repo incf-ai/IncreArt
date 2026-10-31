@@ -34,9 +34,9 @@ impl App {
         config_path: Option<PathBuf>,
         warnings: Vec<String>,
         startup: crate::Startup,
-    ) -> App {
+    ) -> std::io::Result<App> {
         let ctx = cc.egui_ctx.clone();
-        let rt = Runtime::new(move || ctx.request_repaint());
+        let rt = Runtime::new(move || ctx.request_repaint())?;
         let mut st = AppState::new(config, config_path);
         st.gpu_runtime = increart_core::pe::GpuRuntime::likely();
         st.validations_path = increart_core::validation::path();
@@ -75,7 +75,7 @@ impl App {
         if let Some(asked) = startup.library {
             app.skip_library(&asked);
         }
-        app
+        Ok(app)
     }
 
     /// The command line's `--library`: opens it if it's a library, else

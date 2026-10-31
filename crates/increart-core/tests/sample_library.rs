@@ -103,7 +103,8 @@ fn rsn_files_roundtrip_byte_for_byte() {
             RUN_FILE => rsnfmt::to_string(&rsnfmt::from_str::<Run>(&body).unwrap()),
             "library.rsn" => rsnfmt::to_string(&rsnfmt::from_str::<LibraryMeta>(&body).unwrap()),
             _ => rsnfmt::to_string(&rsnfmt::from_str::<Config>(&body).unwrap()),
-        };
+        }
+        .unwrap();
         assert_eq!(format!("{again}\n"), body, "{}", p.display());
         checked += 1;
     }
@@ -114,7 +115,7 @@ fn rsn_files_roundtrip_byte_for_byte() {
         let path = lib.image_path(&increart_core::ImageRef::output(id.clone()));
         let text = png::text(&fs::read(&path).unwrap(), png::KEY_RECIPE).unwrap().unwrap();
         let recipe: Recipe = rsnfmt::from_str(&text).unwrap();
-        assert_eq!(rsnfmt::to_string(&recipe), text);
+        assert_eq!(rsnfmt::to_string(&recipe).unwrap(), text);
     }
 }
 

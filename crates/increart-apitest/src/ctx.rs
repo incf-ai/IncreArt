@@ -23,6 +23,17 @@ pub struct Verdict {
     pub summary: String,
 }
 
+/// The value of `r`, or (from the case) a failed verdict with its error.
+macro_rules! tried {
+    ($r:expr) => {
+        match $r {
+            Ok(v) => v,
+            Err(e) => return $crate::ctx::fail(e),
+        }
+    };
+}
+pub(crate) use tried;
+
 pub fn pass(s: impl Into<String>) -> Verdict {
     Verdict { outcome: Outcome::Pass, summary: s.into() }
 }
@@ -133,8 +144,11 @@ impl Ctx<'_> {
         self.cancel.load(Ordering::Relaxed)
     }
 
-    pub fn client(&self, s: usize) -> Client {
-        self.images[s].proc.as_ref().expect("an open server").client.clone()
+    /// Its client (an error if it isn't open: a suite bug, a case the
+    /// catalogue should have skipped).
+    pub fn client(&self, s: usize) -> Result<Client, String> {
+        let p = self.images[s].proc.as_ref().ok_or_else(|| format!("{} isn't open", self.name(s)))?;
+        Ok(p.client.clone())
     }
 
     pub fn name(&self, s: usize) -> &str {
@@ -151,7 +165,7 @@ impl Ctx<'_> {
         if let Some(l) = &self.images[s].loadable {
             return l.clone();
         }
-        let r = match self.client(s).loadable() {
+        let r = match self.client(s)?.loadable() {
             Ok(l) => Ok(Some(l)),
             Err(increart_core::sdserver::ApiError::Http { status: 404, .. }) => Ok(None),
             Err(e) => Err(e.to_string()),
@@ -170,7 +184,7 @@ impl Ctx<'_> {
     /// it's one, else the first it can load.
     pub fn model_for(&mut self, s: usize) -> Result<usize, String> {
         let can = self.models_for(s);
-        let loaded = self.client(s).model_status().ok().and_then(|st| st.loaded());
+        let loaded = self.client(s)?.model_status().ok().and_then(|st| st.loaded());
         can.iter()
             .copied()
             .min_by_key(|&m| Some(&self.models[m].key) != loaded.as_ref())
@@ -179,7 +193,7 @@ impl Ctx<'_> {
 
     /// Loads model preset `m` on it unless loaded; the answer must name it.
     pub fn ensure_loaded(&self, s: usize, m: usize) -> Result<(), String> {
-        let client = self.client(s);
+        let client = self.client(s)?;
         let want = &self.models[m].key;
         if client.model_status().ok().and_then(|st| st.loaded()).as_ref() == Some(want) {
             return Ok(());
@@ -228,7 +242,7 @@ impl Ctx<'_> {
 
     /// Submits `body` on it and waits for the job to end.
     pub fn generate(&self, s: usize, body: &Value, limit: Duration) -> Result<Job, String> {
-        let client = self.client(s);
+        let client = self.client(s)?;
         let id = client.img_gen(body).map_err(|e| format!("POST /sdcpp/v1/img_gen failed: {e}"))?;
         self.wait(&client, &id, limit, |_| true)
     }
@@ -327,7 +341,11 @@ pub fn test_png(size: u32, noise: bool) -> Vec<u8> {
         }
     });
     let mut out = vec![];
-    image::DynamicImage::ImageRgb8(img).write_to(&mut Cursor::new(&mut out), image::ImageFormat::Png).unwrap();
+    // (writing to memory: an error would be the encoder's; an empty image
+    // is then refused by the server, failing the case)
+    if image::DynamicImage::ImageRgb8(img).write_to(&mut Cursor::new(&mut out), image::ImageFormat::Png).is_err() {
+        out.clear();
+    }
     out
 }
 
@@ -335,6 +353,10 @@ pub fn test_png(size: u32, noise: bool) -> Vec<u8> {
 pub fn solid_png(size: u32, rgb: [u8; 3]) -> Vec<u8> {
     let img = image::RgbImage::from_pixel(size, size, image::Rgb(rgb));
     let mut out = vec![];
-    image::DynamicImage::ImageRgb8(img).write_to(&mut Cursor::new(&mut out), image::ImageFormat::Png).unwrap();
+    // (writing to memory: an error would be the encoder's; an empty image
+    // is then refused by the server, failing the case)
+    if image::DynamicImage::ImageRgb8(img).write_to(&mut Cursor::new(&mut out), image::ImageFormat::Png).is_err() {
+        out.clear();
+    }
     out
 }

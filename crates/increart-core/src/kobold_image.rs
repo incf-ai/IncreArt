@@ -21,8 +21,9 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{Shutdown, TcpStream, ToSocketAddrs};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
-use std::sync::{Arc, Condvar, Mutex, Weak};
+use std::sync::{Arc, Condvar, Mutex, OnceLock, Weak};
 use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
@@ -31,6 +32,7 @@ use ureq::Agent;
 use crate::sdserver::{
     ApiError, ApiResult, Job, JobError, JobResult, JobStatus, Loadable, ModelKey, ModelStatus, Preview, ResultImage,
 };
+use crate::sync::{LockExt, WaitExt};
 
 /// How long a model may take to load (Qwen-Image from a cold disk).
 const LOAD_TIMEOUT: Duration = Duration::from_secs(60 * 60);
@@ -123,7 +125,8 @@ struct Inner {
     /// Sampler names and aliases (lowercase) of the loaded model; empty:
     /// not known.
     samplers: Mutex<Vec<String>>,
-    version: Mutex<Option<String>>,
+    /// Once it has answered (a reload restarts the same binary).
+    version: OnceLock<String>,
     jobs: Mutex<HashMap<String, JobState>>,
     done: Mutex<VecDeque<String>>,
     /// Swap mode: the turns, and the settings file with the image model.
@@ -147,7 +150,7 @@ impl Drop for ChatTurn {
 /// swaps (its chat model loaded again if need be); None when it doesn't.
 pub fn chat_turn(base: &str) -> Result<Option<ChatTurn>, String> {
     let base = base.trim_end_matches('/');
-    let inner = SWAPPING.lock().unwrap().iter().find(|(b, _)| b == base).and_then(|(_, w)| w.upgrade());
+    let inner = SWAPPING.lock_or_recover().iter().find(|(b, _)| b == base).and_then(|(_, w)| w.upgrade());
     let Some(inner) = inner else { return Ok(None) };
     inner.take_turn(Side::Chat, None)?;
     Ok(Some(ChatTurn(inner)))
@@ -156,8 +159,8 @@ pub fn chat_turn(base: &str) -> Result<Option<ChatTurn>, String> {
 /// One KoboldCpp image server (see the module docs).
 pub struct KoboldImage {
     inner: Arc<Inner>,
-    queue: Mutex<Sender<String>>,
-    next: Mutex<u64>,
+    queue: Sender<String>,
+    next: AtomicU64,
 }
 
 impl std::fmt::Debug for KoboldImage {
@@ -236,7 +239,7 @@ fn file_name(p: &str) -> &str {
 impl KoboldImage {
     /// `base`: e.g. `http://127.0.0.1:5001`. `password`: KoboldCpp's
     /// `--password` (or its admin password), sent with every request.
-    pub fn new(base: &str, password: &str, admin: Option<Admin>) -> KoboldImage {
+    pub fn new(base: &str, password: &str, admin: Option<Admin>) -> std::io::Result<KoboldImage> {
         let inner = Arc::new(Inner {
             base: base.trim_end_matches('/').to_string(),
             agent: agent(None, Some(crate::config::timeouts().request())),
@@ -244,29 +247,26 @@ impl KoboldImage {
             admin,
             loaded: Mutex::new(None),
             samplers: Mutex::new(vec![]),
-            version: Mutex::new(None),
+            version: OnceLock::new(),
             jobs: Mutex::new(HashMap::new()),
             done: Mutex::new(VecDeque::new()),
             turns: (Mutex::new(Turns::default()), Condvar::new()),
             image_settings: Mutex::new(None),
         });
         if inner.swaps() {
-            let mut list = SWAPPING.lock().unwrap();
+            let mut list = SWAPPING.lock_or_recover();
             list.retain(|(b, w)| w.strong_count() > 0 && *b != inner.base);
             list.push((inner.base.clone(), Arc::downgrade(&inner)));
         }
         let (tx, rx) = mpsc::channel();
         let runner = inner.clone();
-        std::thread::Builder::new()
-            .name(format!("koboldcpp {base}"))
-            .spawn(move || run_jobs(&runner, &rx))
-            .expect("spawn koboldcpp runner");
-        KoboldImage { inner, queue: Mutex::new(tx), next: Mutex::new(0) }
+        std::thread::Builder::new().name(format!("koboldcpp {base}")).spawn(move || run_jobs(&runner, &rx))?;
+        Ok(KoboldImage { inner, queue: tx, next: AtomicU64::new(0) })
     }
 
     /// `koboldcpp <version>`, once it has answered, for recipes.
     pub fn software(&self) -> Option<String> {
-        self.inner.version.lock().unwrap().as_ref().map(|v| format!("koboldcpp {v}"))
+        self.inner.version.get().map(|v| format!("koboldcpp {v}"))
     }
 
     pub fn capabilities(&self) -> ApiResult<Value> {
@@ -275,7 +275,7 @@ impl KoboldImage {
             return Err(ApiError::Transport(format!("{} isn't KoboldCpp", self.inner.base)));
         }
         if let Some(ver) = v.get("version").and_then(Value::as_str) {
-            *self.inner.version.lock().unwrap() = Some(ver.to_string());
+            let _ = self.inner.version.set(ver.to_string());
         }
         Ok(v)
     }
@@ -295,7 +295,7 @@ impl KoboldImage {
                 .map(|flags| flags.iter().filter_map(|(_, p)| std::fs::metadata(p).ok()).map(|m| m.len()).sum())
                 .unwrap_or(0u64)
         };
-        let now = self.inner.loaded.lock().unwrap().as_ref().map_or(0, |(k, _)| size(k));
+        let now = self.inner.loaded.lock_or_recover().as_ref().map_or(0, |(k, _)| size(k));
         size(model).saturating_sub(now)
     }
 
@@ -347,19 +347,16 @@ impl KoboldImage {
         } else {
             self.inner.reload("initial_model")?;
         }
-        *self.inner.loaded.lock().unwrap() = None;
-        *self.inner.image_settings.lock().unwrap() = None;
+        *self.inner.loaded.lock_or_recover() = None;
+        *self.inner.image_settings.lock_or_recover() = None;
         self.inner.status()
     }
 
     /// Queues a job from an sd-server `img_gen` body; returns its ID.
     pub fn img_gen(&self, body: &Value) -> ApiResult<String> {
-        let samplers = self.inner.samplers.lock().unwrap().clone();
-        let id = {
-            let mut n = self.next.lock().unwrap();
-            *n += 1;
-            format!("kcpp_{:x}_{n}", now_ms())
-        };
+        let samplers = self.inner.samplers.lock_or_recover().clone();
+        let n = self.next.fetch_add(1, Ordering::Relaxed) + 1;
+        let id = format!("kcpp_{:x}_{n}", now_ms());
         let (path, a1111) = a1111_body(body, &id, &samplers).map_err(ApiError::BadRequest)?;
         let preview = body.get("preview").and_then(Value::as_str).is_some_and(|p| p != "none");
         let job = JobState {
@@ -375,14 +372,14 @@ impl KoboldImage {
             cancel: false,
             conn: None,
         };
-        self.inner.jobs.lock().unwrap().insert(id.clone(), job);
-        self.queue.lock().unwrap().send(id.clone()).map_err(|_| ApiError::Transport("runner stopped".into()))?;
+        self.inner.jobs.lock_or_recover().insert(id.clone(), job);
+        self.queue.send(id.clone()).map_err(|_| ApiError::Transport("runner stopped".into()))?;
         Ok(id)
     }
 
     pub fn job(&self, id: &str) -> ApiResult<Job> {
         let (mut job, progress) = {
-            let jobs = self.inner.jobs.lock().unwrap();
+            let jobs = self.inner.jobs.lock_or_recover();
             let j = jobs.get(id).ok_or(ApiError::JobGone)?;
             if j.lost {
                 // as asking an sd-server that went: the server is down
@@ -400,7 +397,7 @@ impl KoboldImage {
     /// Cancels a job: one waiting goes at once; one generating stops when
     /// its connection is closed.
     pub fn cancel(&self, id: &str) -> ApiResult<Job> {
-        let mut jobs = self.inner.jobs.lock().unwrap();
+        let mut jobs = self.inner.jobs.lock_or_recover();
         let j = jobs.get_mut(id).ok_or(ApiError::JobGone)?;
         j.cancel = true;
         match j.state {
@@ -447,7 +444,7 @@ fn to_job(id: &str, j: &JobState) -> Job {
 /// The sampling step of the job generating, with its preview if it asked
 /// for previews.
 fn jobs_preview(inner: &Inner, id: &str) -> Option<Preview> {
-    let with_image = inner.jobs.lock().unwrap().get(id).is_some_and(|j| j.preview);
+    let with_image = inner.jobs.lock_or_recover().get(id).is_some_and(|j| j.preview);
     let path = format!("/sdapi/v1/progress?genkey={id}&skip_current_image={}", !with_image);
     let v: Value = inner.get(&path).ok()?;
     let state = v.get("state")?;
@@ -505,7 +502,7 @@ impl Inner {
     fn running(&self) -> ApiResult<Option<String>> {
         let v = self.get("/api/extra/version")?;
         if let Some(ver) = v.get("version").and_then(Value::as_str) {
-            *self.version.lock().unwrap() = Some(ver.to_string());
+            let _ = self.version.set(ver.to_string());
         }
         if v.get("txt2img").and_then(Value::as_bool) != Some(true) {
             return Ok(None);
@@ -516,8 +513,8 @@ impl Inner {
 
     fn status(&self) -> ApiResult<ModelStatus> {
         // swapped out for the chat model: still this client's model
-        if self.swaps() && self.turns.0.lock().unwrap().side == Side::Chat {
-            return Ok(match self.loaded.lock().unwrap().clone() {
+        if self.swaps() && self.turns.0.lock_or_recover().side == Side::Chat {
+            return Ok(match self.loaded.lock_or_recover().clone() {
                 Some((key, _)) => ModelStatus {
                     state: "ready".into(),
                     recipe: Some(key.recipe),
@@ -530,7 +527,7 @@ impl Inner {
         let Some(file) = self.running()? else {
             return Ok(ModelStatus { state: "empty".into(), ..Default::default() });
         };
-        let loaded = self.loaded.lock().unwrap().clone();
+        let loaded = self.loaded.lock_or_recover().clone();
         let (recipe, models) = match loaded {
             Some((key, f)) if f == file => (key.recipe, key.models),
             // not loaded by this client: named by its file
@@ -540,7 +537,7 @@ impl Inner {
     }
 
     fn ready(&self, key: &ModelKey, file: String) -> ApiResult<ModelStatus> {
-        *self.loaded.lock().unwrap() = Some((key.clone(), file));
+        *self.loaded.lock_or_recover() = Some((key.clone(), file));
         self.learn_samplers();
         self.status()
     }
@@ -554,7 +551,7 @@ impl Inner {
                 all.extend(a.as_str().map(str::to_lowercase));
             }
         }
-        *self.samplers.lock().unwrap() = all;
+        *self.samplers.lock_or_recover() = all;
     }
 
     fn load(&self, key: &ModelKey) -> ApiResult<ModelStatus> {
@@ -573,7 +570,7 @@ impl Inner {
         }
         let running = self.running()?;
         let already =
-            self.loaded.lock().unwrap().as_ref().is_some_and(|(k, f)| k == key && Some(f) == running.as_ref());
+            self.loaded.lock_or_recover().as_ref().is_some_and(|(k, f)| k == key && Some(f) == running.as_ref());
         // the same diffusion model: taken as loaded (the other files can't be checked)
         let same_file = running.as_deref().is_some_and(|r| file_name(r) == file_name(&wanted));
         if let (true, Some(file)) = (already || (same_file && self.admin.is_none()), running.clone()) {
@@ -592,7 +589,7 @@ impl Inner {
         match self.running()? {
             Some(file) if file_name(&file) == file_name(&wanted) => self.ready(key, file),
             _ => {
-                *self.loaded.lock().unwrap() = None;
+                *self.loaded.lock_or_recover() = None;
                 let why = admin.log.as_deref().and_then(|l| load_error(l, log_len));
                 Err(ApiError::ModelLoadFailed(why.unwrap_or_else(|| "KoboldCpp didn't load it (see its log)".into())))
             }
@@ -612,20 +609,20 @@ impl Inner {
         flags: &[(String, String)],
         wanted: &str,
     ) -> ApiResult<ModelStatus> {
-        if self.loaded.lock().unwrap().as_ref().is_some_and(|(k, _)| k == key) {
+        if self.loaded.lock_or_recover().as_ref().is_some_and(|(k, _)| k == key) {
             return self.status();
         }
         let name = export(admin, flags).map_err(ApiError::ModelLoadFailed)?;
         let log_len = admin.log.as_ref().and_then(|l| std::fs::metadata(l).ok()).map_or(0, |m| m.len());
-        *self.loaded.lock().unwrap() = None;
-        *self.image_settings.lock().unwrap() = Some(name.clone());
+        *self.loaded.lock_or_recover() = None;
+        *self.image_settings.lock_or_recover() = Some(name.clone());
         self.take_turn(Side::Image, Some(&name)).map_err(ApiError::ModelLoadFailed)?;
         let running = self.running();
         self.end_turn(Side::Image);
         match running? {
             Some(file) if file_name(&file) == file_name(wanted) => self.ready(key, file),
             _ => {
-                *self.image_settings.lock().unwrap() = None;
+                *self.image_settings.lock_or_recover() = None;
                 let why = admin.log.as_deref().and_then(|l| load_error(l, log_len));
                 Err(ApiError::ModelLoadFailed(why.unwrap_or_else(|| "KoboldCpp didn't load it (see its log)".into())))
             }
@@ -637,7 +634,7 @@ impl Inner {
     /// `reload` names the settings to load whatever is loaded.
     fn take_turn(&self, side: Side, reload: Option<&str>) -> Result<(), String> {
         let (lock, cv) = &self.turns;
-        let mut t = lock.lock().unwrap();
+        let mut t = lock.lock_or_recover();
         if side == Side::Chat {
             t.chats_waiting += 1;
         }
@@ -649,7 +646,7 @@ impl Inner {
             if !t.switching && !busy {
                 break;
             }
-            t = cv.wait(t).unwrap();
+            t = cv.wait_or_recover(t);
         }
         if side == Side::Chat {
             t.chats_waiting -= 1;
@@ -660,13 +657,13 @@ impl Inner {
             let settings = match (side, reload) {
                 (_, Some(name)) => Some(name.to_string()),
                 (Side::Chat, None) => Some("initial_model".to_string()),
-                (Side::Image, None) => self.image_settings.lock().unwrap().clone(),
+                (Side::Image, None) => self.image_settings.lock_or_recover().clone(),
             };
             let r = match settings {
                 Some(name) => self.reload(&name).map_err(|e| e.to_string()),
                 None => Err("no image model loaded".into()),
             };
-            t = lock.lock().unwrap();
+            t = lock.lock_or_recover();
             t.switching = false;
             if r.is_ok() {
                 t.side = side;
@@ -683,7 +680,7 @@ impl Inner {
 
     fn end_turn(&self, side: Side) {
         let (lock, cv) = &self.turns;
-        let mut t = lock.lock().unwrap();
+        let mut t = lock.lock_or_recover();
         match side {
             Side::Chat => t.chats = t.chats.saturating_sub(1),
             Side::Image => t.images = t.images.saturating_sub(1),
@@ -694,7 +691,9 @@ impl Inner {
     /// Asks KoboldCpp to restart with `file` (from its admin dir) and waits
     /// for it to answer again.
     fn reload(&self, file: &str) -> ApiResult<()> {
-        let admin = self.admin.as_ref().expect("reload needs admin");
+        let Some(admin) = self.admin.as_ref() else {
+            return Err(ApiError::InvalidModelConfig("reloading KoboldCpp needs its admin password".into()));
+        };
         let r = self.post("/api/admin/reload_config", &json!({ "filename": file }), &admin.password)?;
         if r.get("success").and_then(Value::as_bool) != Some(true) {
             return Err(ApiError::InvalidModelConfig(format!(
@@ -721,7 +720,7 @@ impl Inner {
 
     /// Drops the oldest finished jobs past [`KEEP_DONE`].
     fn retire(&self, id: &str) {
-        let mut done = self.done.lock().unwrap();
+        let mut done = self.done.lock_or_recover();
         done.push_back(id.to_string());
         while done.len() > KEEP_DONE {
             if let Some(old) = done.pop_front()
@@ -899,7 +898,7 @@ pub fn a1111_body(body: &Value, genkey: &str, samplers: &[String]) -> Result<(St
 fn run_jobs(inner: &Inner, rx: &Receiver<String>) {
     while let Ok(id) = rx.recv() {
         let (path, body) = {
-            let mut jobs = inner.jobs.lock().unwrap();
+            let mut jobs = inner.jobs.lock_or_recover();
             let Some(j) = jobs.get_mut(&id) else { continue };
             if j.cancel || j.state != State::Queued {
                 continue;
@@ -912,7 +911,7 @@ fn run_jobs(inner: &Inner, rx: &Receiver<String>) {
         let result = if inner.swaps() {
             match inner.take_turn(Side::Image, None) {
                 Ok(()) => {
-                    let cancelled = inner.jobs.lock().unwrap().get(&id).is_none_or(|j| j.cancel);
+                    let cancelled = inner.jobs.lock_or_recover().get(&id).is_none_or(|j| j.cancel);
                     let r = if cancelled {
                         Err(Failure::Failed("cancelled".into()))
                     } else {
@@ -926,7 +925,7 @@ fn run_jobs(inner: &Inner, rx: &Receiver<String>) {
         } else {
             generate(inner, &id, &path, &body)
         };
-        let mut jobs = inner.jobs.lock().unwrap();
+        let mut jobs = inner.jobs.lock_or_recover();
         let Some(j) = jobs.get_mut(&id) else { continue };
         // KoboldCpp went (stopped, crashed, restarted): its jobs went with
         // it, and asking for one fails as asking an sd-server that went does,
@@ -996,7 +995,7 @@ fn generate(inner: &Inner, id: &str, path: &str, body: &Value) -> Result<String,
     let lost = |e: std::io::Error| Failure::Lost(format!("KoboldCpp: {e}"));
     let mut stream = TcpStream::connect_timeout(&addr, Duration::from_secs(5)).map_err(lost)?;
     stream.set_read_timeout(Some(CANCEL_CHECK)).map_err(|e| e.to_string())?;
-    if let Some(j) = inner.jobs.lock().unwrap().get_mut(id) {
+    if let Some(j) = inner.jobs.lock_or_recover().get_mut(id) {
         j.conn = stream.try_clone().ok();
     }
     let data = serde_json::to_vec(body).map_err(|e| e.to_string())?;
@@ -1073,7 +1072,7 @@ impl Read for Cancellable<'_> {
         loop {
             match self.stream.read(buf) {
                 Err(e) if matches!(e.kind(), WouldBlock | TimedOut) => {
-                    if self.inner.jobs.lock().unwrap().get(self.id).is_none_or(|j| j.cancel) {
+                    if self.inner.jobs.lock_or_recover().get(self.id).is_none_or(|j| j.cancel) {
                         return Err(std::io::Error::other("cancelled"));
                     }
                     if Instant::now() >= self.deadline {

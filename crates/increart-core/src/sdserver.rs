@@ -334,9 +334,9 @@ impl Client {
     }
 
     /// A KoboldCpp image server (DESIGN.md, KoboldCpp).
-    pub fn kobold(base: &str, password: &str, admin: Option<crate::kobold_image::Admin>) -> Client {
-        let kobold = crate::kobold_image::KoboldImage::new(base, password, admin);
-        Client { kobold: Some(std::sync::Arc::new(kobold)), ..Client::new(base) }
+    pub fn kobold(base: &str, password: &str, admin: Option<crate::kobold_image::Admin>) -> std::io::Result<Client> {
+        let kobold = crate::kobold_image::KoboldImage::new(base, password, admin)?;
+        Ok(Client { kobold: Some(std::sync::Arc::new(kobold)), ..Client::new(base) })
     }
 
     pub fn is_kobold(&self) -> bool {

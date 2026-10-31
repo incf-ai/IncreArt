@@ -26,7 +26,7 @@ impl Harness {
         let root = tmp.path().join("lib");
         let mut config = Config::default();
         config.normalize();
-        let rt = Runtime::new(|| {});
+        let rt = Runtime::new(|| {}).unwrap();
         // started servers (stand-ins) log here, not in the real log folder
         rt.set_log_dir(tmp.path().join("logs"));
         rt.set_trash_dir(tmp.path().join("trash"));
@@ -6019,7 +6019,7 @@ fn prompt_enhance_shares_its_asks_among_its_servers() {
         image_size: 0,
         max_tokens: 10,
     };
-    let rt = Runtime::new(|| {});
+    let rt = Runtime::new(|| {}).unwrap();
     rt.run(Effect::PeAsk { servers: servers.clone(), jobs: (1..=4).map(job).collect() });
     let (mut on, mut answers, mut ready) = (vec![], vec![], 0);
     let deadline = std::time::Instant::now() + Duration::from_secs(20);
@@ -6060,6 +6060,68 @@ fn prompt_enhance_shares_its_asks_among_its_servers() {
     while !rt.wait(Duration::from_millis(100)).iter().any(|m| matches!(m, Msg::PeStatus(PeStatus::Off))) {
         assert!(std::time::Instant::now() < deadline, "not off");
     }
+}
+
+#[test]
+fn prompt_enhance_asks_stopped_are_never_answered() {
+    use increart_core::pe::{PeRun, PeServer};
+    use increart_gui_core::update::PeJob;
+    let server = tiny_http::Server::http("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", server.server_addr().to_ip().unwrap());
+    std::thread::spawn(move || {
+        for req in server.incoming_requests() {
+            let answer = if req.url().ends_with("/v1/models") {
+                r#"{"data": []}"#.to_string()
+            } else {
+                std::thread::sleep(Duration::from_millis(400));
+                serde_json::json!({"choices": [{"message": {"content": "ok"}}]}).to_string()
+            };
+            let _ = req.respond(tiny_http::Response::from_string(answer));
+        }
+    });
+    let servers = vec![PeServer { name: "A".into(), run: PeRun::Connect { url }, ..Default::default() }];
+    let job = |id| PeJob {
+        id,
+        key: PeKey::Text(id),
+        system: "s".into(),
+        sampling: increart_core::pe::Sampling { temperature: 0.9, min_p: 0.0 },
+        text: "t".into(),
+        images: vec![],
+        image_size: 0,
+        max_tokens: 10,
+    };
+    let rt = Runtime::new(|| {}).unwrap();
+    // until `want` is answered: what was started and answered
+    let until = |want: u64| {
+        let (mut on, mut answered) = (vec![], vec![]);
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while !answered.contains(&want) {
+            assert!(std::time::Instant::now() < deadline, "{want} not answered: {answered:?}");
+            for m in rt.wait(Duration::from_millis(50)) {
+                match m {
+                    Msg::PeOn(id, _) => on.push(id),
+                    Msg::PeAnswer(id, _) => answered.push(id),
+                    _ => {}
+                }
+            }
+        }
+        (on, answered)
+    };
+    rt.run(Effect::PeAsk { servers: servers.clone(), jobs: (1..=3).map(job).collect() });
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while !rt.wait(Duration::from_millis(50)).iter().any(|m| matches!(m, Msg::PeOn(1, _))) {
+        assert!(std::time::Instant::now() < deadline, "1 not started");
+    }
+    // the one being answered and one queued
+    rt.run(Effect::PeStop(vec![1, 2]));
+    let (on, answered) = until(3);
+    assert_eq!(answered, [3]);
+    assert!(!on.contains(&2), "{on:?}");
+    // one stopped before it comes
+    rt.run(Effect::PeStop(vec![4]));
+    rt.run(Effect::PeAsk { servers, jobs: vec![job(4), job(5)] });
+    let (on, answered) = until(5);
+    assert_eq!((on, answered), (vec![5], vec![5]));
 }
 
 #[test]
@@ -6485,11 +6547,11 @@ fn timeouts_are_set_at_least_a_second_and_saved() {
     let same = s.config.timeouts;
     assert!(update(&mut s, Msg::SetTimeouts(same)).is_empty(), "unchanged: not saved");
     // in config.rsn only when not the defaults
-    let text = increart_core::rsnfmt::to_string(&s.config);
+    let text = increart_core::rsnfmt::to_string(&s.config).unwrap();
     assert!(text.contains("server_start: 900"), "{text}");
     let back: increart_core::config::Config = increart_core::rsnfmt::from_str(&text).unwrap();
     assert_eq!(back.timeouts, s.config.timeouts);
-    let text = increart_core::rsnfmt::to_string(&increart_core::config::Config::default());
+    let text = increart_core::rsnfmt::to_string(&increart_core::config::Config::default()).unwrap();
     assert!(!text.contains("timeouts"));
 }
 
@@ -6512,7 +6574,7 @@ fn the_traffic_log_setting_is_saved_and_applied() {
     assert!(fx.iter().any(|f| matches!(f, Effect::SetLogTraffic(true))));
     assert!(fx.iter().any(|f| matches!(f, Effect::SaveConfig(..))), "{fx:?}");
     assert!(update(&mut s, Msg::SetLogTraffic(true)).is_empty());
-    let text = increart_core::rsnfmt::to_string(&s.config);
+    let text = increart_core::rsnfmt::to_string(&s.config).unwrap();
     assert!(text.contains("log_traffic: true"), "{text}");
 }
 

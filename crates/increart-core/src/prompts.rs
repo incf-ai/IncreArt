@@ -800,7 +800,8 @@ const DEFAULTS: &str = include_str!("../default-presets.rsn");
 /// `default-presets.rsn`.
 pub fn builtin() -> PromptPresets {
     static BUILTIN: LazyLock<PromptPresets> =
-        LazyLock::new(|| rsnfmt::from_str(DEFAULTS).expect("default-presets.rsn is valid"));
+        // (it parses: `builtin_set` reads it)
+        LazyLock::new(|| rsnfmt::from_str(DEFAULTS).unwrap_or_default());
     BUILTIN.clone()
 }
 
@@ -903,7 +904,8 @@ pub fn merge(defaults: &PromptPresets, state: &UserState, user: &[(String, Promp
     let mut user: Vec<_> = user.iter().collect();
     user.sort_by_key(|(_, p)| (lower(&p.group), lower(&p.name)));
     for (task, p) in user {
-        let t = list.tasks.iter_mut().find(|t| t.name == *task).expect("added above");
+        // (every user task was added above)
+        let Some(t) = list.tasks.iter_mut().find(|t| t.name == *task) else { continue };
         let p = PromptPreset { favourite: false, ..p.clone() };
         match t.presets.iter().position(|x| x.name == p.name) {
             Some(i) if t.presets[i].group == p.group => t.presets[i] = p,
@@ -946,7 +948,8 @@ fn task_files(task_dir: &Path) -> Result<Vec<(String, PathBuf)>> {
         let Ok(rel) = p.strip_prefix(task_dir) else { continue };
         let depth = rel.components().count();
         if p.extension().is_some_and(|e| e == "rsn") && !fsutil::hidden(&p) && depth <= 2 && p.is_file() {
-            let group = if depth == 2 { rel.parent().unwrap().to_string_lossy().into_owned() } else { String::new() };
+            // (none at the top: its parent is empty)
+            let group = rel.parent().map(|g| g.to_string_lossy().into_owned()).unwrap_or_default();
             out.push((group, p));
         }
     }

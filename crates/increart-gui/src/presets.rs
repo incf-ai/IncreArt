@@ -527,11 +527,8 @@ fn fields_column(ui: &mut egui::Ui, e: &mut PresetsEditor) {
 
 /// `base`, or `base 2`, `base 3`… if taken.
 fn unique_name<'a>(taken: impl Iterator<Item = &'a str> + Clone, base: &str) -> String {
-    let free = |n: &str| !taken.clone().any(|t| t.eq_ignore_ascii_case(n));
-    if free(base) {
-        return base.to_string();
-    }
-    (2..).map(|i| format!("{base} {i}")).find(|n| free(n)).unwrap()
+    let taken = |n: &str| taken.clone().any(|t| t.eq_ignore_ascii_case(n));
+    increart_core::config::first_free(|i| if i == 1 { base.to_string() } else { format!("{base} {i}") }, taken)
 }
 
 /// **Save as preset…**: name the Generate prompt and pick its task.

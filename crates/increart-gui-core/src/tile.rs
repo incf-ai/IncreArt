@@ -36,12 +36,18 @@ pub struct Tile {
 
 /// Tiles on a grid `cols` wide; rows as many as they need. Cells no tile
 /// covers stay empty. A title and subtitle (if any) go above the grid.
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct TileLayout {
     pub cols: u32,
     pub tiles: Vec<Tile>,
     pub title: String,
     pub subtitle: String,
+}
+
+impl Default for TileLayout {
+    fn default() -> Self {
+        TileLayout { cols: 1, tiles: vec![], title: String::new(), subtitle: String::new() }
+    }
 }
 
 /// Bigger than this (output pixels) is refused.
@@ -122,7 +128,7 @@ impl TileLayout {
         if let Some(j) = other {
             (self.tiles[j].col, self.tiles[j].row) = old;
         }
-        (self.tiles[i].col, self.tiles[i].row) = (col.min(self.cols - 1), row);
+        (self.tiles[i].col, self.tiles[i].row) = (col.min(self.cols.saturating_sub(1)), row);
         self.settle(&[Some(i), other].into_iter().flatten().collect::<Vec<_>>());
     }
 
@@ -160,7 +166,7 @@ impl TileLayout {
     /// after the one before, row by row; with no cell, after the last tile.
     /// Their indices.
     pub fn add(&mut self, contents: Vec<TileContent>, at: Option<(u32, u32)>) -> Vec<usize> {
-        let cols = self.cols;
+        let cols = self.cols.max(1);
         let mut next = match at {
             Some((c, r)) => r as u64 * cols as u64 + c.min(cols - 1) as u64,
             None => self
@@ -290,6 +296,8 @@ impl TileLayout {
     /// Keeps each tile where it is if it fits there, else puts it in the
     /// first free place (row by row); `first` are placed before the rest.
     fn settle(&mut self, first: &[usize]) {
+        // (a layout with `cols` set to 0: one)
+        self.cols = self.cols.max(1);
         let n = self.tiles.len();
         let order: Vec<usize> = first.iter().copied().chain((0..n).filter(|i| !first.contains(i))).collect();
         let mut placed: Vec<(u32, u32, u32, u32)> = vec![];
@@ -303,10 +311,12 @@ impl TileLayout {
             let fits = t.col.checked_add(t.w).is_some_and(|e| e <= self.cols);
             if !(fits && free(&placed, t.col, t.row, t.w, t.h)) {
                 let (w, h, cols) = (t.w, t.h, self.cols);
-                let spot = (0..)
+                // (the row below every tile is free)
+                let below = placed.iter().map(|&(_, pr, _, ph)| pr + ph).max().unwrap_or(0);
+                let spot = (0..=below)
                     .flat_map(|r| (0..=cols - w).map(move |c| (c, r)))
                     .find(|&(c, r)| free(&placed, c, r, w, h))
-                    .expect("rows are unbounded");
+                    .unwrap_or((0, below));
                 (t.col, t.row) = spot;
             }
             placed.push((t.col, t.row, t.w, t.h));
@@ -408,7 +418,7 @@ impl Geometry {
             return px(*size, self.cell.1, 0.0);
         }
         let (_, _, w, h) = self.image_rect(t);
-        let font = font();
+        let Some(font) = font() else { return self.caption_px };
         let fits = |p: u32| {
             let sf = font.as_scaled(PxScale::from(p as f32));
             let words = text.split_whitespace().all(|word| text_width(&sf, word) <= w as f32);
@@ -504,7 +514,7 @@ pub fn compose_images(
         ));
     }
     let mut out = RgbaImage::from_pixel(g.size.0, g.size.1, Rgba(s.background));
-    let font = font();
+    let font = font().ok_or("the built-in font didn't load")?;
     let [tr, sr] = g.title_rects();
     for (text, size, r) in [(&layout.title, g.title_px, tr), (&layout.subtitle, g.title_px / 2, sr)] {
         if r.3 > 0 {
@@ -559,14 +569,15 @@ fn text_width(sf: &PxScaleFont<&FontRef<'_>>, t: &str) -> f32 {
         .sum()
 }
 
-fn font() -> FontRef<'static> {
-    FontRef::try_from_slice(epaint_default_fonts::UBUNTU_LIGHT).expect("built-in font")
+/// The built-in font (`None` never happens: the tests draw with it).
+fn font() -> Option<FontRef<'static>> {
+    FontRef::try_from_slice(epaint_default_fonts::UBUNTU_LIGHT).ok()
 }
 
 /// A caption one line `w` wide: its size shrunk (down to `SHRINK`) to fit,
 /// then cut short with "…" if it still doesn't.
 pub fn caption_fit(text: &str, w: u32, px: u32) -> (String, u32) {
-    let font = font();
+    let Some(font) = font() else { return (text.to_string(), px) };
     let full = text_width(&font.as_scaled(PxScale::from(px as f32)), text);
     let k = (w as f32 / full).clamp(SHRINK, 1.0);
     let px = ((px as f32 * k).floor() as u32).max(MIN_PX);
@@ -583,7 +594,7 @@ pub fn caption_fit(text: &str, w: u32, px: u32) -> (String, u32) {
 
 /// The lines (as typed, then word-wrapped to `w` px) of text `px` high.
 pub fn text_lines(text: &str, px: u32, w: u32) -> Vec<String> {
-    let font = font();
+    let Some(font) = font() else { return text.lines().map(str::to_string).collect() };
     wrap(&font.as_scaled(PxScale::from(px as f32)), text, w)
 }
 
@@ -669,6 +680,21 @@ mod tests {
 
     fn cells(l: &TileLayout) -> Vec<(u32, u32, u32, u32)> {
         l.tiles.iter().map(|t| (t.col, t.row, t.w, t.h)).collect()
+    }
+
+    #[test]
+    fn a_layout_without_columns_gets_one() {
+        for cols in [None, Some(0)] {
+            let mut l = TileLayout::default();
+            if let Some(c) = cols {
+                l.cols = c;
+            }
+            l.add(vec![TileContent::Image(img(1))], Some((3, 0)));
+            l.add_text(2, 0, "x".into());
+            l.move_tile(0, 5, 1);
+            assert_eq!(l.cols, 1);
+            assert!(cells(&l).iter().all(|&(c, _, w, _)| c == 0 && w == 1), "{:?}", cells(&l));
+        }
     }
 
     #[test]

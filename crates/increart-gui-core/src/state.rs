@@ -4248,7 +4248,7 @@ impl AppState {
             let mut outs: Vec<_> = p.outputs.iter().filter(|o| of_run.contains_key(&o.name.run)).collect();
             outs.sort_by(|a, b| (&a.name.run, a.name.seed).cmp(&(&b.name.run, b.name.seed)));
             for o in outs {
-                let s = m.get_mut(&of_run[&o.name.run]).expect("counted above");
+                let Some(s) = of_run.get(&o.name.run).and_then(|k| m.get_mut(k)) else { continue };
                 let good = o.verdict == Some(Verdict::Good);
                 match o.verdict {
                     Some(Verdict::Good) => s.good += 1,
@@ -4931,13 +4931,10 @@ impl AppState {
     pub fn run_groups(&self) -> Vec<RunGroup> {
         let mut groups: Vec<RunGroup> = vec![];
         for j in self.jobs() {
-            let g = match groups.iter().position(|g| g.project == j.project_id) {
-                Some(i) => &mut groups[i],
-                None => {
-                    groups.push(RunGroup { project: j.project_id.clone(), name: j.project.clone(), items: vec![] });
-                    groups.last_mut().unwrap()
-                }
-            };
+            if !groups.iter().any(|g| g.project == j.project_id) {
+                groups.push(RunGroup { project: j.project_id.clone(), name: j.project.clone(), items: vec![] });
+            }
+            let Some(g) = groups.iter_mut().find(|g| g.project == j.project_id) else { continue };
             let sweep = j.sweep.as_ref().map(|(s, _)| s.clone());
             match sweep {
                 Some(name) => {

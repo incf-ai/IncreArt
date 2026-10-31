@@ -49,7 +49,8 @@ impl Id {
     }
 
     pub fn seq(&self) -> u32 {
-        self.0[17..].parse().expect("validated on construction")
+        // (validated on construction)
+        self.0[17..].parse().unwrap_or_default()
     }
 }
 
@@ -81,7 +82,8 @@ impl FromStr for Id {
         if !shape {
             return Err(bad());
         }
-        let n = |r: std::ops::Range<usize>| s[r].parse::<u32>().unwrap();
+        // (all digits, checked above; too large fails below)
+        let n = |r: std::ops::Range<usize>| s[r].parse::<u32>().unwrap_or(u32::MAX);
         let valid = NaiveDate::from_ymd_opt(n(0..4) as i32, n(5..7), n(8..10)).is_some()
             && n(11..13) < 24
             && n(14..16) < 60

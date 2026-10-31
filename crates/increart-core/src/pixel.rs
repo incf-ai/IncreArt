@@ -2,7 +2,7 @@
 //! and BLAKE3 (`increart:blake3`) of a canonical 8-bit RGB/RGBA encoding of
 //! the decoded pixels.
 
-use image::{DynamicImage, ImageBuffer, Pixel};
+use image::{DynamicImage, ImageBuffer};
 use sha2::{Digest, Sha256};
 
 pub const TAG_V1: &[u8] = b"increart-pixels-v1";
@@ -86,14 +86,12 @@ impl Pixels {
         h.finalize().to_hex().to_string()
     }
 
-    pub fn into_image(self) -> DynamicImage {
-        fn buf<P: Pixel<Subpixel = u8>>(w: u32, h: u32, d: Vec<u8>) -> ImageBuffer<P, Vec<u8>> {
-            ImageBuffer::from_raw(w, h, d).expect("length matches")
-        }
+    /// `None` if the data doesn't fill the size.
+    pub fn into_image(self) -> Option<DynamicImage> {
         if self.has_alpha() {
-            DynamicImage::ImageRgba8(buf(self.width, self.height, self.data))
+            ImageBuffer::from_raw(self.width, self.height, self.data).map(DynamicImage::ImageRgba8)
         } else {
-            DynamicImage::ImageRgb8(buf(self.width, self.height, self.data))
+            ImageBuffer::from_raw(self.width, self.height, self.data).map(DynamicImage::ImageRgb8)
         }
     }
 }

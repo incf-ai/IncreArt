@@ -1749,7 +1749,7 @@ fn name_wizard_draft(state: &mut AppState) {
     let base = wizard_name(&d.draft);
     let taken = |n: &str| state.config.server_presets.iter().any(|p| p.name == n);
     d.draft.name =
-        (1..).map(|i| if i == 1 { base.clone() } else { format!("{base} ({i})") }).find(|n| !taken(n)).unwrap();
+        increart_core::config::first_free(|i| if i == 1 { base.clone() } else { format!("{base} ({i})") }, taken);
     d.editing = Some(Editing::New);
     d.wizard = false;
 }
@@ -2437,7 +2437,7 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
                 return fx;
             }
             let stopping = stopping_for(state, &sd);
-            let Phase::Servers(d) = &mut state.phase else { unreachable!() };
+            let Phase::Servers(d) = &mut state.phase else { return fx };
             d.opening = true;
             d.started = state.now;
             d.progress = vec![ServerProgress::Opening; sd.len()];
@@ -4357,7 +4357,9 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
                 }
             };
             if let Some(p) = problem {
-                state.pe.editor.as_mut().unwrap().error = Some(p);
+                if let Some(ed) = &mut state.pe.editor {
+                    ed.error = Some(p);
+                }
                 return vec![];
             }
             let Phase::Servers(d) = &mut state.phase else { return vec![] };
@@ -4483,7 +4485,8 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
                 e.error = Some(err);
                 return vec![];
             }
-            state.prompt_presets = state.presets_editor.take().unwrap().list.normalized();
+            let Some(e) = state.presets_editor.take() else { return vec![] };
+            state.prompt_presets = e.list.normalized();
             let n = state.prompt_presets.tasks.len();
             if let Some(p) = &mut state.presets_panel
                 && p.view.task().is_some_and(|t| t >= n)
@@ -4543,7 +4546,7 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
                 d.error = Some(format!("A preset in {} {why}", task.name));
                 return vec![];
             }
-            let mut d = state.save_preset.take().unwrap();
+            let Some(mut d) = state.save_preset.take() else { return vec![] };
             d.preset.name = name.clone();
             let task = &mut state.prompt_presets.tasks[d.task];
             task.presets.push(d.preset);
@@ -4668,7 +4671,7 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
                     state.idea_dirty = Some(state.now);
                 }
                 HistoryKey::Idea(id) if state.idea_edit.as_ref().is_some_and(|ed| &ed.id == id) => {
-                    let ed = state.idea_edit.as_mut().unwrap();
+                    let Some(ed) = state.idea_edit.as_mut() else { return fx };
                     let (t, x) = (ed.text.clone(), ed.title.clone());
                     ed.text = e.text;
                     if with_extra {
@@ -5624,14 +5627,11 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
         },
         Msg::QueueModelChecked => {
             let unnamed = unnamed_refs(state);
-            if unnamed.is_empty() {
-                return update(state, Msg::QueueChecked);
-            }
             let tags: Vec<String> = unnamed.iter().map(|n| format!("<image{n}>")).collect();
             let (list, them) = match tags.as_slice() {
+                [] => return update(state, Msg::QueueChecked),
                 [one] => (one.clone(), "it"),
                 [rest @ .., last] => (format!("{} and {last}", rest.join(", ")), "them"),
-                [] => unreachable!(),
             };
             let text = format!(
                 "{list} {} named in the prompt{}. The model gets {them} anyway, \
@@ -7788,8 +7788,9 @@ fn ask_text(state: &mut AppState) -> Vec<Effect> {
     // a new ask replaces the window's last one
     let mut fx = stop_text_ask(state);
     let job = queue_job(state, job);
-    let t = state.pe.text.as_mut().unwrap();
-    (t.waiting, t.error, t.images) = (Some(job.id), None, job.images.len());
+    if let Some(t) = &mut state.pe.text {
+        (t.waiting, t.error, t.images) = (Some(job.id), None, job.images.len());
+    }
     fx.push(Effect::PeAsk { servers: pool(state, server), jobs: vec![job] });
     fx
 }
@@ -7889,7 +7890,7 @@ fn use_text(state: &mut AppState, t: PeText, how: PeUse) -> Vec<Effect> {
                 let op = variant(state, id);
                 return lib(state, op);
             }
-            let ed = state.idea_edit.clone().unwrap();
+            let Some(ed) = state.idea_edit.clone() else { return vec![] };
             let mut fx = record(
                 state,
                 HistoryKey::Idea(id.clone()),

@@ -21,6 +21,7 @@ use crate::model::Run;
 use crate::request::{self, GenOptions, Provenance};
 use crate::scheduler::{Action, LoadResult, Order, Outcome, Scheduler, ServerIdx, ServerState, Ticket};
 use crate::sdserver::{ApiError, Client, Job, JobStatus, Loadable, ModelKey, ModelStatus};
+use crate::sync::LockExt;
 
 /// A run's generation log (DESIGN.md, Filesystem layout): what the engine
 /// did for it and what its servers answered, a line each, next to its
@@ -224,7 +225,7 @@ impl Engine {
         servers: Vec<Endpoint>,
         opts: EngineOptions,
         notify: Option<Box<dyn Fn() + Send>>,
-    ) -> Engine {
+    ) -> std::io::Result<Engine> {
         let (tx, rx) = mpsc::channel();
         let (etx, events) = mpsc::channel();
         let skip_ram_check = Arc::new(AtomicBool::new(opts.skip_ram_check));
@@ -239,11 +240,11 @@ impl Engine {
                 let skip = skip_ram_check.clone();
                 std::thread::Builder::new()
                     .name(format!("sd-server {}", ep.name))
-                    .spawn(move || worker(i, client, crx, report, poll, limits, skip))
-                    .expect("spawn worker");
-                ctx
+                    .spawn(move || worker(i, client, crx, report, poll, limits, skip))?;
+                Ok(ctx)
             })
-            .collect();
+            // (failing, the workers started end: their senders are dropped)
+            .collect::<std::io::Result<_>>()?;
         let mut sched = Scheduler::new(servers.len());
         sched.max_in_flight = opts.max_in_flight;
         sched.backoff_base = opts.backoff_base;
@@ -269,8 +270,8 @@ impl Engine {
             events: etx,
             notify,
         };
-        let thread = std::thread::Builder::new().name("engine".into()).spawn(move || co.run(rx)).expect("spawn engine");
-        Engine { tx, events, skip_ram_check, thread: Some(thread) }
+        let thread = std::thread::Builder::new().name("engine".into()).spawn(move || co.run(rx))?;
+        Ok(Engine { tx, events, skip_ram_check, thread: Some(thread) })
     }
 
     /// Queues the pending seeds of a run (again after adding seeds: only
@@ -299,6 +300,12 @@ impl Engine {
 
     pub fn events(&self) -> &Receiver<Event> {
         &self.events
+    }
+
+    /// Takes the events, for a thread other than the one holding the engine
+    /// to read without a lock; [`Engine::events`] has none after.
+    pub fn take_events(&mut self) -> Receiver<Event> {
+        std::mem::replace(&mut self.events, mpsc::channel().1)
     }
 
     /// Stops the coordinator. Workers finish their current request and exit.
@@ -457,7 +464,7 @@ impl Coordinator {
     }
 
     fn lib(&self) -> std::sync::MutexGuard<'_, Library> {
-        self.lib.lock().unwrap_or_else(|p| p.into_inner())
+        self.lib.lock_or_recover()
     }
 
     fn step(&mut self) {
@@ -984,7 +991,7 @@ fn load(
                 if !show(&mut shown, "waiting for another server's load".into()) {
                     return None;
                 }
-                LOCAL_LOADS.lock().unwrap_or_else(|e| e.into_inner())
+                LOCAL_LOADS.lock_or_recover()
             }
         };
         let need = client.load_ram_need(model) as f64 / GIB;

@@ -243,7 +243,7 @@ impl Test<'_> {
                     Outcome::Failed,
                     format!(
                         "job {id}: still {} after {} min ({})",
-                        seen.last().unwrap(),
+                        seen.last().map_or("not seen", |s| *s),
                         IMAGE_LIMIT.as_secs() / 60,
                         seen.join(" → ")
                     ),
@@ -331,12 +331,13 @@ fn or_none(s: &str) -> &str {
 }
 
 /// The client a test of `server` talks through, as the launcher builds it;
-/// None for a server the app starts (tested by opening it).
-pub fn client_for(server: &crate::config::ServerConfig) -> Option<Client> {
+/// None for a server the app starts (tested by opening it); an error if
+/// the client's thread couldn't start.
+pub fn client_for(server: &crate::config::ServerConfig) -> Option<std::io::Result<Client>> {
     use crate::config::ServerConfig;
     use crate::kobold::KoboldRun;
     match server {
-        ServerConfig::Connect { url, .. } => Some(Client::new(url)),
+        ServerConfig::Connect { url, .. } => Some(Ok(Client::new(url))),
         ServerConfig::Kobold(k) => match &k.run {
             KoboldRun::Connect { url, password, .. } => Some(Client::kobold(url, password, None)),
             KoboldRun::Start { .. } => None,

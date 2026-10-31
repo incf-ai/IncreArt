@@ -7,7 +7,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use crate::container;
-use crate::error::{Error, IoContext, Result};
+use crate::error::{Error, IoContext, PathParts, Result};
 use crate::fsutil;
 use crate::id::{self, Id, IdAllocator, IdKind, Timestamp};
 use crate::import::{self, Original};
@@ -397,7 +397,8 @@ impl Library {
             if recipe.inputs.is_empty() && recipe.image_refs().next().is_some() {
                 recipe.inputs = self.input_images(&recipe);
                 if !recipe.inputs.is_empty() {
-                    chunks.push(Chunk::itxt(png::KEY_RECIPE, &rsnfmt::to_string(&recipe)));
+                    let text = rsnfmt::to_string(&recipe).map_err(|e| Error::encode(path.display(), e))?;
+                    chunks.push(Chunk::itxt(png::KEY_RECIPE, &text));
                 }
             }
         }
@@ -502,7 +503,7 @@ impl Library {
                 .map_err(|e| Error::Io { path: path.to_path_buf(), source: std::io::Error::other(e.to_string()) }),
             Disposal::Directory(dir) => {
                 fs::create_dir_all(dir).at(dir)?;
-                let name = path.file_name().unwrap().to_string_lossy().into_owned();
+                let name = path.name()?.to_string_lossy().into_owned();
                 let to = dir.join(free_name_in(dir, &name)?);
                 fs::rename(path, &to).at(path)
             }
@@ -523,14 +524,14 @@ impl Library {
     /// Writes a new store file with an exclusive create, moving on to the next
     /// number if the ID is taken (in either format). `make` builds the bytes
     /// for the given ID and says their format.
-    fn write_store(&mut self, store: Store, make: impl Fn(&Id) -> (StoreFormat, Vec<u8>)) -> Result<Id> {
+    fn write_store(&mut self, store: Store, make: impl Fn(&Id) -> Result<(StoreFormat, Vec<u8>)>) -> Result<Id> {
         loop {
             let id = self.ids.allocate(store_kind(store), self.now());
             let r = ImageRef { id: id.clone(), store };
             if StoreFormat::ALL.iter().any(|f| fsutil::exists(&self.root.join(r.rel_path_as(*f)))) {
                 continue;
             }
-            let (format, bytes) = make(&id);
+            let (format, bytes) = make(&id)?;
             let path = self.root.join(r.rel_path_as(format));
             match OpenOptions::new().write(true).create_new(true).open(&path) {
                 Ok(mut f) => {
@@ -705,7 +706,7 @@ impl Library {
         }
         let mut source = prepared.source;
         source.imported = Some(self.now());
-        let json = serde_json::to_string_pretty(&source).expect("serializable");
+        let json = serde_json::to_string_pretty(&source).map_err(|e| Error::encode(&label, e))?;
         let hash = prepared.pixel_hash.clone();
         let format = self.meta.store_format;
         let id = self.write_store(Store::Input, |id| {
@@ -719,7 +720,7 @@ impl Library {
             if let Some(exif) = &prepared.exif {
                 chunks.push(Chunk::exif(exif.clone()));
             }
-            container::encode(format, &prepared.pixels, &chunks)
+            container::encode(format, &prepared.pixels, &chunks).map_err(|e| Error::encode(&label, e))
         })?;
         self.pixels.input.insert(prepared.pixel_hash, id.clone());
         if prepared.pixels.is_transparent() {
@@ -762,7 +763,7 @@ impl Library {
             }
             out.push(self.new_idea(idea)?);
             let imported = self.root.join(IMPORTED);
-            let name = path.file_name().unwrap().to_string_lossy().into_owned();
+            let name = path.name()?.to_string_lossy().into_owned();
             let to = imported.join(free_name_in(&imported, &name)?);
             fs::create_dir_all(&imported).at(&imported)?;
             fs::rename(&path, &to).at(&path)?;
@@ -848,7 +849,7 @@ impl Library {
         let lib = self.root.join(INPUT_LIBRARY);
         for p in fsutil::walk(&lib)? {
             if p.file_name().is_some_and(|n| n == id.as_str()) && p.join(IDEA_FILE).is_file() {
-                let folder = p.parent().unwrap().strip_prefix(&lib).unwrap().to_path_buf();
+                let folder = p.parent_dir()?.relative_to(&lib)?.to_path_buf();
                 return Ok((IdeaLoc::Library(folder), p));
             }
         }
@@ -1091,13 +1092,14 @@ fn free_name_in(dir: &Path, base: &str) -> Result<String> {
         Some((s, e)) if !s.is_empty() && !e.contains(' ') => (s, format!(".{e}")),
         _ => (base, String::new()),
     };
-    for n in 2.. {
+    let mut n = 2u64;
+    loop {
         let name = format!("{stem} {n}{ext}");
         if !name_taken(dir, &name, None)? {
             return Ok(name);
         }
+        n += 1;
     }
-    unreachable!()
 }
 
 impl Library {
@@ -1164,7 +1166,7 @@ impl Library {
         self.node(tree, &abs)?;
         validate_name(name)?;
         reserved(tree, path.parent().unwrap_or(Path::new("")), name)?;
-        let parent = abs.parent().unwrap();
+        let parent = abs.parent_dir()?;
         if name_taken(parent, name, Some(&abs))? {
             return Err(Error::InvalidName { name: name.into(), reason: "already exists here" });
         }
@@ -1188,8 +1190,8 @@ impl Library {
         if path.parent() == Some(new_parent) {
             return Ok(path.to_path_buf());
         }
-        reserved(tree, new_parent, &path.file_name().unwrap().to_string_lossy())?;
-        let name = free_name_in(&dest_dir, &path.file_name().unwrap().to_string_lossy())?;
+        reserved(tree, new_parent, &path.name()?.to_string_lossy())?;
+        let name = free_name_in(&dest_dir, &path.name()?.to_string_lossy())?;
         link::move_with_links(&self.root, &abs, &dest_dir.join(&name))?;
         Ok(new_parent.join(name))
     }
@@ -1207,28 +1209,28 @@ impl Library {
         if new_parent.starts_with(path) {
             return Err(Error::Refused("can't copy a folder into itself".into()));
         }
-        reserved(tree, new_parent, &path.file_name().unwrap().to_string_lossy())?;
+        reserved(tree, new_parent, &path.name()?.to_string_lossy())?;
         let dest_dir = self.folder(tree, new_parent)?;
         match (tree, kind) {
             (Tree::InputLibrary, Node::Leaf) => {
-                let id: Id = path.file_name().unwrap().to_string_lossy().parse()?;
+                let id: Id = path.name()?.to_string_lossy().parse()?;
                 let new = self.copy_idea(&id, &IdeaLoc::Library(new_parent.to_path_buf()))?;
                 Ok(new_parent.join(new.as_str()))
             }
             (Tree::Projects, Node::Leaf) => {
-                let name = free_name_in(&dest_dir, &path.file_name().unwrap().to_string_lossy())?;
+                let name = free_name_in(&dest_dir, &path.name()?.to_string_lossy())?;
                 self.copy_project_setup(&abs, &dest_dir.join(&name))?;
                 Ok(new_parent.join(name))
             }
             (Tree::Collections, Node::Leaf) => {
-                let name = free_name_in(&dest_dir, &path.file_name().unwrap().to_string_lossy())?;
+                let name = free_name_in(&dest_dir, &path.name()?.to_string_lossy())?;
                 let r = link::read_ref(&abs, Store::Output)?
                     .ok_or_else(|| Error::Refused(format!("{} is not a link", path.display())))?;
                 link::create(self.link_mode(), &self.image_path(&r), &dest_dir.join(&name))?;
                 Ok(new_parent.join(name))
             }
             (_, Node::Folder) => {
-                let name = free_name_in(&dest_dir, &path.file_name().unwrap().to_string_lossy())?;
+                let name = free_name_in(&dest_dir, &path.name()?.to_string_lossy())?;
                 let new = new_parent.join(&name);
                 fs::create_dir(dest_dir.join(&name)).at(dest_dir.join(&name))?;
                 for child in fs::read_dir(&abs).at(&abs)? {
@@ -1236,7 +1238,7 @@ impl Library {
                     if fsutil::hidden(&child) || (tree != Tree::Collections && !child.is_dir()) {
                         continue;
                     }
-                    let child_rel = path.join(child.file_name().unwrap());
+                    let child_rel = path.join(child.name()?);
                     self.copy_node(tree, &child_rel, &new)?;
                 }
                 Ok(new)
@@ -1251,7 +1253,7 @@ impl Library {
             return Err(Error::Refused(format!("{} is not a project", path.display())));
         }
         validate_name(name)?;
-        let parent = abs.parent().unwrap();
+        let parent = abs.parent_dir()?;
         if name_taken(parent, name, None)? {
             return Err(Error::InvalidName { name: name.into(), reason: "already exists here" });
         }
@@ -1308,7 +1310,7 @@ impl Library {
                 dirs.extend(fsutil::walk(&abs)?);
                 for d in dirs {
                     if d.join(IDEA_FILE).is_file()
-                        && let Ok(id) = d.file_name().unwrap().to_string_lossy().parse::<Id>()
+                        && let Some(Ok(id)) = d.file_name().map(|n| n.to_string_lossy().parse::<Id>())
                     {
                         ideas.push(id);
                     }
@@ -1651,7 +1653,7 @@ impl Library {
         if recipe.inputs.is_empty() {
             recipe.inputs = self.input_images(&recipe);
         }
-        let recipe_text = rsnfmt::to_string(&recipe);
+        let recipe_text = rsnfmt::to_string(&recipe).map_err(|e| Error::encode(&label, e))?;
         // Fail on a malformed file before taking an ID.
         let server_meta = container::metadata(png_bytes).map_err(|e| Error::format(&label, e))?;
         let format = self.meta.store_format;
@@ -1664,15 +1666,17 @@ impl Library {
                 Chunk::itxt(png::KEY_RECIPE, &recipe_text),
             ];
             if format == StoreFormat::Png && container::format_of(png_bytes) == Some(StoreFormat::Png) {
-                // the server's PNG as it is, chunks added
-                return (StoreFormat::Png, png::set_chunks(png_bytes, &chunks).expect("checked above"));
+                // the server's PNG as it is, chunks added (parsed above)
+                if let Ok(bytes) = png::set_chunks(png_bytes, &chunks) {
+                    return Ok((StoreFormat::Png, bytes));
+                }
             }
             // its chunks (`parameters`) and ours on the same pixels
             let keys: Vec<_> = chunks.iter().filter_map(|c| c.as_text().map(|(k, _)| k)).collect();
             let mut all: Vec<Chunk> =
                 server_meta.iter().filter(|c| !c.as_text().is_some_and(|(k, _)| keys.contains(&k))).cloned().collect();
             all.extend(chunks);
-            container::encode(format, &pixels, &all)
+            container::encode(format, &pixels, &all).map_err(|e| Error::encode(&label, e))
         })?;
         self.pixels.output.entry(hash).or_insert_with(|| id.clone());
         if pixels.is_transparent() {
@@ -1715,7 +1719,7 @@ impl Library {
             .find(|d| d.join(PROJECT_FILE).is_file())
             .ok_or_else(|| Error::Refused(format!("{} is not an output link", link_path.display())))?
             .to_path_buf();
-        let to = project.join(Verdict::output_dir(verdict)).join(abs.file_name().unwrap());
+        let to = project.join(Verdict::output_dir(verdict)).join(abs.name()?);
         if to == abs {
             return Ok(link_path.to_path_buf());
         }
@@ -1768,7 +1772,7 @@ impl Library {
         let Some(project) = project.filter(|_| fsutil::exists(&abs)) else {
             return Err(Error::Refused(format!("{} is not an output link", link_path.display())));
         };
-        let rel = abs.strip_prefix(project).expect("under its project");
+        let rel = abs.relative_to(project)?;
         if rel.starts_with(DISCARDED_OUTPUTS) {
             return Err(Error::Refused(format!("{} is discarded already", link_path.display())));
         }
@@ -1786,7 +1790,7 @@ impl Library {
     /// no longer recorded as deleted.
     pub fn restore_output_link(&self, link_path: &Path) -> Result<PathBuf> {
         let (project, abs) = self.discarded_output(link_path)?;
-        let rel = abs.strip_prefix(project.join(DISCARDED_OUTPUTS)).expect("under discarded/");
+        let rel = abs.relative_to(&project.join(DISCARDED_OUTPUTS))?;
         let to = project.join(rel);
         if fsutil::exists(&to) {
             return Err(Error::Refused(format!("{} is there already", self.rel(&to).display())));

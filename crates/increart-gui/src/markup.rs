@@ -374,8 +374,7 @@ fn canvas(
     if let (Some(d), Some(p)) = (&mut drag, at) {
         match d {
             Drag::Line(points) => {
-                let last = *points.last().unwrap();
-                if map.screen(last).distance(map.screen(p)) > 1.5 {
+                if points.last().is_none_or(|&last| map.screen(last).distance(map.screen(p)) > 1.5) {
                     points.push(p);
                 }
             }

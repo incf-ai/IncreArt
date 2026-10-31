@@ -12,7 +12,10 @@ fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let value = |name: &str| args.iter().position(|a| a == name).and_then(|i| args.get(i + 1)).cloned();
     let host = value("--listen-ip").unwrap_or_else(|| "127.0.0.1".into());
-    let port = value("--listen-port").expect("--listen-port");
+    let Some(port) = value("--listen-port") else {
+        eprintln!("fake-sd-server: --listen-port is needed");
+        std::process::exit(2);
+    };
     let f = fake::Fake::start_on(&format!("{host}:{port}"), None);
     f.with(|s| {
         s.model_files = value("--fake-files").map(|v| v.split(',').map(str::to_string).collect());

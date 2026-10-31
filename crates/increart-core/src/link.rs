@@ -6,7 +6,7 @@ use std::io;
 use std::path::{Component, Path, PathBuf};
 
 use crate::container;
-use crate::error::{Error, IoContext, Result};
+use crate::error::{Error, IoContext, PathParts, Result};
 use crate::fsutil;
 use crate::model::StoreFormat;
 use crate::model::{ImageRef, LinkMode, Store};
@@ -54,14 +54,20 @@ pub fn probe(dir: &Path) -> Result<LinkMode> {
     Ok(mode)
 }
 
+/// `target` as seen from `dir` (both absolute).
+fn relative(target: &Path, dir: &Path) -> Result<PathBuf> {
+    pathdiff::diff_paths(target, dir)
+        .ok_or_else(|| Error::Path { path: target.to_path_buf(), what: "can't be linked to from a relative path" })
+}
+
 /// Creates a link at `at` to the store file `target` (absolute). Fails if
 /// something exists at `at`.
 pub fn create(mode: LinkMode, target: &Path, at: &Path) -> Result<()> {
-    let dir = at.parent().expect("link has a parent");
+    let dir = at.parent_dir()?;
     fs::create_dir_all(dir).at(dir)?;
     match mode {
         LinkMode::Symlink => {
-            let rel = pathdiff::diff_paths(target, dir).expect("both absolute");
+            let rel = relative(target, dir)?;
             symlink(&rel, at).at(at)
         }
         LinkMode::Hardlink => fs::hard_link(target, at).at(at),
@@ -163,7 +169,7 @@ pub fn refresh_symlinks(root: &Path, dir: &Path) -> Result<()> {
         }
         if let Some(r) = symlink_ref(&p) {
             let target = r.path(root);
-            let want = pathdiff::diff_paths(&target, p.parent().unwrap()).unwrap();
+            let want = relative(&target, p.parent_dir()?)?;
             if fs::read_link(&p).at(&p)? != want {
                 fs::remove_file(&p).at(&p)?;
                 symlink(&want, &p).at(&p)?;

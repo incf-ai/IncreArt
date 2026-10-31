@@ -46,6 +46,12 @@ const FILES: [(&str, usize); 5] = [(VAE, 0), (BF16, 1), (Q8, 1), (LLM, 1), (LORA
 const SD_PORT: u16 = 1240;
 const KCPP_PORT: u16 = 5111;
 const SEEDS: u64 = 2;
+/// A model's seeds left (made or not, over its two runs) at which it gets
+/// more until both servers have had jobs at once: with two jobs on a
+/// server at a time, two more are waiting, so it isn't left without any.
+const TOP_UP_AT: u64 = 4;
+/// The most seeds added to a run that way.
+const TOP_UP_MAX: u64 = 12;
 /// A photo, asked of every preset: the LoRA's child's drawing is its own.
 const PROMPT: &str = "A photograph of a lighthouse on a cliff at sunset, waves below, film grain.";
 const SIZE: u32 = 512;
@@ -217,7 +223,7 @@ fn two_gpus_two_servers_loras_across_folders() {
     let root = tmp.path().join("lib");
     let logs = tmp.path().join("logs");
     let _logs = KeepLogs(logs.clone(), root.clone());
-    let rt = Runtime::new(|| {});
+    let rt = Runtime::new(|| {}).unwrap();
     rt.set_trash_dir(tmp.path().join("trash"));
     // not the app's log folder
     rt.set_log_dir(logs);
@@ -269,28 +275,78 @@ fn two_gpus_two_servers_loras_across_folders() {
     app.log(&format!("up: {:?}", app.state.servers.iter().map(|s| (&s.name, &s.state)).collect::<Vec<_>>()));
 
     // ---- every image, noting when both servers had jobs at once
-    // (progress comes only with previews, which are off)
+    // (progress comes only with previews, which are off). Loads go one at
+    // a time, so the server loaded first may run out of its model's seeds
+    // before the other is ready (a load or warm-up from a cold page cache
+    // takes a minute longer): until both have had jobs at once, a model
+    // with no more than `TOP_UP_AT` seeds left gets one more in each of
+    // its runs (with and without the LoRA: they stay in pairs). Busy is
+    // ready or draining (taking no new jobs, to load the other's model
+    // once its own are done) with jobs on it.
     let t = Instant::now();
-    let total = SEEDS as usize * 4;
+    let runs: Vec<(increart_core::Id, String)> = app
+        .state
+        .index
+        .projects
+        .iter()
+        .flat_map(|p| &p.runs)
+        .map(|r| (r.id.clone(), r.model.files["diffusion_model"].id.clone()))
+        .collect();
+    let mut seeds: BTreeMap<increart_core::Id, u64> = runs.iter().map(|(r, _)| (r.clone(), SEEDS)).collect();
+    let made_of = |s: &AppState, run: &increart_core::Id| {
+        s.index.projects.iter().flat_map(|p| &p.outputs).filter(|o| o.name.run == *run).count() as u64
+    };
     let mut both_at_once = false;
     let mut shown = String::new();
     let t0 = app.t0;
-    let made = app.pump(
-        Duration::from_secs(3600),
-        |s| {
-            let now: Vec<String> =
-                s.servers.iter().map(|v| format!("{} {} idle {}", v.name, v.state, v.idle_since.is_some())).collect();
-            let now = now.join(" | ");
-            if now != shown {
-                eprintln!("{:7.1}s {now}", t0.elapsed().as_secs_f64());
-                shown = now;
+    let deadline = Instant::now() + Duration::from_secs(3600);
+    loop {
+        let total: u64 = seeds.values().sum();
+        let made = app.pump(
+            Duration::from_millis(250),
+            |s| {
+                let now: Vec<String> = s
+                    .servers
+                    .iter()
+                    .map(|v| format!("{} {} idle {}", v.name, v.state, v.idle_since.is_some()))
+                    .collect();
+                let now = now.join(" | ");
+                if now != shown {
+                    eprintln!("{:7.1}s {now}", t0.elapsed().as_secs_f64());
+                    shown = now;
+                }
+                both_at_once |= s.servers.len() == 2
+                    && s.servers
+                        .iter()
+                        .all(|v| matches!(v.state.as_str(), "ready" | "draining") && v.idle_since.is_none());
+            },
+            |s| {
+                s.index.projects.iter().map(|p| p.outputs.len()).sum::<usize>() as u64 >= total
+                    && s.active_runs.is_empty()
+            },
+        );
+        if made {
+            break;
+        }
+        assert!(Instant::now() < deadline, "not all {total} images made: {:?}", app.state.servers);
+        if both_at_once {
+            continue;
+        }
+        let models: BTreeSet<&String> = runs.iter().map(|(_, m)| m).collect();
+        for model in models {
+            let of: Vec<&increart_core::Id> = runs.iter().filter(|(_, m)| m == model).map(|(r, _)| r).collect();
+            let left: u64 = of.iter().map(|r| seeds[*r].saturating_sub(made_of(&app.state, r))).sum();
+            if left > TOP_UP_AT || of.iter().any(|r| seeds[*r] >= SEEDS + TOP_UP_MAX) {
+                continue;
             }
-            both_at_once |=
-                s.servers.len() == 2 && s.servers.iter().all(|v| v.state == "ready" && v.idle_since.is_none());
-        },
-        |s| s.index.projects.iter().map(|p| p.outputs.len()).sum::<usize>() >= total && s.active_runs.is_empty(),
-    );
-    assert!(made, "not all {total} images made: {:?}", app.state.servers);
+            app.log(&format!("{model}: {left} seeds left, one more in each of its runs"));
+            for r in of {
+                app.send(Msg::MoreSeeds(r.clone(), 1));
+                *seeds.entry(r.clone()).or_default() += 1;
+            }
+        }
+    }
+    let total: u64 = seeds.values().sum();
     app.log(&format!("{total} images in {:.0} s (with the loads)", t.elapsed().as_secs_f64()));
 
     // ---- what each image's recipe says

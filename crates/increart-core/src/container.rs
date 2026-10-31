@@ -105,14 +105,14 @@ pub fn patch_chunk(path: &Path, at: u64, chunk: &Chunk) -> Result<()> {
 
 /// Encodes pixels as `format` with `chunks`. WebP can't hold a side over
 /// 16383 pixels: such an image is PNG whatever was asked. Returns the
-/// format used.
-pub fn encode(format: StoreFormat, px: &Pixels, chunks: &[Chunk]) -> (StoreFormat, Vec<u8>) {
+/// format used. An error only for pixels that don't fill their size.
+pub fn encode(format: StoreFormat, px: &Pixels, chunks: &[Chunk]) -> Result<(StoreFormat, Vec<u8>), String> {
     if format == StoreFormat::Webp
         && let Some(bytes) = webp::encode(px, chunks)
     {
-        return (StoreFormat::Webp, bytes);
+        return Ok((StoreFormat::Webp, bytes));
     }
-    (StoreFormat::Png, import::encode_png(px, chunks))
+    Ok((StoreFormat::Png, import::encode_png(px, chunks)?))
 }
 
 /// A store file re-encoded as `to` with the same pixels and metadata,
@@ -121,7 +121,7 @@ pub fn encode(format: StoreFormat, px: &Pixels, chunks: &[Chunk]) -> (StoreForma
 pub fn transcode(bytes: &[u8], to: StoreFormat) -> Result<(StoreFormat, Vec<u8>, String), String> {
     let px = import::decode_pixels(bytes).map_err(|e| e.to_string())?;
     let chunks = metadata(bytes)?;
-    let (format, out) = encode(to, &px, &chunks);
+    let (format, out) = encode(to, &px, &chunks)?;
     let hash = px.hash();
     let again = import::decode_pixels(&out).map_err(|e| e.to_string())?.hash();
     if again != hash {
@@ -137,7 +137,7 @@ pub fn as_png(bytes: Vec<u8>) -> Result<Vec<u8>, String> {
         return Ok(bytes);
     }
     let px = import::decode_pixels(&bytes).map_err(|e| e.to_string())?;
-    Ok(import::encode_png_fast(&px))
+    import::encode_png_fast(&px)
 }
 
 #[cfg(test)]
@@ -149,7 +149,7 @@ mod tests {
     fn transcode_both_ways_keeps_pixels_and_metadata() {
         let px = Pixels { width: 7, height: 5, channels: 4, data: (0..140).map(|i| (i * 13) as u8).collect() };
         let chunks = [Chunk::text(KEY_ID, "x"), Chunk::itxt(KEY_RECIPE, "Recipe { é }"), Chunk::exif(b"MM".to_vec())];
-        let (f, png_bytes) = encode(StoreFormat::Png, &px, &chunks);
+        let (f, png_bytes) = encode(StoreFormat::Png, &px, &chunks).unwrap();
         assert_eq!(f, StoreFormat::Png);
         let (f, webp_bytes, hash) = transcode(&png_bytes, StoreFormat::Webp).unwrap();
         assert_eq!((f, hash), (StoreFormat::Webp, px.hash()));
@@ -161,5 +161,24 @@ mod tests {
         let plain = as_png(webp_bytes).unwrap();
         assert_eq!(format_of(&plain), Some(StoreFormat::Png));
         assert_eq!(import::decode_pixels(&plain).unwrap().hash(), px.hash());
+    }
+
+    #[test]
+    fn cut_short_or_damaged_files_are_errors_not_panics() {
+        let px = Pixels { width: 3, height: 2, channels: 4, data: (0..24).map(|i| (i * 7) as u8).collect() };
+        let chunks = [Chunk::text(KEY_ID, "x"), Chunk::exif(b"MM".to_vec())];
+        for format in [StoreFormat::Png, StoreFormat::Webp] {
+            let (_, bytes) = encode(format, &px, &chunks).unwrap();
+            let damaged = (0..bytes.len()).map(|i| {
+                let mut b = bytes.clone();
+                b[i] ^= 0xff;
+                b
+            });
+            for b in (0..bytes.len()).map(|n| bytes[..n].to_vec()).chain(damaged) {
+                let _ = metadata(&b);
+                let _ = strip_metadata(&b);
+                let _ = set_chunks(&b, &chunks);
+            }
+        }
     }
 }

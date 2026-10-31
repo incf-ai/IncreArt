@@ -210,7 +210,8 @@ impl Report {
 
 /// The presets as config.rsn has them, passwords as `***`.
 pub fn presets_text(presets: &[increart_core::config::ServerPreset]) -> String {
-    let text = increart_core::rsnfmt::to_string(&presets.to_vec());
+    let text = increart_core::rsnfmt::to_string(&presets.to_vec())
+        .unwrap_or_else(|e| format!("(the presets couldn't be written out: {e})"));
     text.lines()
         .map(|l| match l.find("password: \"") {
             Some(at) => format!("{}password: \"***\",", &l[..at]),

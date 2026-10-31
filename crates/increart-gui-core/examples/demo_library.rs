@@ -213,7 +213,7 @@ fn build(config: &Path, preset: &str, spec: &Value, sources: &Path, library: &Pa
     let preset_at = config.server_presets.iter().position(|p| p.name == preset).expect("server preset in config");
     let recipe = s(spec, "recipe");
     let recipe_at = config.recipes.iter().position(|r| r.name == recipe).expect("model preset in config");
-    let mut app = App { state: AppState::new(config, None), rt: Runtime::new(|| {}), t0: Instant::now() };
+    let mut app = App { state: AppState::new(config, None), rt: Runtime::new(|| {}).unwrap(), t0: Instant::now() };
 
     app.send(Msg::SetLibraryPath(library.to_string_lossy().into_owned()));
     app.send(Msg::OpenLibrary);
