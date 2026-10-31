@@ -21,6 +21,7 @@ use crate::model::Run;
 use crate::request::{self, GenOptions, Provenance};
 use crate::scheduler::{Action, LoadResult, Order, Outcome, Scheduler, ServerIdx, ServerState, Ticket};
 use crate::sdserver::{ApiError, Client, Job, JobStatus, Loadable, ModelKey, ModelStatus};
+use crate::sync::LockExt;
 
 /// A run's generation log (DESIGN.md, Filesystem layout): what the engine
 /// did for it and what its servers answered, a line each, next to its
@@ -431,7 +432,7 @@ impl Coordinator {
     }
 
     fn lib(&self) -> std::sync::MutexGuard<'_, Library> {
-        self.lib.lock().unwrap_or_else(|p| p.into_inner())
+        self.lib.lock_or_recover()
     }
 
     fn step(&mut self) {
@@ -897,7 +898,7 @@ fn load(
                 if !show(&mut shown, "waiting for another server's load".into()) {
                     return None;
                 }
-                LOCAL_LOADS.lock().unwrap_or_else(|e| e.into_inner())
+                LOCAL_LOADS.lock_or_recover()
             }
         };
         let need = client.load_ram_need(model) as f64 / GIB;

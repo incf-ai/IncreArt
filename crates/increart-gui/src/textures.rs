@@ -7,6 +7,7 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 
 use eframe::egui::{self, ColorImage, TextureHandle, TextureOptions};
+use increart_core::sync::LockExt;
 use increart_core::{ImageRef, thumbs};
 
 /// Longest side of the images shown in Review.
@@ -40,7 +41,7 @@ impl Textures {
                 .name(format!("textures {i}"))
                 .spawn(move || {
                     loop {
-                        let Ok((key, root)) = jobs.lock().unwrap().recv() else { return };
+                        let Ok((key, root)) = jobs.lock_or_recover().recv() else { return };
                         let img = load(&root, &key);
                         if done.send((key, img)).is_err() {
                             return;
