@@ -197,12 +197,16 @@ impl Library {
         let lock_path = root.join(LOCK_FILE);
         let mut lock = OpenOptions::new().create(true).truncate(false).write(true).open(&lock_path).at(&lock_path)?;
         // tried for a moment: a process being started elsewhere in this one
-        // holds a copy of every open file (the lock too) until it execs
+        // holds a copy of every open file (the lock too) until it execs. The
+        // lock written by this process (a library of its own just closed):
+        // longer, a busy machine can keep that child from exec'ing a while
+        let ours = fs::read_to_string(&lock_path).is_ok_and(|pid| pid.trim() == std::process::id().to_string());
+        let tries_max = if ours { 150 } else { 10 };
         let mut tries = 0;
         loop {
             match lock.try_lock() {
                 Ok(()) => break,
-                Err(fs::TryLockError::WouldBlock) if tries < 10 => {
+                Err(fs::TryLockError::WouldBlock) if tries < tries_max => {
                     tries += 1;
                     std::thread::sleep(std::time::Duration::from_millis(20));
                 }
