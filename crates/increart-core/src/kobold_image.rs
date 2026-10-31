@@ -21,8 +21,9 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{Shutdown, TcpStream, ToSocketAddrs};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
-use std::sync::{Arc, Condvar, Mutex, Weak};
+use std::sync::{Arc, Condvar, Mutex, OnceLock, Weak};
 use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
@@ -121,7 +122,8 @@ struct Inner {
     /// Sampler names and aliases (lowercase) of the loaded model; empty:
     /// not known.
     samplers: Mutex<Vec<String>>,
-    version: Mutex<Option<String>>,
+    /// Once it has answered (a reload restarts the same binary).
+    version: OnceLock<String>,
     jobs: Mutex<HashMap<String, JobState>>,
     done: Mutex<VecDeque<String>>,
     /// Swap mode: the turns, and the settings file with the image model.
@@ -154,8 +156,8 @@ pub fn chat_turn(base: &str) -> Result<Option<ChatTurn>, String> {
 /// One KoboldCpp image server (see the module docs).
 pub struct KoboldImage {
     inner: Arc<Inner>,
-    queue: Mutex<Sender<String>>,
-    next: Mutex<u64>,
+    queue: Sender<String>,
+    next: AtomicU64,
 }
 
 impl std::fmt::Debug for KoboldImage {
@@ -242,7 +244,7 @@ impl KoboldImage {
             admin,
             loaded: Mutex::new(None),
             samplers: Mutex::new(vec![]),
-            version: Mutex::new(None),
+            version: OnceLock::new(),
             jobs: Mutex::new(HashMap::new()),
             done: Mutex::new(VecDeque::new()),
             turns: (Mutex::new(Turns::default()), Condvar::new()),
@@ -259,12 +261,12 @@ impl KoboldImage {
             .name(format!("koboldcpp {base}"))
             .spawn(move || run_jobs(&runner, &rx))
             .expect("spawn koboldcpp runner");
-        KoboldImage { inner, queue: Mutex::new(tx), next: Mutex::new(0) }
+        KoboldImage { inner, queue: tx, next: AtomicU64::new(0) }
     }
 
     /// `koboldcpp <version>`, once it has answered, for recipes.
     pub fn software(&self) -> Option<String> {
-        self.inner.version.lock().unwrap().as_ref().map(|v| format!("koboldcpp {v}"))
+        self.inner.version.get().map(|v| format!("koboldcpp {v}"))
     }
 
     pub fn capabilities(&self) -> ApiResult<Value> {
@@ -273,7 +275,7 @@ impl KoboldImage {
             return Err(ApiError::Transport(format!("{} isn't KoboldCpp", self.inner.base)));
         }
         if let Some(ver) = v.get("version").and_then(Value::as_str) {
-            *self.inner.version.lock().unwrap() = Some(ver.to_string());
+            let _ = self.inner.version.set(ver.to_string());
         }
         Ok(v)
     }
@@ -353,11 +355,8 @@ impl KoboldImage {
     /// Queues a job from an sd-server `img_gen` body; returns its ID.
     pub fn img_gen(&self, body: &Value) -> ApiResult<String> {
         let samplers = self.inner.samplers.lock().unwrap().clone();
-        let id = {
-            let mut n = self.next.lock().unwrap();
-            *n += 1;
-            format!("kcpp_{:x}_{n}", now_ms())
-        };
+        let n = self.next.fetch_add(1, Ordering::Relaxed) + 1;
+        let id = format!("kcpp_{:x}_{n}", now_ms());
         let (path, a1111) = a1111_body(body, &id, &samplers).map_err(ApiError::BadRequest)?;
         let preview = body.get("preview").and_then(Value::as_str).is_some_and(|p| p != "none");
         let job = JobState {
@@ -373,7 +372,7 @@ impl KoboldImage {
             conn: None,
         };
         self.inner.jobs.lock().unwrap().insert(id.clone(), job);
-        self.queue.lock().unwrap().send(id.clone()).map_err(|_| ApiError::Transport("runner stopped".into()))?;
+        self.queue.send(id.clone()).map_err(|_| ApiError::Transport("runner stopped".into()))?;
         Ok(id)
     }
 
@@ -488,7 +487,7 @@ impl Inner {
     fn running(&self) -> ApiResult<Option<String>> {
         let v = self.get("/api/extra/version")?;
         if let Some(ver) = v.get("version").and_then(Value::as_str) {
-            *self.version.lock().unwrap() = Some(ver.to_string());
+            let _ = self.version.set(ver.to_string());
         }
         if v.get("txt2img").and_then(Value::as_bool) != Some(true) {
             return Ok(None);

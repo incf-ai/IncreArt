@@ -223,7 +223,7 @@ while kill -0 "$1" 2>/dev/null; do sleep 1 & wait $!; done"#;
     pub fn spawn_with_app(mut cmd: Command) -> io::Result<Child> {
         use std::sync::mpsc;
         type Job = (Command, mpsc::Sender<io::Result<Child>>);
-        static SPAWNER: std::sync::OnceLock<std::sync::Mutex<mpsc::Sender<Job>>> = std::sync::OnceLock::new();
+        static SPAWNER: std::sync::OnceLock<mpsc::Sender<Job>> = std::sync::OnceLock::new();
         with_app(&mut cmd);
         let spawner = SPAWNER.get_or_init(|| {
             let (tx, rx) = mpsc::channel::<Job>();
@@ -239,11 +239,11 @@ while kill -0 "$1" 2>/dev/null; do sleep 1 & wait $!; done"#;
                     }
                 })
                 .expect("can't start the server-spawner thread");
-            std::sync::Mutex::new(tx)
+            tx
         });
         let (back, child) = mpsc::channel();
         let gone = || io::Error::other("the server-spawner thread is gone");
-        spawner.lock().map_err(|_| gone())?.send((cmd, back)).map_err(|_| gone())?;
+        spawner.send((cmd, back)).map_err(|_| gone())?;
         child.recv().map_err(|_| gone())?
     }
 
