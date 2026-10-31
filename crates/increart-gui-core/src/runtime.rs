@@ -76,6 +76,8 @@ pub struct Runtime {
     tx: Sender<Msg>,
     rx: Receiver<Msg>,
     work: Sender<Effect>,
+    /// Effects sent to `work` and not yet done (their messages sent).
+    queued: Arc<std::sync::atomic::AtomicUsize>,
     /// PE servers to use and asks for them, in order; None: stop them.
     pe_work: Sender<Option<(Vec<increart_core::pe::PeServer>, Vec<crate::update::PeJob>)>>,
     shared: Arc<Mutex<Shared>>,
@@ -115,7 +117,8 @@ impl Runtime {
         let (work, jobs) = mpsc::channel::<Effect>();
         let shared = Arc::new(Mutex::new(Shared::default()));
         let wake: Wake = Arc::new(wake);
-        let (wtx, wshared, wwake) = (tx.clone(), shared.clone(), wake.clone());
+        let queued = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let (wtx, wshared, wwake, wqueued) = (tx.clone(), shared.clone(), wake.clone(), queued.clone());
         std::thread::Builder::new()
             .name("library".into())
             .spawn(move || {
@@ -124,17 +127,18 @@ impl Runtime {
                     // StopServers sent just before it.
                     if let Effect::OpenServers { servers, shared, attempt } = fx {
                         open_servers(&wtx, &wwake, &wshared, servers, shared, attempt);
-                        continue;
+                    } else {
+                        let started = matches!(fx, Effect::StartEngine { .. });
+                        let msgs = work_on(&wshared, &wwake, fx);
+                        for m in msgs {
+                            let _ = wtx.send(m);
+                        }
+                        if started {
+                            list_loadable(&wtx, &wwake, &wshared);
+                        }
+                        wwake();
                     }
-                    let started = matches!(fx, Effect::StartEngine { .. });
-                    let msgs = work_on(&wshared, &wwake, fx);
-                    for m in msgs {
-                        let _ = wtx.send(m);
-                    }
-                    if started {
-                        list_loadable(&wtx, &wwake, &wshared);
-                    }
-                    wwake();
+                    wqueued.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
                 }
             })
             .expect("spawn library worker");
@@ -149,7 +153,7 @@ impl Runtime {
                 }
             })
             .expect("spawn PE worker");
-        Runtime { tx, rx, work, pe_work, shared, pe_signal, wake }
+        Runtime { tx, rx, work, queued, pe_work, shared, pe_signal, wake }
     }
 
     pub fn run(&self, fx: Effect) {
@@ -336,7 +340,10 @@ impl Runtime {
                 });
             }
             other => {
-                let _ = self.work.send(other);
+                self.queued.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                if self.work.send(other).is_err() {
+                    self.queued.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+                }
             }
         }
     }
@@ -358,6 +365,13 @@ impl Runtime {
                 let _ = self.tx.send(m);
             }
         }
+    }
+
+    /// Nothing sent to the library worker is still to do, and the messages
+    /// of what it did are ready (tests: effects with no reply, like saving
+    /// prompt presets or reading a history, are done).
+    pub fn idle(&self) -> bool {
+        self.queued.load(std::sync::atomic::Ordering::SeqCst) == 0
     }
 
     /// Waits up to `timeout` for at least one message (tests).
