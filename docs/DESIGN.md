@@ -1414,9 +1414,16 @@ its details window, and for every run at once in the Jobs header:
 - **Finish & stop** drops the pending seeds and cancels in-flight jobs that
   are still waiting on the server, but lets the job already generating finish
   and keeps its image (the run shows "finishing N images…" until then). The
-  worker tells the two apart by the job's last polled status.
+  two are told apart by the job's polled status (the worker reports a job
+  once it is seen generating).
 - **Stop now** = `jobs/{id}/cancel` on every in-flight job + drop pending
   seeds; images being generated are thrown away. **Stop all now** asks first.
+- Either way, the seeds cancelled are let go of at once, not when their
+  server says the job ended: a job a server never ends (a hung proxy, a
+  KoboldCpp restarting) or a worker busy with a long load would otherwise
+  keep the run "finishing…" for good. The cancels are still sent; a job
+  that ends later is ignored. Stop now also ends a Finish & stop whose
+  generating image never comes.
 
 - **Shallow submission**: at most 2 jobs in flight per server (one generating,
   one queued). Everything else stays in IncreArt's own pool. This keeps
@@ -1450,7 +1457,29 @@ its details window, and for every run at once in the Jobs header:
   and loads on this machine go one at a time anyway). With a
   single server, runs for a second model therefore wait until the first
   model's work is done (no reload ping-pong). A model whose load fails
-  leaves its runs waiting (shown as stuck) instead of retrying in a loop.
+  on a server isn't tried there again (no retry loop) but may still go to
+  another; its runs wait (shown as stuck) once no server is left.
+- **Which servers**: a model goes only to servers whose model list has all
+  of its files: sd-server's `model-files`, a started KoboldCpp's model
+  folders less the files it can't load (sd-server's int8 safetensors), a
+  KoboldCpp started elsewhere only its running model. A server's list is
+  read with its probe and again whenever runs are queued; a server that
+  can't give one is tried with anything, as before. So a run of a model
+  only one server has goes there, not to the first idle server (KoboldCpp
+  first in line used to take an sd-server-only int8 model and fail, which
+  stuck the run for every server). A model no server can take is said
+  once in the messages and in its runs' logs, with each server's reason
+  ("no server can load krea2, so its runs wait (kobold: …; proxy: …)").
+- **Generation log**: each run's `generation.log` (next to its `run.rsn`)
+  has a timestamped line, tagged with the server, for everything the
+  engine does for it: queued, which server loads its model (and why not
+  the others), how the load went and how long it took, the warm-up, the
+  first seed's `img_gen` request (base64 data shown by its length), each
+  seed sent, its job ID, generating, done or failed with the server's
+  answer, cancels, and a server's failures. The job details window shows
+  it (**Generation log**, live while open, with **Copy** and **Show
+  file**), and its progress says "waiting for a server" until a server
+  has one of the run's seeds, "generating on <server>" then.
 - **One load at a time on this machine**: servers on `localhost` /
   `127.0.0.1` load models one after another (a server waiting shows
   "waiting for another server's load"). A KoboldCpp that offloads its
@@ -1496,6 +1525,7 @@ costs ~4% speed and frees ~21 GiB: see Measurements so far).
     <folder>/…/<project>/             output queue + output library (per project)
       project.rsn                     project id + source idea ids (+ cover image, image titles)
       runs/<run-id>/run.rsn
+      runs/<run-id>/generation.log    what the engine did for it and its servers' answers (Job window ▸ Generation log)
       unreviewed/<run-id>_r<rev>_s<seed>.png  link → output_images/<image-id>.png
       reviewed/{good,neutral,bad}/...         links
   collections/<folder>/…/<image-id>.png  output-library collections: links into output_images/

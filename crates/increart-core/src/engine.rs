@@ -4,7 +4,8 @@
 //! [`Engine::cancel_run`] and reads [`Event`]s.
 
 use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
+use std::io::Write as _;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex, TryLockError};
@@ -20,6 +21,23 @@ use crate::model::Run;
 use crate::request::{self, GenOptions, Provenance};
 use crate::scheduler::{Action, LoadResult, Order, Outcome, Scheduler, ServerIdx, ServerState, Ticket};
 use crate::sdserver::{ApiError, Client, Job, JobStatus, Loadable, ModelKey, ModelStatus};
+
+/// A run's generation log (DESIGN.md, Filesystem layout): what the engine
+/// did for it and what its servers answered, a line each, next to its
+/// `run.rsn`.
+pub const RUN_LOG: &str = "generation.log";
+
+/// The generation log of `run` in the project at `project_dir`.
+pub fn run_log(project_dir: &Path, run: &Id) -> PathBuf {
+    project_dir.join("runs").join(run.as_str()).join(RUN_LOG)
+}
+
+/// The last `max` lines of a generation log (none without one).
+pub fn read_run_log(path: &Path, max: usize) -> Vec<String> {
+    let text = std::fs::read_to_string(path).unwrap_or_default();
+    let lines: Vec<&str> = text.lines().collect();
+    lines[lines.len().saturating_sub(max)..].iter().map(|l| l.to_string()).collect()
+}
 
 /// One server the engine may use.
 #[derive(Clone, Debug)]
@@ -77,6 +95,8 @@ pub enum Event {
     RunDone { run: Id },
     /// Something the user should see that isn't about one seed.
     Problem(String),
+    /// A line of a run's generation log (written to its [`RUN_LOG`] too).
+    Log { run: Id, line: String },
 }
 
 /// A server's last reported state, model, idleness and runs in flight.
@@ -132,6 +152,11 @@ enum Report {
     /// A job was seen generating (not waiting in the server's queue).
     Generating {
         ticket: Ticket,
+    },
+    /// The server took a seed as this job.
+    Submitted {
+        ticket: Ticket,
+        id: String,
     },
     Warmed(Result<(), ApiError>),
     Loaded(Result<ModelStatus, ApiError>),
@@ -223,6 +248,9 @@ impl Engine {
             relist: false,
             generating: HashSet::new(),
             told_stuck: HashSet::new(),
+            logs: HashMap::new(),
+            load_started: vec![],
+            body_logged: HashSet::new(),
             events: etx,
             notify,
         };
@@ -299,6 +327,12 @@ struct Coordinator {
     generating: HashSet<Ticket>,
     /// Models said to be loadable nowhere (said once until that changes).
     told_stuck: HashSet<ModelKey>,
+    /// Queued runs' generation logs.
+    logs: HashMap<Id, PathBuf>,
+    /// When each server's latest load was asked for.
+    load_started: Vec<Option<Instant>>,
+    /// Runs whose request body is in their log (the first seed's).
+    body_logged: HashSet<Id>,
     events: Sender<Event>,
     notify: Option<Box<dyn Fn() + Send>>,
 }
@@ -319,6 +353,7 @@ impl Coordinator {
         self.shown = vec![None; self.servers.len()];
         self.waiting = vec![None; self.servers.len()];
         self.listed = vec![None; self.servers.len()];
+        self.load_started = vec![None; self.servers.len()];
         loop {
             match rx.recv_timeout(Duration::from_millis(250)) {
                 Ok(Msg::Shutdown) | Err(RecvTimeoutError::Disconnected) => return,
@@ -340,6 +375,52 @@ impl Coordinator {
         let _ = self.events.send(e);
         if let Some(n) = &self.notify {
             n();
+        }
+    }
+
+    /// Adds a line to a run's generation log (`server`: whose doing).
+    fn log(&self, run: &Id, server: Option<ServerIdx>, text: &str) {
+        let at = chrono::Local::now().format("%Y-%m-%d %H:%M:%S%.3f");
+        let line = match server {
+            Some(s) => format!("{at} [{}] {text}", self.servers[s].name),
+            None => format!("{at} {text}"),
+        };
+        if let Some(path) = self.logs.get(run) {
+            let _ = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(path)
+                .and_then(|mut f| writeln!(f, "{line}"));
+        }
+        self.emit(Event::Log { run: run.clone(), line });
+    }
+
+    /// Logs a line for every queued run of `model`.
+    fn log_model(&self, model: &ModelKey, server: Option<ServerIdx>, text: &str) {
+        let runs: Vec<&Id> =
+            self.runs.iter().filter(|(_, r)| ModelKey::from(&r.model) == *model).map(|(id, _)| id).collect();
+        for run in runs {
+            self.log(run, server, text);
+        }
+    }
+
+    /// Logs a line for every run with a seed in flight on `server`.
+    fn log_server(&self, server: ServerIdx, text: &str) {
+        let mut runs: Vec<&Id> = vec![];
+        for (_, seed) in self.sched.in_flight(server) {
+            if !runs.contains(&&seed.run) {
+                runs.push(&seed.run);
+            }
+        }
+        for run in runs {
+            self.log(run, Some(server), text);
+        }
+    }
+
+    /// Logs a line about a ticket's seed.
+    fn log_ticket(&self, ticket: Ticket, server: ServerIdx, text: &str) {
+        if let Some((_, seed)) = self.sched.ticket(ticket) {
+            self.log(&seed.run, Some(server), &format!("seed {}: {text}", seed.seed));
         }
     }
 
@@ -398,11 +479,9 @@ impl Coordinator {
             let why: Vec<String> = (0..self.servers.len())
                 .filter_map(|i| self.sched.why_not(i, &m).map(|w| format!("{}: {w}", self.servers[i].name)))
                 .collect();
-            self.emit(Event::Problem(format!(
-                "no server can load {}, so its runs wait ({})",
-                m.recipe,
-                why.join("; ")
-            )));
+            let text = format!("no server can load {}, so its runs wait ({})", m.recipe, why.join("; "));
+            self.log_model(&m, None, &text);
+            self.emit(Event::Problem(text));
         }
     }
 
@@ -414,7 +493,18 @@ impl Coordinator {
             Action::WarmUp { server } => {
                 self.sched.warmed(server, true, now);
             }
-            Action::Load { server, model } => self.send(server, Cmd::Load(model)),
+            Action::Load { server, model } => {
+                let others: Vec<String> = (0..self.servers.len())
+                    .filter_map(|i| self.sched.why_not(i, &model).map(|w| format!("{}: {w}", self.servers[i].name)))
+                    .collect();
+                let mut text = format!("loading {}", model_text(&model));
+                if !others.is_empty() {
+                    text += &format!(" (not on {})", others.join("; "));
+                }
+                self.log_model(&model, Some(server), &text);
+                self.load_started[server] = Some(now);
+                self.send(server, Cmd::Load(model))
+            }
             Action::Submit { server, ticket, seed } => {
                 let body = match self.runs.get(&seed.run) {
                     Some(run) => request::img_gen_body(&self.lib(), run, seed.seed, &self.opts.generation)
@@ -422,7 +512,13 @@ impl Coordinator {
                     None => Err(format!("run {} is not loaded", seed.run)),
                 };
                 match body {
-                    Ok(body) => self.send(server, Cmd::Submit { ticket, body }),
+                    Ok(body) => {
+                        if self.body_logged.insert(seed.run.clone()) {
+                            self.log(&seed.run, Some(server), &format!("img_gen request: {}", redacted(&body)));
+                        }
+                        self.log(&seed.run, Some(server), &format!("seed {}: sent", seed.seed));
+                        self.send(server, Cmd::Submit { ticket, body })
+                    }
                     Err(error) => self.fail_seed(ticket, &error),
                 }
             }
@@ -444,6 +540,19 @@ impl Coordinator {
             Msg::Cancel(run, how) => {
                 let (dropped, in_flight) = self.sched.cancel_run(&run);
                 let mut seeds: Vec<u64> = dropped.iter().map(|(_, s)| *s).collect();
+                let kept = in_flight.iter().filter(|(_, t)| self.generating.contains(t)).count();
+                self.log(
+                    &run,
+                    None,
+                    &match how {
+                        Stop::Now => format!("Stop now: {} waiting dropped, {} in flight cancelled", seeds.len(), in_flight.len()),
+                        Stop::Finish => format!(
+                            "Finish & stop: {} waiting dropped, {} sent but not generating cancelled, {kept} generating kept",
+                            seeds.len(),
+                            in_flight.len() - kept
+                        ),
+                    },
+                );
                 for (server, ticket) in in_flight {
                     // finishing: a job generating finishes and is kept
                     if how == Stop::Finish && self.generating.contains(&ticket) {
@@ -470,9 +579,20 @@ impl Coordinator {
                 Report::Generating { ticket } => {
                     if self.sched.ticket(ticket).is_some() {
                         self.generating.insert(ticket);
+                        self.log_ticket(ticket, s, "generating");
                     }
                 }
+                Report::Submitted { ticket, id } => {
+                    self.log_ticket(ticket, s, &format!("queued on the server as job {id}"))
+                }
                 Report::Warmed(r) => {
+                    if let Some(m) = self.sched.model_of(s) {
+                        let text = match &r {
+                            Ok(()) => "warm-up image done".to_string(),
+                            Err(e) => format!("warm-up image failed: {e}"),
+                        };
+                        self.log_model(m, Some(s), &text);
+                    }
                     if let Err(e) = &r {
                         self.emit(Event::Problem(format!("{}: warm-up failed: {e}", self.servers[s].name)));
                     }
@@ -497,6 +617,16 @@ impl Coordinator {
                         ServerState::Loading { target } => target.clone(),
                         _ => return,
                     };
+                    let took = self.load_started[s].take().map_or(0.0, |t| t.elapsed().as_secs_f32());
+                    let text = match &r {
+                        Ok(st) if st.loaded().as_ref() == Some(&target) => format!("loaded in {took:.1} s"),
+                        Ok(st) => format!(
+                            "the load answered with {} loaded",
+                            st.loaded().map_or("nothing".to_string(), |m| model_text(&m))
+                        ),
+                        Err(e) => format!("loading failed after {took:.1} s: {e}"),
+                    };
+                    self.log_model(&target, Some(s), &text);
                     let result = match r {
                         Ok(st) if st.loaded().as_ref() == Some(&target) => LoadResult::Ok,
                         Ok(st) => LoadResult::Broken {
@@ -521,17 +651,20 @@ impl Coordinator {
                     };
                     self.sched.loaded(s, result, now);
                 }
-                Report::SubmitFailed { ticket, error } => match error {
-                    ApiError::ModelNotLoaded => {
-                        self.sched.lost_model(s);
-                        self.sched.finished(ticket, Outcome::Retry);
+                Report::SubmitFailed { ticket, error } => {
+                    self.log_ticket(ticket, s, &format!("the server refused it: {error}"));
+                    match error {
+                        ApiError::ModelNotLoaded => {
+                            self.sched.lost_model(s);
+                            self.sched.finished(ticket, Outcome::Retry);
+                        }
+                        ApiError::BadRequest(m) => self.fail_seed(ticket, &m),
+                        _ => {
+                            self.sched.finished(ticket, Outcome::Retry);
+                            self.sched.server_failed(s, now);
+                        }
                     }
-                    ApiError::BadRequest(m) => self.fail_seed(ticket, &m),
-                    _ => {
-                        self.sched.finished(ticket, Outcome::Retry);
-                        self.sched.server_failed(s, now);
-                    }
-                },
+                }
                 Report::Progress { ticket, step, total, preview } => {
                     if let Some((server, seed)) = self.sched.ticket(ticket) {
                         let e = Event::Progress {
@@ -551,16 +684,23 @@ impl Coordinator {
                     self.finished(s, ticket, *job, step_s)
                 }
                 Report::Gone { ticket } => {
+                    self.log_ticket(
+                        ticket,
+                        s,
+                        "its job is gone from the server (purged, or it restarted): queued again",
+                    );
                     self.generating.remove(&ticket);
                     self.sched.finished(ticket, Outcome::Retry);
                 }
                 Report::NotSubmitted { ticket } => {
+                    self.log_ticket(ticket, s, "cancelled before it was sent");
                     if let Some(seed) = self.sched.finished(ticket, Outcome::Dropped) {
                         self.record_cancelled(&seed.run, &[seed.seed]);
                         self.check_done(&seed.run);
                     }
                 }
                 Report::PollFailed(e) => {
+                    self.log_server(s, &format!("asking for its jobs failed: {e}; their seeds go back to the queue"));
                     self.emit(Event::Problem(format!("{}: {e}", self.servers[s].name)));
                     self.sched.server_failed(s, now);
                 }
@@ -584,6 +724,16 @@ impl Coordinator {
         }
         let fresh: Vec<_> = pending.into_iter().filter(|(_, s)| !queued.contains(s)).collect();
         let model = ModelKey::from(&run.model);
+        self.logs.insert(run_id.clone(), run_log(&project, run_id));
+        if !fresh.is_empty() {
+            let seeds = match (fresh.first(), fresh.last()) {
+                (Some(a), Some(b)) if fresh.len() > 1 => format!("{} seeds ({}…{})", fresh.len(), a.1, b.1),
+                (Some(a), _) => format!("seed {}", a.1),
+                _ => String::new(),
+            };
+            let text = format!("queued {seeds} of {}", model_text(&model));
+            self.log(run_id, None, &text);
+        }
         // a sweep's runs go together (sweep labels are unique per project)
         let group = run.sweep.as_ref().map(|t| format!("{}/{}", project.display(), t.name));
         self.runs.insert(run_id.clone(), run);
@@ -603,6 +753,7 @@ impl Coordinator {
 
     fn fail_seed(&mut self, ticket: Ticket, error: &str) {
         let Some(seed) = self.sched.finished(ticket, Outcome::Dropped) else { return };
+        self.log(&seed.run, None, &format!("seed {} failed: {error}", seed.seed));
         if let Err(e) = self.lib().record_failure(&seed.run, seed.rev, seed.seed, error) {
             self.emit(Event::Problem(format!("recording failed seed: {e}")));
         }
@@ -614,6 +765,7 @@ impl Coordinator {
         match job.status {
             JobStatus::Completed => {}
             JobStatus::Cancelled => {
+                self.log_ticket(ticket, s, "cancelled by the server");
                 if let Some(seed) = self.sched.finished(ticket, Outcome::Dropped) {
                     self.record_cancelled(&seed.run, &[seed.seed]);
                     self.check_done(&seed.run);
@@ -641,6 +793,7 @@ impl Coordinator {
         });
         match written {
             Ok((image, link)) => {
+                self.log_ticket(ticket, s, &format!("done in {:.1} s", job.elapsed_s().unwrap_or(0.0)));
                 self.sched.finished(ticket, Outcome::Done);
                 self.emit(Event::Output { run: seed.run.clone(), rev: seed.rev, seed: seed.seed, image, link });
                 self.check_done(&seed.run);
@@ -651,7 +804,10 @@ impl Coordinator {
 
     fn check_done(&mut self, run: &Id) {
         if self.runs.contains_key(run) && self.sched.run_counts(run).is_none() {
+            self.log(run, None, "nothing left to generate");
             self.runs.remove(run);
+            self.logs.remove(run);
+            self.body_logged.remove(run);
             self.emit(Event::RunDone { run: run.clone() });
         }
     }
@@ -810,8 +966,8 @@ fn worker(
                 } else {
                     match client.img_gen(&body) {
                         Ok(id) => {
-                            jobs.push(Polled::new(ticket, id));
-                            true
+                            jobs.push(Polled::new(ticket, id.clone()));
+                            report(Report::Submitted { ticket, id })
                         }
                         Err(error) => report(Report::SubmitFailed { ticket, error }),
                     }
@@ -875,6 +1031,22 @@ fn worker(
             }
             i += 1;
         }
+    }
+}
+
+/// A model as logged: its preset and files.
+fn model_text(m: &ModelKey) -> String {
+    let files: Vec<&str> = m.models.values().map(String::as_str).collect();
+    format!("{} ({})", m.recipe, files.join(", "))
+}
+
+/// A request body as logged: base64 data (no spaces, long) as its length.
+fn redacted(v: &Value) -> Value {
+    match v {
+        Value::String(s) if s.len() > 200 && !s.contains(' ') => Value::String(format!("<{} characters>", s.len())),
+        Value::Array(a) => Value::Array(a.iter().map(redacted).collect()),
+        Value::Object(o) => Value::Object(o.iter().map(|(k, v)| (k.clone(), redacted(v))).collect()),
+        v => v.clone(),
     }
 }
 

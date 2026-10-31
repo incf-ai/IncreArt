@@ -2788,6 +2788,32 @@ fn sampling_bars(ui: &mut egui::Ui, j: &increart_gui_core::RunProgress) {
     }
 }
 
+/// A run's generation log: what was asked of which server and what it
+/// answered, for finding out why a run fails or waits.
+fn job_log(ui: &mut egui::Ui, st: &AppState, file: &std::path::Path, out: &mut Vec<Msg>) {
+    ui.horizontal(|ui| {
+        ui.label(RichText::new(ic(ph::SCROLL, "Generation log")).strong());
+        if st.job_log.is_empty() {
+            return;
+        }
+        if ui.small_button(ic(ph::COPY, "Copy")).on_hover_text("copy the log, e.g. into a bug report").clicked() {
+            ui.ctx().copy_text(st.job_log.join("\n"));
+        }
+        if ui.small_button(ic(ph::FOLDER_OPEN, "Show file")).on_hover_text(file.display().to_string()).clicked() {
+            out.push(Msg::ShowInFileManager(file.to_path_buf()));
+        }
+    });
+    if st.job_log.is_empty() {
+        ui.weak("Nothing logged yet: a run is logged from when it is queued.");
+        return;
+    }
+    egui::ScrollArea::vertical().id_salt("job_log").max_height(220.0).stick_to_bottom(true).show(ui, |ui| {
+        for line in &st.job_log {
+            ui.add(egui::Label::new(RichText::new(line).monospace().small()).wrap());
+        }
+    });
+}
+
 /// A job's details: progress, the prompt, the settings, and the images it
 /// was given (click one to see it large).
 pub fn job_window(ctx: &egui::Context, st: &AppState, tex: &mut Textures, out: &mut Vec<Msg>) {
@@ -2802,7 +2828,18 @@ pub fn job_window(ctx: &egui::Context, st: &AppState, tex: &mut Textures, out: &
             ui.heading(ic(ph::QUEUE, &format!("{} · {}", p.name(), run.label)));
         });
         if let Some(j) = &progress {
-            let state = if active { "generating" } else { "not queued" };
+            // generating only once a server has one of its seeds
+            let on: Vec<&str> = st
+                .server_jobs
+                .iter()
+                .filter(|(_, runs)| runs.contains(id))
+                .filter_map(|(i, _)| st.servers.get(*i).map(|s| s.name.as_str()))
+                .collect();
+            let state = match (active, on.is_empty()) {
+                (false, _) => "not queued".to_string(),
+                (true, true) => "waiting for a server (see the log)".to_string(),
+                (true, false) => format!("generating on {}", on.join(", ")),
+            };
             ui.add(egui::ProgressBar::new(j.fraction()).text(format!("{} / {} seeds · {state}", j.done, j.total)));
             sampling_bars(ui, j);
         }
@@ -2944,6 +2981,8 @@ pub fn job_window(ctx: &egui::Context, st: &AppState, tex: &mut Textures, out: &
                     ui.add(egui::Label::new(RichText::new(format!("seed {}: {}", f.seed, f.error)).small()).wrap());
                 }
             }
+            ui.add_space(6.0);
+            job_log(ui, st, &increart_core::engine::run_log(&root.join(&p.dir), id), out);
         });
         ui.separator();
         if active {

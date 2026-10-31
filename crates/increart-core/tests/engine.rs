@@ -408,6 +408,64 @@ fn a_run_no_server_can_load_says_why_once() {
     collect(&engine, run_done(&run));
 }
 
+/// The lines of a run's generation log, with their timestamps cut off.
+fn log_of(s: &Setup, run: &Id) -> Vec<String> {
+    let (dir, _) = s.lib.lock().unwrap().find_run(run).unwrap();
+    let lines = increart_core::engine::read_run_log(&increart_core::engine::run_log(&dir, run), 1000);
+    // "2026-10-31 12:00:00.000 text"
+    lines.iter().map(|l| l.splitn(3, ' ').nth(2).unwrap_or_default().to_string()).collect()
+}
+
+#[test]
+fn a_run_is_logged_from_queued_to_done() {
+    let s = setup();
+    let a = Fake::start(None);
+    a.with(|st| st.model_files = Some(FILES.iter().map(|(_, id)| id.to_string()).collect()));
+    let run = new_run(&s, "qwen-image-21", 2, false);
+    let engine = start(&s, &[&a]);
+    engine.queue_run(&run);
+    let events = collect(&engine, run_done(&run));
+    let log = log_of(&s, &run);
+    let want = [
+        "queued 2 seeds (0…1) of qwen-image-21 (diffusion_models/q.safetensors, vae/v.safetensors)",
+        "[gpu0] loading qwen-image-21 (diffusion_models/q.safetensors, vae/v.safetensors)",
+        "[gpu0] loaded in ",
+        "[gpu0] warm-up image done",
+        "[gpu0] img_gen request: {",
+        "[gpu0] seed 0: sent",
+        "[gpu0] seed 0: queued on the server as job job_fake_",
+        "[gpu0] seed 0: generating",
+        "[gpu0] seed 0: done in ",
+        "nothing left to generate",
+    ];
+    for w in want {
+        assert!(log.iter().any(|l| l.starts_with(w)), "no {w:?} in {log:#?}");
+    }
+    assert_eq!(log.last().map(String::as_str), Some("nothing left to generate"));
+    let logged = events.iter().filter(|e| matches!(e, Event::Log { run: r, .. } if r == &run)).count();
+    assert_eq!(logged, log.len(), "every line sent as an event too");
+}
+
+#[test]
+fn a_refused_request_is_logged_with_the_servers_answer() {
+    let s = setup();
+    let a = Fake::start(LOADED);
+    a.with(|st| st.submit_errors.push_back((422, serde_json::json!({"error": "width must be a multiple of 32"}))));
+    let run = new_run(&s, "qwen-image-21", 1, false);
+    let mut o = opts();
+    o.warm_up = false;
+    let ep = Endpoint { name: "proxy".into(), device: String::new(), client: Client::new(&a.url) };
+    let engine = Engine::start(s.lib.clone(), vec![ep], o, None);
+    engine.queue_run(&run);
+    collect(&engine, run_done(&run));
+    let log = log_of(&s, &run);
+    assert!(
+        log.iter().any(|l| l.starts_with("[proxy] seed 0: the server refused it:") && l.contains("multiple of 32")),
+        "{log:#?}"
+    );
+    assert!(log.iter().any(|l| l.starts_with("seed 0 failed:")), "{log:#?}");
+}
+
 #[test]
 fn finish_and_stop_keeps_the_images_being_generated() {
     let s = setup();

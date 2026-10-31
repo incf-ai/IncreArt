@@ -1125,6 +1125,9 @@ fn work_on(shared: &Arc<Mutex<Shared>>, wake: &Wake, fx: Effect) -> Vec<Msg> {
                 Err(e) => vec![Msg::Problem(format!("prompt history: {e}"))],
             }
         }
+        Effect::ReadJobLog(id, path) => {
+            vec![Msg::JobLog(id, increart_core::engine::read_run_log(&path, crate::update::JOB_LOG_LINES))]
+        }
         Effect::LoadRecipe(id) => {
             let Some(lib) = library(shared) else { return vec![] };
             let r = lib.lock().unwrap().recipe(&id).ok().flatten();

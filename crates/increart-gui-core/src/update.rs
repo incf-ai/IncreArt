@@ -708,6 +708,8 @@ pub enum Msg {
     PreviewRate(Verdict),
     /// The job details window for this run (`None` closes it).
     JobInfo(Option<Id>),
+    /// A run's generation log, read.
+    JobLog(Id, Vec<String>),
     EditResolutions(Vec<Resolution>),
     SaveResolutions,
     CloseResolutions,
@@ -934,6 +936,8 @@ pub enum Effect {
         replace_last: bool,
     },
     LoadRecipe(Id),
+    /// Reads a run's generation log (answered with [`Msg::JobLog`]).
+    ReadJobLog(Id, std::path::PathBuf),
     LoadInputMeta(Vec<Id>),
     LoadImports,
     Export {
@@ -4380,6 +4384,18 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
         }
         Msg::JobInfo(run) => {
             state.job_info = run.filter(|r| state.index.run(r).is_some());
+            state.job_log.clear();
+            match (&state.job_info, state.job_info.as_ref().and_then(|r| state.index.run(r)), &state.library) {
+                (Some(id), Some((p, _)), Some(root)) => {
+                    vec![Effect::ReadJobLog(id.clone(), increart_core::engine::run_log(&root.join(&p.dir), id))]
+                }
+                _ => vec![],
+            }
+        }
+        Msg::JobLog(run, lines) => {
+            if state.job_info.as_ref() == Some(&run) {
+                state.job_log = lines;
+            }
             vec![]
         }
         // ------------------------------------------------ review / output library
@@ -8309,9 +8325,13 @@ fn op_done(state: &mut AppState, ok: OpOk) -> Vec<Effect> {
     vec![]
 }
 
+/// The lines of a generation log the Job window holds.
+pub const JOB_LOG_LINES: usize = 5000;
+
 fn engine_event(state: &mut AppState, e: Event) -> Vec<Effect> {
     match e {
         Event::Server { server, state: s, model, idle, runs } => {
+            state.server_jobs.insert(server, runs.clone());
             state.alerts.server_runs.entry(server).or_default().extend(runs);
             if let Some(st) = state.servers.get_mut(server) {
                 st.model = model.map(|m| m.recipe);
@@ -8365,6 +8385,14 @@ fn engine_event(state: &mut AppState, e: Event) -> Vec<Effect> {
         }
         Event::Problem(p) => {
             state.messages_error(p);
+            vec![]
+        }
+        Event::Log { run, line } => {
+            if state.job_info.as_ref() == Some(&run) {
+                state.job_log.push(line);
+                let over = state.job_log.len().saturating_sub(JOB_LOG_LINES);
+                state.job_log.drain(..over);
+            }
             vec![]
         }
     }

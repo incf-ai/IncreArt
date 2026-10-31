@@ -3029,11 +3029,22 @@ fn style_sweeps_queue_review_on_a_contact_sheet_and_reuse_a_style() {
     assert_eq!(h.state.sheet_cell, (0, 0));
     h.send(Msg::Preview(None));
 
-    // a job's details open for a run that exists
+    // a job's details open for a run that exists, with its generation log
+    let (p, _) = h.state.index.run(&ids[0]).unwrap();
+    let file = increart_core::engine::run_log(&h.state.library.clone().unwrap().join(&p.dir), &ids[0]);
+    std::fs::write(&file, "10:00 queued 3 seeds\n10:01 [gpu0] seed 0: sent\n").unwrap();
     h.send(Msg::JobInfo(Some(ids[0].clone())));
+    h.settle();
     assert_eq!(h.state.job_info.as_ref(), Some(&ids[0]));
+    assert_eq!(h.state.job_log, ["10:00 queued 3 seeds", "10:01 [gpu0] seed 0: sent"]);
+    // lines the engine logs now: the open run's only
+    h.send(Msg::Engine(increart_core::engine::Event::Log { run: ids[0].clone(), line: "10:02 done".into() }));
+    h.send(Msg::Engine(increart_core::engine::Event::Log { run: ids[1].clone(), line: "10:02 other".into() }));
+    assert_eq!(h.state.job_log.last().map(String::as_str), Some("10:02 done"));
+    assert_eq!(h.state.job_log.len(), 3);
     h.send(Msg::JobInfo(Some("2001.01.01-00.00-0000".parse().unwrap())));
     assert!(h.state.job_info.is_none(), "no such run");
+    assert!(h.state.job_log.is_empty());
 
     // "Use this style": its run back in Generate as a single prompt
     h.send(Msg::RunInGenerate(ids[1].clone()));

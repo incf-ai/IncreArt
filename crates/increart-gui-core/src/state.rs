@@ -2785,6 +2785,10 @@ pub struct AppState {
     pub ref_picker_source: Option<RefSource>,
     /// The job details window (a run in Jobs or the jobs popover clicked).
     pub job_info: Option<Id>,
+    /// Its generation log (read when it opens, added to as the engine logs).
+    pub job_log: Vec<String>,
+    /// The runs each server (by index) has a job of now.
+    pub server_jobs: HashMap<usize, Vec<Id>>,
     /// The Settings window.
     pub settings_open: bool,
     pub settings_tab: SettingsTab,
@@ -3059,6 +3063,8 @@ impl AppState {
             promote: None,
             promote_last: None,
             job_info: None,
+            job_log: vec![],
+            server_jobs: HashMap::new(),
             settings_open: false,
             settings_tab: SettingsTab::Notifications,
             store: None,
