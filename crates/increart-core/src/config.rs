@@ -178,6 +178,18 @@ fn one() -> f32 {
 pub const LORA_DIRS: [&str; 2] = ["loras", "lora"];
 
 /// The LoRA folder of a model directory as it is on disk, if it has one.
+/// The first of `name(1)`, `name(2)`… that isn't `taken`.
+pub fn first_free(name: impl Fn(u64) -> String, taken: impl Fn(&str) -> bool) -> String {
+    let mut n = 1;
+    loop {
+        let candidate = name(n);
+        if !taken(&candidate) {
+            return candidate;
+        }
+        n += 1;
+    }
+}
+
 pub fn lora_dir(model_dir: &str) -> Option<PathBuf> {
     lora_dirs(&[model_dir.to_string()]).into_iter().next()
 }
@@ -693,10 +705,10 @@ impl Config {
         }
         let mut alone = vec![];
         for (_, o) in old.iter().enumerate().filter(|(i, _)| *i != used || !had_presets) {
-            let name = (1..)
-                .map(|n| if n == 1 { o.name.clone() } else { format!("{} {n}", o.name) })
-                .find(|n| self.preset(n).is_none())
-                .unwrap();
+            let name = first_free(
+                |n| if n == 1 { o.name.clone() } else { format!("{} {n}", o.name) },
+                |n| self.preset(n).is_some(),
+            );
             alone.push(name.clone());
             self.server_presets.push(ServerPreset { name, servers: vec![ServerConfig::Chat(server(o))] });
         }
