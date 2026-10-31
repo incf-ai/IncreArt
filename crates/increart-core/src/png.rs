@@ -88,19 +88,26 @@ pub fn read_chunks(bytes: &[u8]) -> Result<Vec<Chunk>, String> {
     Ok(out)
 }
 
+/// A chunk's head: its data's length and its type.
+fn chunk_head(h: [u8; 8]) -> (usize, [u8; 4]) {
+    let [l0, l1, l2, l3, k0, k1, k2, k3] = h;
+    (u32::from_be_bytes([l0, l1, l2, l3]) as usize, [k0, k1, k2, k3])
+}
+
 fn parse(bytes: &[u8], mut f: impl FnMut(Chunk) -> bool) -> Result<(), String> {
     if bytes.get(..8) != Some(SIGNATURE) {
         return Err("not a PNG file".into());
     }
     let mut i = 8;
     while i < bytes.len() {
-        let len = u32::from_be_bytes(bytes.get(i..i + 4).ok_or("truncated")?.try_into().unwrap()) as usize;
+        let len = u32::from_be_bytes(*bytes.get(i..).and_then(<[u8]>::first_chunk).ok_or("truncated")?) as usize;
         let body = bytes.get(i + 4..i + 8 + len).ok_or("truncated chunk")?;
         let crc = bytes.get(i + 8 + len..i + 12 + len).ok_or("truncated chunk")?;
+        let (kind, data) = body.split_first_chunk::<4>().ok_or("truncated chunk")?;
         if crc32fast::hash(body).to_be_bytes() != crc {
-            return Err(format!("bad CRC in {} chunk", String::from_utf8_lossy(&body[..4])));
+            return Err(format!("bad CRC in {} chunk", String::from_utf8_lossy(kind)));
         }
-        let chunk = Chunk { kind: body[..4].try_into().unwrap(), data: body[4..].to_vec() };
+        let chunk = Chunk { kind: *kind, data: data.to_vec() };
         let end = &chunk.kind == b"IEND";
         if !f(chunk) || end {
             return Ok(());
@@ -171,8 +178,7 @@ pub fn header_texts(path: &Path) -> Result<Vec<(String, String)>> {
         if r.read_exact(&mut head).is_err() {
             return Ok(out);
         }
-        let len = u32::from_be_bytes(head[..4].try_into().unwrap()) as usize;
-        let kind: [u8; 4] = head[4..].try_into().unwrap();
+        let (len, kind) = chunk_head(head);
         if &kind == b"IDAT" || &kind == b"IEND" {
             return Ok(out);
         }
@@ -240,18 +246,16 @@ pub fn find_header_chunk(path: &Path, key: &str) -> Result<Option<(u64, Chunk, b
         if r.read_exact(&mut head).is_err() {
             return Ok(None);
         }
-        let len = u32::from_be_bytes(head[..4].try_into().unwrap()) as usize;
-        let kind: [u8; 4] = head[4..].try_into().unwrap();
+        let (len, kind) = chunk_head(head);
         if &kind == b"IDAT" || &kind == b"IEND" {
             return Ok(None);
         }
         let mut data = vec![0; len + 4];
         r.read_exact(&mut data).at(path)?;
-        let crc: [u8; 4] = data[len..].try_into().unwrap();
-        data.truncate(len);
+        let crc = data.split_off(len);
         let mut body = kind.to_vec();
         body.extend(&data);
-        let ok = crc32fast::hash(&body).to_be_bytes() == crc;
+        let ok = crc32fast::hash(&body).to_be_bytes() == crc[..];
         let chunk = Chunk { kind, data };
         // a torn chunk may not parse as text: match its key by its bytes
         if chunk.data.starts_with(key.as_bytes()) && chunk.data.get(key.len()) == Some(&0) {

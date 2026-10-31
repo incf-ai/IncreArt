@@ -65,11 +65,22 @@ struct Parts {
 /// A RIFF chunk: its type and data.
 type RiffChunk<'a> = ([u8; 4], &'a [u8]);
 
+/// A RIFF chunk's head: its type and its data's length.
+fn chunk_head(h: [u8; 8]) -> ([u8; 4], usize) {
+    let [k0, k1, k2, k3, l0, l1, l2, l3] = h;
+    ([k0, k1, k2, k3], u32::from_le_bytes([l0, l1, l2, l3]) as usize)
+}
+
+/// The 8 bytes at `i`, if there are.
+fn head_at(bytes: &[u8], i: usize) -> Option<[u8; 8]> {
+    bytes.get(i..).and_then(<[u8]>::first_chunk).copied()
+}
+
 fn riff_chunks(bytes: &[u8]) -> Result<Vec<RiffChunk<'_>>, String> {
     if !is_webp(bytes) {
         return Err("not a WebP file".into());
     }
-    let size = u32::from_le_bytes(bytes[4..8].try_into().unwrap()) as usize;
+    let (_, size) = chunk_head(head_at(bytes, 0).ok_or("truncated")?);
     let end = 8 + size;
     if end > bytes.len() {
         return Err("truncated".into());
@@ -77,8 +88,7 @@ fn riff_chunks(bytes: &[u8]) -> Result<Vec<RiffChunk<'_>>, String> {
     let mut out = Vec::new();
     let mut i = 12;
     while i + 8 <= end {
-        let kind: [u8; 4] = bytes[i..i + 4].try_into().unwrap();
-        let len = u32::from_le_bytes(bytes[i + 4..i + 8].try_into().unwrap()) as usize;
+        let (kind, len) = chunk_head(head_at(bytes, i).ok_or("truncated chunk")?);
         let data = bytes.get(i + 8..i + 8 + len).filter(|_| i + 8 + len <= end).ok_or("truncated chunk")?;
         out.push((kind, data));
         i += 8 + len + (len & 1);
@@ -122,13 +132,9 @@ fn wrap(c: &Chunk) -> Vec<u8> {
 
 /// A `PNGt` chunk's PNG chunk and whether its CRC is right.
 fn unwrap_checked(d: &[u8]) -> Option<(Chunk, bool)> {
-    if d.len() < 8 {
-        return None;
-    }
-    let kind: [u8; 4] = d[..4].try_into().unwrap();
-    let data = d[4..d.len() - 4].to_vec();
-    let ok = crc(&kind, &data) == d[d.len() - 4..];
-    Some((Chunk { kind, data }, ok))
+    let (kind, rest) = d.split_first_chunk::<4>()?;
+    let (data, sum) = rest.split_last_chunk::<4>()?;
+    Some((Chunk { kind: *kind, data: data.to_vec() }, crc(kind, data) == *sum))
 }
 
 fn unwrap(d: &[u8]) -> Option<Chunk> {
@@ -203,8 +209,7 @@ fn walk_header(path: &Path, mut f: impl FnMut(u64, [u8; 4], Vec<u8>) -> bool) ->
         if r.read_exact(&mut h).is_err() {
             return Ok(());
         }
-        let kind: [u8; 4] = h[..4].try_into().unwrap();
-        let len = u32::from_le_bytes(h[4..].try_into().unwrap()) as usize;
+        let (kind, len) = chunk_head(h);
         if matches!(&kind, b"VP8L" | b"VP8 " | b"ALPH" | b"ANIM" | b"ANMF") {
             return Ok(());
         }
@@ -266,7 +271,8 @@ pub fn patch_chunk(path: &Path, at: u64, chunk: &Chunk) -> Result<()> {
     let mut head = [0; 8];
     crate::fsutil::read_exact_at(&f, &mut head, at).at(path)?;
     let bytes = wrap(chunk);
-    if &head[..4] != b"PNGt" || u32::from_le_bytes(head[4..].try_into().unwrap()) as usize != bytes.len() {
+    let (kind, len) = chunk_head(head);
+    if &kind != b"PNGt" || len != bytes.len() {
         return Err(Error::format(path, "chunk to patch has another length"));
     }
     crate::fsutil::write_all_at(&f, &bytes, at + 8).and_then(|_| crate::fsutil::sync(&f)).at(path)

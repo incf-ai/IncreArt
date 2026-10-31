@@ -162,4 +162,23 @@ mod tests {
         assert_eq!(format_of(&plain), Some(StoreFormat::Png));
         assert_eq!(import::decode_pixels(&plain).unwrap().hash(), px.hash());
     }
+
+    #[test]
+    fn cut_short_or_damaged_files_are_errors_not_panics() {
+        let px = Pixels { width: 3, height: 2, channels: 4, data: (0..24).map(|i| (i * 7) as u8).collect() };
+        let chunks = [Chunk::text(KEY_ID, "x"), Chunk::exif(b"MM".to_vec())];
+        for format in [StoreFormat::Png, StoreFormat::Webp] {
+            let (_, bytes) = encode(format, &px, &chunks);
+            let damaged = (0..bytes.len()).map(|i| {
+                let mut b = bytes.clone();
+                b[i] ^= 0xff;
+                b
+            });
+            for b in (0..bytes.len()).map(|n| bytes[..n].to_vec()).chain(damaged) {
+                let _ = metadata(&b);
+                let _ = strip_metadata(&b);
+                let _ = set_chunks(&b, &chunks);
+            }
+        }
+    }
 }
