@@ -670,7 +670,9 @@ fn deleted_outputs_are_discarded_restored_or_deleted_for_good() {
     let bad = lib.review_output(&link, Some(Verdict::Bad)).unwrap();
 
     let gone = lib.delete_output_link(&bad).unwrap();
-    assert!(gone.to_string_lossy().contains("/discarded/reviewed/bad/"), "{}", gone.display());
+    // by components: Windows separates with \
+    let parts: Vec<_> = gone.components().map(|c| c.as_os_str().to_string_lossy().into_owned()).collect();
+    assert!(parts.windows(3).any(|w| w == ["discarded", "reviewed", "bad"]), "{}", gone.display());
     assert!(lib.delete_output_link(&gone).is_err());
     resolves(&lib, &gone, Store::Output);
     let ix = lib.scan().unwrap();

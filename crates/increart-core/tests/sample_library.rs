@@ -135,6 +135,37 @@ fn second_instance_is_refused() {
     assert!(matches!(Library::open(&root), Err(Error::Locked(_))));
 }
 
+/// A process being started holds a copy of every open file, the lock too,
+/// until it execs; on a busy machine (a CI runner's 2 CPUs taken by
+/// KoboldCpp) that took longer than the open waited. The library closed
+/// meanwhile opens once it has.
+#[cfg(unix)]
+#[test]
+fn a_process_starting_as_the_library_closes_doesnt_keep_it_locked() {
+    use std::os::unix::process::CommandExt;
+    let tmp = sample();
+    let root = tmp.path().join("lib");
+    let lib = Library::open(&root).unwrap();
+    let starting = std::thread::spawn(|| {
+        let mut cmd = std::process::Command::new("true");
+        // SAFETY: nanosleep is async-signal-safe; nothing else runs before exec.
+        unsafe {
+            cmd.pre_exec(|| {
+                let pause = libc::timespec { tv_sec: 0, tv_nsec: 700_000_000 };
+                libc::nanosleep(&pause, std::ptr::null_mut());
+                Ok(())
+            });
+        }
+        cmd.status().unwrap()
+    });
+    // forked (holding the lock's copy), not yet exec'd
+    std::thread::sleep(std::time::Duration::from_millis(100));
+    drop(lib);
+    let reopened = Library::open(&root);
+    assert!(starting.join().unwrap().success());
+    assert!(reopened.is_ok(), "{:?}", reopened.err());
+}
+
 #[test]
 fn pixel_index_is_built_and_checked() {
     let tmp = sample();
