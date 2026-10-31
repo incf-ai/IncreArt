@@ -681,20 +681,9 @@ pub fn servers(ui: &mut egui::Ui, st: &AppState, d: &ServerDialog, out: &mut Vec
             || st.confirm.is_some()
             || st.pe.editor.is_some();
         // the settings on the left, the ways out on the right
-        let ((settings, logs, validate), _) = dialog_footer(
+        let ((settings, logs), _) = dialog_footer(
             ui,
             |ui| {
-                // the suite starts the servers itself: not with any open
-                let validate = !d.opening
-                    && st.servers.is_empty()
-                    && st.background.is_none()
-                    && ui
-                        .button(ic(ph::STETHOSCOPE, "Validate servers…"))
-                        .on_hover_text(
-                            "the server validation suite: opens each preset's servers and tests every call the \
-                             app makes, case by case, each request and answer logged",
-                        )
-                        .clicked();
                 let settings = !d.opening
                     && ui
                         .button(ic(ph::GEAR, "Server settings…"))
@@ -706,13 +695,10 @@ pub fn servers(ui: &mut egui::Ui, st: &AppState, d: &ServerDialog, out: &mut Vec
                     .button(ic(ph::SCROLL, "Logs…"))
                     .on_hover_text("the logs of the servers IncreArt started")
                     .clicked();
-                (settings, logs, validate)
+                (settings, logs)
             },
             |ui| ways_out(ui, st, d, modal, out),
         );
-        if validate {
-            out.push(Msg::ApiTest(true));
-        }
         if settings {
             out.push(Msg::ServerSettings(true));
         }
@@ -939,6 +925,21 @@ fn presets(ui: &mut egui::Ui, st: &AppState, d: &ServerDialog, out: &mut Vec<Msg
                 .clicked()
         {
             out.push(Msg::ServerWizard(true));
+        }
+        // the suite starts the servers itself: not with any open
+        if !st.config.server_presets.is_empty()
+            && !d.opening
+            && st.servers.is_empty()
+            && st.background.is_none()
+            && ui
+                .button(ic(ph::STETHOSCOPE, "Validate servers…"))
+                .on_hover_text(
+                    "the server validation suite: opens each preset's servers and tests every call the app \
+                     makes, case by case, each request and answer logged",
+                )
+                .clicked()
+        {
+            out.push(Msg::ApiTest(true));
         }
     });
     ui.add_space(6.0);
