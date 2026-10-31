@@ -2558,7 +2558,7 @@ ends, is stopped, or loses the app (its stdin closing).
   of the cases shown. Left, the cases as a tree, preset, then server (or
   "servers together"), then group; each branch's checkbox checks all in it (half
   checked: some), its mark the worst of theirs. n/a cases start unchecked.
-  **Check all**, **Uncheck all**, **Light only**, **Basic only**. Right, the case clicked
+  **Check ▾** (Check all, Uncheck all, Light only, Basic only). Right, the case clicked
   (what it expects, its result, its log and traffic), else the last run's
   counts and the run's log;
   it follows the case running until one is clicked. **Run N checked**,

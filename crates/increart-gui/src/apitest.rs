@@ -702,38 +702,46 @@ fn footer(ui: &mut egui::Ui, st: &AppState, t: &ApiTest, out: &mut Vec<Msg>) {
             }
             // of the preset shown: a hidden one's servers aren't started unseen
             let every = t.shown_cases();
-            if ui.button("Check all").clicked() {
-                out.push(Msg::ApiTestCheck(every.clone(), true));
-            }
-            if ui.button("Uncheck all").clicked() {
-                out.push(Msg::ApiTestCheck(every.clone(), false));
-            }
             let light: Vec<usize> = every.iter().copied().filter(|&i| t.cases[i].case.cost == Cost::Light).collect();
-            if ui
-                .button("Light only")
-                .on_hover_text("checks only the cases that load nothing and generate nothing")
-                .clicked()
-            {
-                out.push(Msg::ApiTestCheck(every.clone(), false));
-                out.push(Msg::ApiTestCheck(light, true));
-            }
             let basic: Vec<usize> = every
                 .iter()
                 .copied()
                 .filter(|&i| t.cases[i].case.basic && t.cases[i].case.not_applicable.is_none())
                 .collect();
-            if ui
-                .button("Basic only")
-                .on_hover_text(
-                    "checks only the basic cases: each server answers, lists its models and makes a small image, \
-                     a chat server answers, the servers together route each model preset and run through the \
-                     engine. A preset whose basic cases all run is noted as validated (or not) for its settings",
-                )
-                .clicked()
-            {
-                out.push(Msg::ApiTestCheck(every.clone(), false));
-                out.push(Msg::ApiTestCheck(basic, true));
-            }
+            // one menu: four buttons didn't fit the row beside the others
+            ui.add_enabled_ui(idle, |ui| {
+                ui.menu_button(ic(ph::CHECK_SQUARE, &format!("Check {}", ph::CARET_DOWN)), |ui| {
+                    if ui.button("Check all").clicked() {
+                        out.push(Msg::ApiTestCheck(every.clone(), true));
+                    }
+                    if ui.button("Uncheck all").clicked() {
+                        out.push(Msg::ApiTestCheck(every.clone(), false));
+                    }
+                    if ui
+                        .button("Light only")
+                        .on_hover_text("checks only the cases that load nothing and generate nothing")
+                        .clicked()
+                    {
+                        out.push(Msg::ApiTestCheck(every.clone(), false));
+                        out.push(Msg::ApiTestCheck(light, true));
+                    }
+                    if ui
+                        .button("Basic only")
+                        .on_hover_text(
+                            "checks only the basic cases: each server answers, lists its models and makes a small \
+                             image, a chat server answers, the servers together route each model preset and run \
+                             through the engine. A preset whose basic cases all run is noted as validated (or not) \
+                             for its settings",
+                        )
+                        .clicked()
+                    {
+                        out.push(Msg::ApiTestCheck(every.clone(), false));
+                        out.push(Msg::ApiTestCheck(basic, true));
+                    }
+                })
+                .response
+                .on_hover_text("Check all, Uncheck all, Light only, Basic only: of the preset shown");
+            });
             ui.separator();
             let copy = ui
                 .add_enabled(report.is_some(), egui::Button::new(ic(ph::COPY, "Copy report")))
