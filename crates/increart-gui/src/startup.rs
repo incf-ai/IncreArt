@@ -64,6 +64,19 @@ pub fn library(
                 ui.weak("The servers stay connected.");
             });
         }
+        if back.is_none() {
+            // what a library is, for a first start
+            ui.label(
+                "A library is a folder on your disk that holds all your work: ideas and reference images, \
+                 projects and their runs, and every image generated, each with the recipe that made it.",
+            );
+            ui.weak(
+                "IncreArt works inside one library at a time, so open one to start. Keep several (one per \
+                 theme or client, say) and switch between them from the top bar; copy or back up the folder \
+                 to keep everything in it.",
+            );
+            ui.add_space(4.0);
+        }
         ui.add_space(6.0);
         // at least the label and three rows tall, so a short list (or none)
         // doesn't leave a wide, flat dialog
@@ -71,7 +84,7 @@ pub fn library(
         ui.vertical(|ui| {
             ui.set_min_height(4.0 * row);
             if recent.is_empty() {
-                ui.label("No libraries yet. A library is the folder that holds your ideas, projects and images.");
+                ui.label("No libraries yet: create a new one, or open one you already have.");
             } else {
                 ui.label(RichText::new("Recent").strong());
                 let example = increart_core::config::bundled_example_library();
