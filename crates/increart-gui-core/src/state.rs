@@ -48,8 +48,8 @@ pub struct LibFilter {
     pub text: String,
     pub starred_only: bool,
     pub with_images_only: bool,
-    /// `Some(true)`: promoted ideas only; `Some(false)`: not yet promoted.
-    pub promoted: Option<bool>,
+    /// `Some(true)`: ideas used in a project only; `Some(false)`: in none yet.
+    pub used_in_project: Option<bool>,
     /// Most used first (as ref or start image), instead of newest first.
     pub most_used: bool,
     /// The edited copies (Crop / mark…) too, from `input/edited/`.
@@ -404,7 +404,7 @@ impl OutputPreset {
 pub enum Smart {
     /// One day, from the image IDs (`YYYY.MM.DD`).
     Day(String),
-    /// Made from runs promoted from this idea.
+    /// Made from runs of projects made from this idea.
     Idea(Id),
     /// Runs with Transparent on.
     Transparent,
@@ -758,6 +758,8 @@ pub enum ProjectsTab {
     Folder,
     Generate,
     Jobs,
+    /// Discarded projects: restore or delete for good.
+    Discarded,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1174,6 +1176,8 @@ pub enum SheetCell<'a> {
 pub enum OutputTab {
     Grid,
     Folder,
+    /// Discarded images: restore or delete for good.
+    Discarded,
 }
 
 /// What the Output library's Grid shows.
@@ -1222,21 +1226,48 @@ impl Confirm {
     }
 }
 
-/// The log viewer: the started servers' logs (DESIGN.md, Server logs).
+/// The log viewer: the app's log and the started servers' (DESIGN.md,
+/// Server logs).
 #[derive(Clone, Debug, PartialEq)]
 pub struct LogsView {
     /// The log shown: its file name in the log folder.
     pub file: Option<String>,
-    /// Only the lines containing this (any case).
+    /// Found in the lines shown (any case): marked, Enter going from one to
+    /// the next.
     pub search: String,
+    /// Only the lines with `search` in them.
+    pub only_found: bool,
     pub wrap: bool,
     /// Keep to the end as the log grows.
     pub follow: bool,
+    pub launch: LaunchShown,
+    /// Only warnings and errors (and the app's lines), with the lines
+    /// around them.
+    pub trouble: bool,
+}
+
+/// Which of a log's launches the log viewer shows.
+#[derive(Clone, Debug, PartialEq, Default)]
+pub enum LaunchShown {
+    /// From the last launch line on.
+    #[default]
+    Latest,
+    /// The launch with this launch line.
+    Of(String),
+    All,
 }
 
 impl LogsView {
     pub fn new(file: Option<String>) -> Self {
-        LogsView { file, search: String::new(), wrap: false, follow: true }
+        LogsView {
+            file,
+            search: String::new(),
+            only_found: false,
+            wrap: false,
+            follow: true,
+            launch: LaunchShown::Latest,
+            trouble: false,
+        }
     }
 }
 
@@ -1617,17 +1648,15 @@ pub enum StartRefs {
     Files,
 }
 
-/// Naming the project that promoting ideas makes (always asked: an idea's
+/// Naming the project New project from ideas makes (always asked: an idea's
 /// title needn't suit a project).
 #[derive(Clone, Debug, PartialEq)]
-pub struct PromoteDialog {
-    /// The ideas; empty: the New idea form's draft (Add and promote).
+pub struct FromIdeasDialog {
+    /// The ideas; empty: the New idea form's draft (Add & new project).
     pub ideas: Vec<Id>,
     /// Where the project goes, relative to `projects/` (step 2 picks it).
     pub parent: PathBuf,
     pub name: String,
-    /// Step 2: choosing where.
-    pub choosing: bool,
     /// A new folder to make in `parent` (on Create) and put the project in;
     /// an existing one of that name (any case) is used. It starts as the
     /// project's name and follows it while they match (`None`: in `parent`
@@ -1635,17 +1664,50 @@ pub struct PromoteDialog {
     pub new_folder: Option<String>,
     /// Step 2's folder filter.
     pub filter: String,
+    /// The draft from Save to input library's Save & new project: the
+    /// library folder it's saved in (else the top level).
+    pub saved_in: Option<PathBuf>,
 }
 
-impl PromoteDialog {
-    pub fn new(ideas: Vec<Id>, parent: PathBuf, name: String) -> PromoteDialog {
+impl FromIdeasDialog {
+    pub fn new(ideas: Vec<Id>, parent: PathBuf, name: String) -> FromIdeasDialog {
         let new_folder = Some(name.trim().to_string());
-        PromoteDialog { ideas, parent, name, choosing: false, new_folder, filter: String::new() }
+        FromIdeasDialog { ideas, parent, name, new_folder, filter: String::new(), saved_in: None }
     }
 
     /// The project goes in a new folder named after it.
     pub fn own_folder(&self) -> bool {
         self.new_folder.as_deref().map(str::trim) == Some(self.name.trim())
+    }
+}
+
+/// Save to input library, from the Idea inbox or the New idea form: the
+/// idea's name (one idea or the draft; several keep their titles) and the
+/// library folder it goes to.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SaveIdeaDialog {
+    /// The ideas; empty: the New idea form's draft (Add & save).
+    pub ideas: Vec<Id>,
+    /// Starts as the idea's title.
+    pub name: String,
+    /// Relative to `input/library/` (empty: the top level).
+    pub folder: PathBuf,
+    /// A new folder to make in `folder` and save into (an existing one of
+    /// that name, any case, is used).
+    pub new_folder: Option<String>,
+    /// The folder tree's filter.
+    pub filter: String,
+}
+
+impl SaveIdeaDialog {
+    /// Starting in the folder the last save went to, if it's still there.
+    pub fn new(state: &AppState, ideas: Vec<Id>, name: String) -> SaveIdeaDialog {
+        let folder = state
+            .save_idea_last
+            .clone()
+            .filter(|f| f.as_os_str().is_empty() || state.index.library_folders.contains(f))
+            .unwrap_or_default();
+        SaveIdeaDialog { ideas, name, folder, new_folder: None, filter: String::new() }
     }
 }
 
@@ -2987,11 +3049,16 @@ pub struct AppState {
     pub start_project: Option<StartProjectDialog>,
     /// Naming a project's plain Duplicate.
     pub duplicate: Option<DuplicateDialog>,
-    /// Naming the project for Promote.
-    pub promote: Option<PromoteDialog>,
-    /// Where the last promote put its project (this session), the next
+    /// Naming the project for New project from ideas.
+    pub from_ideas: Option<FromIdeasDialog>,
+    /// Where the last New project from ideas put its project (this session), the next
     /// one's first guess.
-    pub promote_last: Option<PathBuf>,
+    pub from_ideas_last: Option<PathBuf>,
+    /// Saving inbox ideas to the input library.
+    pub save_idea: Option<SaveIdeaDialog>,
+    /// Where the last Save to input library went (this session), the next
+    /// one's first folder.
+    pub save_idea_last: Option<PathBuf>,
     /// The prompt presets (shared by every library).
     pub prompt_presets: PromptPresets,
     /// The `prompt-presets` folder they are saved in (`None`: not saved,
@@ -3247,8 +3314,10 @@ impl AppState {
             ref_picker: None,
             ref_picker_source: None,
             title_edit: None,
-            promote: None,
-            promote_last: None,
+            from_ideas: None,
+            from_ideas_last: None,
+            save_idea: None,
+            save_idea_last: None,
             job_info: None,
             job_log: vec![],
             server_jobs: HashMap::new(),
@@ -3345,7 +3414,7 @@ impl AppState {
                 || i.tags.iter().any(|t| t.to_lowercase().contains(&q)))
                 && (!f.starred_only || i.starred)
                 && (!f.with_images_only || !i.images.is_empty())
-                && f.promoted.is_none_or(|p| p == !i.projects.is_empty())
+                && f.used_in_project.is_none_or(|p| p == !i.projects.is_empty())
         });
         v.sort_by(|a, b| b.idea.id.cmp(&a.idea.id));
         if f.most_used {
@@ -4586,9 +4655,12 @@ impl AppState {
                     .map(|r| r.live_seeds().count() as u64)
                     .sum::<u64>()
                     .saturating_sub(images as u64);
-                let mut s = format!("{folders} folder(s), {} project(s), {images} image link(s)", ps.len());
+                let mut s = format!(
+                    "{folders} folder(s); {} project(s) with {images} image link(s) will be discarded (restorable)",
+                    ps.len()
+                );
                 if pending > 0 {
-                    s.push_str(&format!("; {pending} pending seed(s) will not be generated"));
+                    s.push_str(&format!("; {pending} pending seed(s) won't be generated unless restored"));
                 }
                 s
             }
@@ -4606,6 +4678,14 @@ impl AppState {
                 format!("{n} link(s); the images stay")
             }
         }
+    }
+
+    /// Discarded output images (every project's `discarded/`), newest
+    /// first.
+    pub fn discarded_outputs(&self) -> Vec<&OutputLink> {
+        let mut v: Vec<_> = self.index.projects.iter().flat_map(|p| &p.discarded).collect();
+        v.sort_by(|a, b| b.image.id.cmp(&a.image.id));
+        v
     }
 
     /// Every output image, any rating or none, newest first.

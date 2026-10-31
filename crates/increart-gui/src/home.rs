@@ -136,9 +136,9 @@ fn steps(ui: &mut egui::Ui, st: &AppState, out: &mut Vec<Msg>) {
         Step {
             icon: ph::TRAY,
             title: "Sort the inbox",
-            text: "Go through the inbox and keep or discard each idea. Kept ideas move to the Input library; \
-                   discarded ones wait under Discarded, where they can be restored.",
-            keys: "1 / G keep and star · 2 / N keep · 3 / B discard · Ctrl+Z undo",
+            text: "Go through the inbox and save or discard each idea. Saving asks its name and the Input \
+                   library folder it goes to; discarded ones wait under Discarded, where they can be restored.",
+            keys: "1 / 2 / S save… · 3 / B discard · Ctrl+Z undo",
             count: format!("{} to sort", st.unreviewed_ideas().len()),
             button: open_tab(Tab::IdeaInbox),
             open: vec![Msg::Tab(Tab::IdeaInbox), Msg::InboxTab(InboxTab::Grid)],
@@ -146,9 +146,9 @@ fn steps(ui: &mut egui::Ui, st: &AppState, out: &mut Vec<Msg>) {
         Step {
             icon: ph::BOOKS,
             title: "Input library",
-            text: "Your kept ideas and reference images, filed in folders, starred or not. Promote ideas into a \
-                   project, or use their images as references.",
-            keys: "P promote",
+            text: "Your kept ideas and reference images, filed in folders, starred or not. Make a new project \
+                   from ideas, or use their images as references.",
+            keys: "P new project",
             count: format!("{} kept ideas", st.library_ideas_all()),
             button: open_tab(Tab::InputLibrary),
             open: vec![Msg::Tab(Tab::InputLibrary)],
@@ -261,7 +261,7 @@ fn recent_projects(ui: &mut egui::Ui, st: &AppState, out: &mut Vec<Msg>) {
         .collect();
     if projects.is_empty() {
         ui.heading("Projects");
-        ui.weak("No projects yet. Start one above, or promote ideas from the Input library.");
+        ui.weak("No projects yet. Start one above, or make one from ideas in the Input library.");
         return;
     }
     projects.sort_by_key(|p| std::cmp::Reverse(p.0));

@@ -313,12 +313,8 @@ pub fn spawn(
     }
     let mut out = OpenOptions::new().create(true).append(true).open(log).map_err(log_error)?;
     let mut cmd = command(binary)?;
-    crate::process::background(&mut cmd, true)
-        .args(args)
-        .envs(env.iter().cloned())
-        .stdin(Stdio::null())
-        .stdout(out.try_clone().map_err(log_error)?)
-        .stderr(out.try_clone().map_err(log_error)?);
+    crate::process::background(&mut cmd, true).args(args).envs(env.iter().cloned()).stdin(Stdio::null());
+    let pipe = crate::process::output_to(&mut cmd, &out, with_app).map_err(log_error)?;
     // the command line first, and then where the server's output starts
     out.write_all(crate::process::log_header(&cmd).as_bytes()).map_err(log_error)?;
     let start = out.metadata().map_err(log_error)?.len();
@@ -328,6 +324,9 @@ pub fn spawn(
         let _ = writeln!(out, "--- IncreArt: {why}");
         why
     })?;
+    if let Some(pipe) = pipe {
+        crate::process::stamp_into(pipe, out.try_clone().map_err(log_error)?);
+    }
     Ok((child, start))
 }
 
@@ -401,6 +400,28 @@ mod tests {
         let t = Instant::now();
         crate::process::stop(child);
         assert!(t.elapsed() < Duration::from_secs(4), "stopped by TERM, not waited out");
+    }
+
+    /// Stopped with the app: its lines (stdout and stderr) get the time they
+    /// came; a line rewritten with `\r` once, at its start.
+    #[cfg(unix)]
+    #[test]
+    fn a_server_stopped_with_the_app_has_its_lines_timed() {
+        use std::time::{Duration, Instant};
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("k.log");
+        let script = "printf 'up\\n 1/2\\r 2/2\\n'; echo oops >&2; sleep 30";
+        let (child, start) = spawn("sh", &["-c".into(), script.into()], &[], &log, true).unwrap();
+        let output = || fs::read_to_string(&log).unwrap_or_default()[start as usize..].to_string();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while output().lines().count() < 3 && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        crate::process::stop(child);
+        let out = output();
+        let lines: Vec<(&str, &str)> = out.lines().map(crate::logview::split_stamp).collect();
+        assert!(lines.iter().all(|(stamp, _)| !stamp.is_empty()), "{out:?}");
+        assert_eq!(lines.iter().map(|l| l.1).collect::<Vec<_>>(), ["up", " 1/2\r 2/2", "oops"]);
     }
 
     #[test]

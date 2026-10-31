@@ -436,11 +436,11 @@ Review → Single on a sweep's image: **Sweep r02 contact sheet** in the top bar
 
 ![72-review-sweep-button](72-review-sweep-button.png)
 
-## 73-promote
+## 73-new-project-from-ideas
 
-Promote into project: the new project's name, always asked (the first idea title as the guess)
+New project from ideas: the project folders on the left (New folder under them), the new project's name, always asked (the first idea title as the guess)
 
-![73-promote](73-promote.png)
+![73-new-project-from-ideas](73-new-project-from-ideas.png)
 
 ## 99a-home
 

@@ -1170,7 +1170,10 @@ fn list_dir(root: &Path, rel: &Path) -> Vec<FvEntry> {
     for e in rd.flatten() {
         let path = e.path();
         let name = e.file_name().to_string_lossy().into_owned();
-        if name.starts_with('.') {
+        // a project's discarded images are shown in Output library → Discarded
+        if name.starts_with('.')
+            || (name == increart_core::scan::DISCARDED_OUTPUTS && dir.join("project.rsn").is_file())
+        {
             continue;
         }
         let meta = std::fs::metadata(&path).ok();
@@ -1298,7 +1301,7 @@ fn work_on(shared: &Arc<Mutex<Shared>>, wake: &Wake, fx: Effect) -> Vec<Msg> {
     match fx {
         Effect::SaveConfig(config, path) => match config.save(&path) {
             Ok(()) => vec![],
-            Err(e) => vec![Msg::OpDone(Err(format!("saving settings: {e}")), None)],
+            Err(e) => vec![Msg::Problem(format!("saving settings: {e}"))],
         },
         Effect::OpenLibrary { path, create } => {
             let opened = if create { Library::create(&path, None) } else { Library::open(&path) };
@@ -1403,7 +1406,7 @@ fn work_on(shared: &Arc<Mutex<Shared>>, wake: &Wake, fx: Effect) -> Vec<Msg> {
         }
         Effect::SavePresets(presets, path) => match presets.save_dir(&path) {
             Ok(()) => vec![],
-            Err(e) => vec![Msg::OpDone(Err(format!("saving prompt presets: {e}")), None)],
+            Err(e) => vec![Msg::Problem(format!("saving prompt presets: {e}"))],
         },
         Effect::StopServers => {
             let mut s = shared.lock().unwrap();
@@ -1760,10 +1763,20 @@ fn verdict_of(link: &Path) -> Option<Verdict> {
 
 pub fn lib_op(lib: &mut Library, op: LibOp) -> Result<OpOk, String> {
     match op {
-        LibOp::NewIdea(n) => lib.new_idea(n).map(OpOk::Idea).map_err(err),
-        LibOp::NewIdeaPromote(n, folder, name) => {
+        LibOp::NewIdea(n) => {
+            // Add & save to input library may name a new folder
+            if let IdeaLoc::Library(folder) = &n.loc {
+                lib.make_library_folder(folder).map_err(err)?;
+            }
+            lib.new_idea(n).map(OpOk::Idea).map_err(err)
+        }
+        LibOp::NewIdeaNewProject(n, folder, name) => {
+            // Save & new project may name a new library folder
+            if let IdeaLoc::Library(f) = &n.loc {
+                lib.make_library_folder(f).map_err(err)?;
+            }
             let id = lib.new_idea(n).map_err(err)?;
-            promote(lib, &[id], &folder, &name)
+            new_project_from_ideas(lib, &[id], &folder, &name)
         }
         LibOp::ImportFiles(paths) => {
             for p in paths {
@@ -1790,10 +1803,15 @@ pub fn lib_op(lib: &mut Library, op: LibOp) -> Result<OpOk, String> {
             ids.map(OpOk::ImportedRefs).map_err(err)
         }
         LibOp::ReviewIdea(id, v) => lib.review_idea(&id, v).map(|_| OpOk::Done).map_err(err),
+        LibOp::SaveToLibrary(id, title, folder) => {
+            lib.save_to_library(&id, title.as_deref(), &folder).map(|_| OpOk::Done).map_err(err)
+        }
         LibOp::MoveIdea(id, loc) => lib.move_idea(&id, &loc).map(|_| OpOk::Done).map_err(err),
         LibOp::SetStar(id, on) => lib.update_idea(&id, |i| i.starred = on).map(|_| OpOk::Done).map_err(err),
         LibOp::DeleteDiscarded(id) => lib.delete_discarded_idea(&id).map(|_| OpOk::Done).map_err(err),
-        LibOp::Promote(ids, folder, name) => promote(lib, &ids, &folder, &name),
+        LibOp::RestoreProject(id) => lib.restore_project(&id).map(|_| OpOk::Done).map_err(err),
+        LibOp::DeleteDiscardedProject(id) => lib.delete_discarded_project(&id).map(|_| OpOk::Done).map_err(err),
+        LibOp::NewProjectFromIdeas(ids, folder, name) => new_project_from_ideas(lib, &ids, &folder, &name),
         LibOp::CreateFolder(tree, parent) => {
             lib.create_folder(tree, &parent, None).map(|p| OpOk::Created(tree, p)).map_err(err)
         }
@@ -1890,6 +1908,18 @@ pub fn lib_op(lib: &mut Library, op: LibOp) -> Result<OpOk, String> {
             }
             Ok(OpOk::Done)
         }
+        LibOp::RestoreOutputs(links) => {
+            for l in links {
+                lib.restore_output_link(&l).map_err(err)?;
+            }
+            Ok(OpOk::Done)
+        }
+        LibOp::DeleteDiscardedOutputs(links) => {
+            for l in links {
+                lib.delete_discarded_output(&l).map_err(err)?;
+            }
+            Ok(OpOk::Done)
+        }
         LibOp::ReviewOutputs { links, undo } => {
             let mut done = vec![];
             for (link, verdict) in links {
@@ -1908,7 +1938,7 @@ pub fn lib_op(lib: &mut Library, op: LibOp) -> Result<OpOk, String> {
 
 /// Keeps the ideas (inbox ones move to the top of the input library) and
 /// makes one project from them, named after the first idea's title.
-fn promote(lib: &mut Library, ids: &[Id], folder: &Path, name: &str) -> Result<OpOk, String> {
+fn new_project_from_ideas(lib: &mut Library, ids: &[Id], folder: &Path, name: &str) -> Result<OpOk, String> {
     // Create in folder: a new folder is made first
     if !lib.root().join("projects").join(folder).is_dir()
         && let (Some(parent), Some(last)) = (folder.parent(), folder.file_name())
@@ -1925,7 +1955,7 @@ fn promote(lib: &mut Library, ids: &[Id], folder: &Path, name: &str) -> Result<O
     let (project, _) = lib.create_project(folder, Some(name), ids).map_err(err)?;
     let prompt = ideas.iter().map(|i| i.text.trim()).find(|t| !t.is_empty()).unwrap_or("").to_string();
     let refs = ideas.iter().flat_map(|i| i.images.iter().cloned().map(ImageRef::input)).collect();
-    Ok(OpOk::Promoted { project, prompt, refs, idea: ids.first().cloned() })
+    Ok(OpOk::ProjectFromIdeas { project, prompt, refs, idea: ids.first().cloned() })
 }
 
 /// Hashes a new run's model files into the library's cache before the

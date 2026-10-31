@@ -33,7 +33,9 @@ const SCENES: &[&str] = &[
     "54b-server-wizard-sd-server",
     "03-idea-inbox-grid",
     "03b-idea-inbox-picked",
+    "03c-idea-inbox-save-dialog",
     "04-idea-inbox-new-idea",
+    "04b-idea-inbox-new-idea-save-dialog",
     "05-input-library",
     "05b-input-library-tile",
     "06-projects-grid",
@@ -98,9 +100,16 @@ const EXTRA_SCENES: &[&str] = &[
     "41-check-rubber-band",
     "46-check-ref-double-click",
     "48-check-copy-image",
+    // the inbox's Save to input library: the filter clicked keeps the
+    // typing (the name took the focus back)
+    "03d-check-save-dialog-focus",
+    // New project from ideas: the same
+    "73b-check-new-project-focus",
     // after 02: the wheel over a followed log unticks follow
     "98h3-check-logs-scroll-unticks-follow",
     "98h4-check-logs-wrapped-scroll-unticks-follow",
+    // after 02: Ctrl+F, a word, Enter: found and gone to
+    "98h7-check-logs-find",
     "50-output-library-show-outputs-empty",
     "51-output-library-show-outputs-any-rating",
     "56-server-status",
@@ -131,12 +140,12 @@ const EXTRA_SCENES: &[&str] = &[
     "70-contact-sheet",
     "71-job-info",
     "72-review-sweep-button",
-    "73-promote",
+    "73-new-project-from-ideas",
     "74-notification-settings",
     "74b-timeout-settings",
     "74c-bell-ringing",
     "74d-snooze-dialog",
-    "75-promote-in-folder",
+    "75-new-project-from-ideas-in-folder",
     "76-top-bar-wide",
     "77-top-bar-medium",
     "78-top-bar-narrow",
@@ -195,12 +204,16 @@ const EXTRA_SCENES: &[&str] = &[
     "98g-presets-group",
     "98h-server-logs",
     "98h2-server-logs-wrapped",
+    // a KoboldCpp's (or a PE server's) log: its model load folded; then
+    // only its warnings and errors
+    "98h5-server-logs-folded",
+    "98h6-server-logs-errors-only",
     // after 02, with a config whose first preset's server can't start (a
     // KoboldCpp binary that isn't there): the error under its row
     "98i-server-start-failed",
     // checks, not screenshots: the selected idea card's own buttons
     "98j-check-library-card-refs",
-    "98k-check-inbox-card-keep",
+    "98k-check-inbox-card-save",
     "99-quit-with-unsaved-draft",
     // the README's shots, on the demo library (scripts/demo-library.json),
     // after 02-server-dialog and 03-idea-inbox-grid
@@ -322,13 +335,35 @@ impl Tour {
             "56-server-status" => vec![Msg::ContinueWithoutServers, Msg::ServerStatus(true)],
             "57-no-server-warning" => vec![Msg::ServerStatus(false), Msg::QueueGenerate],
             "98h-server-logs" => vec![Msg::OpenLogs(None)],
+            // the checks: every launch, more than fits (the latest may not)
             "98h2-server-logs-wrapped" | "98h4-check-logs-wrapped-scroll-unticks-follow" => {
                 vec![Msg::Logs(Some(increart_gui_core::LogsView {
                     wrap: true,
+                    launch: if name.starts_with("98h4-") {
+                        increart_gui_core::LaunchShown::All
+                    } else {
+                        increart_gui_core::LaunchShown::Latest
+                    },
                     ..increart_gui_core::LogsView::new(None)
                 }))]
             }
-            "98h3-check-logs-scroll-unticks-follow" => vec![Msg::Logs(Some(increart_gui_core::LogsView::new(None)))],
+            "98h3-check-logs-scroll-unticks-follow" | "98h7-check-logs-find" => {
+                vec![Msg::Logs(Some(increart_gui_core::LogsView {
+                    launch: increart_gui_core::LaunchShown::All,
+                    ..increart_gui_core::LogsView::new(None)
+                }))]
+            }
+            "98h5-server-logs-folded" | "98h6-server-logs-errors-only" => {
+                let mut names: Vec<String> = std::fs::read_dir(increart_gui_core::runtime::log_dir())
+                    .map(|rd| rd.flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect())
+                    .unwrap_or_default();
+                names.sort();
+                let file = names.into_iter().find(|n| n.starts_with("koboldcpp-") || n.starts_with("pe-"));
+                vec![Msg::Logs(Some(increart_gui_core::LogsView {
+                    trouble: name == "98h6-server-logs-errors-only",
+                    ..increart_gui_core::LogsView::new(file)
+                }))]
+            }
             "98i-server-start-failed" => vec![Msg::OpenPresetNow(0)],
             "58-server-dialog-from-main" => vec![Msg::CloseNoServerWarning, Msg::OpenServerDialog],
             "59-continue-without-servers" => vec![Msg::AskContinueWithoutServers],
@@ -761,8 +796,13 @@ impl Tour {
                 }
                 v
             }
-            "98k-check-inbox-card-keep" => {
-                vec![Msg::ContinueWithoutServers, Msg::Tab(Tab::IdeaInbox), Msg::InboxTab(InboxTab::Grid)]
+            "98k-check-inbox-card-save" => {
+                vec![
+                    Msg::CancelSaveIdea,
+                    Msg::ContinueWithoutServers,
+                    Msg::Tab(Tab::IdeaInbox),
+                    Msg::InboxTab(InboxTab::Grid),
+                ]
             }
             "97i-check-output-double-click" => vec![
                 Msg::ContinueWithoutServers,
@@ -806,19 +846,18 @@ impl Tour {
                 vec![Msg::ContinueWithoutServers, Msg::Settings(false), Msg::SetNotifications(n)]
             }
             "74d-snooze-dialog" => vec![],
-            "75-promote-in-folder" => {
+            "75-new-project-from-ideas-in-folder" => {
                 let idea = st.index.ideas.iter().find(|e| matches!(e.loc, increart_core::IdeaLoc::Library(_)));
                 let mut v = vec![Msg::ContinueWithoutServers, Msg::Settings(false), Msg::Tab(Tab::InputLibrary)];
                 if let Some(e) = idea {
-                    v.push(Msg::Promote(vec![e.idea.id.clone()]));
-                    // step 2: in clients, a new folder
-                    v.push(Msg::PromoteChoose(true));
-                    v.push(Msg::PromoteParent("clients".into()));
-                    v.push(Msg::PromoteNewFolder(Some("posters".into())));
+                    v.push(Msg::NewProjectFromIdeas(vec![e.idea.id.clone()]));
+                    // in clients, a new folder
+                    v.push(Msg::FromIdeasParent("clients".into()));
+                    v.push(Msg::FromIdeasNewFolder(Some("posters".into())));
                 }
                 v
             }
-            "76-top-bar-wide" => vec![Msg::ContinueWithoutServers, Msg::CancelPromote, Msg::Tab(Tab::Review)],
+            "76-top-bar-wide" => vec![Msg::ContinueWithoutServers, Msg::CancelFromIdeas, Msg::Tab(Tab::Review)],
             "71-job-info" => {
                 // glass-fish's edit run pretends to generate: a reference and a start image
                 let run = st.index.projects.iter().find(|p| p.name() == "glass-fish").and_then(|p| p.runs.first());
@@ -884,9 +923,9 @@ impl Tour {
                 Msg::ReviewView(ReviewView::Single),
                 Msg::ReviewNewest,
             ],
-            "73-promote" => {
+            "73-new-project-from-ideas" | "73b-check-new-project-focus" => {
                 let ideas: Vec<_> = st.library_ideas().iter().take(2).map(|e| e.idea.id.clone()).collect();
-                vec![Msg::ContinueWithoutServers, Msg::Tab(Tab::IdeaInbox), Msg::Promote(ideas)]
+                vec![Msg::ContinueWithoutServers, Msg::Tab(Tab::IdeaInbox), Msg::NewProjectFromIdeas(ideas)]
             }
             "62-rename" => vec![Msg::Tab(Tab::Projects), Msg::StartRename(Tree::Projects, PathBuf::from("stickers"))],
             "61-duplicate-project" => vec![Msg::Tab(Tab::Projects), Msg::DuplicateProject(PathBuf::from("stickers"))],
@@ -1000,6 +1039,7 @@ impl Tour {
                 ]
             }
             "04-idea-inbox-new-idea" => vec![
+                Msg::CancelSaveIdea,
                 Msg::InboxTab(InboxTab::NewIdea),
                 Msg::Draft(IdeaDraft {
                     title: "Otter tea party".into(),
@@ -1012,8 +1052,14 @@ impl Tour {
                 let picks = st.inbox_queue().iter().take(3).map(|e| e.idea.id.clone()).collect();
                 vec![Msg::InboxPick(picks)]
             }
+            "03c-idea-inbox-save-dialog" | "03d-check-save-dialog-focus" => {
+                let first = st.inbox_queue().first().map(|e| e.idea.id.clone());
+                vec![Msg::InboxPick(vec![]), Msg::SaveIdeas(first.into_iter().collect())]
+            }
+            "04b-idea-inbox-new-idea-save-dialog" => vec![Msg::AddIdea(increart_gui_core::AddIdea::Keep)],
             "05-input-library" => {
                 vec![
+                    Msg::CancelSaveIdea,
                     Msg::InboxPick(vec![]),
                     Msg::ContinueWithoutServers,
                     Msg::Tab(Tab::InputLibrary),
@@ -1717,7 +1763,7 @@ impl Tour {
     }
 
     /// Click a button on the selected idea card (the library's Add as refs,
-    /// the inbox's Keep), then check it did what it says.
+    /// the inbox's Save to input library), then check it did what it says.
     fn card_click_check(&mut self, name: &str, ctx: &egui::Context, st: &AppState) {
         let library = name == "98j-check-library-card-refs";
         match self.settled {
@@ -1727,7 +1773,7 @@ impl Tour {
                     self.clicked = true;
                     return;
                 };
-                // Add as refs is the second of two; Keep the first
+                // Add as refs is the second of two; Save the first
                 let pos = crate::widgets::cover_button_rect(cover, 2, usize::from(library)).center();
                 self.card_before = if library {
                     (st.lib_selected.iter().next().cloned(), st.generate.refs().len())
@@ -1750,11 +1796,9 @@ impl Tour {
                     let now = st.generate.refs().len();
                     (images > 0 && now == n + images, format!("refs {n} → {now}, its images {images}"))
                 } else {
-                    let kept = id
-                        .as_ref()
-                        .and_then(|id| st.idea(id))
-                        .is_some_and(|e| matches!(e.loc, increart_core::IdeaLoc::Library(_)));
-                    (kept && st.inbox_queue().len() + 1 == n, format!("inbox {n} → {}", st.inbox_queue().len()))
+                    // Save asks for the name and folder first
+                    let asked = st.save_idea.as_ref().map(|d| d.ideas.clone());
+                    (id.is_some() && asked == id.clone().map(|i| vec![i]), format!("save dialog for {asked:?}"))
                 };
                 eprintln!("CHECK {name}: {} ({what})", if ok { "ok" } else { "FAILED" });
             }
@@ -1839,7 +1883,7 @@ impl Tour {
             // rewrite, compared with the current prompt
             out.push(Msg::HistorySelect(2));
         }
-        if name == "98j-check-library-card-refs" || name == "98k-check-inbox-card-keep" {
+        if name == "98j-check-library-card-refs" || name == "98k-check-inbox-card-save" {
             self.card_click_check(name, ctx, st);
         }
         if name == "25-check-grid-click" && self.settled == 5 && !self.clicked {
@@ -2006,6 +2050,61 @@ impl Tour {
                 (6, Some(p)) if !self.clicked => {
                     self.inject = vec![button(p, false)];
                     self.clicked = true;
+                }
+                _ => {}
+            }
+        }
+        if name == "03d-check-save-dialog-focus" || name == "73b-check-new-project-focus" {
+            // typed as it opens: the name; the filter clicked: the filter,
+            // and the name doesn't take it back
+            let dialog = if name.starts_with("03d") { "save_idea" } else { "from_ideas" };
+            let fields = || match dialog {
+                "save_idea" => st.save_idea.as_ref().map(|d| (d.name.clone(), d.filter.clone())),
+                _ => st.from_ideas.as_ref().map(|d| (d.name.clone(), d.filter.clone())),
+            };
+            let button = |pos, pressed| egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: Default::default(),
+            };
+            let filter = ctx.data(|d| d.get_temp::<egui::Rect>(egui::Id::unique(("tour_filter", dialog))));
+            match (self.settled, filter) {
+                (4, _) => self.inject = vec![egui::Event::Text("q".into())],
+                (7, Some(r)) => self.inject = vec![egui::Event::PointerMoved(r.center()), button(r.center(), true)],
+                (8, Some(r)) => self.inject = vec![button(r.center(), false)],
+                (7, None) => eprintln!("CHECK {name}: FAILED (no filter drawn)"),
+                (11, _) => self.inject = vec![egui::Event::Text("zz".into())],
+                (16, _) => {
+                    let f = fields();
+                    let ok =
+                        f.as_ref().is_some_and(|(n, filter)| n.ends_with('q') && !n.contains("zz") && filter == "zz");
+                    eprintln!("CHECK {name}: {} (name, filter: {f:?})", if ok { "ok" } else { "FAILED" });
+                }
+                _ => {}
+            }
+        }
+        if name == "98h7-check-logs-find" {
+            let key = |key, pressed, modifiers| egui::Event::Key {
+                key,
+                physical_key: None,
+                pressed,
+                repeat: false,
+                modifiers,
+            };
+            let (ctrl, none) = (egui::Modifiers::COMMAND, egui::Modifiers::default());
+            match self.settled {
+                5 => self.inject = vec![key(egui::Key::F, true, ctrl), key(egui::Key::F, false, ctrl)],
+                7 => self.inject = vec![egui::Event::Text("listening".into())],
+                9 => self.inject = vec![key(egui::Key::Enter, true, none), key(egui::Key::Enter, false, none)],
+                15 => {
+                    let l = st.logs.as_ref();
+                    let (search, follow) = (l.map(|l| l.search.as_str()), l.is_some_and(|l| l.follow));
+                    let ok = search == Some("listening") && !follow;
+                    eprintln!(
+                        "CHECK {name}: {} (search {search:?}, following {follow})",
+                        if ok { "ok" } else { "FAILED" }
+                    );
                 }
                 _ => {}
             }

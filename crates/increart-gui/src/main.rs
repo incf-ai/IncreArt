@@ -10,6 +10,7 @@
 
 mod apitest;
 mod app;
+mod folder_pick;
 mod folderview;
 mod history;
 mod home;

@@ -176,7 +176,7 @@ pub struct Idea {
     /// Input store image IDs (authoritative; the folder's links mirror it).
     #[serde(default)]
     pub images: Vec<Id>,
-    /// Projects it has been promoted into.
+    /// Projects made from it (New project from idea).
     #[serde(default)]
     pub projects: Vec<Id>,
     #[serde(default)]
@@ -262,7 +262,7 @@ pub enum Shape {
 pub struct Project {
     pub id: Id,
     pub created: Timestamp,
-    /// The ideas it was promoted from.
+    /// The ideas it was made from (New project from idea).
     #[serde(default)]
     pub sources: Vec<Id>,
     #[serde(default, serialize_with = "bare", skip_serializing_if = "Option::is_none")]
@@ -727,6 +727,19 @@ pub struct GenerateImage {
 
 pub fn default_strength() -> f32 {
     0.75
+}
+
+/// `discarded.rsn` in a discarded project's folder: where it was, to restore
+/// it there.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename = "Discarded")]
+pub struct DiscardedProject {
+    /// Its name when discarded (its folder here may be numbered).
+    pub name: String,
+    /// The folder it was in, relative to `projects/`.
+    #[serde(default)]
+    pub from: PathBuf,
+    pub discarded: Timestamp,
 }
 
 /// `input/draft.rsn`: the New idea form, autosaved until the idea is added.

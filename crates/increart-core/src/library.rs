@@ -31,6 +31,7 @@ const LAYOUT: &[&str] = &[
     DISCARDED_IDEAS,
     EDITED_IDEAS,
     PROJECTS,
+    DISCARDED_PROJECTS,
     COLLECTIONS,
     "thumbs/input",
     "thumbs/output",
@@ -900,6 +901,40 @@ impl Library {
         self.move_idea(id, &to)
     }
 
+    /// Saves an inbox idea to the input library: retitled (when `title` is
+    /// given), unstarred, into `folder` (relative to `input/library/`; its
+    /// missing folders are made).
+    pub fn save_to_library(&self, id: &Id, title: Option<&str>, folder: &Path) -> Result<PathBuf> {
+        self.make_library_folder(folder)?;
+        let title = title.map(str::trim);
+        if let Some(t) = title
+            && t.is_empty()
+        {
+            return Err(Error::InvalidName { name: t.into(), reason: "empty" });
+        }
+        self.update_idea(id, |i| {
+            i.starred = false;
+            if let Some(t) = title {
+                i.title = t.to_string();
+            }
+        })?;
+        self.move_idea(id, &IdeaLoc::Library(folder.to_path_buf()))
+    }
+
+    /// Makes `folder` of the input library (relative to `input/library/`)
+    /// and its missing parents, checking each name.
+    pub fn make_library_folder(&self, folder: &Path) -> Result<()> {
+        let mut dir = self.root.join(INPUT_LIBRARY);
+        for c in folder.components() {
+            validate_name(&c.as_os_str().to_string_lossy())?;
+            dir.push(c);
+        }
+        if !dir.is_dir() {
+            fs::create_dir_all(&dir).at(&dir)?;
+        }
+        Ok(())
+    }
+
     /// Deletes a discarded idea for good (its folder goes to the trash; the
     /// store images stay until Clean up).
     pub fn delete_discarded_idea(&self, id: &Id) -> Result<()> {
@@ -1286,6 +1321,21 @@ impl Library {
                 fs::remove_file(&abs).at(&abs)?;
                 Ok(vec![])
             }
+            // projects go to Discarded (restorable), then their folders to
+            // the trash
+            (Tree::Projects, _) => {
+                let mut projects = vec![abs.clone()];
+                if kind == Node::Folder {
+                    projects = fsutil::walk(&abs)?.into_iter().filter(|d| d.join(PROJECT_FILE).is_file()).collect();
+                }
+                for p in &projects {
+                    self.discard_project(p)?;
+                }
+                if kind == Node::Folder {
+                    self.dispose(&abs)?;
+                }
+                Ok(vec![])
+            }
             _ => {
                 self.dispose(&abs)?;
                 Ok(vec![])
@@ -1340,6 +1390,61 @@ impl Library {
             fs::create_dir_all(dir.join(sub)).at(dir.join(sub))?;
         }
         rsnfmt::write(&dir.join(PROJECT_FILE), project)
+    }
+
+    /// Moves a project (its directory, absolute) to `discarded_projects/`,
+    /// noting where it was.
+    fn discard_project(&self, dir: &Path) -> Result<PathBuf> {
+        let projects = self.root.join(PROJECTS);
+        let rel =
+            dir.strip_prefix(&projects).map_err(|_| Error::Refused(format!("{} is not a project", dir.display())))?;
+        let name = rel.file_name().unwrap_or_default().to_string_lossy().into_owned();
+        let from = rel.parent().unwrap_or(Path::new("")).to_path_buf();
+        let base = self.root.join(DISCARDED_PROJECTS);
+        fs::create_dir_all(&base).at(&base)?;
+        let to = base.join(free_name_in(&base, &name)?);
+        link::move_with_links(&self.root, dir, &to)?;
+        rsnfmt::write(&to.join(DISCARDED_FILE), &DiscardedProject { name, from, discarded: self.now() })?;
+        Ok(self.rel(&to))
+    }
+
+    /// A discarded project's directory (absolute).
+    fn find_discarded_project(&self, id: &Id) -> Result<PathBuf> {
+        for p in fsutil::subdirs(&self.root.join(DISCARDED_PROJECTS))? {
+            let file = p.join(PROJECT_FILE);
+            if file.is_file() && rsnfmt::read::<Project>(&file).is_ok_and(|pr| &pr.id == id) {
+                return Ok(p);
+            }
+        }
+        Err(Error::NotFound(format!("discarded project {id}")))
+    }
+
+    /// Puts a discarded project back where it was (the top level if that
+    /// folder is gone), under its name (numbered if taken). Returns its path
+    /// relative to `projects/`.
+    pub fn restore_project(&self, id: &Id) -> Result<PathBuf> {
+        let dir = self.find_discarded_project(id)?;
+        let note = rsnfmt::read::<DiscardedProject>(&dir.join(DISCARDED_FILE)).ok();
+        let name = note.as_ref().map(|n| n.name.clone());
+        let name = name.unwrap_or_else(|| dir.file_name().unwrap_or_default().to_string_lossy().into_owned());
+        let from = note.map(|n| n.from).unwrap_or_default();
+        let projects = self.root.join(PROJECTS);
+        let parent = if projects.join(&from).is_dir() { from } else { PathBuf::new() };
+        let name = free_name_in(&projects.join(&parent), &name)?;
+        let to = projects.join(&parent).join(&name);
+        link::move_with_links(&self.root, &dir, &to)?;
+        let note = to.join(DISCARDED_FILE);
+        if note.exists() {
+            fs::remove_file(&note).at(&note)?;
+        }
+        Ok(parent.join(name))
+    }
+
+    /// Deletes a discarded project for good (its folder goes to the trash;
+    /// the store images stay until Clean up).
+    pub fn delete_discarded_project(&self, id: &Id) -> Result<()> {
+        let dir = self.find_discarded_project(id)?;
+        self.dispose(&dir)
     }
 
     /// A project's directory (absolute), wherever it has been moved.
@@ -1649,25 +1754,76 @@ impl Library {
         })
     }
 
-    /// Deletes an output link (e.g. a rejected image): it goes to the trash;
-    /// the image stays in the store until Clean up. Its run records the
-    /// seed as deleted (not to be generated again, and not missing).
-    pub fn delete_output_link(&self, link_path: &Path) -> Result<()> {
+    /// Discards an output link (e.g. a rejected image): it moves to its
+    /// project's `discarded/`, under its rating folder, to be restored from
+    /// the Output library's Discarded. Its run records the seed as deleted
+    /// (not to be generated again, and not missing).
+    pub fn delete_output_link(&self, link_path: &Path) -> Result<PathBuf> {
         let abs = self.root.join(link_path);
-        let in_project = abs.ancestors().skip(1).take(3).any(|d| d.join(PROJECT_FILE).is_file());
-        if !in_project || !fsutil::exists(&abs) {
+        let project = abs.ancestors().skip(1).take(3).find(|d| d.join(PROJECT_FILE).is_file());
+        let Some(project) = project.filter(|_| fsutil::exists(&abs)) else {
             return Err(Error::Refused(format!("{} is not an output link", link_path.display())));
+        };
+        let rel = abs.strip_prefix(project).expect("under its project");
+        if rel.starts_with(DISCARDED_OUTPUTS) {
+            return Err(Error::Refused(format!("{} is discarded already", link_path.display())));
         }
-        let name = abs.file_name().and_then(|n| OutputName::parse(&n.to_string_lossy()));
+        self.mark_deleted(&abs, true)?;
+        let to = project.join(DISCARDED_OUTPUTS).join(rel);
+        // the same seed discarded before, restored and rated the same again
+        if fsutil::exists(&to) {
+            self.dispose(&to)?;
+        }
+        link::move_with_links(&self.root, &abs, &to)?;
+        Ok(self.rel(&to))
+    }
+
+    /// A discarded output link back in its project's rating folder; its seed
+    /// no longer recorded as deleted.
+    pub fn restore_output_link(&self, link_path: &Path) -> Result<PathBuf> {
+        let (project, abs) = self.discarded_output(link_path)?;
+        let rel = abs.strip_prefix(project.join(DISCARDED_OUTPUTS)).expect("under discarded/");
+        let to = project.join(rel);
+        if fsutil::exists(&to) {
+            return Err(Error::Refused(format!("{} is there already", self.rel(&to).display())));
+        }
+        link::move_with_links(&self.root, &abs, &to)?;
+        self.mark_deleted(&to, false)?;
+        Ok(self.rel(&to))
+    }
+
+    /// Deletes a discarded output link for good: it goes to the trash; the
+    /// image stays in the store until Clean up.
+    pub fn delete_discarded_output(&self, link_path: &Path) -> Result<()> {
+        let (_, abs) = self.discarded_output(link_path)?;
+        self.dispose(&abs)
+    }
+
+    /// A discarded output link's project directory and the link (absolute).
+    fn discarded_output(&self, link_path: &Path) -> Result<(PathBuf, PathBuf)> {
+        let abs = self.root.join(link_path);
+        let project = abs.ancestors().skip(1).take(4).find(|d| d.join(PROJECT_FILE).is_file());
+        match project {
+            Some(p) if fsutil::exists(&abs) && abs.starts_with(p.join(DISCARDED_OUTPUTS)) => Ok((p.to_path_buf(), abs)),
+            _ => Err(Error::Refused(format!("{} is not a discarded output link", link_path.display()))),
+        }
+    }
+
+    /// Records an output link's seed as deleted in its run (or not).
+    fn mark_deleted(&self, link: &Path, deleted: bool) -> Result<()> {
+        let name = link.file_name().and_then(|n| OutputName::parse(&n.to_string_lossy()));
         if let Some(n) = name
             && let Ok((dir, mut run)) = self.find_run(&n.run)
         {
             let mut all: Vec<u64> = run.deleted.iter().flat_map(|d| d.first..d.first + d.count).collect();
-            all.push(n.seed);
+            all.retain(|s| *s != n.seed);
+            if deleted {
+                all.push(n.seed);
+            }
             run.deleted = seed_ranges(all);
             self.save_run(&dir, &run)?;
         }
-        self.dispose(&abs)
+        Ok(())
     }
 
     /// Records as deleted every generated seed whose output link is gone
@@ -1862,12 +2018,13 @@ impl Library {
         fs::remove_file(&old).at(&old)
     }
 
-    /// Every link into the stores (review folders, collections, idea
-    /// folders), by the image it refers to.
+    /// Every link into the stores (review folders, discarded projects' too,
+    /// collections, idea folders), by the image it refers to.
     fn links_by_image(&self) -> Result<HashMap<ImageRef, Vec<PathBuf>>> {
         let ix = scan::scan(&self.root)?;
         let mut out: HashMap<ImageRef, Vec<PathBuf>> = HashMap::new();
-        for o in ix.projects.iter().flat_map(|p| &p.outputs) {
+        let discarded = ix.discarded_projects.iter().map(|d| &d.entry);
+        for o in ix.projects.iter().chain(discarded).flat_map(|p| p.outputs.iter().chain(&p.discarded)) {
             out.entry(o.image.clone()).or_default().push(o.path.clone());
         }
         for c in &ix.collection_links {
@@ -1899,7 +2056,13 @@ impl Library {
         let ix = self.scan()?;
         let mut marked: HashSet<ImageRef> = HashSet::new();
         let mut todo: Vec<ImageRef> = Vec::new();
-        for (dir, store) in [("input", Store::Input), (PROJECTS, Store::Output), (COLLECTIONS, Store::Output)] {
+        let dirs = [
+            ("input", Store::Input),
+            (PROJECTS, Store::Output),
+            (DISCARDED_PROJECTS, Store::Output),
+            (COLLECTIONS, Store::Output),
+        ];
+        for (dir, store) in dirs {
             for p in fsutil::walk(&self.root.join(dir))? {
                 if p.starts_with(self.root.join(INBOX_DROP)) || p.is_dir() && !fsutil::is_symlink(&p) {
                     continue;
@@ -1921,7 +2084,8 @@ impl Library {
         if let Some(d) = &ix.idea_draft {
             todo.extend(d.images.iter().cloned().map(ImageRef::input));
         }
-        for p in &ix.projects {
+        // discarded projects keep theirs, to be restored
+        for p in ix.projects.iter().chain(ix.discarded_projects.iter().map(|d| &d.entry)) {
             todo.extend(p.project.cover.iter().cloned());
             todo.extend(p.draft.iter().flat_map(|d| d.refs.iter().cloned()));
             for r in &p.runs {

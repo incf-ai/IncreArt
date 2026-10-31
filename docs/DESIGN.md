@@ -19,7 +19,7 @@ folded into this document; each has a writeup.
 ## Goals
 
 - An **input review queue**: ideas (text, images, or both) collected into an
-  inbox, triaged with the same keyboard flow, and promoted into projects.
+  inbox, triaged with the same keyboard flow, and made into projects.
 - Projects containing runs of many seeds, generated across both GPUs.
 - Text-to-image **and** edit with reference images (Qwen-Image 2.1 `ref_images`).
 - **Transparent (RGBA) output** as a first-class option, preserved end to end.
@@ -45,16 +45,18 @@ The app is built around two symmetric queues, each feeding a library:
 ```
             ┌──────────────── R / I (output → input) ◄───────────────┐
             ▼                                                        │
-ideas ──► INPUT QUEUE ──review──► INPUT LIBRARY ──promote (P)──► PROJECT
+ideas ──► INPUT QUEUE ──review──► INPUT LIBRARY ──new project (P)──► PROJECT
 (text,    (Idea inbox)            (kept ideas,                    │ runs × seeds
  images,                           starred shortlist,             ▼ (both GPUs)
  drop                              ref images)              OUTPUT QUEUE ──review──► OUTPUT LIBRARY
  folder)                                                    (Review tab)            (all projects)
 ```
 
-- Both queues use the same verdict keys (`1`/`2`/`3` or `G`/`N`/`B`, arrows,
-  `Ctrl+Z`) and the same mechanism: an item's folder is its verdict. (`Space`
-  differs: it promotes an idea in the Idea inbox and toggles grid / single in
+- Both queues use the same mechanism: an item's folder is its verdict. Review
+  rates with `1`/`2`/`3` (or `G`/`N`/`B`); the Idea inbox has two verdicts,
+  save to input library (`1`/`2`/`S`) and discard (`3`/`B`); both take arrows
+  and `Ctrl+Z`. (`Space`
+  differs: it makes a project from an idea in the Idea inbox and toggles grid / single in
   Review.) (On the
   input side the folder records keep vs. discard; the star is a flag in
   `idea.rsn`, so kept ideas can live in user folders — see Input library
@@ -1026,12 +1028,12 @@ it as a new entry.
 
 ```
 Inbox ── Idea (unreviewed) ──review──► Input library (kept ideas + ref images)
-                                            │ promote (one or many ideas)
+                                            │ new project (one or many ideas)
                                             ▼
 Project ─┬─ Run (prompt template, params, refs, N seeds)
          │    └─ Revision (edited params; new seeds go here)
          │         └─ Item (one seed → one image) ──review──► Output library
-         └─ sources: the ideas it was promoted from
+         └─ sources: the ideas it was made from
 ```
 
 ### Seeds
@@ -1101,7 +1103,7 @@ An `Idea` is a small folder: `idea.rsn` plus any attached images.
   with its origin: `Manual` or `Rewritten { model, system_prompt_hash }`),
   tags, source (`Manual`, `Clipboard`, `DroppedFile { original_path }`,
   `InboxFolder`, `FromOutput { image: ImageRef }`), created time,
-  `projects: Vec<ProjectId>` it has been promoted into, `starred: bool`.
+  `projects: Vec<ProjectId>` made from it, `starred: bool`.
 - Attached images live in the input image store
   (`input_images/<image-id>.png`, see Image stores), and the same picture
   used by several ideas and as a ref is stored once. `idea.rsn` lists the
@@ -1134,33 +1136,32 @@ moves it to `input/discarded/`:
 | good | keep, best | **keep**, starred: shortlist for new projects |
 | neutral | keep | **keep** in the input library |
 | bad | reject (out of the way, still recoverable) | **discard** (`input/discarded/`, still recoverable) |
-| `P` / `Space` | — | **promote**: new project (or add to an open one) seeded with the idea's text as prompt and its images as refs |
+| `P` / `Space` | — | **new project** from the idea (or add to an open one) seeded with the idea's text as prompt and its images as refs |
 | `W` | — | **rewrite** the idea's text with the PE model (adds a variant) |
 
-Promoting always asks for the new project's name first (an idea's title
-needn't suit a project): the first idea title that is a valid, free name is
-the guess (numbered when taken), else the field is empty; an invalid or taken
-name is refused. **Add & promote** in the New idea form asks the same way and
-keeps the draft until the name is given. By default the project goes in a new
-folder of its own name (**In a new folder of the same name**, ticked; the
-folder follows the name as it is typed); untick it to put the project in the
-location itself. The dialog shows where the project will go
-(`→ projects/clients/acme/Fox cafe/Fox cafe`); **Create here** (Enter) makes it
-there. **Choose location…** is a second step: a tree of the project folders
-(with a filter) to pick from, and the new folder in it, named in place (renamed
-there it no longer follows the project's name, and the step 1 box says
-"In a new folder “…”"; ✕ takes it away, **New folder in "…"** brings it back).
-It is only made on Create, and an existing folder of that name, in any case,
-is used. **Back** returns to the name. The first location is where the last
-promote went (this session), if that folder still exists, else the one below;
-after a project in its own folder, that is the folder's parent (so projects
-don't nest).
+**New project from idea** always asks for the new project's name first (an
+idea's title needn't suit a project): the first idea title that is a valid,
+free name is the guess (numbered when taken), else the field is empty; an
+invalid or taken name is refused. **Add & new project…** in the New idea form
+asks the same way and keeps the draft until the name is given. The dialog has
+the save dialog's layout. Left, the **Folder**: a tree of the project folders
+(with a filter) and, under it, the new folder to make in the one chosen. By
+default the project goes in a new folder of its own name (it follows the name
+as it is typed; renamed there, it no longer does); ✕ takes it away (the
+project goes in the folder itself) and **New folder** brings it back, named
+after the project. It is only made on Create, and an existing folder of that
+name, in any case, is used. Right, the **Project name** (it has the focus as
+the dialog opens; a field clicked keeps it) and where the project will be made
+(`projects/clients/acme/Fox cafe/Fox cafe`); **Create** (Enter) makes it
+there. The first folder is where the last project from ideas went (this
+session), if that folder still exists, else the top level; after a project in
+its own folder, that is the folder's parent (so projects don't nest).
 
-Promoting several selected ideas at once makes one project with all of them
+A new project from several selected ideas at once is one project with all of them
 as sources (e.g. a style image from one idea + a subject from another). An
-idea with several variants can be promoted as one run per variant.
+idea with several variants can become one run per variant.
 
-Promoted images become `ref_images`, never an implicit `init_image`;
+An idea's images become the project's `ref_images`, never an implicit `init_image`;
 `init_image` is only sent for an explicit Edit run.
 
 ### Output → input
@@ -1407,11 +1408,12 @@ WebP is chosen or WebP files exist, so an older IncreArt, which can't read
 them, refuses to open it instead of seeing missing images. Converting back
 to PNG returns it to format 1.
 
-**Clean up.** Deleting a project or a discarded idea only removes links, so
-store images can become unreferenced. A **Clean up library** command (never
-automatic) marks every image still referenced (links, `idea.rsn` images,
-`run.rsn` refs, recipes' `refs` / `init` / `parent`, `FromOutput` sources)
-and moves the rest to the system trash. An input image used as a ref by any
+**Clean up.** Deleting a discarded project or idea for good only removes
+links, so store images can become unreferenced. A **Clean up library**
+command (never automatic) marks every image still referenced (links, those
+of discarded projects too, `idea.rsn` images, `run.rsn` refs (discarded
+projects' too, so a restore finds them), recipes' `refs` / `init` /
+`parent`, `FromOutput` sources) and moves the rest to the system trash. An input image used as a ref by any
 kept output therefore survives even after its idea is gone.
 
 ## Scheduling (same as Yue2, plus model switching)
@@ -1512,7 +1514,8 @@ its details window, and for every run at once in the Jobs header:
   seed sent, its job ID, generating, done or failed with the server's
   answer, cancels, and a server's failures. The job details window shows
   it (**Generation log**, live while open, with **Copy** and **Show
-  file**), and its progress says "waiting for a server" until a server
+  file**; wrapped, the time dimmed, errors red and warnings amber, paths
+  as file names unless **full paths** is ticked), and its progress says "waiting for a server" until a server
   has one of the run's seeds, "generating on <server>" then.
 - **One load at a time on this machine**: servers on `localhost` /
   `127.0.0.1` load models one after another (a server waiting shows
@@ -2249,11 +2252,11 @@ out as one image.
 
 - **Ideas**: the Idea inbox Grid picks ideas the same way (Ctrl+click,
   Shift+click, a box, Ctrl+A, Esc; numbered in pick order). While any are
-  picked, a bar shows **N picked · Tile… · Promote… · Keep ★ · Keep ·
-  Discard · Clear**, 1/2/3 keep or discard them all, P promotes them and T
+  picked, a bar shows **N picked · Tile… · New project… · Save to input library… ·
+  Discard · Clear**, 1/2/S save them all (one dialog, below) and 3/B discard them, P makes a project from them and T
   tiles them (without picks the keys act on the cursor's idea, as before).
   The Input library's selection gains Shift+click (a range) and the box;
-  with several selected the same bar (no Keep / Discard) is shown above the
+  with several selected the same bar (no Save / Discard) is shown above the
   grid and T tiles them. A picked or selected card's right-click starts
   with what to do with them all; every card with images has **Tile its
   images…**. Tiling ideas tiles all their images, in pick order (the
@@ -2416,6 +2419,9 @@ in the app's state folder (`$XDG_STATE_HOME/increart` when set, else
 `sd-server-<name>.log`, `koboldcpp-<name>.log` (KoboldCpp image servers),
 `pe-<name>.log`. Servers it only connects to have none.
 
+- What a server writes (its output and errors, one stream) is timed as it
+  comes: each line starts `HH:MM:SS.mmm `. A server left running when the
+  app quits (`leave_running`) writes to the file itself, untimed.
 - **Server traffic** (Server settings: **Log server traffic**, or
   `INCREART_TRAFFIC_LOG=1` for one start): `server-traffic.log` there
   gets every request to the image servers, sd-server's API and
@@ -2565,14 +2571,34 @@ ends, is stopped, or loses the app (its stdin closing).
 - **Logs…** (the startup Servers screen's footer, the top bar's Servers
   window) opens the log viewer, a modal; a started server's row there has a
   log button that opens it on that server's log.
-- Left: the logs, newest first (size and age on hover). Right: the chosen
-  log's last 1 MB as a terminal shows it (lines rewritten with `\r`, such
-  as progress bars, as their last state; colour codes out), refreshed as it
-  grows; **follow** keeps to the end (scrolling back, by the wheel or the
-  bar, unticks it; ticked again, it's back at the end), **wrap** (the
-  last 3000 lines, wrapped to the width), and a search that shows only the
-  lines containing it. When the last 1 MB
-  starts after the latest launch line, that line is pinned above it.
+- Left: the logs by kind (App · Image servers · Prompt enhancer · Other),
+  newest first in each, named for what they are ("KoboldCpp kcpp-gpu1",
+  not the file name; it, the size and age on hover). A server in use has
+  its state beside it (ready green, failed or retrying red); a log with an
+  error since its latest launch is red with a ●.
+- Right: the chosen log's last 1 MB as a terminal shows it (lines
+  rewritten with `\r`, such as progress bars, as their last state; colour
+  codes out), refreshed as it grows; **follow** keeps to the end
+  (scrolling back, by the wheel or the bar, unticks it; ticked again, it's
+  back at the end), **wrap** (the last 3000 lines, wrapped to the width).
+  When the last 1 MB starts after the latest launch line, that line is
+  pinned above it.
+- Launches: the latest launch's lines to start with (chosen from the
+  list, it's always that); the menu picks an earlier one by its time, or
+  **all**. A KoboldCpp's reloads are part of their launch.
+- Easier to read: times dimmed; launch lines bright; errors red (sd.cpp's
+  `[E]`, "error", "failed", "out of memory", "panicked", a traceback… not
+  "no error"), warnings amber; sd.cpp's ` --- file.cpp:N` endings
+  dimmed. Runs of 8 or more lines of one kind (`print_info: …`,
+  `load: …`, progress bars) fold into one "▸ print_info: 66 lines"
+  (clicked, they show; again, they fold), unless a warning or error is
+  among them; a line repeated is shown once with ×N.
+- **errors only**: the warnings and errors (and the launch lines), each
+  with the 2 lines around it, ⋯ between.
+- Find (Ctrl+F, or the box): matches marked, the one gone to in amber,
+  "N of M"; typed, it goes to the latest; Enter or F3 the next, Shift for
+  the one before (or ↑ ↓), which unticks follow. **only these lines**
+  shows only the lines containing it.
 - Footer left: **Open in editor** (`editor` in `config.rsn`, the file
   appended; else the desktop's default app for it, then gnome-text-editor,
   gedit, kate, mousepad, xed), **Show in folder**, **Copy** (the lines
@@ -2643,10 +2669,13 @@ real directories under `projects/`, so it looks the same in a file manager.
     templates — but **not** its images; copying a folder copies its subtree
     the same way. A pasted name that clashes gets a number suffix. Pasting a
     folder into itself or a descendant is refused.
-  - **Delete…**: confirmation showing the folders, projects and images
-    inside and how many pending seeds will be cancelled, then the whole
-    directory goes to the system trash. That only removes links; the images
-    stay in `output_images/` until **Clean up library**.
+  - **Discard…** (a project) / **Delete…** (a folder): confirmation
+    showing the folders, projects and images inside and how many pending
+    seeds won't be generated. Each project moves to `discarded_projects/`
+    (numbered if the name is taken there) with a `discarded.rsn` noting its
+    name, the folder it was in and when; it leaves the tree, the queue,
+    Review and the Output library, and shows under **Projects → Discarded**.
+    A folder itself goes to the system trash once its projects are out.
   - **Drag and drop** moves, like cut + paste: drop on a folder to move into
     it, on a project to move beside it, or on "All projects" / the empty
     area for the top level. The target is outlined blue, or red when the drop
@@ -2671,8 +2700,8 @@ real directories under `projects/`, so it looks the same in a file manager.
   inside collapsed folders without expanding them. Which folders are
   collapsed is remembered per library in the config
   (`collapsed_folders`); deleted or renamed folders drop out.
-- New projects from Promote land, unless another location is chosen, in a
-  folder of their own name where the last promote went, else at the top level.
+- New projects from ideas land, unless another folder is chosen, in a
+  folder of their own name where the last one went, else at the top level.
 
 ### Input library folders
 
@@ -2701,7 +2730,7 @@ drop and shortcuts (see Project folders). The differences:
 ## GUI
 
 Top-level tabs, in pipeline order after **Home**: **Idea inbox** · **Input library** ·
-**Projects** (Grid · Folder · Generate · Jobs; shows the project count, and
+**Projects** (Grid · Folder · Generate · Jobs · Discarded; shows the project count, and
 ✦ while generating) ·
 **Review** (the output queue) · **Output library**. Review is top-level, like
 the Idea inbox, because it is the busiest screen during batches and works
@@ -2764,25 +2793,42 @@ the keys and mouse buttons go through that view's own history instead.
     size (the editor when there's no image), and a pencil button on the
     image (on hover, or when selected) opens the editor. Hovered or
     selected, the image also shows two buttons along its bottom, as on
-    project tiles: here **Keep** and **Discard** (`2`/`3`); in the Input
-    library **Promote** and **Add as refs** (Promote alone for a text-only
+    project tiles: here **Save** and **Discard** (`S`/`3`); in the Input
+    library **New project** and **Add as refs** (New project alone for a text-only
     idea); none in Discarded. They act on that card only; on a small card
     (zoomed out) they're icons, the name on hover (`widgets::cover_buttons`).
     The side panel showing the current idea keeps its buttons pinned to its
-    bottom (here **Keep ★** / **Keep** / **Discard**, then **Promote**,
+    bottom (here **Save to input library…** / **Discard**, then **New project**,
     **Edit…**, **Copy text**, **Open folder**) and its header at the top;
     the details scroll between. Keys as in the
     table above, plus `Home`/`End` = the first / last idea, `Enter`/`T` = open the **Edit idea** window (title, tags,
     text, variants, images, and a finished PE rewrite's diff with Accept /
-    Reject). Right-click a card, in groups: promote (`P`), edit (`Enter`),
-    rewrite with PE (in the Edit window, so Use changes its text) · keep in
-    input library ★ / keep in input library / discard (`1`/`2`/`3`) · copy
+    Reject). Right-click a card, in groups: new project from idea (`P`), edit (`Enter`),
+    rewrite with PE (in the Edit window, so Use changes its text) · save to
+    input library / discard (`S`/`3`) · copy
     text, copy image and describe image with PE (its first image) · open
     folder in file manager. (Planned: accept all ready rewrites.)
+  - **Save to input library** (the card's Save, the side panel's button,
+    the menus, `1`/`2`/`S`; the New idea form's **Add & save to input
+    library…**, for the draft) always asks first, in a modal. Left, the
+    **Folder**: a filterable tree of the input library's folders, **New
+    folder** under it (named in the folder chosen; an existing one of that
+    name, any case, is used). Right, the **Name** (the idea's title to start
+    with; renames it; several picked ideas keep theirs and the field is
+    hidden), and where it's **Saved in**. The name has the focus as it
+    opens, a new folder's name once asked for; neither takes it back from a
+    field clicked since. It starts in the folder the last save went to (this
+    session). **Save** (`Enter`) moves the ideas there unstarred, making the
+    folder; **Save & new project** saves them, then makes a project
+    from them at once, named as the idea (the first valid title of several),
+    where the last project from ideas went, in its own folder (the New project dialog asks
+    when that name won't do; the draft is saved in the folder chosen, not
+    the top level); **Cancel** (`Esc`) leaves them in the inbox (the draft in
+    the form). Discard doesn't ask.
   - **New idea** (`Ctrl+N` from anywhere): title, text, tags, images (drop /
     paste / browse), **Rewrite with PE**. **Add to inbox** (review it later),
-    **Add & keep** (straight into the input library, into a chosen folder),
-    **Add & promote** (keep it and start a project). The draft is kept while
+    **Add & save to input library…** (asks the name and folder, as below),
+    **Add & new project…** (keep it and start a project). The draft is kept while
     switching tabs.
   - **Folder**: the file-manager view (see Projects → Folder) rooted at the
     inbox's own places only: `inbox_drop/` (waiting files, and `imported/`
@@ -2808,22 +2854,22 @@ the keys and mouse buttons go through that view's own history instead.
 - **Input library**: tabs **Grid** (default) · **Folder** (see Projects →
   Folder) · **Discarded** (the same Discarded view as in the Idea inbox). In
   Grid, the left panel holds the filters (tag / starred / text /
-  has-images / promoted-or-not), selection actions, and the library folder
+  has-images / **used in a project** or not), selection actions, and the library folder
   tree (see Input library folders); the grid shows the selected folder's
-  ideas, newest first (or most used first); cards show PE rewrite state like the inbox's. Multi-select → promote
+  ideas, newest first (or most used first); cards show PE rewrite state like the inbox's. Multi-select → new project
   (button or `P`/`Space`); ← → ↑ ↓ and `Home`/`End` select the previous /
   next / first / last idea and show it in the panel, `Ctrl+A` selects all,
   `Enter`/`T` edits; a **Keys** list is pinned at the bottom left; drag an image into a project's reference strip; drag
   cards onto a folder to file them. Right-click a card, in groups as in the
-  inbox: promote, edit, rewrite with PE, add its images as refs to the
+  inbox: new project, edit, rewrite with PE, add its images as refs to the
   current project, star/unstar · back to the Idea inbox, discard · copy
   text, copy image, describe image with PE · open folder in file manager.
   (Planned: accept all ready rewrites.) When the card is part of a multi-selection, the
-  bulk actions (star, promote, rewrite, back to inbox, discard) apply to the
+  bulk actions (star, new project, rewrite, back to inbox, discard) apply to the
   whole selection. A plain click on a card opens the **idea panel** on the
   right: the idea's images (double-click: full size), text, tags, created
   date and folder, what its images were used for, the projects it was
-  promoted into (links), and Edit…, Promote, Add as refs, Copy text, Open
+  **used in** (links), and Edit…, New project, Add as refs, Copy text, Open
   folder pinned to its bottom (the details scroll above them); × closes it. While the panel is closed it opens a moment after
   the click, so a double-click (full size) doesn't open it; while it's
   open, a click shows the clicked idea at once. Ctrl/Shift+click only
@@ -2850,7 +2896,7 @@ the keys and mouse buttons go through that view's own history instead.
   the project's folder only when that holds other projects (here and below)
   and **narrow to siblings** is ticked; otherwise the grid keeps showing what
   it did, if the project is in it, else the project's folder (the one above
-  when the project is alone in it, as Promote's own folders are). After
+  when the project is alone in it, as a project from ideas' own folder is). After
   Back / Forward that last rule decides. Each tile's cover is its best image: highest
   rated (good > neutral > unreviewed > bad), most recent among equals. A
   project with no output image yet shows its references and start images
@@ -2961,6 +3007,15 @@ the keys and mouse buttons go through that view's own history instead.
 - **Messages** (status bar, after the library path): the latest one, with
   "(+N more)" when there are others and ✕ to dismiss it. Clicking it opens
   a popover with every message, newest first, each with ✕, and **Clear all**.
+- **Discarded** (Projects' last tab, with its count): discarded projects,
+  newest first, as tiles (cover, name, rating counts, "from projects/…",
+  when). Hovered, a tile shows **Restore** and **Delete** on its cover;
+  right-click: Restore, Open in file manager, Delete permanently…
+  **Restore** puts the project back in the folder it was in (the top level
+  if that folder is gone), under its name (numbered if taken); its pending
+  seeds generate again. **Delete permanently** (asks first) sends its folder
+  to the system trash; the images stay until Clean up. **Empty
+  discarded…** (asks first) does it for all of them.
 - **Jobs**: per-run progress and per-server state (loading / draining /
   generating), with a live preview frame from `jobs/{id}`. Under **Runs**,
   the order toggle and **Finish & stop all** / **Stop all now** stay put
@@ -3045,7 +3100,8 @@ the keys and mouse buttons go through that view's own history instead.
   library as ref, `I` = new idea from this image, `Ctrl+Z` = undo last review
   action.
 - **Output library**: the place for finished work, as opposed to Projects
-  (where images are made and triaged). Tabs **Grid** (default) · **Folder**.
+  (where images are made and triaged). Tabs **Grid** (default) · **Folder**
+  · **Discarded**.
   The full-height left panel has, from the top: the **search** box with
   **in Images | Project names** under it (Images: an image's title or its
   run's prompt; Project names: narrows the "by project" smart folder to the
@@ -3082,9 +3138,9 @@ the keys and mouse buttons go through that view's own history instead.
     Clicking a tab replaces the filters (sets its ratings, clears text, refs
     and alpha); once the filters are changed the tab shows "•" and clicking
     it again resets them. **Rejected** follows the source, with **Delete these
-    N rejected…** (asks first; the links go to the system trash, the images
-    stay in the store until Clean up) and right-click to re-rate, send back to
-    Review or **Delete permanently…**. **Unreviewed** has **Review them**
+    N rejected…** (asks first; they go to **Discarded**, their seeds not
+    generated again) and right-click to re-rate, send back to Review or
+    **Delete…**. **Unreviewed** has **Review them**
     (Review scoped to the source). Double-clicking an image opens it full
     size over the window (the image preview: click, Esc or a click outside
     closes it; right-click copies it). Selecting an image shows the
@@ -3102,6 +3158,19 @@ the keys and mouse buttons go through that view's own history instead.
     Projects → Folder stays the place for project files (`runs/`,
     `unreviewed/`, triage); the "by project" smart folder is the project
     tree with only the kept images.
+  - **Discarded** (with its count): the images deleted from projects (the
+    Rejected tab's delete, Delete in a folder view), newest first, framed in
+    their rating's colour. Each moves to its project's
+    `discarded/<its rating folder>/`, kept out of the folder views, Review,
+    the queue and the other tabs, and its run records the seed as deleted
+    (not generated again, not a missing output). Hovered, an image shows
+    **Restore** and **Delete**; right-click: Restore, Show in file manager,
+    Delete permanently… **Restore** puts it back in its project, rated as it
+    was, and its seed is no longer deleted (refused if a link of that name is
+    there). **Delete permanently** (asks first) sends the link to the system
+    trash; the image stays until Clean up. **Empty discarded…** (asks first)
+    does it for all of them. Clean up and store conversion count discarded
+    images' links, so a restore finds its image.
   - **Titles**: an output image can be given a title (**Set title…** in the
     Grid's right-click menu, `F2` on the selected image, or the pencil in
     the lineage view). A small dialog edits it: Enter saves, an empty title
@@ -3324,7 +3393,7 @@ calls while the window is minimized or hidden, with a clock of the app's own
   second per write.
 - gui-core flows (`crates/increart-gui-core/tests/flows.rs`): the reducer
   with the real runtime and a real temp library (create library, add /
-  review / restore / promote ideas, queue a run, trees, drop files, review +
+  review / restore / make projects from ideas, queue a run, trees, drop files, review +
   undo) and the server dialog as a pure reducer.
 - The app's screenshot tour (`INCREART_TOUR`, see [gui/README.md](gui/README.md))
   drives every screen through the reducer and saves one PNG per screen.
@@ -3445,7 +3514,7 @@ matrix cores that hipBLAS uses. The same sd-server and int8 model takes
   more to put in it.
 
 - New idea form: which add button is the primary one (Add to inbox, Add &
-  keep, Add & promote)? POC1 shows all three with equal weight.
+  keep, Add & new project)? POC1 shows all three with equal weight.
 - IDs use a separate counter per kind, so the same string can be an idea, a
   run and an image. Keep that, or use one counter across kinds so every ID is
   unique in the library?

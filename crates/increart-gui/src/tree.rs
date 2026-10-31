@@ -106,8 +106,11 @@ fn folder_menu(ui: &mut egui::Ui, st: &AppState, tree: Tree, path: &Path, out: &
             out.push(Msg::MoveNode(tree, path.to_path_buf(), PathBuf::new()));
             ui.close();
         }
-        let what =
-            if tree == Tree::InputLibrary { "Delete… (discards its ideas)" } else { "Delete… (to the trash)" };
+        let what = match tree {
+            Tree::InputLibrary => "Delete… (discards its ideas)",
+            Tree::Projects => "Delete… (discards its projects)",
+            Tree::Collections => "Delete… (to the trash)",
+        };
         if ui.button(ic(ph::TRASH, what)).clicked() {
             let name = path.file_name().unwrap_or_default().to_string_lossy();
             let text = format!("Delete folder {name}? {}.", st.delete_summary(tree, path));
@@ -319,9 +322,13 @@ pub fn projects(ui: &mut egui::Ui, st: &AppState, out: &mut Vec<Msg>) {
                         out.push(Msg::ShowInFileManager(p.dir.clone()));
                         ui.close();
                     }
-                    if ui.button(ic(ph::TRASH, "Delete… (to the trash)")).clicked() {
-                        let text = format!("Delete project {}? {}.", p.name(), st.delete_summary(Tree::Projects, &rel));
-                        out.push(Msg::Ask(Confirm::new(text, "Delete", Msg::DeleteNode(Tree::Projects, rel.clone()))));
+                    if ui.button(ic(ph::TRASH, "Discard…")).clicked() {
+                        let text = format!(
+                            "Discard project {}? {}. Restore it from Projects → Discarded.",
+                            p.name(),
+                            st.delete_summary(Tree::Projects, &rel)
+                        );
+                        out.push(Msg::Ask(Confirm::new(text, "Discard", Msg::DeleteNode(Tree::Projects, rel.clone()))));
                         ui.close();
                     }
                 });

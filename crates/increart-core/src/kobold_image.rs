@@ -831,8 +831,11 @@ fn load_error(log: &Path, from: u64) -> Option<String> {
     f.take(1 << 20).read_to_string(&mut text).ok()?;
     // most telling first ("Unable to determine GPU Memory" is only a warning)
     let hints = ["cannot", "out of memory", "failed", "error"];
-    let lines: Vec<&str> =
-        text.lines().filter(|l| !l.starts_with("Namespace(") && !l.starts_with("--- IncreArt")).collect();
+    let lines: Vec<&str> = text
+        .lines()
+        .map(crate::logview::unstamped)
+        .filter(|l| !l.starts_with("Namespace(") && !l.starts_with("--- IncreArt"))
+        .collect();
     hints.iter().find_map(|h| lines.iter().find(|l| l.to_lowercase().contains(h))).map(|l| l.trim().to_string())
 }
 
