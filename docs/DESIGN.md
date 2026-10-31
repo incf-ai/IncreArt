@@ -2526,7 +2526,23 @@ ends, is stopped, or loses the app (its stdin closing).
   expects of each call, each case's result, log and traffic), `report.json`,
   `traffic.log` and the started servers' logs, zipped beside it. The app's
   runs go to `apitest/<date-time>` in the log folder.
-- The window: **Server preset** shows one preset's cases only, those for
+- The window opens on its basic view, for someone who doesn't know the
+  suite: one preset (**Server preset**, presets only) and its mark; before
+  a run, what validating does and its basic cases as plain steps ("gpu0:
+  makes a small image"), **Start validation** (its basic cases, as
+  **Validate now**) and **Skip and open**; during it, step k of n, a
+  progress bar, the time so far and the steps with their marks, **Stop**;
+  after, a summary: "<preset> works with IncreArt" (any warnings listed
+  under Worth knowing), "N problems found" (What went wrong, then the
+  steps Not checked as what they need failed, and what to do: Copy
+  report, Advanced view), or "Stopped before it finished"; whether the
+  Servers screen now marks it validated, and every step folded below
+  (open when all passed). **Open the preset** (**Open anyway** when
+  something failed) closes the window and opens it, not asking to
+  validate it again; **Run again**, **Copy report**, **Show report zip**.
+  **Advanced view…** shows what follows; **Basic view** goes back; the
+  choice is kept for the session.
+- The advanced view: **Server preset** shows one preset's cases only, those for
   its setup checked and no other preset's (so only its servers start), or
   **All presets**, the checks as they were; it opens on the last used
   preset. Check all, Uncheck all, Light only, Basic only, Run all and Rerun failed are
@@ -2534,7 +2550,8 @@ ends, is stopped, or loses the app (its stdin closing).
   "servers together"), then group; each branch's checkbox checks all in it (half
   checked: some), its mark the worst of theirs. n/a cases start unchecked.
   **Check all**, **Uncheck all**, **Light only**, **Basic only**. Right, the case clicked
-  (what it expects, its result, its log and traffic), else the run's log;
+  (what it expects, its result, its log and traffic), else the last run's
+  counts and the run's log;
   it follows the case running until one is clicked. **Run N checked**,
   **Run all**, **Rerun failed** (failed and skipped), **Stop** (the case
   going on, then the servers), **Copy report** (`report.md`), **Show

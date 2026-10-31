@@ -6766,6 +6766,94 @@ fn opening_a_preset_not_validated_asks_once_to_validate_it_first() {
 }
 
 #[test]
+fn a_basic_validation_ends_on_its_summary_and_continues_to_the_preset() {
+    use increart_core::apitest::{Case, Cost, Event, Outcome};
+    use increart_core::validation::fingerprint;
+    let tmp = tempfile::tempdir().unwrap();
+    let preset = |name: &str, port| ServerPreset { name: name.into(), servers: vec![start("gpu0", port)] };
+    let mut s = dialog_state(vec![preset("Sd", 1234)], Some("Sd"));
+    let path = tmp.path().join("validated.json");
+    s.validations_path = Some(path.clone());
+    s.suite_found = true;
+    assert!(!s.api_test_advanced, "the basic view first");
+    let fx = update(&mut s, Msg::ValidateBasic("Sd".into()));
+    let [Effect::ApiTestList { run, .. }] = fx.as_slice() else { panic!("{fx:?}") };
+    let case = |key: &str, basic: bool| Case {
+        id: format!("Sd/gpu0/{key}"),
+        preset: "Sd".into(),
+        server: Some("gpu0".into()),
+        group: "connect".into(),
+        title: key.into(),
+        cost: Cost::Light,
+        basic,
+        not_applicable: None,
+        expects: String::new(),
+    };
+    let cases = vec![case("connect.capabilities", true), case("models.list", true), case("connect.latency", false)];
+    update(&mut s, Msg::ApiTestEvent(*run, Event::Plan { cases }));
+    s.now = 10.0;
+    let fx = update(&mut s, Msg::ApiTestEnded(*run, None));
+    let [Effect::ApiTestRun { run, .. }] = fx.as_slice() else { panic!("{fx:?}") };
+    let run = *run;
+    let t = s.api_test.as_ref().unwrap();
+    assert_eq!(t.ran, [0, 1], "the basic cases");
+    assert_eq!(t.basic_cases(), [0, 1]);
+    assert!(!t.finished() && t.started == 10.0);
+    // Continue does nothing while it runs
+    update(&mut s, Msg::ApiTestContinue);
+    assert!(s.api_test.is_some());
+    for (id, outcome) in [("Sd/gpu0/connect.capabilities", Outcome::Pass), ("Sd/gpu0/models.list", Outcome::Fail)] {
+        update(&mut s, Msg::ApiTestEvent(run, Event::End { id: id.into(), outcome, summary: "x".into(), secs: 1.0 }));
+    }
+    s.now = 75.0;
+    update(&mut s, Msg::ApiTestEnded(run, None));
+    let t = s.api_test.as_ref().unwrap();
+    assert!(t.finished() && !t.stopped && t.ended == Some(75.0), "its summary");
+    // the advanced view, kept for the session
+    update(&mut s, Msg::ApiTestAdvanced(true));
+    assert!(s.api_test_advanced);
+    update(&mut s, Msg::ApiTestAdvanced(false));
+    // Open anyway: the window closes, the preset opens, not asked again
+    let fx = update(&mut s, Msg::ApiTestContinue);
+    let fp = fingerprint(&s.config, &s.config.server_presets[0].clone());
+    assert!(fx.contains(&Effect::ValidationAsked(path, fp)), "{fx:?}");
+    assert!(s.api_test.is_none());
+    let Phase::Servers(d) = &s.phase else { panic!() };
+    assert!(d.opening, "opening Sd");
+}
+
+#[test]
+fn a_validation_stopped_says_so() {
+    use increart_core::apitest::{Case, Cost, Event};
+    let mut s = dialog_state(vec![ServerPreset { name: "Sd".into(), servers: vec![start("gpu0", 1234)] }], Some("Sd"));
+    let fx = update(&mut s, Msg::ValidateBasic("Sd".into()));
+    let [Effect::ApiTestList { run, .. }] = fx.as_slice() else { panic!("{fx:?}") };
+    let cases = vec![Case {
+        id: "Sd/gpu0/models.list".into(),
+        preset: "Sd".into(),
+        server: Some("gpu0".into()),
+        group: "models".into(),
+        title: "models".into(),
+        cost: Cost::Light,
+        basic: true,
+        not_applicable: None,
+        expects: String::new(),
+    }];
+    update(&mut s, Msg::ApiTestEvent(*run, Event::Plan { cases }));
+    let fx = update(&mut s, Msg::ApiTestEnded(*run, None));
+    let [Effect::ApiTestRun { run, .. }] = fx.as_slice() else { panic!("{fx:?}") };
+    let run = *run;
+    update(&mut s, Msg::ApiTestStop);
+    update(&mut s, Msg::ApiTestEnded(run, None));
+    let t = s.api_test.as_ref().unwrap();
+    assert!(t.finished() && t.stopped);
+    // a run again starts over
+    update(&mut s, Msg::ApiTestRun(increart_gui_core::ApiRun::All));
+    let t = s.api_test.as_ref().unwrap();
+    assert!(!t.stopped && t.ended.is_none() && !t.finished());
+}
+
+#[test]
 fn a_server_problem_links_the_servers_log() {
     let mut s = dialog_state(vec![], None);
     let status = |name: &str, config: Option<ServerConfig>| ServerStatus {

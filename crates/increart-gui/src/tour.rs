@@ -122,9 +122,13 @@ const EXTRA_SCENES: &[&str] = &[
     "60b-server-test-button",
     "60c-server-test",
     // after 02, on a config whose sd-server is the suite's fake
-    // (increart-fake-sd-server): Validate servers…, its cases, a run
+    // (increart-fake-sd-server): Validate servers…, its basic view, a
+    // preset's basic validation and its summary, the advanced view, a run
     "60d-validate-servers-button",
     "60e-validate-servers",
+    "60e2-validate-servers-summary",
+    "60e3-validate-servers-advanced",
+    "60e4-validate-servers-failed",
     "60f-validate-servers-run",
     // after 60d: opening a preset not validated asks to validate it first
     "60g-validate-first",
@@ -376,7 +380,17 @@ impl Tour {
             })],
             "60d-validate-servers-button" => vec![Msg::CancelOpening, Msg::CloseServerTest, Msg::CancelEdit],
             "60e-validate-servers" => vec![Msg::ApiTest(true)],
-            "60g-validate-first" => vec![Msg::OpenPreset(1)],
+            "60e2-validate-servers-summary" => match st.api_test.as_ref().and_then(|t| t.preset.clone()) {
+                Some(p) => vec![Msg::ValidateBasic(p)],
+                None => vec![],
+            },
+            "60e3-validate-servers-advanced" => vec![Msg::ApiTestAdvanced(true)],
+            // the preset connecting to a box that isn't there
+            "60e4-validate-servers-failed" => match st.config.server_presets.get(1) {
+                Some(p) => vec![Msg::ApiTestAdvanced(false), Msg::ValidateBasic(p.name.clone())],
+                None => vec![],
+            },
+            "60g-validate-first" => vec![Msg::ApiTest(false), Msg::OpenPreset(1)],
             "60f-validate-servers-run" => {
                 // the first preset's light cases and its servers together
                 let Some(t) = &st.api_test else { return vec![] };
@@ -389,6 +403,7 @@ impl Tour {
                     })
                     .collect();
                 vec![
+                    Msg::ApiTestAdvanced(true),
                     Msg::ApiTestCheck((0..t.cases.len()).collect(), false),
                     Msg::ApiTestCheck(pick, true),
                     Msg::ApiTestRun(increart_gui_core::ApiRun::Checked),

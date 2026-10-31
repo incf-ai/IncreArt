@@ -173,6 +173,10 @@ pub enum Msg {
     ApiTestStop,
     /// **Validate now**: the window on this preset, its basic cases run.
     ValidateBasic(String),
+    /// The window's advanced view (true) or basic one.
+    ApiTestAdvanced(bool),
+    /// After validating: closes the window and opens the preset shown.
+    ApiTestContinue,
     /// The stamps file, read.
     Validations(increart_core::validation::Validations),
     /// The Settings window.
@@ -2750,6 +2754,7 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
             Some(t) if t.running => {
                 let stop = !t.stopping;
                 t.stopping = true;
+                t.stopped = true;
                 if stop { vec![Effect::ApiTestStop] } else { vec![] }
             }
             _ => {
@@ -2771,6 +2776,9 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
                     && let Some(path) = &state.validations_path
                 {
                     fx.push(Effect::LoadValidations(path.clone()));
+                }
+                if t.running {
+                    t.ended = Some(state.now);
                 }
                 let listed = t.listing;
                 t.listing = false;
@@ -2812,6 +2820,29 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
             state.validations = v;
             vec![]
         }
+        Msg::ApiTestAdvanced(on) => {
+            state.api_test_advanced = on;
+            vec![]
+        }
+        Msg::ApiTestContinue => {
+            let Some(t) = state.api_test.as_ref().filter(|t| !t.running && !t.listing) else { return vec![] };
+            let Some(i) = t.preset.as_ref().and_then(|p| state.config.server_presets.iter().position(|x| &x.name == p))
+            else {
+                return vec![];
+            };
+            state.api_test = None;
+            // validated (or chosen not to be): not asked again on opening
+            let mut fx = vec![];
+            let fp = increart_core::validation::fingerprint(&state.config, &state.config.server_presets[i]);
+            if let Some(path) = &state.validations_path
+                && !state.validations.asked.contains(&fp)
+            {
+                state.validations.asked.push(fp.clone());
+                fx.push(Effect::ValidationAsked(path.clone(), fp));
+            }
+            fx.extend(update(state, Msg::OpenPresetNow(i)));
+            fx
+        }
         Msg::ApiTestCheck(ix, on) => {
             if let Some(t) = &mut state.api_test {
                 for i in ix {
@@ -2847,6 +2878,10 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
             }
             state.server_tests += 1;
             t.run = state.server_tests;
+            t.ran = t.picked(which);
+            t.stopped = false;
+            t.started = state.now;
+            t.ended = None;
             t.running = true;
             t.follow = true;
             t.done = None;
@@ -2857,6 +2892,7 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
         Msg::ApiTestStop => match &mut state.api_test {
             Some(t) if t.running && !t.stopping => {
                 t.stopping = true;
+                t.stopped = true;
                 vec![Effect::ApiTestStop]
             }
             _ => vec![],

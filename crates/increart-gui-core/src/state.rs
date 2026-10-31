@@ -2499,6 +2499,13 @@ pub struct ApiTest {
     /// Run the basic cases of the preset shown once they're listed
     /// (**Validate now**).
     pub basic_pending: bool,
+    /// The cases the last run ran, for its summary.
+    pub ran: Vec<usize>,
+    /// Stop was asked during the last run (it didn't finish).
+    pub stopped: bool,
+    /// When the last run started and ended (`AppState::now`).
+    pub started: f64,
+    pub ended: Option<f64>,
 }
 
 /// A case of the suite, in [`ApiTest`].
@@ -2573,18 +2580,36 @@ impl ApiTest {
         }
     }
 
-    /// The IDs `which` runs (empty for all), of the cases shown.
-    pub fn ids(&self, which: ApiRun) -> Vec<String> {
+    /// The cases `which` runs, of the cases shown.
+    pub fn picked(&self, which: ApiRun) -> Vec<usize> {
         use increart_core::apitest::Outcome;
-        if which == ApiRun::All && self.preset.is_none() {
-            return vec![];
-        }
         let pick = |c: &ApiCase| match which {
             ApiRun::Checked => c.checked,
             ApiRun::All => true,
             ApiRun::Failed => matches!(c.outcome, Some(Outcome::Fail | Outcome::Skipped)),
         };
-        self.shown_cases().into_iter().map(|i| &self.cases[i]).filter(|c| pick(c)).map(|c| c.case.id.clone()).collect()
+        self.shown_cases().into_iter().filter(|&i| pick(&self.cases[i])).collect()
+    }
+
+    /// The IDs `which` runs (empty for all), of the cases shown.
+    pub fn ids(&self, which: ApiRun) -> Vec<String> {
+        if which == ApiRun::All && self.preset.is_none() {
+            return vec![];
+        }
+        self.picked(which).into_iter().map(|i| self.cases[i].case.id.clone()).collect()
+    }
+
+    /// The basic cases of the preset shown, for its setup.
+    pub fn basic_cases(&self) -> Vec<usize> {
+        self.shown_cases()
+            .into_iter()
+            .filter(|&i| self.cases[i].case.basic && self.cases[i].case.not_applicable.is_none())
+            .collect()
+    }
+
+    /// The last run is over and ran (some of) the preset shown.
+    pub fn finished(&self) -> bool {
+        !self.running && self.ended.is_some() && self.ran.iter().any(|&i| self.shown(i))
     }
 }
 
@@ -2874,6 +2899,10 @@ pub struct AppState {
     pub server_tests: u32,
     /// The **Validate servers…** window.
     pub api_test: Option<ApiTest>,
+    /// It shows its advanced view (the cases as a tree, each one's log),
+    /// not the basic one (a preset's validation, step by step, and its
+    /// summary); kept for the session.
+    pub api_test_advanced: bool,
     /// Which server presets passed the suite's basic cases (the stamps
     /// file at `validations_path`).
     pub validations: increart_core::validation::Validations,
@@ -3244,6 +3273,7 @@ impl AppState {
             server_test: None,
             server_tests: 0,
             api_test: None,
+            api_test_advanced: false,
             validations: Default::default(),
             validations_path: None,
             suite_found: false,
