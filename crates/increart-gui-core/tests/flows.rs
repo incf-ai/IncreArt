@@ -6349,6 +6349,7 @@ fn validate_servers_lists_runs_checked_cases_and_stops() {
         group: "together".into(),
         title: id.into(),
         cost: Cost::Light,
+        basic: false,
         not_applicable: na.map(String::from),
         expects: String::new(),
     };
@@ -6448,6 +6449,7 @@ fn validate_servers_opens_on_the_last_used_preset_and_shows_one_at_a_time() {
         group: "connect".into(),
         title: key.into(),
         cost: Cost::Light,
+        basic: false,
         not_applicable: na.then(|| "no LoRA".into()),
         expects: String::new(),
     };
@@ -6475,6 +6477,78 @@ fn validate_servers_opens_on_the_last_used_preset_and_shows_one_at_a_time() {
     // one that isn't there: all presets
     update(&mut s, Msg::ApiTestPreset(Some("Gone".into())));
     assert_eq!(s.api_test.as_ref().unwrap().preset, None);
+}
+
+#[test]
+fn opening_a_preset_not_validated_asks_once_to_validate_it_first() {
+    use increart_core::apitest::{Case, Cost, Counts, Event, Outcome};
+    use increart_core::validation::{Stamp, fingerprint};
+    let tmp = tempfile::tempdir().unwrap();
+    let preset = |name: &str, port| ServerPreset { name: name.into(), servers: vec![start("gpu0", port)] };
+    let mut s = dialog_state(vec![preset("Sd", 1234), preset("Checked", 1240)], Some("Sd"));
+    // tests have no stamps file: nothing asked
+    update(&mut s, Msg::OpenPreset(0));
+    assert!(s.confirm.is_none());
+    let mut s = dialog_state(vec![preset("Sd", 1234), preset("Checked", 1240)], Some("Sd"));
+    let path = tmp.path().join("validated.json");
+    s.validations_path = Some(path.clone());
+    s.suite_found = true;
+    // one validated with the settings it has
+    let checked = s.config.server_presets[1].clone();
+    s.validations.stamps.push(
+        Stamp {
+            preset: "Checked".into(),
+            fingerprint: fingerprint(&s.config, &checked),
+            when: "2026-10-31T17:00:00+01:00".into(),
+            outcome: Outcome::Warn,
+            counts: Counts::default(),
+            servers: vec![],
+            suite: String::new(),
+            report_sha256: String::new(),
+            zip: None,
+            seal: String::new(),
+        }
+        .sealed(),
+    );
+    update(&mut s, Msg::OpenPreset(1));
+    assert!(s.confirm.is_none(), "validated: opened without asking");
+    let mut s2 = dialog_state(vec![preset("Sd", 1234)], Some("Sd"));
+    s2.validations_path = Some(path.clone());
+    s2.suite_found = true;
+    let mut s = s2;
+    let fx = update(&mut s, Msg::OpenPreset(0));
+    let fp = fingerprint(&s.config, &s.config.server_presets[0].clone());
+    assert!(fx.contains(&Effect::ValidationAsked(path.clone(), fp)), "{fx:?}");
+    let c = s.confirm.clone().expect("asked");
+    assert_eq!(c.heading.as_deref(), Some("Validate these servers first?"));
+    assert!(c.text.contains("Sd hasn't been validated") && c.text.contains("Strongly recommended"), "{}", c.text);
+    // Validate now: the window on it; once listed, its basic cases run
+    let fx = update(&mut s, Msg::ConfirmYes);
+    let [Effect::ApiTestList { run, .. }] = fx.as_slice() else { panic!("{fx:?}") };
+    let run = *run;
+    let case = |key: &str, basic: bool| Case {
+        id: format!("Sd/gpu0/{key}"),
+        preset: "Sd".into(),
+        server: Some("gpu0".into()),
+        group: "connect".into(),
+        title: key.into(),
+        cost: Cost::Light,
+        basic,
+        not_applicable: None,
+        expects: String::new(),
+    };
+    let cases = vec![case("connect.capabilities", true), case("connect.latency", false)];
+    update(&mut s, Msg::ApiTestEvent(run, Event::Plan { cases }));
+    let fx = update(&mut s, Msg::ApiTestEnded(run, None));
+    let [Effect::ApiTestRun { run, cases, .. }] = fx.as_slice() else { panic!("{fx:?}") };
+    assert_eq!(cases, &["Sd/gpu0/connect.capabilities"]);
+    // its end: the stamps read again
+    let fx = update(&mut s, Msg::ApiTestEnded(*run, None));
+    assert_eq!(fx, [Effect::LoadValidations(path.clone())]);
+    update(&mut s, Msg::ApiTest(false));
+    // asked once for these settings: opened now, not asked again
+    update(&mut s, Msg::OpenPreset(0));
+    assert!(s.confirm.is_none());
 }
 
 #[test]

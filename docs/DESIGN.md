@@ -2481,10 +2481,39 @@ ends, is stopped, or loses the app (its stdin closing).
   `increart-apitest run` runs them: `--config` (default
   `$INCREART_CONFIG`, else the app's), `--preset` (again for more),
   `--cases` (comma-separated, `*` for any text: `"*/jobs.*"`), `--light`,
-  `--url <url> --kind sd-server|koboldcpp|chat` (one running server, no
-  preset), `--out`, `--verbose`, `--jsonl` (events as JSON lines, a `stop`
-  line on stdin stops: what the app reads). Exit status: 0 all passed,
-  1 a failure, 2 warnings only, 3 it couldn't run.
+  `--basic`, `--url <url> --kind sd-server|koboldcpp|chat` (one running
+  server, no preset), `--out`, `--no-stamp`, `--verbose`, `--jsonl` (events
+  as JSON lines, a `stop` line on stdin stops: what the app reads). Exit
+  status: 0 all passed, 1 a failure, 2 warnings only, 3 it couldn't run.
+- **Basic validation**: the basic cases are `together.open`,
+  `connect.capabilities`, `models.list`, `generate.txt2img` (one small
+  image per image server), `prompt-enhance.answers`, `together.routing`
+  and `together.end-to-end`: a few minutes, the first image the longest.
+  A run with all of a preset's basic cases (`--basic`, **Basic only**,
+  **Run all**) notes it in `validated.json` in the app's state folder: a
+  stamp with the preset, its settings' fingerprint (a hash of its servers
+  and, for a started sd-server, the sd-server binary, model folders and
+  arguments; not its name, nor the model presets), the time, passed
+  (warnings allowed) or failed (a case failed or skipped), the basic
+  cases' counts, what each server said it runs, the suite's version, the
+  run's zip and the SHA-256 of its `report.json`. `--no-stamp` and `--url`
+  note nothing. Each preset keeps its newest 5. A stamp holds for the
+  settings it was run with: editing the preset, or the sd-server settings
+  a started one uses, makes it not validated again. Its seal (a hash of its
+  fields) catches a stamp edited by hand; it's no secret (the source is
+  public), so what shows a setup was validated is the report the stamp
+  names, with its hash: a bug report carries `validated.json` and each
+  preset's newest report zip (up to 16 MB each).
+- On the Servers screen each preset has a mark: **validated** (green, the
+  date and any warnings on hover), **validation failed** (red), or **not
+  validated** (never, or not since its settings changed). With no servers
+  open, clicking it validates the preset: the window opens on it and runs
+  its basic cases. Opening a preset not validated asks once per settings
+  (the fingerprints asked are noted in `validated.json` too) **Validate
+  these servers first?**, strongly recommending it: **Validate now** (the
+  same as the mark), **Open without**, or Cancel. Not asked while servers
+  are open (the suite can't run then), when the suite isn't beside the
+  app, or for `--servers`.
 - Every request of a case and its answer is logged to the case (the same
   lines as the traffic log, tagged with the case). The `--out` folder gets
   `report.md` (written to be handed to a person or an LLM: what the app
@@ -2494,11 +2523,11 @@ ends, is stopped, or loses the app (its stdin closing).
 - The window: **Server preset** shows one preset's cases only, those for
   its setup checked and no other preset's (so only its servers start), or
   **All presets**, the checks as they were; it opens on the last used
-  preset. Check all, Uncheck all, Light only, Run all and Rerun failed are
+  preset. Check all, Uncheck all, Light only, Basic only, Run all and Rerun failed are
   of the cases shown. Left, the cases as a tree, preset, then server (or
   "servers together"), then group; each branch's checkbox checks all in it (half
   checked: some), its mark the worst of theirs. n/a cases start unchecked.
-  **Check all**, **Uncheck all**, **Light only**. Right, the case clicked
+  **Check all**, **Uncheck all**, **Light only**, **Basic only**. Right, the case clicked
   (what it expects, its result, its log and traffic), else the run's log;
   it follows the case running until one is clicked. **Run N checked**,
   **Run all**, **Rerun failed** (failed and skipped), **Stop** (the case

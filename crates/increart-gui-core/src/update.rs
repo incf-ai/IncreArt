@@ -171,6 +171,10 @@ pub enum Msg {
     ApiTestRun(crate::state::ApiRun),
     /// Stops the run: the case going on, then the servers it started.
     ApiTestStop,
+    /// **Validate now**: the window on this preset, its basic cases run.
+    ValidateBasic(String),
+    /// The stamps file, read.
+    Validations(increart_core::validation::Validations),
     /// The Settings window.
     Settings(bool),
     SetNotifications(increart_core::notify::Notifications),
@@ -962,6 +966,11 @@ pub enum Effect {
         cases: Vec<String>,
     },
     ApiTestStop,
+    /// Read the stamps file, answered with `Validations`.
+    LoadValidations(PathBuf),
+    /// Note in the stamps file that opening these settings (a
+    /// fingerprint) asked whether to validate them.
+    ValidationAsked(PathBuf, String),
     /// Stop the engine and the servers the app started.
     StopServers,
     /// Stop the engine only, keeping the servers (switching libraries).
@@ -1041,6 +1050,8 @@ pub enum Effect {
     SaveBugReport {
         config: Option<PathBuf>,
         model_dirs: Vec<String>,
+        /// The stamps file: it and each preset's newest report go in.
+        validations: Option<PathBuf>,
         dest: PathBuf,
     },
     /// Writes the library at `root` to `dest`, on its own thread, reporting
@@ -1509,6 +1520,44 @@ fn skip_servers(state: &mut AppState, choice: StartupServers) -> Vec<Effect> {
     fx
 }
 
+/// The first time a preset is opened with settings not validated (the
+/// suite's basic cases never passed for them), asks whether to validate
+/// them first; asked once per settings. None: nothing to ask.
+fn ask_to_validate(state: &mut AppState, i: usize, p: &ServerPreset) -> Option<Vec<Effect>> {
+    use increart_core::validation::{Status, fingerprint};
+    let path = state.validations_path.clone()?;
+    // the suite starts the servers itself: not with any open
+    let idle = matches!(&state.phase, Phase::Servers(d) if !d.opening)
+        && state.servers.is_empty()
+        && state.background.is_none()
+        && state.api_test.is_none();
+    if !state.suite_found || !idle || p.servers.is_empty() || state.validations.was_asked(&state.config, p) {
+        return None;
+    }
+    let said = match state.validations.status(&state.config, p) {
+        Status::Passed(_) => return None,
+        Status::Never => {
+            format!("{} hasn't been validated: the server validation suite hasn't checked its servers.", p.name)
+        }
+        Status::Changed(s) => format!("{} was validated on {}, but its settings have changed since.", p.name, s.day()),
+        Status::Failed(s) => format!("{} failed its basic validation on {}.", p.name, s.day()),
+    };
+    let fp = fingerprint(&state.config, p);
+    state.validations.asked.push(fp.clone());
+    let text = format!(
+        "{said}\n\nStrongly recommended: validate it now. Each server answers, lists its models and makes a \
+         small image, then a short run goes through them all, as the app uses them. It takes a few minutes \
+         (the first image the longest); a problem is said case by case, with a report to send.\n\n\
+         Asked once for these settings: the preset's mark on this screen says whether it's validated."
+    );
+    let ask = Confirm::new(text, "Validate now", Msg::ValidateBasic(p.name.clone()))
+        .with_fix("Open without", Msg::OpenPreset(i))
+        .recommending("Validate these servers first?");
+    let mut fx = vec![Effect::ValidationAsked(path, fp)];
+    fx.extend(update(state, Msg::Ask(ask)));
+    Some(fx)
+}
+
 /// Opening a preset stops the sd-servers in use it doesn't have, and
 /// restarts the engine (dropping the images being made) unless its
 /// sd-servers are those in use: ask first when either happens.
@@ -1940,6 +1989,9 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
         Msg::OpenPreset(i) => match state.config.server_presets.get(i) {
             Some(p) => {
                 let p = p.clone();
+                if let Some(fx) = ask_to_validate(state, i, &p) {
+                    return fx;
+                }
                 ask_before_replacing(state, &p, Msg::OpenPresetNow(i))
             }
             None => vec![],
@@ -2681,7 +2733,15 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
             vec![]
         }
         Msg::ApiTestEnded(run, why) => {
+            let mut fx = vec![];
             if let Some(t) = state.api_test.as_mut().filter(|t| t.run == run) {
+                // a run may have noted a preset validated
+                if t.running
+                    && let Some(path) = &state.validations_path
+                {
+                    fx.push(Effect::LoadValidations(path.clone()));
+                }
+                let listed = t.listing;
                 t.listing = false;
                 t.running = false;
                 t.stopping = false;
@@ -2691,7 +2751,34 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
                 if t.error.is_none() {
                     t.error = why;
                 }
+                // Validate now: its basic cases, once listed
+                if listed && t.basic_pending && t.error.is_none() && !t.cases.is_empty() {
+                    t.basic_pending = false;
+                    t.check_basic();
+                    fx.extend(update(state, Msg::ApiTestRun(crate::state::ApiRun::Checked)));
+                }
             }
+            fx
+        }
+        Msg::ValidateBasic(preset) => {
+            if state.api_test.is_none() {
+                let fx = update(state, Msg::ApiTest(true));
+                if let Some(t) = &mut state.api_test {
+                    t.preset = Some(preset);
+                    t.basic_pending = true;
+                }
+                return fx;
+            }
+            let Some(t) = &mut state.api_test else { return vec![] };
+            if t.running || t.listing || !t.presets().contains(&preset.as_str()) {
+                return vec![];
+            }
+            t.show_preset(Some(preset));
+            t.check_basic();
+            update(state, Msg::ApiTestRun(crate::state::ApiRun::Checked))
+        }
+        Msg::Validations(v) => {
+            state.validations = v;
             vec![]
         }
         Msg::ApiTestCheck(ix, on) => {
@@ -6112,7 +6199,12 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
                 }
                 state.saving_bug_report = true;
                 let config = state.config_path.clone();
-                vec![Effect::SaveBugReport { config, model_dirs: state.config.sdserver.model_dirs.clone(), dest }]
+                vec![Effect::SaveBugReport {
+                    config,
+                    model_dirs: state.config.sdserver.model_dirs.clone(),
+                    validations: state.validations_path.clone(),
+                    dest,
+                }]
             }
             PickKind::ExportDir => {
                 if let Some(e) = &mut state.export {

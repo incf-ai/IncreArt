@@ -329,6 +329,23 @@ fn footer(ui: &mut egui::Ui, st: &AppState, t: &ApiTest, out: &mut Vec<Msg>) {
                 out.push(Msg::ApiTestCheck(every.clone(), false));
                 out.push(Msg::ApiTestCheck(light, true));
             }
+            let basic: Vec<usize> = every
+                .iter()
+                .copied()
+                .filter(|&i| t.cases[i].case.basic && t.cases[i].case.not_applicable.is_none())
+                .collect();
+            if ui
+                .button("Basic only")
+                .on_hover_text(
+                    "checks only the basic cases: each server answers, lists its models and makes a small image, \
+                     a chat server answers, the servers together route each model preset and run through the \
+                     engine. A preset whose basic cases all run is noted as validated (or not) for its settings",
+                )
+                .clicked()
+            {
+                out.push(Msg::ApiTestCheck(every.clone(), false));
+                out.push(Msg::ApiTestCheck(basic, true));
+            }
             ui.separator();
             let copy = ui
                 .add_enabled(report.is_some(), egui::Button::new(ic(ph::COPY, "Copy report")))

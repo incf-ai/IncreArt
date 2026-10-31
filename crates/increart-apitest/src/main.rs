@@ -14,8 +14,8 @@ use increart_core::pe::{PeRun, PeServer};
 
 const USAGE: &str = "\
 usage: increart-apitest list [<options>] [--json]
-       increart-apitest run [<options>] [--cases <pattern>,…] [--light] [--out <folder>]
-                            [--jsonl] [--verbose]
+       increart-apitest run [<options>] [--cases <pattern>,…] [--light | --basic] [--out <folder>]
+                            [--no-stamp] [--jsonl] [--verbose]
        increart-apitest --version
 
 Validates the servers of an IncreArt config: each server preset's servers
@@ -35,6 +35,11 @@ run:
   --cases <patterns>  only these case IDs, comma-separated; * for any text
                       (\"*/jobs.*\", \"Remote/proxy/*\"); `list` shows the IDs
   --light             only the light cases: nothing loaded, nothing generated
+  --basic             only the basic cases: each server answers, lists its models and
+                      makes a small image, a chat server answers, and the servers
+                      together route each model preset and run through the engine
+  --no-stamp          don't note the result: a preset whose basic cases all ran is
+                      noted as validated (or not) for its settings, which the app shows
   --out <folder>      the report's folder (default: increart-apitest-<date-time>)
   --jsonl             events as JSON lines (for the app); a `stop` line on stdin stops
   --verbose           each case's log and traffic as it runs
@@ -51,6 +56,8 @@ struct Args {
     password: String,
     cases: Vec<String>,
     light: bool,
+    basic: bool,
+    no_stamp: bool,
     out: Option<PathBuf>,
     json: bool,
     jsonl: bool,
@@ -67,6 +74,8 @@ fn parse() -> Result<Args, String> {
         password: String::new(),
         cases: vec![],
         light: false,
+        basic: false,
+        no_stamp: false,
         out: None,
         json: false,
         jsonl: false,
@@ -88,6 +97,8 @@ fn parse() -> Result<Args, String> {
                 a.cases.extend(value("--cases")?.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()))
             }
             "--light" => a.light = true,
+            "--basic" => a.basic = true,
+            "--no-stamp" => a.no_stamp = true,
             "--out" => a.out = Some(value("--out")?.into()),
             "--json" => a.json = true,
             "--jsonl" => a.jsonl = true,
@@ -267,7 +278,18 @@ fn main() -> ExitCode {
             _ => {}
         }
     });
-    let opts = increart_apitest::Options { config, config_path: path, presets, cases: a.cases, light: a.light, out };
+    // a --url server isn't a preset of the config: nothing to note
+    let stamps = (!a.no_stamp && a.url.is_none()).then(increart_core::validation::path).flatten();
+    let opts = increart_apitest::Options {
+        config,
+        config_path: path,
+        presets,
+        cases: a.cases,
+        light: a.light,
+        basic: a.basic,
+        stamps,
+        out,
+    };
     // the config's own warnings first
     let mut emit = emit;
     for w in warnings {

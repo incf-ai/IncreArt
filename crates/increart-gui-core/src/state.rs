@@ -1200,11 +1200,20 @@ pub struct Confirm {
     pub verb: String,
     pub then: Box<crate::Msg>,
     pub fix: Option<(String, Box<crate::Msg>)>,
+    /// Its heading, for a question that isn't "are you sure": its verb is
+    /// then what's recommended, not what can't be undone.
+    pub heading: Option<String>,
 }
 
 impl Confirm {
     pub fn new(text: impl Into<String>, verb: impl Into<String>, then: crate::Msg) -> Self {
-        Self { text: text.into(), verb: verb.into(), then: Box::new(then), fix: None }
+        Self { text: text.into(), verb: verb.into(), then: Box::new(then), fix: None, heading: None }
+    }
+
+    /// Asks under `heading`, `verb` recommended.
+    pub fn recommending(mut self, heading: impl Into<String>) -> Self {
+        self.heading = Some(heading.into());
+        self
     }
 
     pub fn with_fix(mut self, name: impl Into<String>, then: crate::Msg) -> Self {
@@ -2425,6 +2434,9 @@ pub struct ApiTest {
     pub done: Option<(increart_core::apitest::Counts, Option<PathBuf>, Option<PathBuf>)>,
     /// It couldn't list or run (the suite missing, a bad config).
     pub error: Option<String>,
+    /// Run the basic cases of the preset shown once they're listed
+    /// (**Validate now**).
+    pub basic_pending: bool,
 }
 
 /// A case of the suite, in [`ApiTest`].
@@ -2488,6 +2500,14 @@ impl ApiTest {
         self.preset = preset;
         if self.selected.is_some_and(|i| !self.shown(i)) {
             self.selected = None;
+        }
+    }
+
+    /// Checks the basic cases shown (those for its setup) and no others.
+    pub fn check_basic(&mut self) {
+        for i in 0..self.cases.len() {
+            let on = self.shown(i) && self.cases[i].case.basic && self.cases[i].case.not_applicable.is_none();
+            self.cases[i].checked = on;
         }
     }
 
@@ -2792,6 +2812,14 @@ pub struct AppState {
     pub server_tests: u32,
     /// The **Validate servers…** window.
     pub api_test: Option<ApiTest>,
+    /// Which server presets passed the suite's basic cases (the stamps
+    /// file at `validations_path`).
+    pub validations: increart_core::validation::Validations,
+    /// The stamps file ([`increart_core::validation::path`]); None (as in
+    /// tests): nothing read or noted, and opening a preset doesn't ask.
+    pub validations_path: Option<PathBuf>,
+    /// `increart-apitest` is there to run (beside the app, or on PATH).
+    pub suite_found: bool,
     /// Numbers server-opening attempts; reports from older ones are ignored.
     pub open_attempt: u32,
     /// Servers still opening after **Continue in background**.
@@ -3149,6 +3177,9 @@ impl AppState {
             server_test: None,
             server_tests: 0,
             api_test: None,
+            validations: Default::default(),
+            validations_path: None,
+            suite_found: false,
             open_attempt: 0,
             background: None,
             start_log: vec![],

@@ -10,6 +10,7 @@ use std::time::Instant;
 use increart_core::apitest::{Case, Counts, Event, Outcome, matches};
 use increart_core::config::{Config, ServerPreset};
 use increart_core::sdserver::ModelKey;
+use increart_core::validation::Stamp;
 
 use crate::catalogue::{Target, cases_of, defs};
 use crate::ctx::{ChatSrv, Ctx, ImageSrv, Model, Out, Verdict, skipped};
@@ -24,6 +25,11 @@ pub struct Options {
     pub cases: Vec<String>,
     /// Only the light cases (nothing loaded, nothing generated).
     pub light: bool,
+    /// Only the basic cases ([`increart_core::validation::BASIC`]).
+    pub basic: bool,
+    /// The stamps file a preset whose basic cases all ran is stamped in
+    /// ([`increart_core::validation`]); None: not stamped.
+    pub stamps: Option<PathBuf>,
     /// The report's folder (zipped beside it).
     pub out: PathBuf,
 }
@@ -31,6 +37,7 @@ pub struct Options {
 /// Whether the case is chosen (the presets' `open` is, with any other).
 fn chosen(o: &Options, c: &Case, cost: increart_core::apitest::Cost) -> bool {
     (!o.light || cost == increart_core::apitest::Cost::Light)
+        && (!o.basic || c.basic)
         && (o.cases.is_empty() || o.cases.iter().any(|p| matches(p, &c.id)))
 }
 
@@ -45,7 +52,16 @@ pub fn run(o: &Options, cancel: &AtomicBool, emit: Box<dyn FnMut(&Event) + Send>
             picked[i] = all.iter().zip(&picked).any(|((x, ..), p)| *p && x.preset == c.preset);
         }
     }
+    // the presets whose basic cases all run: stamped at the end
+    let whole: Vec<&str> = o
+        .presets
+        .iter()
+        .map(|p| p.name.as_str())
+        .filter(|p| all.iter().zip(&picked).all(|((c, ..), on)| c.preset != *p || !c.basic || *on))
+        .collect();
+    let whole: Vec<String> = whole.into_iter().map(str::to_string).collect();
     let run: Vec<_> = all.into_iter().zip(picked).filter(|(_, p)| *p).map(|(x, _)| x).collect();
+    let mut stamps: Vec<Stamp> = vec![];
     let report = Report::new(crate::version(), o.config_path.clone(), presets_text(&o.presets));
     let out = Arc::new(Out::new(emit, report));
     out.event(Event::Plan { cases: run.iter().map(|(c, ..)| c.clone()).collect() });
@@ -77,6 +93,7 @@ pub fn run(o: &Options, cancel: &AtomicBool, emit: Box<dyn FnMut(&Event) + Send>
             cancel,
             out: &out,
         };
+        let mut basic = Counts::default();
         for (case, d, target) in cases {
             out.event(Event::Start { id: case.id.clone() });
             let t = Instant::now();
@@ -86,11 +103,44 @@ pub fn run(o: &Options, cancel: &AtomicBool, emit: Box<dyn FnMut(&Event) + Send>
             } else {
                 v
             };
+            if case.basic {
+                basic.add(v.outcome);
+            }
             out.event(Event::End {
                 id: case.id.clone(),
                 outcome: v.outcome,
                 summary: v.summary,
                 secs: t.elapsed().as_secs_f64(),
+            });
+        }
+        if whole.contains(&p.name) && !cx.stopped() {
+            let outcome = if basic.fail + basic.skipped > 0 {
+                Outcome::Fail
+            } else if basic.warn > 0 {
+                Outcome::Warn
+            } else {
+                Outcome::Pass
+            };
+            let servers = cx
+                .images
+                .iter()
+                .map(|s| {
+                    let software = s.proc.as_ref().and_then(|p| p.client.software());
+                    (s.config.name().to_string(), software.unwrap_or_default())
+                })
+                .chain(cx.chats.iter().map(|c| (c.server.name.clone(), String::new())))
+                .collect();
+            stamps.push(Stamp {
+                preset: p.name.clone(),
+                fingerprint: increart_core::validation::fingerprint(&o.config, p),
+                when: chrono::Local::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, false),
+                outcome,
+                counts: basic,
+                servers,
+                suite: crate::version(),
+                report_sha256: String::new(),
+                zip: None,
+                seal: String::new(),
             });
         }
         let started: Vec<String> =
@@ -103,6 +153,18 @@ pub fn run(o: &Options, cancel: &AtomicBool, emit: Box<dyn FnMut(&Event) + Send>
     increart_core::traffic::set_sink(None);
     let counts = out.with_report(|r| r.counts());
     let written = out.with_report(|r| r.write(&o.out));
+    if let (Some(file), Ok(zip)) = (&o.stamps, &written) {
+        let sha = increart_core::validation::file_sha256(&o.out.join("report.json")).unwrap_or_default();
+        for mut s in stamps {
+            s.report_sha256 = sha.clone();
+            s.zip = Some(zip.clone());
+            let said = format!("{}: basic validation {}", s.preset, if s.passed() { "passed" } else { "failed" });
+            match increart_core::validation::record(file, s.sealed()) {
+                Ok(()) => out.log(format!("{said} (noted in {})", file.display())),
+                Err(e) => out.log(format!("{said}, but it couldn't be noted in {}: {e}", file.display())),
+            }
+        }
+    }
     match written {
         Ok(zip) => out.event(Event::Done { counts, report: Some(o.out.clone()), zip: Some(zip) }),
         Err(e) => {

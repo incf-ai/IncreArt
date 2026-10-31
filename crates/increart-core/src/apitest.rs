@@ -81,6 +81,10 @@ pub struct Case {
     pub group: String,
     pub title: String,
     pub cost: Cost,
+    /// One of the basic cases ([`crate::validation::BASIC`]): a run of all
+    /// of a preset's stamps it validated, or not.
+    #[serde(default)]
+    pub basic: bool,
     /// Why it isn't for this server or setup (it's then n/a).
     pub not_applicable: Option<String>,
     /// What IncreArt expects of the server here (for whoever reads the

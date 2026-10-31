@@ -893,9 +893,12 @@ fn presets(ui: &mut egui::Ui, st: &AppState, d: &ServerDialog, out: &mut Vec<Msg
             ui,
             |ui| ui.selectable_label(editing, text).on_hover_text("Open").clicked(),
             |ui| {
-                // right to left: ✎ pinned to the right edge, the bin next to it, then the tag
+                // right to left: ✎ pinned to the right edge, the bin next to it, then the tags
                 let edit = ui.small_button(ph::PENCIL_SIMPLE).on_hover_text("Edit").clicked();
                 let delete = ui.small_button(ph::TRASH).on_hover_text("Delete preset…").clicked();
+                if validation_mark(ui, st, d, p) {
+                    out.push(Msg::ValidateBasic(p.name.clone()));
+                }
                 if last == Some(i) {
                     ui.label(RichText::new("last used").color(ACCENT_MUTED));
                 }
@@ -944,6 +947,57 @@ fn presets(ui: &mut egui::Ui, st: &AppState, d: &ServerDialog, out: &mut Vec<Msg
     });
     ui.add_space(6.0);
     ui.weak("Click a preset to open it");
+}
+
+/// Whether the preset passed the suite's basic cases with the settings it
+/// has: a mark saying so, which validates it when clicked (while the
+/// suite can run: no servers open); true when clicked.
+fn validation_mark(ui: &mut egui::Ui, st: &AppState, d: &ServerDialog, p: &config::ServerPreset) -> bool {
+    use increart_core::validation::Status;
+    if st.validations_path.is_none() || p.servers.is_empty() {
+        return false;
+    }
+    let (icon, text, color, tip) = match st.validations.status(&st.config, p) {
+        Status::Passed(s) => {
+            let warned = if s.counts.warn > 0 { format!(", with {} warning(s)", s.counts.warn) } else { String::new() };
+            (ph::SEAL_CHECK, "validated", GOOD, format!("its basic validation passed on {}{warned}", s.day()))
+        }
+        Status::Failed(s) => (
+            ph::SEAL_WARNING,
+            "validation failed",
+            BAD,
+            format!(
+                "its basic validation failed on {}: {} case(s) failed or were skipped",
+                s.day(),
+                s.counts.fail + s.counts.skipped
+            ),
+        ),
+        Status::Changed(s) => (
+            ph::SEAL_QUESTION,
+            "not validated",
+            NEUTRAL,
+            format!("validated on {}, but its settings have changed since", s.day()),
+        ),
+        Status::Never => (
+            ph::SEAL_QUESTION,
+            "not validated",
+            NEUTRAL,
+            "the server validation suite hasn't checked its servers".into(),
+        ),
+    };
+    let can = st.suite_found && !d.opening && st.servers.is_empty() && st.background.is_none() && st.api_test.is_none();
+    let label = RichText::new(ic(icon, text)).color(color);
+    if can {
+        ui.add(egui::Button::new(label).frame(false))
+            .on_hover_text(format!(
+                "{tip}\nClick to validate it now: each server answers, lists its models and makes a small \
+                 image, then a short run through them all"
+            ))
+            .clicked()
+    } else {
+        ui.label(label).on_hover_text(tip);
+        false
+    }
 }
 
 /// **Continue without servers**: nothing generates meanwhile; prompt

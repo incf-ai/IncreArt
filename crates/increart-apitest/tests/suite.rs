@@ -93,6 +93,8 @@ fn run_suite(config: Config, presets: Vec<ServerPreset>, cases: &[&str]) -> Ran 
         presets,
         cases: cases.iter().map(|s| s.to_string()).collect(),
         light: false,
+        basic: false,
+        stamps: None,
         out: dir.path().join("report"),
     };
     let events = Arc::new(Mutex::new(vec![]));
@@ -203,6 +205,8 @@ fn light_only_loads_nothing() {
         presets: vec![preset],
         cases: vec![],
         light: true,
+        basic: false,
+        stamps: Some(dir.path().join("validated.json")),
         out: dir.path().join("r"),
     };
     let _one = ONE.lock().unwrap_or_else(|e| e.into_inner());
@@ -210,6 +214,52 @@ fn light_only_loads_nothing() {
     assert_eq!(counts.fail, 0);
     assert_eq!(a.count("/models/load"), 0);
     assert_eq!(a.count("/img_gen"), 0);
+    // not all the basic cases: nothing noted
+    assert!(!dir.path().join("validated.json").exists());
+}
+
+#[test]
+fn the_basic_cases_note_the_preset_validated() {
+    use increart_core::validation::{Status, Validations};
+    let a = good_fake();
+    let preset = ServerPreset { name: "One".into(), servers: vec![connect("a", &a.url)] };
+    let config = config(std::slice::from_ref(&preset));
+    let dir = tempfile::tempdir().unwrap();
+    let stamps = dir.path().join("validated.json");
+    let opts = Options {
+        config: config.clone(),
+        config_path: None,
+        presets: vec![preset.clone()],
+        cases: vec![],
+        light: false,
+        basic: true,
+        stamps: Some(stamps.clone()),
+        out: dir.path().join("r"),
+    };
+    let events = Arc::new(Mutex::new(vec![]));
+    let sink = events.clone();
+    let _one = ONE.lock().unwrap_or_else(|e| e.into_inner());
+    let counts = run(&opts, &AtomicBool::new(false), Box::new(move |e| sink.lock().unwrap().push(e.clone())));
+    assert_eq!(counts.fail, 0, "{counts:?}");
+    // the basic cases only: one image, no cancels
+    let ran: Vec<String> = events
+        .lock()
+        .unwrap()
+        .iter()
+        .filter_map(|e| match e {
+            Event::End { id, .. } => Some(id.clone()),
+            _ => None,
+        })
+        .collect();
+    assert!(ran.iter().all(|id| increart_core::validation::is_basic(id)), "{ran:?}");
+    assert!(ran.contains(&"One/a/generate.txt2img".to_string()), "{ran:?}");
+    let v = Validations::load(&stamps);
+    let Status::Passed(s) = v.status(&config, &preset) else { panic!("{v:?}") };
+    let zip = s.zip.clone().unwrap();
+    assert!(zip.is_file());
+    let sha = increart_core::validation::file_sha256(&dir.path().join("r").join("report.json")).unwrap();
+    assert_eq!(s.report_sha256, sha);
+    assert_eq!(s.servers[0].0, "a");
 }
 
 #[cfg(feature = "fake")]

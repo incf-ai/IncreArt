@@ -472,9 +472,11 @@ pub fn cases_of(config: &Config, presets: &[ServerPreset]) -> Vec<(Case, usize, 
     for p in presets {
         let s = setup(config, p);
         let mut add = |i: usize, d: &Def, server: Option<&str>, t: Target| {
+            let id = case_id(&p.name, server, d);
             out.push((
                 Case {
-                    id: case_id(&p.name, server, d),
+                    basic: increart_core::validation::is_basic(&id),
+                    id,
                     preset: p.name.clone(),
                     server: server.map(str::to_string),
                     group: d.group.into(),

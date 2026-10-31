@@ -117,6 +117,8 @@ const EXTRA_SCENES: &[&str] = &[
     "60d-validate-servers-button",
     "60e-validate-servers",
     "60f-validate-servers-run",
+    // after 60d: opening a preset not validated asks to validate it first
+    "60g-validate-first",
     "61-duplicate-project",
     "62-rename",
     "63-projects-search",
@@ -339,6 +341,7 @@ impl Tour {
             })],
             "60d-validate-servers-button" => vec![Msg::CancelOpening, Msg::CloseServerTest, Msg::CancelEdit],
             "60e-validate-servers" => vec![Msg::ApiTest(true)],
+            "60g-validate-first" => vec![Msg::OpenPreset(1)],
             "60f-validate-servers-run" => {
                 // the first preset's light cases and its servers together
                 let Some(t) = &st.api_test else { return vec![] };

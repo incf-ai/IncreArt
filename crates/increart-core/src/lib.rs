@@ -47,6 +47,7 @@ pub mod servertest;
 pub mod thumbs;
 pub mod tiers;
 pub mod traffic;
+pub mod validation;
 pub mod webp;
 
 pub use error::{Error, Result};

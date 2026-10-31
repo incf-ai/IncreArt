@@ -368,6 +368,14 @@ impl Runtime {
                     let _ = writeln!(stdin, "stop").and_then(|_| stdin.flush());
                 }
             }
+            Effect::LoadValidations(path) => {
+                let _ = self.tx.send(Msg::Validations(increart_core::validation::Validations::load(&path)));
+                (self.wake)();
+            }
+            Effect::ValidationAsked(path, fingerprint) => {
+                // not noted: asked again next time, no worse
+                let _ = increart_core::validation::mark_asked(&path, &fingerprint);
+            }
             Effect::FolderPreviews { root, dir, names } => {
                 let (tx, wake) = (self.tx.clone(), self.wake.clone());
                 std::thread::spawn(move || {
@@ -397,13 +405,14 @@ impl Runtime {
                     .spawn(move || convert_store(&lib, &shared, to, &cancel, &tx, &wake))
                     .expect("spawn store conversion");
             }
-            Effect::SaveBugReport { config, model_dirs, dest } => {
+            Effect::SaveBugReport { config, model_dirs, validations, dest } => {
                 let (tx, wake) = (self.tx.clone(), self.wake.clone());
                 let report = increart_core::bugreport::Report {
                     config,
                     logs: logs(&self.shared),
                     model_dirs: model_dirs.iter().map(|d| increart_core::config::full_path(d)).collect(),
                     about: increart_core::applog::about().unwrap_or("increart (version not known)").to_string(),
+                    validations,
                 };
                 std::thread::Builder::new()
                     .name("bug report".into())
@@ -1511,6 +1520,8 @@ fn work_on(shared: &Arc<Mutex<Shared>>, wake: &Wake, fx: Effect) -> Vec<Msg> {
         | Effect::ApiTestList { .. }
         | Effect::ApiTestRun { .. }
         | Effect::ApiTestStop
+        | Effect::LoadValidations(_)
+        | Effect::ValidationAsked(..)
         | Effect::PlaySound { .. }
         | Effect::OpenServers { .. }
         | Effect::Pick { .. }
