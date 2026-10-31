@@ -243,7 +243,7 @@ impl Test<'_> {
                     Outcome::Failed,
                     format!(
                         "job {id}: still {} after {} min ({})",
-                        seen.last().unwrap(),
+                        seen.last().map_or("not seen", |s| *s),
                         IMAGE_LIMIT.as_secs() / 60,
                         seen.join(" → ")
                     ),

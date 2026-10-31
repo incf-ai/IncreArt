@@ -195,14 +195,22 @@ pub fn parallel(cx: &mut Ctx, _: Target) -> Verdict {
         let handles: Vec<_> = jobs
             .iter()
             .map(|(s, body)| {
-                sc.spawn(move || {
+                let job = std::thread::Builder::new().spawn_scoped(sc, move || {
                     let t = Instant::now();
                     let r = cx.generate(*s, body, IMAGE_LIMIT).and_then(|j| png_of(&j)).map(|_| ());
-                    (*s, r, t.elapsed())
-                })
+                    (r, t.elapsed())
+                });
+                (*s, job)
             })
             .collect();
-        handles.into_iter().map(|h| h.join().expect("a job thread")).collect()
+        handles
+            .into_iter()
+            .map(|(s, job)| match job.map_err(|e| e.to_string()).map(|h| h.join()) {
+                Ok(Ok((r, took))) => (s, r, took),
+                Ok(Err(_)) => (s, Err("its job's thread stopped".into()), Duration::ZERO),
+                Err(e) => (s, Err(format!("its job's thread didn't start: {e}")), Duration::ZERO),
+            })
+            .collect()
     });
     let all = at.elapsed().as_secs_f32();
     let mut each = vec![];
@@ -227,7 +235,7 @@ pub fn pe_with_images(cx: &mut Ctx, _: Target) -> Verdict {
     if let Err(e) = cx.ensure_loaded(s, m) {
         return fail(e);
     }
-    let client = cx.client(s);
+    let client = tried!(cx.client(s));
     let id = match client.img_gen(&cx.body(m, 81, 12, &[])) {
         Ok(id) => id,
         Err(e) => return fail(format!("the image: {e}")),
@@ -330,9 +338,10 @@ fn engine_run(cx: &mut Ctx, stop_one: bool) -> Verdict {
     };
     let endpoints: Vec<Endpoint> = open
         .iter()
-        .map(|&s| {
-            let p = cx.images[s].proc.as_ref().unwrap();
-            Endpoint { name: p.name.clone(), device: p.device.clone(), client: p.client.clone() }
+        .filter_map(|&s| {
+            // (all open: `open` lists those with a process)
+            let p = cx.images[s].proc.as_ref()?;
+            Some(Endpoint { name: p.name.clone(), device: p.device.clone(), client: p.client.clone() })
         })
         .collect();
     let names: Vec<String> = endpoints.iter().map(|e| e.name.clone()).collect();

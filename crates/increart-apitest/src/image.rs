@@ -12,10 +12,10 @@ use serde_json::json;
 use crate::catalogue::Target;
 use crate::ctx::*;
 
-fn server(t: Target) -> usize {
+fn server(t: Target) -> Result<usize, String> {
     match t {
-        Target::Image(s) => s,
-        _ => unreachable!("an image server's case"),
+        Target::Image(s) => Ok(s),
+        _ => Err("not an image server's case".into()),
     }
 }
 
@@ -31,7 +31,7 @@ fn secs(t: Instant) -> String {
 }
 
 pub fn capabilities(cx: &mut Ctx, t: Target) -> Verdict {
-    let client = cx.client(server(t));
+    let client = tried!(cx.client(tried!(server(t))));
     match client.capabilities() {
         Ok(v) => {
             let what = client.software().unwrap_or_else(|| "sd-server's API".into());
@@ -54,7 +54,7 @@ pub fn capabilities(cx: &mut Ctx, t: Target) -> Verdict {
 }
 
 pub fn latency(cx: &mut Ctx, t: Target) -> Verdict {
-    let client = cx.client(server(t));
+    let client = tried!(cx.client(tried!(server(t))));
     let mut ms = vec![];
     for _ in 0..10 {
         let at = Instant::now();
@@ -70,7 +70,7 @@ pub fn latency(cx: &mut Ctx, t: Target) -> Verdict {
 }
 
 pub fn parallel_clients(cx: &mut Ctx, t: Target) -> Verdict {
-    let client = cx.client(server(t));
+    let client = tried!(cx.client(tried!(server(t))));
     let at = Instant::now();
     let errors: Vec<String> = std::thread::scope(|sc| {
         let handles: Vec<_> = (0..8)
@@ -90,7 +90,7 @@ pub fn parallel_clients(cx: &mut Ctx, t: Target) -> Verdict {
 }
 
 pub fn poll_burst(cx: &mut Ctx, t: Target) -> Verdict {
-    let client = cx.client(server(t));
+    let client = tried!(cx.client(tried!(server(t))));
     let at = Instant::now();
     let mut slowest = Duration::ZERO;
     for i in 0..100 {
@@ -105,7 +105,7 @@ pub fn poll_burst(cx: &mut Ctx, t: Target) -> Verdict {
 }
 
 pub fn unknown_job(cx: &mut Ctx, t: Target) -> Verdict {
-    match cx.client(server(t)).job("increart-apitest-no-such-job") {
+    match tried!(cx.client(tried!(server(t)))).job("increart-apitest-no-such-job") {
         Err(ApiError::JobGone) => pass("404: an unknown job is gone"),
         Err(e) => warn(format!("answered {e}, not 404: the engine reads that as the server failing, not the job gone")),
         Ok(j) => fail(format!("answered a job for an ID it never gave ({})", job_text(&j))),
@@ -113,7 +113,7 @@ pub fn unknown_job(cx: &mut Ctx, t: Target) -> Verdict {
 }
 
 pub fn list(cx: &mut Ctx, t: Target) -> Verdict {
-    let s = server(t);
+    let s = tried!(server(t));
     match cx.loadable(s) {
         Err(e) => fail(format!("GET /sdcpp/v1/model-files: {e}")),
         Ok(None) => warn("no list (404): any model preset may be sent to it, and fail there if it hasn't the files"),
@@ -149,7 +149,7 @@ pub fn list(cx: &mut Ctx, t: Target) -> Verdict {
 }
 
 pub fn status(cx: &mut Ctx, t: Target) -> Verdict {
-    match cx.client(server(t)).model_status() {
+    match tried!(cx.client(tried!(server(t)))).model_status() {
         Ok(st) => {
             let loaded = st.loaded().map(|k| key_text(&k)).unwrap_or_else(|| "nothing".into());
             match st.state.as_str() {
@@ -162,7 +162,7 @@ pub fn status(cx: &mut Ctx, t: Target) -> Verdict {
 }
 
 pub fn load_each(cx: &mut Ctx, t: Target) -> Verdict {
-    let s = server(t);
+    let s = tried!(server(t));
     let ms = cx.models_for(s);
     if ms.is_empty() {
         return skipped("none of the config's model presets has its files on it");
@@ -188,8 +188,8 @@ pub fn load_each(cx: &mut Ctx, t: Target) -> Verdict {
 }
 
 pub fn load_missing(cx: &mut Ctx, t: Target) -> Verdict {
-    let s = server(t);
-    let client = cx.client(s);
+    let s = tried!(server(t));
+    let client = tried!(cx.client(s));
     let recipe = cx.models.first().map(|m| m.key.recipe.clone()).unwrap_or_else(|| "qwen-image-21".into());
     let missing = "diffusion_models/increart-apitest-missing.safetensors";
     let key = ModelKey { recipe, models: BTreeMap::from([("diffusion_model".to_string(), missing.to_string())]) };
@@ -212,7 +212,7 @@ pub fn load_missing(cx: &mut Ctx, t: Target) -> Verdict {
 }
 
 pub fn basic(cx: &mut Ctx, t: Target) -> Verdict {
-    let client = cx.client(server(t));
+    let client = tried!(cx.client(tried!(server(t))));
     let models: Vec<(String, ModelKey)> = cx.models.iter().map(|m| (m.preset.name.clone(), m.key.clone())).collect();
     let mut steps: Vec<servertest::Step> = vec![];
     let cx = &*cx;
@@ -254,7 +254,7 @@ fn one_image(cx: &Ctx, s: usize, body: &serde_json::Value, what: &str) -> Verdic
 }
 
 pub fn txt2img(cx: &mut Ctx, t: Target) -> Verdict {
-    let s = server(t);
+    let s = tried!(server(t));
     let m = match ready(cx, s) {
         Ok(m) => m,
         Err(v) => return v,
@@ -264,7 +264,7 @@ pub fn txt2img(cx: &mut Ctx, t: Target) -> Verdict {
 }
 
 pub fn same_seed(cx: &mut Ctx, t: Target) -> Verdict {
-    let s = server(t);
+    let s = tried!(server(t));
     let m = match ready(cx, s) {
         Ok(m) => m,
         Err(v) => return v,
@@ -293,7 +293,7 @@ pub fn same_seed(cx: &mut Ctx, t: Target) -> Verdict {
 }
 
 pub fn reference(cx: &mut Ctx, t: Target) -> Verdict {
-    let s = server(t);
+    let s = tried!(server(t));
     let m = match ready(cx, s) {
         Ok(m) => m,
         Err(v) => return v,
@@ -303,7 +303,7 @@ pub fn reference(cx: &mut Ctx, t: Target) -> Verdict {
 }
 
 pub fn large_request(cx: &mut Ctx, t: Target) -> Verdict {
-    let s = server(t);
+    let s = tried!(server(t));
     let m = match ready(cx, s) {
         Ok(m) => m,
         Err(v) => return v,
@@ -312,7 +312,7 @@ pub fn large_request(cx: &mut Ctx, t: Target) -> Verdict {
     let body = cx.body(m, 12, 4, &refs);
     let mb = body.to_string().len() as f64 / 1e6;
     cx.log(format!("a request of {mb:.1} MB"));
-    let client = cx.client(s);
+    let client = tried!(cx.client(s));
     let at = Instant::now();
     match client.img_gen(&body) {
         Ok(id) => {
@@ -328,7 +328,7 @@ pub fn large_request(cx: &mut Ctx, t: Target) -> Verdict {
 }
 
 pub fn lora(cx: &mut Ctx, t: Target) -> Verdict {
-    let s = server(t);
+    let s = tried!(server(t));
     let can = cx.models_for(s);
     let Some(m) = can.into_iter().find(|&m| cx.models[m].preset.loras.iter().any(|l| !l.file.is_empty())) else {
         return not_applicable("none of the model presets with a LoRA has its files on it");
@@ -349,7 +349,7 @@ pub fn lora(cx: &mut Ctx, t: Target) -> Verdict {
 }
 
 pub fn custom_sigmas(cx: &mut Ctx, t: Target) -> Verdict {
-    let s = server(t);
+    let s = tried!(server(t));
     let can = cx.models_for(s);
     let Some(m) = can.into_iter().find(|&m| !cx.models[m].preset.custom_sigmas.is_empty()) else {
         return not_applicable("none of the model presets with custom sigmas has its files on it");
@@ -364,12 +364,12 @@ pub fn custom_sigmas(cx: &mut Ctx, t: Target) -> Verdict {
 }
 
 pub fn queue(cx: &mut Ctx, t: Target) -> Verdict {
-    let s = server(t);
+    let s = tried!(server(t));
     let m = match ready(cx, s) {
         Ok(m) => m,
         Err(v) => return v,
     };
-    let client = cx.client(s);
+    let client = tried!(cx.client(s));
     let a = match client.img_gen(&cx.body(m, 21, 8, &[])) {
         Ok(id) => id,
         Err(e) => return fail(format!("the first job: {e}")),
@@ -394,12 +394,12 @@ pub fn queue(cx: &mut Ctx, t: Target) -> Verdict {
 }
 
 pub fn cancel_running(cx: &mut Ctx, t: Target) -> Verdict {
-    let s = server(t);
+    let s = tried!(server(t));
     let m = match ready(cx, s) {
         Ok(m) => m,
         Err(v) => return v,
     };
-    let client = cx.client(s);
+    let client = tried!(cx.client(s));
     let id = match client.img_gen(&cx.body(m, 31, 30, &[])) {
         Ok(id) => id,
         Err(e) => return fail(format!("POST /sdcpp/v1/img_gen: {e}")),
@@ -424,12 +424,12 @@ pub fn cancel_running(cx: &mut Ctx, t: Target) -> Verdict {
 }
 
 pub fn cancel_queued(cx: &mut Ctx, t: Target) -> Verdict {
-    let s = server(t);
+    let s = tried!(server(t));
     let m = match ready(cx, s) {
         Ok(m) => m,
         Err(v) => return v,
     };
-    let client = cx.client(s);
+    let client = tried!(cx.client(s));
     let (a, b) = match (client.img_gen(&cx.body(m, 41, 30, &[])), client.img_gen(&cx.body(m, 42, 30, &[]))) {
         (Ok(a), Ok(b)) => (a, b),
         (Ok(a), Err(e)) => {
@@ -458,12 +458,12 @@ pub fn cancel_queued(cx: &mut Ctx, t: Target) -> Verdict {
 }
 
 pub fn after_cancel(cx: &mut Ctx, t: Target) -> Verdict {
-    let s = server(t);
+    let s = tried!(server(t));
     let m = match ready(cx, s) {
         Ok(m) => m,
         Err(v) => return v,
     };
-    let client = cx.client(s);
+    let client = tried!(cx.client(s));
     if let Ok(id) = client.img_gen(&cx.body(m, 51, 30, &[])) {
         let _ = cx.wait(&client, &id, IMAGE_LIMIT, |j| j.status == JobStatus::Queued);
         let _ = client.cancel(&id);
@@ -475,7 +475,7 @@ pub fn after_cancel(cx: &mut Ctx, t: Target) -> Verdict {
 }
 
 pub fn poll_finished(cx: &mut Ctx, t: Target) -> Verdict {
-    let s = server(t);
+    let s = tried!(server(t));
     let m = match ready(cx, s) {
         Ok(m) => m,
         Err(v) => return v,
@@ -488,7 +488,7 @@ pub fn poll_finished(cx: &mut Ctx, t: Target) -> Verdict {
         return fail(e);
     }
     std::thread::sleep(Duration::from_secs(5));
-    match cx.client(s).job(&job.id) {
+    match tried!(cx.client(s)).job(&job.id) {
         Ok(j) if png_of(&j).is_ok() => pass("5 s later it still answers completed, with the image"),
         Ok(j) => warn(format!("5 s later it answers {} without the image", job_text(&j))),
         Err(ApiError::JobGone) => {

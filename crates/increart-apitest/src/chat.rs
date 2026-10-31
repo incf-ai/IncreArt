@@ -10,9 +10,12 @@ use crate::ctx::*;
 
 const SAMPLING: Sampling = Sampling { temperature: 0.2, min_p: 0.0 };
 
-fn client(cx: &Ctx, t: Target) -> Client {
-    let Target::Chat(c) = t else { unreachable!("a chat server's case") };
-    cx.chats[c].proc.as_ref().expect("an open chat server").client.clone()
+/// Its client (errors: suite bugs, cases the catalogue should have
+/// skipped).
+fn client(cx: &Ctx, t: Target) -> Result<Client, String> {
+    let Target::Chat(c) = t else { return Err("not a chat server's case".into()) };
+    let p = cx.chats[c].proc.as_ref().ok_or("the chat server isn't open")?;
+    Ok(p.client.clone())
 }
 
 fn short(s: &str) -> String {
@@ -24,11 +27,15 @@ fn short(s: &str) -> String {
 }
 
 pub fn answers(cx: &mut Ctx, t: Target) -> Verdict {
-    if client(cx, t).ready() { pass("GET /v1/models answers") } else { fail("GET /v1/models doesn't answer 200") }
+    if tried!(client(cx, t)).ready() {
+        pass("GET /v1/models answers")
+    } else {
+        fail("GET /v1/models doesn't answer 200")
+    }
 }
 
 pub fn chat(cx: &mut Ctx, t: Target) -> Verdict {
-    let c = client(cx, t);
+    let c = tried!(client(cx, t));
     let at = Instant::now();
     match c.chat("Answer in one word.", "What colour is a clear daytime sky?", &[], 32, SAMPLING) {
         Ok(a) if a.trim().is_empty() => fail("answered nothing"),
@@ -38,7 +45,7 @@ pub fn chat(cx: &mut Ctx, t: Target) -> Verdict {
 }
 
 pub fn stop(cx: &mut Ctx, t: Target) -> Verdict {
-    let c = client(cx, t);
+    let c = tried!(client(cx, t));
     let r = c.chat_stream(
         "You write long stories.",
         "Tell a long story about a lighthouse.",
@@ -62,9 +69,9 @@ pub fn stop(cx: &mut Ctx, t: Target) -> Verdict {
 }
 
 pub fn vision(cx: &mut Ctx, t: Target) -> Verdict {
-    let Target::Chat(i) = t else { unreachable!() };
+    let Target::Chat(i) = t else { return fail("not a chat server's case") };
     let known = cx.chats[i].server.vision_known();
-    let c = client(cx, t);
+    let c = tried!(client(cx, t));
     let png = solid_png(256, [220, 20, 20]);
     match c.chat("Answer in one word.", "What colour is this image?", &[png], 16, SAMPLING) {
         Ok(a) if a.to_lowercase().contains("red") => pass(format!("it sees the red square: \"{}\"", short(&a))),

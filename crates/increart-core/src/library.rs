@@ -1772,7 +1772,7 @@ impl Library {
         let Some(project) = project.filter(|_| fsutil::exists(&abs)) else {
             return Err(Error::Refused(format!("{} is not an output link", link_path.display())));
         };
-        let rel = abs.strip_prefix(project).expect("under its project");
+        let rel = abs.relative_to(project)?;
         if rel.starts_with(DISCARDED_OUTPUTS) {
             return Err(Error::Refused(format!("{} is discarded already", link_path.display())));
         }
@@ -1790,7 +1790,7 @@ impl Library {
     /// no longer recorded as deleted.
     pub fn restore_output_link(&self, link_path: &Path) -> Result<PathBuf> {
         let (project, abs) = self.discarded_output(link_path)?;
-        let rel = abs.strip_prefix(project.join(DISCARDED_OUTPUTS)).expect("under discarded/");
+        let rel = abs.relative_to(&project.join(DISCARDED_OUTPUTS))?;
         let to = project.join(rel);
         if fsutil::exists(&to) {
             return Err(Error::Refused(format!("{} is there already", self.rel(&to).display())));

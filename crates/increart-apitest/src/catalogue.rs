@@ -50,15 +50,15 @@ fn always(_: &Setup, _: Target) -> Option<String> {
     None
 }
 
-fn image_of<'a>(s: &'a Setup, t: Target) -> &'a ServerConfig {
+fn image_of<'a>(s: &'a Setup, t: Target) -> Option<&'a ServerConfig> {
     match t {
-        Target::Image(i) => &s.images[i],
-        _ => unreachable!("an image server's case"),
+        Target::Image(i) => Some(&s.images[i]),
+        _ => None,
     }
 }
 
 fn kobold_started(s: &Setup, t: Target) -> Option<String> {
-    matches!(image_of(s, t), ServerConfig::Kobold(k) if matches!(k.run, KoboldRun::Start { .. }))
+    matches!(image_of(s, t), Some(ServerConfig::Kobold(k)) if matches!(k.run, KoboldRun::Start { .. }))
         .then(|| "a started KoboldCpp loads by restarting with the model: a missing file would stop it".into())
 }
 
@@ -73,7 +73,7 @@ fn with_sigmas(s: &Setup, _: Target) -> Option<String> {
 }
 
 fn text_only(s: &Setup, t: Target) -> Option<String> {
-    let Target::Chat(i) = t else { unreachable!() };
+    let Target::Chat(i) = t else { return Some("not a chat server".into()) };
     (s.chats[i].vision_known() == Some(false))
         .then(|| "it has no vision projector: the app sends it no images (the roles grid says text only)".into())
 }
