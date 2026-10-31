@@ -2540,6 +2540,15 @@ ends, is stopped, or loses the app (its stdin closing).
   (open when all passed). **Open the preset** (**Open anyway** when
   something failed) closes the window and opens it, not asking to
   validate it again; **Run again**, **Copy report**, **Show report zip**.
+  A failure or warning of a common kind gets a **Try:** line under it (in
+  the summary, the advanced view's case, and `report.md`), from what the
+  case said (`apitest::hint`): nothing answering at an address, a server
+  that exits or goes quiet as it starts, a program not found, a 413 body
+  limit, out of memory, files listed but refused, a password, a 404, and a
+  model file no server lists. sd-server only looks in a model directory's
+  standard folders (`diffusion_models/`, `text_encoders/`, `vae/`,
+  `loras/`, `checkpoints/`…), so a file in another (`koboldcpp/`) is said
+  to be invisible to it: expected for a model preset meant for KoboldCpp.
   **Advanced view…** shows what follows; **Basic view** goes back; the
   choice is kept for the session.
 - The advanced view: **Server preset** shows one preset's cases only, those for

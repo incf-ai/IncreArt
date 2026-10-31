@@ -272,6 +272,7 @@ fn detail_body(ui: &mut egui::Ui, t: &ApiTest) {
                         let text = format!("{}: {} ({:.1} s)", o.label(), c.summary, c.secs);
                         ui.add(egui::Label::new(RichText::new(text).strong()).wrap());
                     });
+                    try_line(ui, Some(o), &c.summary);
                 }
                 (false, None) => {
                     let why = c.case.not_applicable.as_deref().map(|w| format!("n/a here: {w}"));
@@ -521,6 +522,7 @@ fn summary(ui: &mut egui::Ui, st: &AppState, t: &ApiTest, preset: &str) {
                     ui.label(step_name(&c.case));
                     let why = if c.summary.is_empty() { "not run" } else { c.summary.as_str() };
                     ui.add(egui::Label::new(RichText::new(why).weak()).wrap());
+                    try_line(ui, c.outcome, &c.summary);
                 });
             });
         }
@@ -535,6 +537,13 @@ fn summary(ui: &mut egui::Ui, st: &AppState, t: &ApiTest, preset: &str) {
         .id_salt(("api_basic_every", t.run))
         .default_open(failed.is_empty() && warned.is_empty())
         .show(ui, |ui| steps(ui, t, &ran));
+}
+
+/// What to try for a failure or warning, if it's a common one.
+fn try_line(ui: &mut egui::Ui, outcome: Option<Outcome>, summary: &str) {
+    if let Some(h) = outcome.and_then(|o| increart_core::apitest::hint(o, summary)) {
+        ui.add(egui::Label::new(RichText::new(ic(ph::LIGHTBULB, &format!("Try: {h}"))).color(ACCENT)).wrap());
+    }
 }
 
 /// The cases as steps: their mark, name and (once run) what came back.

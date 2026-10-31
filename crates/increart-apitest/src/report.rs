@@ -135,6 +135,9 @@ impl Report {
             if !r.summary.is_empty() {
                 md.push_str(&format!("Result: {}\n\n", r.summary));
             }
+            if let Some(h) = r.outcome.and_then(|o| increart_core::apitest::hint(o, &r.summary)) {
+                md.push_str(&format!("Try: {h}\n\n"));
+            }
             if !r.log.is_empty() {
                 md.push_str(&format!("Log:\n\n```text\n{}\n```\n\n", r.log.join("\n")));
             }
