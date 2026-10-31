@@ -203,6 +203,7 @@ const EXTRA_SCENES: &[&str] = &[
     // the README's gallery (docs/readme/GALLERY.md, scripts/make-readme-gallery.sh),
     // on the demo library too, after 02-server-dialog
     "G01-server-wizard",
+    "G02a-home",
     "G02-idea-inbox",
     "G03-projects-grid",
     "G04-generate-refs",
@@ -1510,6 +1511,7 @@ impl Tour {
                 Msg::SelectProjectFolder(Some(PathBuf::new())),
             ],
             "G01-server-wizard" => self.msgs("54-server-wizard", st),
+            "G02a-home" => self.msgs("99a-home", st),
             "G02-idea-inbox" => {
                 let mut v = vec![Msg::ContinueWithoutServers];
                 // the default card and tile sizes, whatever the config has

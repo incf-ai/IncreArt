@@ -54,10 +54,17 @@ it anywhere, and run `increart` (`increart.exe` on Windows). It's portable:
 nothing is installed. The builds aren't signed, so Windows and macOS may
 ask you to confirm the first time you run them.
 
-At start-up, IncreArt offers the [example library](#example-library) that
+At start-up, IncreArt asks for a library: the folder that holds all your
+work (ideas, reference images, projects and every generated image with its
+recipe). It offers the [example library](#example-library) that
 comes in the zip (it stays in the list until you remove it), or a new library of your own, then asks for the servers
 to use. **Set up KoboldCpp for your GPUs…** in the server dialog is the
 easiest start.
+
+Then it opens on **Home**, which explains the workflow step by step (save
+images into the inbox's drop folder, keep or discard them into the input
+library, start projects, review the results) and has buttons to start a new
+project, write an idea or import images.
 
 The [setup guides](docs/setup/README.md) go step by step: get the models,
 install KoboldCpp or sd-server, configure them, or build IncreArt from

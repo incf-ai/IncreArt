@@ -5,7 +5,7 @@ Sources: `crates/increart-gui/src/startup.rs`, `crates/increart-gui/src/main.rs`
 [../DESIGN.md](../DESIGN.md) (Startup, Config file). Screenshots:
 [../gui/README.md](../gui/README.md).
 
-Order at start-up: **library screen → servers screen → main window**.
+Order at start-up: **library screen → servers screen → main window** (on its Home tab).
 
 ## 6.1 Create a library
 
@@ -52,7 +52,7 @@ servers…**:
   folder, leave servers running): **Server settings…** (bottom right).
 - **Continue without servers**: browse and review work; runs queue and wait.
 
-**Expected result:** the main window; the top bar shows each server
+**Expected result:** the main window, on Home; the top bar shows each server
 starting, then up. With **Continue in background** the window opens while
 they start.
 

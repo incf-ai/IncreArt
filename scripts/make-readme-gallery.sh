@@ -34,12 +34,14 @@ rm -rf "$out"
 mkdir -p "$out"
 for png in "$work"/shots/G*.png; do
     name=$(basename "$png" .png)
-    magick "$png" -quality 85 -define webp:method=6 "$out/${name#G[0-9][0-9]-}.webp"
+    # G02a-home → home
+    magick "$png" -quality 85 -define webp:method=6 "$out/${name#G*-}.webp"
 done
 
 # file | caption; files without a folder are the gallery's, the rest the README's
 captions=(
     "server-wizard|**Set up servers.** Choose KoboldCpp and IncreArt finds your GPUs, picks a preset for each card's memory and shares the work between them: here two 24 GB cards each make images and run prompt enhance."
+    "home|**Home.** Where the app opens: how ideas become finished images, step by step, each with its tab, its keys and what's waiting there. Start a new project (it asks for reference images too), write an idea, import images or open the drop folder."
     "idea-inbox|**Idea inbox.** Ideas come in as text, images or both: typed in, imported, or saved into the drop folder from a browser. Keep, discard or promote each one."
     "../input-library.png|**Input library.** Kept ideas in folders, with their source images, ready to start projects from."
     "projects-grid|**Projects.** Each project with its cover and its counts of good, neutral, bad and new images, in folders."

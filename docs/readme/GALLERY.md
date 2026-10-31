@@ -8,6 +8,10 @@ simulated. Retaken by `scripts/make-readme-gallery.sh`; don't edit by hand.
 
 ![Set up servers](gallery/server-wizard.webp)
 
+**Home.** Where the app opens: how ideas become finished images, step by step, each with its tab, its keys and what's waiting there. Start a new project (it asks for reference images too), write an idea, import images or open the drop folder.
+
+![Home](gallery/home.webp)
+
 **Idea inbox.** Ideas come in as text, images or both: typed in, imported, or saved into the drop folder from a browser. Keep, discard or promote each one.
 
 ![Idea inbox](gallery/idea-inbox.webp)
