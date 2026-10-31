@@ -2835,8 +2835,10 @@ pub fn job_window(ctx: &egui::Context, st: &AppState, tex: &mut Textures, out: &
                 .filter(|(_, runs)| runs.contains(id))
                 .filter_map(|(i, _)| st.servers.get(*i).map(|s| s.name.as_str()))
                 .collect();
+            let sampling = st.progress.keys().any(|(r, _)| r == id);
             let state = match (active, on.is_empty()) {
                 (false, _) => "not queued".to_string(),
+                (true, true) if sampling => "generating".to_string(),
                 (true, true) => "waiting for a server (see the log)".to_string(),
                 (true, false) => format!("generating on {}", on.join(", ")),
             };

@@ -17,7 +17,7 @@ size (regenerate it with `scripts/make-gui-gallery.sh`).
 | | |
 | --- | --- |
 | [01-library-dialog](01-library-dialog.png) | Start-up: recent libraries (last used in the accent colour), Create a new library… / Open an existing library… |
-| [02-server-dialog](02-server-dialog.png) | Start-up: server presets (a click opens one; ✎ edit, 🗑 delete), Open the last used, New preset / Set up KoboldCpp for your GPUs…, Server settings… |
+| [02-server-dialog](02-server-dialog.png) | Start-up: server presets, each with its servers and what they do (images · text · vision) (a click opens one; ✎ edit, 🗑 delete), Open the last used, New preset / Set up KoboldCpp for your GPUs…, Server settings… |
 | [03-idea-inbox-grid](03-idea-inbox-grid.png) | Idea inbox grid: keys panel, card-size zoom, the drop-folder hint |
 | [04-idea-inbox-new-idea](04-idea-inbox-new-idea.png) | New idea form |
 | [05-input-library](05-input-library.png) | Input library: folder tree, selection actions, cards |
@@ -61,7 +61,7 @@ size (regenerate it with `scripts/make-gui-gallery.sh`).
 | [45-reference-preview](45-reference-preview.png) | Generate: double-click a reference (or the start image) to view it large |
 | [47-new-project-name](47-new-project-name.png) | Review → D / N: the new project's name is asked first |
 | [49-output-library-show-outputs](49-output-library-show-outputs.png) | Show outputs on a project with a filter on: the banner says how many it hides, with Reset filters |
-| [52-server-dialog-edit](52-server-dialog-edit.png) | The preset editor modal: name, server rows, the listed devices to add, Save / Save and open / Open without saving / Cancel |
+| [52-server-dialog-edit](52-server-dialog-edit.png) | The preset editor modal: name, server rows, What each server does (Images · Text (prompt enhance) · Vision), the listed devices to add, Save / Save and open / Open without saving / Cancel |
 | [53-library-wizard](53-library-wizard.png) | Create a new library: home folder, current folder or elsewhere |
 | [55-library-open-wizard](55-library-open-wizard.png) | Open an existing library: the folder, checked for library.rsn |
 | [54-server-wizard](54-server-wizard.png) | Server setup wizard (no presets), KoboldCpp: the GPUs through a runtime (Vulkan here; CUDA or ROCm) as its tool lists them (discrete ones ticked), each one's VRAM preset and role, how two GPUs share the work (by default 2 images at a time, prompt enhance ticked on every GPU with room for it beside the images, here both; **Prompt enhance on** ticks its GPUs), the presets table with the one in use highlighted, the summary, the plan and why; Download, save as preset and open |
@@ -84,7 +84,7 @@ size (regenerate it with `scripts/make-gui-gallery.sh`).
 | [68-switch-library](68-switch-library.png) | Switching libraries from the top bar: the library screen with Back to the open one |
 | [69-style-sweep](69-style-sweep.png) | Generate in Style sweep mode: the template with `{preset}`, 8 random styles from Modify style, the summary and the chosen names |
 | [70-contact-sheet](70-contact-sheet.png) | Review → a sweep's Contact sheet: a row per style with its counts and row buttons, a column per seed, `…` for an image still to come |
-| [71-job-info](71-job-info.png) | Projects → Jobs, a run clicked: its details with progress, prompt, the input images labelled `<image1>` / start image, and the settings |
+| [71-job-info](71-job-info.png) | Projects → Jobs, a run clicked: its details with progress (waiting for a server / generating on …), prompt, the input images labelled `<image1>` / start image, the settings, and its Generation log (Copy, Show file) |
 | [72-review-sweep-button](72-review-sweep-button.png) | Review → Single on a sweep's image: **Sweep r02 contact sheet** in the top bar |
 | [73-promote](73-promote.png) | Promote into project: the new project's name, always asked (the first idea title as the guess) |
 

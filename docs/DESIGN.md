@@ -338,7 +338,20 @@ asks among them):
   and its KoboldCpp entries with Chat. Each row shows the name with **Settings…** and ×. The
   settings window's **Add** / **Save** puts it in the preset being edited;
   it's stored when the preset is saved. A preset may have only a chat
-  server. Esc cancels; a click outside doesn't. The editor's buttons:
+  server. Under the rows, **What each server does** is a grid of the
+  preset's servers by role: **Images** (every server but a chat entry;
+  each run goes to one whose model list has its preset's files, see
+  Scheduling), **Text (prompt enhance)** (the servers its asks are shared
+  among; a KoboldCpp that swaps its chat model with images says *not
+  asked* when another chat server is there) and **Vision** (whether those
+  see the reference images: ✓ with an mmproj, *text only* started without
+  one, *assumed* when it can't be told, as for a server connected to; the
+  images are sent then). The presets list shows the same in a line under
+  each preset ("images: kobold, proxy · text: PE · vision: PE", or "·
+  no prompt enhance"), and the top bar's server tooltips say which model
+  presets each image server can generate (from its model list) and
+  whether prompt enhance's asks carry the images. Esc cancels; a click
+  outside doesn't. The editor's buttons:
   - **Save** stores the preset, renaming it in place.
   - **Save and open** stores it and opens it.
   - **Open without saving** opens the edited servers once and leaves the

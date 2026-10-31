@@ -3051,6 +3051,9 @@ fn style_sweeps_queue_review_on_a_contact_sheet_and_reuse_a_style() {
     h.send(Msg::Engine(increart_core::engine::Event::Log { run: ids[1].clone(), line: "10:02 other".into() }));
     assert_eq!(h.state.job_log.last().map(String::as_str), Some("10:02 done"));
     assert_eq!(h.state.job_log.len(), 3);
+    // read again (as when it opens) with a line logged meanwhile: kept
+    h.send(Msg::JobLog(ids[0].clone(), vec!["10:00 queued 3 seeds".into()]));
+    assert_eq!(h.state.job_log, ["10:00 queued 3 seeds", "10:01 [gpu0] seed 0: sent", "10:02 done"]);
     h.send(Msg::JobInfo(Some("2001.01.01-00.00-0000".parse().unwrap())));
     assert!(h.state.job_info.is_none(), "no such run");
     assert!(h.state.job_log.is_empty());

@@ -4394,7 +4394,13 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
         }
         Msg::JobLog(run, lines) => {
             if state.job_info.as_ref() == Some(&run) {
-                state.job_log = lines;
+                // lines logged while it was read stay
+                let live = std::mem::replace(&mut state.job_log, lines);
+                for line in live {
+                    if !state.job_log.contains(&line) {
+                        state.job_log.push(line);
+                    }
+                }
             }
             vec![]
         }

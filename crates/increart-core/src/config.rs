@@ -402,6 +402,85 @@ impl ServerPreset {
     }
 }
 
+/// What one server of a preset is used for (DESIGN.md, Server presets).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Roles {
+    pub name: String,
+    /// Generates images: each run goes to an image server that has its
+    /// model preset's files.
+    pub images: bool,
+    /// Prompt enhance's asks go to it (shared among all such).
+    pub text: bool,
+    /// With [`Self::text`]: whether its model sees the reference images
+    /// sent with the asks (`None`: can't tell, e.g. one connected to;
+    /// they're sent anyway).
+    pub vision: Option<bool>,
+    /// Why a server that can chat isn't asked.
+    pub note: Option<String>,
+}
+
+impl ServerPreset {
+    /// What each of its servers is used for, in order.
+    pub fn roles(&self) -> Vec<Roles> {
+        use crate::pe::PeRun;
+        let pool = self.chat_pool();
+        self.servers
+            .iter()
+            .map(|s| {
+                let (chat, vision) = match s {
+                    ServerConfig::Chat(c) => {
+                        let vision = match &c.run {
+                            PeRun::KoboldCpp { mmproj, .. } if !mmproj.is_empty() => Some(true),
+                            PeRun::KoboldCpp { model, config, .. } if model.is_empty() && !config.is_empty() => None,
+                            PeRun::KoboldCpp { .. } => Some(false),
+                            PeRun::Connect { .. } => None,
+                        };
+                        (Some(c.clone()), vision)
+                    }
+                    ServerConfig::Kobold(k) => {
+                        let vision = match (&k.run, &k.chat) {
+                            (crate::kobold::KoboldRun::Start { config, .. }, Some(c)) => {
+                                if !c.mmproj.is_empty() {
+                                    Some(true)
+                                } else if c.model.is_empty() && !config.is_empty() {
+                                    None
+                                } else {
+                                    Some(false)
+                                }
+                            }
+                            _ => None,
+                        };
+                        (k.chat_server(), vision)
+                    }
+                    _ => (None, None),
+                };
+                let text = chat.as_ref().is_some_and(|c| pool.iter().any(|p| p.same_process(c)));
+                let note = (chat.is_some() && !text).then(|| {
+                    "not asked for prompt enhance: it swaps its chat model with images, and another chat server is there"
+                        .to_string()
+                });
+                Roles { name: s.name().to_string(), images: !s.is_chat(), text, vision: vision.filter(|_| text), note }
+            })
+            .collect()
+    }
+
+    /// Its roles in a line: "images: kcpp, proxy · text: PE · vision: PE"
+    /// ("images: gpu0 · no prompt enhance" without a chat server).
+    pub fn roles_line(&self) -> String {
+        let roles = self.roles();
+        let names =
+            |f: &dyn Fn(&Roles) -> bool| roles.iter().filter(|r| f(r)).map(|r| r.name.as_str()).collect::<Vec<_>>();
+        let list = |v: Vec<&str>, none: &str| if v.is_empty() { none.to_string() } else { v.join(", ") };
+        let images = list(names(&|r| r.images), "none");
+        if !roles.iter().any(|r| r.text) {
+            return format!("images: {images} · no prompt enhance");
+        }
+        let text = list(names(&|r| r.text), "none");
+        let vision = list(names(&|r| r.vision != Some(false) && r.text), "none (asks go without images)");
+        format!("images: {images} · text: {text} · vision: {vision}")
+    }
+}
+
 /// The app's folder for one kind of per-user file: `increart` in `$<xdg>`
 /// when set, else in `%<windows>%` on Windows, `~/Library/Application
 /// Support` on macOS and `~/<unix>` elsewhere. Config: (`XDG_CONFIG_HOME`,
@@ -1331,6 +1410,39 @@ mod tests {
         assert_eq!(p.chat_server().unwrap().name, "b");
         p.servers.drain(1..3);
         assert_eq!(urls(&p), ["http://127.0.0.1:5001"], "swapping, if it's the only one");
+    }
+
+    #[test]
+    fn each_servers_roles() {
+        // as reported: KoboldCpp, an sd-server proxy, and a chat server
+        let text = r#"ServerPreset { name: "mine", servers: [
+            Kobold(KoboldServer { name: "kobold", run: Start { binary: "k", port: 5001 }, chat: Some(KoboldChat { model: "m" }), swap: true }),
+            Connect { name: "proxy", url: "http://127.0.0.1:7860" },
+            Chat(PeServer { name: "PE", run: KoboldCpp { binary: "k", model: "q.gguf", mmproj: "mm.gguf", host: "127.0.0.1", port: 5010 } }),
+        ] }"#;
+        let p: ServerPreset = rsnfmt::from_str(text).unwrap();
+        let r = p.roles();
+        fn flags(r: &Roles) -> (&str, bool, bool, Option<bool>) {
+            (r.name.as_str(), r.images, r.text, r.vision)
+        }
+        assert_eq!(
+            r.iter().map(flags).collect::<Vec<_>>(),
+            [("kobold", true, false, None), ("proxy", true, false, None), ("PE", false, true, Some(true))]
+        );
+        assert!(r[0].note.as_deref().unwrap().contains("swaps its chat model"), "{:?}", r[0].note);
+        assert_eq!(p.roles_line(), "images: kobold, proxy · text: PE · vision: PE");
+        // KoboldCpp alone, chatting without a vision projector
+        let text = r#"ServerPreset { name: "one", servers: [
+            Kobold(KoboldServer { name: "k", run: Start { binary: "k", port: 5001 }, chat: Some(KoboldChat { model: "m" }) }),
+        ] }"#;
+        let p: ServerPreset = rsnfmt::from_str(text).unwrap();
+        assert_eq!(p.roles()[0].vision, Some(false));
+        assert_eq!(p.roles_line(), "images: k · text: k · vision: none (asks go without images)");
+        let p = ServerPreset {
+            name: "sd".into(),
+            servers: vec![ServerConfig::Connect { name: "box".into(), url: "u".into(), device: String::new() }],
+        };
+        assert_eq!(p.roles_line(), "images: box · no prompt enhance");
     }
 
     #[test]

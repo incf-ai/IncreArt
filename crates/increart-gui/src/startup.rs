@@ -871,7 +871,7 @@ fn presets(ui: &mut egui::Ui, st: &AppState, d: &ServerDialog, out: &mut Vec<Msg
     let last = st.config.last_preset.as_ref().and_then(|n| st.config.server_presets.iter().position(|p| &p.name == n));
     for (i, p) in st.config.server_presets.iter().enumerate() {
         let summary = p.servers.iter().map(describe).collect::<Vec<_>>().join(" · ");
-        let text = format!("{}\n{}", p.name, summary);
+        let text = format!("{}\n{}\n{}", p.name, summary, p.roles_line());
         // the preset used last time tagged, the tag in a muted accent (as in the library list)
         let text = RichText::new(text);
         let editing = d.editing == Some(Editing::Preset(i));
@@ -1898,6 +1898,11 @@ fn editor(ui: &mut egui::Ui, st: &AppState, d: &ServerDialog, editing: Editing, 
     if d.draft.servers.iter().any(|s| !matches!(s, ServerConfig::Chat(_))) {
         image_model_line(ui, out);
     }
+    if !d.draft.servers.is_empty() {
+        ui.add_space(4.0);
+        roles_grid(ui, &d.draft);
+        ui.add_space(4.0);
+    }
     ui.horizontal(|ui| {
         if ui
             .button(RichText::new(ic(ph::PLUS, "KoboldCpp")).strong().color(ACCENT))
@@ -1972,6 +1977,50 @@ fn editor(ui: &mut egui::Ui, st: &AppState, d: &ServerDialog, editing: Editing, 
             out.push(Msg::CancelEdit);
         }
     });
+}
+
+/// What each server of a preset is used for: images, prompt enhance's
+/// text, and whether those asks carry the reference images.
+fn roles_grid(ui: &mut egui::Ui, preset: &increart_core::config::ServerPreset) {
+    ui.label(RichText::new(ic(ph::LIST, "What each server does")).strong());
+    let mark = |ui: &mut egui::Ui, on: bool, tip: &str| {
+        let text = if on { RichText::new(ph::CHECK).color(GOOD) } else { RichText::new("—").weak() };
+        ui.label(text).on_hover_text(tip);
+    };
+    egui::Grid::new("server_roles").num_columns(4).spacing([18.0, 2.0]).striped(true).show(ui, |ui| {
+        for h in ["", "Images", "Text (prompt enhance)", "Vision"] {
+            ui.weak(h);
+        }
+        ui.end_row();
+        for r in preset.roles() {
+            ui.label(&r.name);
+            mark(ui, r.images, "generates images: a run goes to an image server whose model list has its preset's files");
+            match &r.note {
+                Some(note) => {
+                    ui.label(RichText::new("not asked").weak()).on_hover_text(note);
+                }
+                None => mark(ui, r.text, "prompt enhance's asks go to it, shared among the servers ticked here"),
+            }
+            let (text, tip) = match (r.text, r.vision) {
+                (false, _) => (RichText::new("—").weak(), "not asked"),
+                (true, Some(true)) => (RichText::new(ph::CHECK).color(GOOD), "its vision projector sees the reference images sent with the asks"),
+                (true, Some(false)) => (
+                    RichText::new("text only").color(NEUTRAL),
+                    "no vision projector (mmproj): the asks go without the reference images, and Describe can't be used",
+                ),
+                (true, None) => (
+                    RichText::new("assumed").weak(),
+                    "can't tell from here (connected, or set in a .kcpps): the reference images are sent with the asks",
+                ),
+            };
+            ui.label(text).on_hover_text(tip);
+            ui.end_row();
+        }
+    });
+    ui.weak(
+        "Images: each run goes to an image server whose model list has all of its model preset's files. \
+         Text: prompt enhance shares its asks among the ticked servers. Vision: those see the reference images.",
+    );
 }
 
 /// An opening library has no count to show, so the bar fills over time,

@@ -783,6 +783,19 @@ impl Tour {
                         preview: None,
                     }));
                     v.push(Msg::JobInfo(Some(r.id.clone())));
+                    let log = [
+                        "09:00:00.120 queued 16 seeds (0…15) of qwen-image-21 (diffusion_models/qwen-image-2.1-int8.safetensors, …)",
+                        "09:00:00.131 [gpu0] loading qwen-image-21 (diffusion_models/qwen-image-2.1-int8.safetensors, …)",
+                        "09:00:41.902 [gpu0] loaded in 41.8 s",
+                        "09:00:43.377 [gpu0] warm-up image done",
+                        "09:00:43.380 [gpu0] seed 0: sent",
+                        "09:00:43.392 [gpu0] seed 0: queued on the server as job job_1a16a5ac28a_00000001",
+                        "09:00:43.410 [gpu0] seed 0: generating",
+                        "09:01:17.655 [gpu0] seed 0: done in 34.2 s",
+                    ];
+                    for line in log {
+                        v.push(Msg::Engine(increart_core::engine::Event::Log { run: r.id.clone(), line: line.into() }));
+                    }
                 }
                 v
             }

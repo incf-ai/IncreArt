@@ -12,7 +12,7 @@ Start-up: recent libraries (last used in the accent colour), Create a new librar
 
 ## 02-server-dialog
 
-Start-up: server presets (a click opens one; ✎ edit, 🗑 delete), Open the last used, New preset / Set up KoboldCpp for your GPUs…, Server settings…
+Start-up: server presets, each with its servers and what they do (images · text · vision) (a click opens one; ✎ edit, 🗑 delete), Open the last used, New preset / Set up KoboldCpp for your GPUs…, Server settings…
 
 ![02-server-dialog](02-server-dialog.png)
 
@@ -288,7 +288,7 @@ Show outputs on a project with a filter on: the banner says how many it hides, w
 
 ## 52-server-dialog-edit
 
-The preset editor modal: name, server rows, the listed devices to add, Save / Save and open / Open without saving / Cancel
+The preset editor modal: name, server rows, What each server does (Images · Text (prompt enhance) · Vision), the listed devices to add, Save / Save and open / Open without saving / Cancel
 
 ![52-server-dialog-edit](52-server-dialog-edit.png)
 
@@ -426,7 +426,7 @@ Review → a sweep's Contact sheet: a row per style with its counts and row butt
 
 ## 71-job-info
 
-Projects → Jobs, a run clicked: its details with progress, prompt, the input images labelled `<image1>` / start image, and the settings
+Projects → Jobs, a run clicked: its details with progress (waiting for a server / generating on …), prompt, the input images labelled `<image1>` / start image, the settings, and its Generation log (Copy, Show file)
 
 ![71-job-info](71-job-info.png)
 

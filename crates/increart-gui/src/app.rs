@@ -323,7 +323,23 @@ fn server_statuses(ui: &mut egui::Ui, st: &AppState, out: &mut Vec<Msg>, compact
             };
             let name = if s.device.is_empty() { s.name.clone() } else { s.device.clone() };
             let model = s.model.as_ref().map(|m| format!(", {m}")).unwrap_or_default();
-            let tip = format!("{}: {}{model}\n{busy} seeds generating · click for the server status", s.name, s.state);
+            // what it's used for: the model presets it can run, once it has said
+            let role = match st.server_models.get(&s.name) {
+                Some(l) => {
+                    let runs: Vec<&str> =
+                        st.config.recipes.iter().filter(|r| l.runs(&r.files)).map(|r| r.name.as_str()).collect();
+                    if runs.is_empty() {
+                        "generates images: none of the model presets (it lacks their files)".to_string()
+                    } else {
+                        format!("generates images of: {}", runs.join(", "))
+                    }
+                }
+                None => "generates images".to_string(),
+            };
+            let tip = format!(
+                "{}: {}{model}\n{role}\n{busy} seeds generating · click for the server status",
+                s.name, s.state
+            );
             // the sd-server's latest log line only in the tooltip
             let state = if s.state.starts_with("starting…") { "starting…".into() } else { s.state.clone() };
             Item { name, dot, state, color, tip, jobs: true }
@@ -346,6 +362,13 @@ fn server_statuses(ui: &mut egui::Ui, st: &AppState, out: &mut Vec<Msg>, compact
     }
     let (dot, full, color) = pe_state(ui, st);
     let mut tip = format!("Prompt enhance (PE): {full}");
+    if let Some(s) = &st.pe.server {
+        tip.push_str(if s.vision() {
+            "\ntext, with the reference images (vision)"
+        } else {
+            "\ntext only: the asks go without the reference images"
+        });
+    }
     // the server's name only in the tooltip: "PE ● ready"; starting or
     // working, a few words ("PE ● writing 143 tok"), the rest in it too
     let state = crate::rewrite::brief(st)
