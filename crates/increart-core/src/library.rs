@@ -1754,25 +1754,76 @@ impl Library {
         })
     }
 
-    /// Deletes an output link (e.g. a rejected image): it goes to the trash;
-    /// the image stays in the store until Clean up. Its run records the
-    /// seed as deleted (not to be generated again, and not missing).
-    pub fn delete_output_link(&self, link_path: &Path) -> Result<()> {
+    /// Discards an output link (e.g. a rejected image): it moves to its
+    /// project's `discarded/`, under its rating folder, to be restored from
+    /// the Output library's Discarded. Its run records the seed as deleted
+    /// (not to be generated again, and not missing).
+    pub fn delete_output_link(&self, link_path: &Path) -> Result<PathBuf> {
         let abs = self.root.join(link_path);
-        let in_project = abs.ancestors().skip(1).take(3).any(|d| d.join(PROJECT_FILE).is_file());
-        if !in_project || !fsutil::exists(&abs) {
+        let project = abs.ancestors().skip(1).take(3).find(|d| d.join(PROJECT_FILE).is_file());
+        let Some(project) = project.filter(|_| fsutil::exists(&abs)) else {
             return Err(Error::Refused(format!("{} is not an output link", link_path.display())));
+        };
+        let rel = abs.strip_prefix(project).expect("under its project");
+        if rel.starts_with(DISCARDED_OUTPUTS) {
+            return Err(Error::Refused(format!("{} is discarded already", link_path.display())));
         }
-        let name = abs.file_name().and_then(|n| OutputName::parse(&n.to_string_lossy()));
+        self.mark_deleted(&abs, true)?;
+        let to = project.join(DISCARDED_OUTPUTS).join(rel);
+        // the same seed discarded before, restored and rated the same again
+        if fsutil::exists(&to) {
+            self.dispose(&to)?;
+        }
+        link::move_with_links(&self.root, &abs, &to)?;
+        Ok(self.rel(&to))
+    }
+
+    /// A discarded output link back in its project's rating folder; its seed
+    /// no longer recorded as deleted.
+    pub fn restore_output_link(&self, link_path: &Path) -> Result<PathBuf> {
+        let (project, abs) = self.discarded_output(link_path)?;
+        let rel = abs.strip_prefix(project.join(DISCARDED_OUTPUTS)).expect("under discarded/");
+        let to = project.join(rel);
+        if fsutil::exists(&to) {
+            return Err(Error::Refused(format!("{} is there already", self.rel(&to).display())));
+        }
+        link::move_with_links(&self.root, &abs, &to)?;
+        self.mark_deleted(&to, false)?;
+        Ok(self.rel(&to))
+    }
+
+    /// Deletes a discarded output link for good: it goes to the trash; the
+    /// image stays in the store until Clean up.
+    pub fn delete_discarded_output(&self, link_path: &Path) -> Result<()> {
+        let (_, abs) = self.discarded_output(link_path)?;
+        self.dispose(&abs)
+    }
+
+    /// A discarded output link's project directory and the link (absolute).
+    fn discarded_output(&self, link_path: &Path) -> Result<(PathBuf, PathBuf)> {
+        let abs = self.root.join(link_path);
+        let project = abs.ancestors().skip(1).take(4).find(|d| d.join(PROJECT_FILE).is_file());
+        match project {
+            Some(p) if fsutil::exists(&abs) && abs.starts_with(p.join(DISCARDED_OUTPUTS)) => Ok((p.to_path_buf(), abs)),
+            _ => Err(Error::Refused(format!("{} is not a discarded output link", link_path.display()))),
+        }
+    }
+
+    /// Records an output link's seed as deleted in its run (or not).
+    fn mark_deleted(&self, link: &Path, deleted: bool) -> Result<()> {
+        let name = link.file_name().and_then(|n| OutputName::parse(&n.to_string_lossy()));
         if let Some(n) = name
             && let Ok((dir, mut run)) = self.find_run(&n.run)
         {
             let mut all: Vec<u64> = run.deleted.iter().flat_map(|d| d.first..d.first + d.count).collect();
-            all.push(n.seed);
+            all.retain(|s| *s != n.seed);
+            if deleted {
+                all.push(n.seed);
+            }
             run.deleted = seed_ranges(all);
             self.save_run(&dir, &run)?;
         }
-        self.dispose(&abs)
+        Ok(())
     }
 
     /// Records as deleted every generated seed whose output link is gone
@@ -1973,7 +2024,7 @@ impl Library {
         let ix = scan::scan(&self.root)?;
         let mut out: HashMap<ImageRef, Vec<PathBuf>> = HashMap::new();
         let discarded = ix.discarded_projects.iter().map(|d| &d.entry);
-        for o in ix.projects.iter().chain(discarded).flat_map(|p| &p.outputs) {
+        for o in ix.projects.iter().chain(discarded).flat_map(|p| p.outputs.iter().chain(&p.discarded)) {
             out.entry(o.image.clone()).or_default().push(o.path.clone());
         }
         for c in &ix.collection_links {

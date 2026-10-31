@@ -31,6 +31,8 @@ pub const PROJECTS: &str = "projects";
 /// Discarded projects, each with a [`DISCARDED_FILE`]; restorable.
 pub const DISCARDED_PROJECTS: &str = "discarded_projects";
 pub const DISCARDED_FILE: &str = "discarded.rsn";
+/// A project's discarded output links, under their rating folders.
+pub const DISCARDED_OUTPUTS: &str = "discarded";
 pub const COLLECTIONS: &str = "collections";
 
 /// Where an idea lives (the folder is the verdict).
@@ -108,6 +110,9 @@ pub struct ProjectEntry {
     pub outputs: Vec<OutputLink>,
     /// The autosaved Generate form, if any.
     pub draft: Option<GenerateDraft>,
+    /// Its discarded output links (`discarded/`), each with the rating it
+    /// had; not in `outputs`.
+    pub discarded: Vec<OutputLink>,
 }
 
 /// A project in `discarded_projects/`.
@@ -348,9 +353,13 @@ fn read_project(root: &Path, dir: &Path, ix: &mut Index) -> Result<()> {
     }
     runs.sort_by(|a, b| a.id.cmp(&b.id));
     let mut outputs = Vec::new();
+    let mut discarded = Vec::new();
     let verdicts = std::iter::once(None).chain(Verdict::ALL.map(Some));
-    for verdict in verdicts {
-        let folder = dir.join(Verdict::output_dir(verdict));
+    let places = verdicts.flat_map(|v| [(v, false), (v, true)]);
+    for (verdict, gone) in places {
+        let base = if gone { dir.join(DISCARDED_OUTPUTS) } else { dir.to_path_buf() };
+        let folder = base.join(Verdict::output_dir(verdict));
+        let outputs = if gone { &mut discarded } else { &mut outputs };
         let Ok(rd) = fs::read_dir(&folder) else { continue };
         let mut files: Vec<_> = rd.filter_map(|e| e.ok().map(|e| e.path())).collect();
         files.sort();
@@ -378,7 +387,7 @@ fn read_project(root: &Path, dir: &Path, ix: &mut Index) -> Result<()> {
             None
         }
     });
-    ix.projects.push(ProjectEntry { project, dir: rel(root, dir), runs, outputs, draft });
+    ix.projects.push(ProjectEntry { project, dir: rel(root, dir), runs, outputs, draft, discarded });
     Ok(())
 }
 

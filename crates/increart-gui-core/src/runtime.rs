@@ -1000,7 +1000,10 @@ fn list_dir(root: &Path, rel: &Path) -> Vec<FvEntry> {
     for e in rd.flatten() {
         let path = e.path();
         let name = e.file_name().to_string_lossy().into_owned();
-        if name.starts_with('.') {
+        // a project's discarded images are shown in Output library → Discarded
+        if name.starts_with('.')
+            || (name == increart_core::scan::DISCARDED_OUTPUTS && dir.join("project.rsn").is_file())
+        {
             continue;
         }
         let meta = std::fs::metadata(&path).ok();
@@ -1717,6 +1720,18 @@ pub fn lib_op(lib: &mut Library, op: LibOp) -> Result<OpOk, String> {
         LibOp::DeleteOutputs(links) => {
             for l in links {
                 lib.delete_output_link(&l).map_err(err)?;
+            }
+            Ok(OpOk::Done)
+        }
+        LibOp::RestoreOutputs(links) => {
+            for l in links {
+                lib.restore_output_link(&l).map_err(err)?;
+            }
+            Ok(OpOk::Done)
+        }
+        LibOp::DeleteDiscardedOutputs(links) => {
+            for l in links {
+                lib.delete_discarded_output(&l).map_err(err)?;
             }
             Ok(OpOk::Done)
         }

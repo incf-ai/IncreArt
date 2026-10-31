@@ -414,6 +414,13 @@ pub enum Msg {
     OutputTab(OutputTab),
     OutputSource(OutputSource),
     DeleteOutput(PathBuf),
+    /// A discarded image's link back in its project (Output library →
+    /// Discarded).
+    RestoreOutput(PathBuf),
+    /// A discarded image's link for good (asks first in the GUI).
+    DeleteDiscardedOutput(PathBuf),
+    /// Every discarded image's link for good (asks first in the GUI).
+    EmptyDiscardedOutputs,
     /// Deletes the bad images the Grid shows.
     DeleteShownRejected,
     // ---- confirmation
@@ -1114,6 +1121,8 @@ pub enum LibOp {
     },
     /// Output links to the trash (the images stay until Clean up).
     DeleteOutputs(Vec<PathBuf>),
+    RestoreOutputs(Vec<PathBuf>),
+    DeleteDiscardedOutputs(Vec<PathBuf>),
     /// A new project in `parent` named after `name`, or a copy of the
     /// project at `copy_of` (relative to `projects/`); then the Generate form
     /// `form` opens on it.
@@ -5660,6 +5669,15 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
             vec![]
         }
         Msg::DeleteOutput(link) => lib(state, LibOp::DeleteOutputs(vec![link])),
+        Msg::RestoreOutput(link) => lib(state, LibOp::RestoreOutputs(vec![link])),
+        Msg::DeleteDiscardedOutput(link) => lib(state, LibOp::DeleteDiscardedOutputs(vec![link])),
+        Msg::EmptyDiscardedOutputs => {
+            let links: Vec<_> = state.discarded_outputs().iter().map(|o| o.path.clone()).collect();
+            if links.is_empty() {
+                return vec![];
+            }
+            lib(state, LibOp::DeleteDiscardedOutputs(links))
+        }
         Msg::DeleteShownRejected => {
             let links: Vec<_> = state
                 .output_source_images()
@@ -6332,7 +6350,7 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
                 )
             } else {
                 format!(
-                    "Delete {} item(s)? Projects go to Discarded (restore them from Projects → Discarded); folders and image links go to the trash, the images stay in the store until Clean up.",
+                    "Delete {} item(s)? Projects go to Discarded (restore them from Projects → Discarded); images go to Output library → Discarded; folders go to the trash.",
                     targets.len()
                 )
             };

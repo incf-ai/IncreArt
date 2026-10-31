@@ -1176,6 +1176,8 @@ pub enum SheetCell<'a> {
 pub enum OutputTab {
     Grid,
     Folder,
+    /// Discarded images: restore or delete for good.
+    Discarded,
 }
 
 /// What the Output library's Grid shows.
@@ -4520,6 +4522,14 @@ impl AppState {
                 format!("{n} link(s); the images stay")
             }
         }
+    }
+
+    /// Discarded output images (every project's `discarded/`), newest
+    /// first.
+    pub fn discarded_outputs(&self) -> Vec<&OutputLink> {
+        let mut v: Vec<_> = self.index.projects.iter().flat_map(|p| &p.discarded).collect();
+        v.sort_by(|a, b| b.image.id.cmp(&a.image.id));
+        v
     }
 
     /// Every output image, any rating or none, newest first.

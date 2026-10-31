@@ -2949,7 +2949,8 @@ the keys and mouse buttons go through that view's own history instead.
   library as ref, `I` = new idea from this image, `Ctrl+Z` = undo last review
   action.
 - **Output library**: the place for finished work, as opposed to Projects
-  (where images are made and triaged). Tabs **Grid** (default) · **Folder**.
+  (where images are made and triaged). Tabs **Grid** (default) · **Folder**
+  · **Discarded**.
   The full-height left panel has, from the top: the **search** box with
   **in Images | Project names** under it (Images: an image's title or its
   run's prompt; Project names: narrows the "by project" smart folder to the
@@ -2986,9 +2987,9 @@ the keys and mouse buttons go through that view's own history instead.
     Clicking a tab replaces the filters (sets its ratings, clears text, refs
     and alpha); once the filters are changed the tab shows "•" and clicking
     it again resets them. **Rejected** follows the source, with **Delete these
-    N rejected…** (asks first; the links go to the system trash, the images
-    stay in the store until Clean up) and right-click to re-rate, send back to
-    Review or **Delete permanently…**. **Unreviewed** has **Review them**
+    N rejected…** (asks first; they go to **Discarded**, their seeds not
+    generated again) and right-click to re-rate, send back to Review or
+    **Delete…**. **Unreviewed** has **Review them**
     (Review scoped to the source). Double-clicking an image opens it full
     size over the window (the image preview: click, Esc or a click outside
     closes it; right-click copies it). Selecting an image shows the
@@ -3006,6 +3007,19 @@ the keys and mouse buttons go through that view's own history instead.
     Projects → Folder stays the place for project files (`runs/`,
     `unreviewed/`, triage); the "by project" smart folder is the project
     tree with only the kept images.
+  - **Discarded** (with its count): the images deleted from projects (the
+    Rejected tab's delete, Delete in a folder view), newest first, framed in
+    their rating's colour. Each moves to its project's
+    `discarded/<its rating folder>/`, kept out of the folder views, Review,
+    the queue and the other tabs, and its run records the seed as deleted
+    (not generated again, not a missing output). Hovered, an image shows
+    **Restore** and **Delete**; right-click: Restore, Show in file manager,
+    Delete permanently… **Restore** puts it back in its project, rated as it
+    was, and its seed is no longer deleted (refused if a link of that name is
+    there). **Delete permanently** (asks first) sends the link to the system
+    trash; the image stays until Clean up. **Empty discarded…** (asks first)
+    does it for all of them. Clean up and store conversion count discarded
+    images' links, so a restore finds its image.
   - **Titles**: an output image can be given a title (**Set title…** in the
     Grid's right-click menu, `F2` on the selected image, or the pencil in
     the lineage view). A small dialog edits it: Enter saves, an empty title

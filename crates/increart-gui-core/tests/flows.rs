@@ -1683,6 +1683,28 @@ fn review_views_compare_and_rejected() {
     assert!(h.state.confirm.is_none());
     assert!(h.state.output_source_images().is_empty(), "{:?}", h.errors());
     assert!(first.path(&h.root).is_file(), "the image itself stays until Clean up");
+
+    // the deleted image is in Discarded, rated as it was; restored, it's back
+    let discarded =
+        |h: &Harness| h.state.discarded_outputs().iter().map(|o| (o.image.clone(), o.verdict)).collect::<Vec<_>>();
+    assert_eq!(discarded(&h), vec![(second.clone(), Some(Verdict::Bad))]);
+    h.send(Msg::OutputTab(OutputTab::Discarded));
+    let path = h.state.discarded_outputs()[0].path.clone();
+    h.send(Msg::RestoreOutput(path));
+    h.settle();
+    assert!(discarded(&h).is_empty(), "{:?}", h.errors());
+    assert_eq!(h.state.output_source_images().len(), 1);
+    assert_eq!(h.state.output_link(&second).unwrap().verdict, Some(Verdict::Bad));
+    // discarded again, then emptied: gone for good
+    let link = h.state.output_link(&second).unwrap().path.clone();
+    h.send(Msg::DeleteOutput(link));
+    h.settle();
+    assert_eq!(discarded(&h).len(), 1);
+    h.send(Msg::Ask(Confirm::new("Empty discarded?", "Delete", Msg::EmptyDiscardedOutputs)));
+    h.send(Msg::ConfirmYes);
+    h.settle();
+    assert!(discarded(&h).is_empty(), "{:?}", h.errors());
+    assert!(h.state.output_link(&second).is_none());
 }
 
 #[test]
