@@ -54,11 +54,14 @@ impl Harness {
     fn settle(&mut self) {
         let deadline = std::time::Instant::now() + Duration::from_secs(30);
         loop {
+            // before the wait: the worker sends what it did before it's idle
+            // (effects with no reply, like reading a history, are done then)
+            let idle = self.rt.idle();
             let msgs = self.rt.wait(Duration::from_millis(300));
             if msgs.is_empty() {
                 // a library still opening sends nothing until it's open
                 let opening = matches!(&self.state.phase, Phase::Library(d) if d.busy);
-                if self.state.busy == 0 && self.state.saving == 0 && !opening && self.state.archiving.is_none() {
+                if idle && self.state.busy == 0 && self.state.saving == 0 && !opening && self.state.archiving.is_none() {
                     return;
                 }
                 assert!(
