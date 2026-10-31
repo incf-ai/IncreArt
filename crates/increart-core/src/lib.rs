@@ -10,6 +10,7 @@
 //! - [`id`], [`pixel`], [`png`], [`link`]: IDs, the pixel hash, PNG chunks and
 //!   store links.
 
+pub mod apitest;
 pub mod applog;
 pub mod archive;
 pub mod bugreport;
@@ -43,9 +44,12 @@ pub mod rsnfmt;
 pub mod scan;
 pub mod scheduler;
 pub mod sdserver;
+pub mod servertest;
 pub mod sync;
 pub mod thumbs;
 pub mod tiers;
+pub mod traffic;
+pub mod validation;
 pub mod webp;
 
 pub use error::{Error, Result};

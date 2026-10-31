@@ -16,6 +16,8 @@ const LIST_DEPTH: usize = 4;
 const LIST_MAX: usize = 3000;
 /// A file beside the config bigger than this is left out.
 const CONFIG_MAX: u64 = 4 << 20;
+/// A validation report bigger than this is left out.
+const VALIDATION_MAX: u64 = 16 << 20;
 
 pub struct Report {
     /// `config.rsn`; its folder's `config.rsn.*` go in too.
@@ -25,6 +27,9 @@ pub struct Report {
     pub model_dirs: Vec<String>,
     /// The version and how the app was started ([`crate::applog::about`]).
     pub about: String,
+    /// The server validation stamps file: it, and each preset's newest
+    /// validation report, go in.
+    pub validations: Option<PathBuf>,
 }
 
 /// Writes `r` to `dest`, returning the zip's size; a zip not finished is
@@ -77,6 +82,33 @@ fn write_zip(r: &Report, dest: &Path) -> std::io::Result<u64> {
 
     put("model-directories.txt", list_model_dirs(&r.model_dirs).as_bytes())?;
     contents.push("model-directories.txt".into());
+
+    // which presets were validated, each with the report that says how
+    match r.validations.as_deref().filter(|p| p.is_file()) {
+        None => contents.push("validation: no server preset validated yet".into()),
+        Some(path) => {
+            put("validation/validated.json", &fs::read(path)?)?;
+            contents.push("validation/validated.json".into());
+            let v = crate::validation::Validations::load(path);
+            let mut zips: Vec<&Path> = vec![];
+            for s in v.newest_each() {
+                let Some(zip) = s.zip.as_deref() else { continue };
+                if zips.contains(&zip) {
+                    continue;
+                }
+                zips.push(zip);
+                let name = zip.file_name().map_or("report.zip".into(), |n| n.to_string_lossy().into_owned());
+                match fs::metadata(zip) {
+                    Ok(m) if m.len() <= VALIDATION_MAX => {
+                        put(&format!("validation/{name}"), &fs::read(zip)?)?;
+                        contents.push(format!("validation/{name} ({}'s newest)", s.preset));
+                    }
+                    Ok(m) => contents.push(format!("validation/{name}: left out ({:.0} MB)", m.len() as f64 / 1e6)),
+                    Err(e) => contents.push(format!("validation/{name}: not read ({e})")),
+                }
+            }
+        }
+    }
 
     let about = format!(
         "{}\nsystem: {} {}\nconfig: {}\nlogs: {}\nsaved: {}\n\nIn this zip:\n  about.txt\n{}\n",
@@ -304,12 +336,30 @@ mod tests {
         fs::write(logs.join("notes.txt"), "not this").unwrap();
         fs::write(models.join("z.gguf"), vec![0u8; 2048]).unwrap();
         fs::write(models.join("loras/drawing.safetensors"), "l").unwrap();
+        // a preset validated: the stamps and its report
+        let stamps = dir.path().join("state").join(crate::validation::FILE);
+        let report = dir.path().join("apitest-1.zip");
+        fs::write(&report, "zip").unwrap();
+        let stamp = crate::validation::Stamp {
+            preset: "Remote".into(),
+            fingerprint: "f".into(),
+            when: "2026-10-31T17:00:00+01:00".into(),
+            outcome: crate::apitest::Outcome::Pass,
+            counts: Default::default(),
+            servers: vec![],
+            suite: String::new(),
+            report_sha256: String::new(),
+            zip: Some(report),
+            seal: String::new(),
+        };
+        crate::validation::record(&stamps, stamp.sealed()).unwrap();
         let dest = dir.path().join("increart-bug-report.zip");
         let r = Report {
             config: Some(conf.join("config.rsn")),
             logs,
             model_dirs: vec![models.to_string_lossy().into_owned(), "/no/such/dir".into()],
             about: "increart 0.1.0 (abc1234)".into(),
+            validations: Some(stamps),
         };
         let size = write(&r, &dest).unwrap();
         assert_eq!(size, fs::metadata(&dest).unwrap().len());
@@ -326,7 +376,9 @@ mod tests {
                 "config/config.rsn.unreadable",
                 "logs/increart.log",
                 "logs/koboldcpp-k.log",
-                "model-directories.txt"
+                "model-directories.txt",
+                "validation/apitest-1.zip",
+                "validation/validated.json"
             ]
             .map(|n| format!("{t}/{n}"))
         );

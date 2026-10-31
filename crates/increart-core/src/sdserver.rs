@@ -357,30 +357,34 @@ impl Client {
         format!("{}/sdcpp/v1/{path}", self.base)
     }
 
-    fn finish<T: DeserializeOwned>(
-        resp: Result<ureq::http::Response<ureq::Body>, ureq::Error>,
-        job: bool,
-    ) -> ApiResult<T> {
-        let mut resp = resp.map_err(|e| ApiError::Transport(e.to_string()))?;
-        let status = resp.status().as_u16();
-        let body = resp
-            .body_mut()
-            .with_config()
-            .limit(BODY_LIMIT)
-            .read_to_string()
-            .map_err(|e| ApiError::Transport(e.to_string()))?;
+    /// GETs `url` (POSTs `body` there when given) with `agent`, written
+    /// to the [traffic log](crate::traffic); `job`: a `jobs/{id}` endpoint.
+    fn call<T: DeserializeOwned>(agent: &Agent, url: &str, body: Option<&Value>, job: bool) -> ApiResult<T> {
+        let t = std::time::Instant::now();
+        let resp = match body {
+            Some(b) => agent.post(url).send_json(b),
+            None => agent.get(url).call(),
+        };
+        let answer = resp.map_err(|e| e.to_string()).and_then(|mut r| {
+            let status = r.status().as_u16();
+            let text = r.body_mut().with_config().limit(BODY_LIMIT).read_to_string().map_err(|e| e.to_string())?;
+            Ok((status, text))
+        });
+        crate::traffic::exchange(if body.is_some() { "POST" } else { "GET" }, url, body, &answer, t.elapsed());
+        let (status, text) = answer.map_err(ApiError::Transport)?;
         if !(200..300).contains(&status) {
-            return Err(classify(status, &body, job));
+            return Err(classify(status, &text, job));
         }
-        serde_json::from_str(&body).map_err(|e| ApiError::Transport(format!("unexpected response ({e}): {body:.200}")))
+        serde_json::from_str(&text).map_err(|e| ApiError::Transport(format!("unexpected response ({e}): {text:.200}")))
     }
 
     fn get<T: DeserializeOwned>(&self, path: &str) -> ApiResult<T> {
-        Self::finish(self.agent.get(self.url(path)).call(), path.starts_with("jobs/"))
+        Self::call(&self.agent, &self.url(path), None, path.starts_with("jobs/"))
     }
 
     fn post<T: DeserializeOwned>(&self, path: &str, body: &impl Serialize) -> ApiResult<T> {
-        Self::finish(self.agent.post(self.url(path)).send_json(body), path.starts_with("jobs/"))
+        let body = serde_json::to_value(body).map_err(|e| ApiError::BadRequest(e.to_string()))?;
+        Self::call(&self.agent, &self.url(path), Some(&body), path.starts_with("jobs/"))
     }
 
     /// Health check and feature discovery (also reports `runtime` status).
@@ -447,14 +451,14 @@ impl Client {
         let models: BTreeMap<&String, String> =
             model.models.iter().map(|(slot, id)| (slot, server_id(&listed, id))).collect();
         let body = serde_json::json!({ "recipe": model.recipe, "models": models });
-        Self::finish(self.load_agent.post(self.url("models/load")).send_json(&body), false).map(portable_status)
+        Self::call(&self.load_agent, &self.url("models/load"), Some(&body), false).map(portable_status)
     }
 
     pub fn unload_model(&self) -> ApiResult<ModelStatus> {
         if let Some(k) = &self.kobold {
             return k.unload_model();
         }
-        Self::finish(self.load_agent.post(self.url("models/unload")).send_json(serde_json::json!({})), false)
+        Self::call(&self.load_agent, &self.url("models/unload"), Some(&serde_json::json!({})), false)
             .map(portable_status)
     }
 
@@ -471,8 +475,7 @@ impl Client {
                     path: String,
                 }
                 let listed: Vec<Lora> =
-                    Self::finish(self.agent.get(format!("{}/sdapi/v1/loras", self.base)).call(), false)
-                        .unwrap_or_default();
+                    Self::call(&self.agent, &format!("{}/sdapi/v1/loras", self.base), None, false).unwrap_or_default();
                 let listed: Vec<String> = listed.into_iter().map(|l| l.path).collect();
                 let mut body = body.clone();
                 body["lora"] = loras

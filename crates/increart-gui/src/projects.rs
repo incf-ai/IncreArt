@@ -8,6 +8,7 @@ use increart_core::engine::Stop;
 use increart_core::{Tree, Verdict};
 use increart_gui_core::{AppState, Confirm, Msg, OutputSource, PickKind, ProjectsTab, Tab, UseTarget, counts, cover};
 
+use crate::folder_pick;
 use crate::textures::Textures;
 use crate::tree;
 use crate::widgets::{ACCENT, BAD, GOOD, NEUTRAL, card, dialog_buttons, dialog_footer, ic, ph, short, thumb};
@@ -79,6 +80,7 @@ pub fn view(ui: &mut egui::Ui, st: &AppState, tex: &mut Textures, out: &mut Vec<
                 (ProjectsTab::Folder, ic(ph::FOLDER, "Folder")),
                 (ProjectsTab::Generate, ic(ph::MAGIC_WAND, "Generate")),
                 (ProjectsTab::Jobs, ic(ph::QUEUE, &format!("Jobs ({})", st.active_runs.len()))),
+                (ProjectsTab::Discarded, ic(ph::TRASH, &format!("Discarded ({})", st.index.discarded_projects.len()))),
             ] {
                 if ui.selectable_label(st.projects_tab == t, label).clicked() {
                     out.push(Msg::ProjectsTab(t));
@@ -101,6 +103,93 @@ pub fn view(ui: &mut egui::Ui, st: &AppState, tex: &mut Textures, out: &mut Vec<
         ProjectsTab::Folder => crate::folderview::view(ui, st, tex, out),
         ProjectsTab::Generate => generate(ui, st, tex, out),
         ProjectsTab::Jobs => jobs(ui, st, out),
+        ProjectsTab::Discarded => discarded(ui, st, tex, out),
+    });
+}
+
+/// Projects → Discarded: discarded projects, newest first, each with where
+/// it was; Restore, Delete permanently, and Empty discarded.
+fn discarded(ui: &mut egui::Ui, st: &AppState, tex: &mut Textures, out: &mut Vec<Msg>) {
+    let Some(root) = st.library.clone() else { return };
+    let ds = &st.index.discarded_projects;
+    if ds.is_empty() {
+        ui.weak("No discarded projects. A project's Discard… (right-click it) puts it here, to restore later.");
+        return;
+    }
+    ui.horizontal(|ui| {
+        ui.weak("Restore puts a project back in its folder (the top level if that's gone); its pending seeds generate again.");
+        crate::widgets::right_group(ui, "empty_discarded", |ui| {
+            if ui.button(ic(ph::TRASH, "Empty discarded…")).clicked() {
+                let images: usize = ds.iter().map(|d| d.entry.outputs.len()).sum();
+                let text = format!(
+                    "Delete the {} discarded project(s) permanently? Their folders go to the trash with {images} image link(s); the images stay in the store until Clean up.",
+                    ds.len()
+                );
+                out.push(Msg::Ask(Confirm::new(text, "Delete", Msg::EmptyDiscardedProjects)));
+            }
+        });
+    });
+    ScrollArea::vertical().auto_shrink([false, true]).show(ui, |ui| {
+        ui.horizontal_wrapped(|ui| {
+            for d in ds {
+                let p = &d.entry;
+                let id = &p.project.id;
+                let [g, n, b, u] = counts(p);
+                let cov = cover(p).and_then(|c| tex.thumb(&root, &c));
+                let from = Path::new("projects").join(&d.discarded.from);
+                let r = card(ui, false, 200.0, 290.0, |ui| {
+                    let r = thumb(ui, cov.as_ref(), 200.0, false, None);
+                    if cov.is_none() {
+                        scattered_inputs(ui, r.rect, id, &root, tex, p);
+                    }
+                    ui.label(RichText::new(short(&d.discarded.name, 26)).strong());
+                    ui.horizontal(|ui| {
+                        ui.colored_label(GOOD, g.to_string());
+                        ui.colored_label(NEUTRAL, n.to_string());
+                        ui.colored_label(BAD, b.to_string());
+                        ui.colored_label(ACCENT, format!("{u} new"));
+                    });
+                    ui.weak(format!("from {}", from.display()));
+                    ui.weak(format!("discarded {}", crate::widgets::when(d.discarded.discarded)));
+                });
+                let restore = || Msg::RestoreProject(id.clone());
+                let delete = || {
+                    let text = format!(
+                        "Delete project {} permanently? Its folder goes to the trash with {} image link(s); the images stay in the store until Clean up.",
+                        d.discarded.name,
+                        p.outputs.len()
+                    );
+                    Msg::Ask(Confirm::new(text, "Delete", Msg::DeleteDiscardedProject(id.clone())))
+                };
+                if ui.rect_contains_pointer(r.rect) {
+                    let cover = egui::Rect::from_min_size(r.rect.min + egui::vec2(7.0, 7.0), egui::vec2(200.0, 200.0));
+                    let buttons = [
+                        (ph::ARROW_COUNTER_CLOCKWISE, "Restore", "back to its folder"),
+                        (ph::TRASH, "Delete", "permanently (asks first)"),
+                    ];
+                    match crate::widgets::cover_buttons(ui, cover, &buttons) {
+                        Some(0) => out.push(restore()),
+                        Some(_) => out.push(delete()),
+                        None => {}
+                    }
+                }
+                r.context_menu(|ui| {
+                    if ui.button(ic(ph::ARROW_COUNTER_CLOCKWISE, "Restore")).clicked() {
+                        out.push(restore());
+                        ui.close();
+                    }
+                    if ui.button(ic(ph::FOLDER_OPEN, "Open in file manager")).clicked() {
+                        out.push(Msg::ShowInFileManager(p.dir.clone()));
+                        ui.close();
+                    }
+                    ui.separator();
+                    if ui.button(ic(ph::TRASH, "Delete permanently…")).clicked() {
+                        out.push(delete());
+                        ui.close();
+                    }
+                });
+            }
+        });
     });
 }
 
@@ -115,7 +204,7 @@ fn key_hints(ui: &mut egui::Ui, tab: ProjectsTab) {
         ("Ctrl+A", "select all"),
         ("Ctrl+C X V", "copy / cut / paste"),
         ("F2", "rename"),
-        ("Delete", "to the trash"),
+        ("Delete", "discard (projects) / trash"),
         ("Ctrl+H", "show .rsn files"),
         ("Ctrl+L", "type a path"),
         ("Esc", "clear the selection"),
@@ -202,7 +291,7 @@ fn grid(ui: &mut egui::Ui, st: &AppState, tex: &mut Textures, out: &mut Vec<Msg>
     breadcrumb(ui, st, out);
     let ps = st.projects_in_scope();
     if ps.is_empty() {
-        ui.weak("No projects here. Promote ideas, or right-click the tree → New project.");
+        ui.weak("No projects here. Make one from ideas, or right-click the tree → New project.");
         return;
     }
     ui.weak("Click to select (it becomes the current project); Review / Generate on the tile; double-click: review, or generate if nothing is new; right-click for more.");
@@ -332,13 +421,13 @@ fn project_menu(ui: &mut egui::Ui, st: &AppState, p: &increart_core::scan::Proje
         out.push(Msg::ShowInFileManager(p.dir.clone()));
         ui.close();
     }
-    if ui.button(ic(ph::TRASH, "Delete… (to the trash)")).clicked() {
+    if ui.button(ic(ph::TRASH, "Discard…")).clicked() {
         let text = format!(
-            "Delete project {}? {}. It goes to the trash; the images stay in the store until Clean up.",
+            "Discard project {}? {}. Restore it from Projects → Discarded.",
             p.name(),
             st.delete_summary(Tree::Projects, &rel)
         );
-        out.push(Msg::Ask(Confirm::new(text, "Delete", Msg::DeleteNode(Tree::Projects, rel))));
+        out.push(Msg::Ask(Confirm::new(text, "Discard", Msg::DeleteNode(Tree::Projects, rel))));
         ui.close();
     }
 }
@@ -682,201 +771,109 @@ pub fn duplicate_window(ctx: &egui::Context, st: &AppState, out: &mut Vec<Msg>) 
     }
 }
 
-/// Promote into project: step 1 names it (Create puts it where the dialog
-/// says), step 2 picks the folder from a tree, optionally a new folder in it.
-pub fn promote_window(ctx: &egui::Context, st: &AppState, out: &mut Vec<Msg>) {
-    let Some(d) = &st.promote else { return };
-    let m = egui::Modal::new(egui::Id::unique("promote_ideas")).show(ctx, |ui| {
-        ui.set_width(480.0);
-        let step = if d.choosing { "Promote into project · location" } else { "Promote into project" };
-        ui.heading(ic(ph::ROCKET_LAUNCH, step));
-        let what = match d.ideas.len() {
-            0 => "The new idea goes to the input library and into a new project.".to_string(),
-            1 => "The idea goes into a new project.".to_string(),
-            n => format!("The {n} ideas go into a new project."),
+/// New project from ideas: the project folders on the left (a filter, the
+/// tree, New folder under it: to start with, one named after the project,
+/// following its name), the project's name on the right, where it goes,
+/// Create.
+pub fn from_ideas_window(ctx: &egui::Context, st: &AppState, out: &mut Vec<Msg>) {
+    // the name takes the focus as the dialog opens: once, not back from a
+    // field clicked since
+    let opening = folder_pick::opening(ctx, "from_ideas", st.from_ideas.is_some());
+    let Some(d) = &st.from_ideas else { return };
+    let m = egui::Modal::new(egui::Id::unique("new_project_from_ideas")).show(ctx, |ui| {
+        ui.set_width(760.0);
+        let title = match d.ideas.len() {
+            0 | 1 => "New project from idea".to_string(),
+            n => format!("New project from the {n} ideas"),
         };
-        ui.weak(what);
-        if d.choosing {
-            promote_location(ui, st, d, out);
-        } else {
-            promote_name_step(ui, st, d, out);
-        }
+        ui.heading(ic(ph::ROCKET_LAUNCH, &title));
+        ui.add_space(4.0);
+        // the dialog as edited this frame
+        let mut d = d.clone();
+        // Enter in the filter or the new folder's name only leaves the field
+        let mut field_enter = false;
+        ui.horizontal_top(|ui| {
+            ui.vertical(|ui| {
+                ui.set_width(300.0);
+                let picker = folder_pick::Picker {
+                    id: "from_ideas",
+                    folders: &st.index.project_folders,
+                    root: (ph::FOLDERS, "projects"),
+                    selected: &d.parent,
+                    filter: &d.filter,
+                    new_folder: d.new_folder.as_deref(),
+                    new_name: d.name.trim(),
+                };
+                let picked = folder_pick::show(ui, &picker, 280.0);
+                field_enter |= picked.field_enter;
+                if let Some(f) = picked.filter {
+                    out.push(Msg::FromIdeasFilter(f));
+                }
+                if let Some(f) = picked.select {
+                    out.push(Msg::FromIdeasParent(f.clone()));
+                    d.parent = f;
+                }
+                if let Some(f) = picked.new_folder {
+                    out.push(Msg::FromIdeasNewFolder(f.clone()));
+                    d.new_folder = f;
+                }
+            });
+            folder_pick::column_line(ui, 340.0);
+            ui.vertical(|ui| {
+                ui.label(RichText::new("Project name").strong());
+                let mut name = d.name.clone();
+                let r = ui
+                    .add(egui::TextEdit::singleline(&mut name).desired_width(f32::INFINITY).hint_text("project name"));
+                if opening {
+                    r.request_focus();
+                }
+                if name != d.name {
+                    out.push(Msg::EditFromIdeasName(name.clone()));
+                    if d.own_folder() {
+                        d.new_folder = Some(name.trim().to_string());
+                    }
+                    d.name = name;
+                }
+                ui.weak(match d.ideas.len() {
+                    0 => "The new idea goes to the input library and into the project.".to_string(),
+                    1 => "The idea goes into the project.".to_string(),
+                    n => format!("The {n} ideas go into the project."),
+                });
+                ui.add_space(8.0);
+                ui.label(RichText::new("Made in").strong());
+                let (at, exists) = increart_gui_core::from_ideas_folder(st, &d);
+                let shown = if d.name.trim().is_empty() { "…" } else { d.name.trim() };
+                ui.horizontal_wrapped(|ui| {
+                    let path = Path::new("projects").join(&at).join(shown);
+                    ui.label(RichText::new(path.display().to_string()).monospace());
+                    if !exists {
+                        ui.weak("(new folder)");
+                    }
+                });
+                if let Some(e) = increart_gui_core::from_ideas_problem(st, &d)
+                    && !d.name.trim().is_empty()
+                {
+                    ui.add_space(4.0);
+                    ui.colored_label(BAD, e);
+                }
+            });
+        });
+        ui.add_space(4.0);
+        let problem = increart_gui_core::from_ideas_problem(st, &d);
+        let enter = ui.input(|i| i.key_pressed(egui::Key::Enter));
+        dialog_buttons(ui, |ui| {
+            let create = egui::Button::new(RichText::new(ic(ph::CHECK, "Create   Enter")).strong());
+            if ui.add_enabled(problem.is_none(), create).clicked() || enter && !field_enter && problem.is_none() {
+                out.push(Msg::ConfirmFromIdeas);
+            }
+            if ui.button("Cancel   Esc").clicked() {
+                out.push(Msg::CancelFromIdeas);
+            }
+        });
     });
     if m.should_close() {
-        out.push(Msg::CancelPromote);
+        out.push(Msg::CancelFromIdeas);
     }
-}
-
-fn promote_name_step(ui: &mut egui::Ui, st: &AppState, d: &increart_gui_core::PromoteDialog, out: &mut Vec<Msg>) {
-    ui.label("Project name");
-    let mut name = d.name.clone();
-    let r = ui.add(egui::TextEdit::singleline(&mut name).desired_width(f32::INFINITY).hint_text("project name"));
-    crate::widgets::focus_until_done(&r);
-    // the dialog as edited this frame
-    let mut d = d.clone();
-    if name != d.name {
-        out.push(Msg::EditPromoteName(name.clone()));
-        d.name = name.clone();
-    }
-    let problem = increart_gui_core::promote_problem(st, &d);
-    if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) && problem.is_none() {
-        out.push(Msg::ConfirmPromote);
-    }
-    if let Some(e) = &problem
-        && !name.trim().is_empty()
-    {
-        ui.colored_label(BAD, e);
-    }
-    let mut in_folder = d.new_folder.is_some();
-    let label = match d.new_folder.as_deref().map(str::trim) {
-        Some(f) if !d.own_folder() => format!("In a new folder “{f}”"),
-        _ => "In a new folder of the same name".to_string(),
-    };
-    if ui.checkbox(&mut in_folder, label).changed() {
-        let folder = in_folder.then(|| d.name.trim().to_string());
-        out.push(Msg::PromoteNewFolder(folder.clone()));
-        d.new_folder = folder;
-    }
-    ui.add_space(4.0);
-    promote_result(ui, st, &d);
-    ui.add_space(4.0);
-    dialog_buttons(ui, |ui| {
-        let create = egui::Button::new(RichText::new(ic(ph::CHECK, "Create here   Enter")).strong());
-        if ui.add_enabled(problem.is_none(), create).clicked() {
-            out.push(Msg::ConfirmPromote);
-        }
-        if ui.button(ic(ph::FOLDER_OPEN, "Choose location…")).clicked() {
-            out.push(Msg::PromoteChoose(true));
-        }
-        if ui.button("Cancel   Esc").clicked() {
-            out.push(Msg::CancelPromote);
-        }
-    });
-}
-
-/// Where the project will be, as a path under `projects/`.
-fn promote_result(ui: &mut egui::Ui, st: &AppState, d: &increart_gui_core::PromoteDialog) {
-    let (at, exists) = increart_gui_core::promote_folder(st, d);
-    let name = if d.name.trim().is_empty() { "…" } else { d.name.trim() };
-    let path = Path::new("projects").join(&at).join(name);
-    ui.horizontal_wrapped(|ui| {
-        ui.weak("→");
-        ui.label(RichText::new(path.display().to_string()).monospace());
-        if !exists {
-            ui.weak("(new folder)");
-        }
-    });
-}
-
-fn promote_location(ui: &mut egui::Ui, st: &AppState, d: &increart_gui_core::PromoteDialog, out: &mut Vec<Msg>) {
-    let mut filter = d.filter.clone();
-    // Enter in the filter (or the new folder's name) only leaves the field
-    let mut field_enter = false;
-    ui.horizontal(|ui| {
-        ui.label(ph::MAGNIFYING_GLASS);
-        let r =
-            ui.add(egui::TextEdit::singleline(&mut filter).hint_text("filter folders").desired_width(f32::INFINITY));
-        field_enter |= r.lost_focus();
-    });
-    if filter != d.filter {
-        out.push(Msg::PromoteFilter(filter.clone()));
-    }
-    let words: Vec<String> = filter.to_lowercase().split_whitespace().map(String::from).collect();
-    let folders = &st.index.project_folders;
-    // shown: matches and their ancestors (the selected folder always)
-    let matches = |f: &Path| words.iter().all(|w| f.to_string_lossy().to_lowercase().contains(w));
-    let shown = |f: &Path| words.is_empty() || f == d.parent || folders.iter().any(|g| g.starts_with(f) && matches(g));
-    egui::Frame::group(ui.style()).show(ui, |ui| {
-        ScrollArea::vertical().max_height(260.0).auto_shrink([false, true]).show(ui, |ui| {
-            folder_row(ui, d, Path::new(""), "projects", 0, out);
-            let mut sorted: Vec<&PathBuf> = folders.iter().filter(|f| shown(f)).collect();
-            sorted.sort_by_key(|f| f.to_string_lossy().to_lowercase());
-            for f in sorted {
-                let depth = f.components().count();
-                let label = f.file_name().unwrap_or_default().to_string_lossy();
-                folder_row(ui, d, f, &label, depth, out);
-            }
-            if !words.is_empty() && !folders.iter().any(|g| matches(g)) {
-                ui.weak("No folder matches.");
-            }
-        });
-    });
-    let here = if d.parent.as_os_str().is_empty() {
-        "projects".to_string()
-    } else {
-        d.parent.file_name().unwrap_or_default().to_string_lossy().into_owned()
-    };
-    if d.new_folder.is_none()
-        && ui
-            .button(ic(ph::FOLDER_PLUS, &format!("New folder in “{here}”")))
-            .on_hover_text("made when you create the project")
-            .clicked()
-    {
-        out.push(Msg::PromoteNewFolder(Some(d.name.trim().to_string())));
-    }
-    let mut d = d.clone();
-    if let Some(new) = d.new_folder.clone() {
-        ui.horizontal(|ui| {
-            ui.label(ic(ph::FOLDER_PLUS, &format!("New folder in “{here}”")));
-            let mut name = new.clone();
-            let r = ui.add(egui::TextEdit::singleline(&mut name).hint_text("folder name").desired_width(200.0));
-            if ui.memory(|m| m.focused().is_none()) && !field_enter {
-                r.request_focus();
-            }
-            field_enter |= r.lost_focus();
-            if name != new {
-                out.push(Msg::PromoteNewFolder(Some(name.clone())));
-            }
-            if ui.small_button(ph::X).on_hover_text("no new folder").clicked() {
-                out.push(Msg::PromoteNewFolder(None));
-            }
-            d.new_folder = Some(name);
-        });
-    }
-    let problem = increart_gui_core::promote_problem(st, &d);
-    if let Some(e) = &problem {
-        ui.colored_label(BAD, e);
-    }
-    promote_result(ui, st, &d);
-    ui.add_space(4.0);
-    let enter = ui.input(|i| i.key_pressed(egui::Key::Enter));
-    let (back, (create, cancel)) = dialog_footer(
-        ui,
-        |ui| ui.button(ic(ph::ARROW_LEFT, "Back")).clicked(),
-        |ui| {
-            let create = egui::Button::new(RichText::new(ic(ph::CHECK, "Create   Enter")).strong());
-            let create = ui.add_enabled(problem.is_none(), create).clicked();
-            (create, ui.button("Cancel   Esc").clicked())
-        },
-    );
-    if back {
-        out.push(Msg::PromoteChoose(false));
-    }
-    if create || enter && !field_enter && problem.is_none() {
-        out.push(Msg::ConfirmPromote);
-    }
-    if cancel {
-        out.push(Msg::CancelPromote);
-    }
-}
-
-/// One folder in the location tree: indented, selectable.
-fn folder_row(
-    ui: &mut egui::Ui,
-    d: &increart_gui_core::PromoteDialog,
-    path: &Path,
-    label: &str,
-    depth: usize,
-    out: &mut Vec<Msg>,
-) {
-    ui.horizontal(|ui| {
-        ui.add_space(depth as f32 * 16.0);
-        let selected = d.parent == path;
-        let icon = if selected { ph::FOLDER_OPEN } else { ph::FOLDER };
-        if ui.selectable_label(selected, ic(icon, label)).clicked() {
-            out.push(Msg::PromoteParent(path.to_path_buf()));
-        }
-    });
 }
 
 /// Asks before renumbering the prompt's `<imageN>` tags after the image

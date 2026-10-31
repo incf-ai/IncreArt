@@ -577,6 +577,7 @@ pub fn plan(
                 args: vec![],
             },
             start: PeStart::AtLaunch,
+            ..Default::default()
         }));
         roles.push(Card { gpu: g.number, preset: None, role: Role::PeOnly });
         notes.push(Note::Plan(format!("GPU {}: prompt enhance (Qwen3-VL 8B), always loaded", g.number)));

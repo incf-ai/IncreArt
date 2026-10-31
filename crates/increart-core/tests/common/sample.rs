@@ -214,7 +214,7 @@ fn png(pic: &Picture, texts: &[Text], image_id: Option<&str>) -> (Vec<u8>, Strin
             }
         }
     }
-    let mut z = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::best());
+    let mut z = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::fast());
     z.write_all(raw).unwrap();
     chunk(&mut out, b"IDAT", &z.finish().unwrap());
     chunk(&mut out, b"IEND", b"");
@@ -347,6 +347,9 @@ struct Gen {
     ideas: Vec<Idea>,
     /// key -> (ID, path)
     projects: HashMap<&'static str, (String, &'static str)>,
+    /// Outputs being drawn and written on threads of their own (nothing
+    /// reads them back while generating); joined before `write` returns.
+    drawing: Vec<std::thread::JoinHandle<()>>,
 }
 
 impl Gen {
@@ -592,10 +595,14 @@ impl Gen {
             let oid = self.new_id("output", done(i)); // finished ~35 s apart
             let pic_seed = u64::from_str_radix(&sha(format!("{rid}-{seed}").as_bytes())[..8], 16).unwrap();
             let recipe = rsn(&recipe, 0);
-            let texts = [Text::I("increart:recipe", &recipe), Text::T("parameters", &params)];
-            let (data, _) = png(&picture(pic_seed, a.alpha), &texts, Some(&oid));
+            let path = self.out.join(format!("output_images/{oid}.png"));
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            let (id, alpha) = (oid.clone(), a.alpha);
+            self.drawing.push(std::thread::spawn(move || {
+                let texts = [Text::I("increart:recipe", &recipe), Text::T("parameters", &params)];
+                fs::write(path, png(&picture(pic_seed, alpha), &texts, Some(&id)).0).unwrap();
+            }));
             let folder = verdict.map_or("unreviewed".into(), |v| format!("reviewed/{v}"));
-            self.write(&format!("output_images/{oid}.png"), data);
             self.link(&format!("projects/{pid_path}/{folder}/{rid}_r0_s{seed:04}.png"), "output", &oid);
             out.push((oid, folder));
         }
@@ -619,6 +626,7 @@ pub fn write(out: &Path) {
         input_ids: HashMap::new(),
         ideas: vec![],
         projects: HashMap::new(),
+        drawing: vec![],
     };
     let t0 = t0();
     let (day, hour, minute) = (TimeDelta::days(1), TimeDelta::hours(1), TimeDelta::minutes(1));
@@ -658,8 +666,13 @@ pub fn write(out: &Path) {
 
     // the synthetic originals, as dropped (PNGs here; the pixel hash ignores chunks)
     let mut dropped = HashMap::new();
-    for &(name, seed, fname, _, _, _) in &ORIGINALS {
-        let pic = picture(seed, name == "robot");
+    // drawn side by side (unoptimised in tests, they take a while)
+    let pics: Vec<Picture> = std::thread::scope(|sc| {
+        let drawn: Vec<_> =
+            ORIGINALS.iter().map(|&(name, seed, ..)| sc.spawn(move || picture(seed, name == "robot"))).collect();
+        drawn.into_iter().map(|d| d.join().unwrap()).collect()
+    });
+    for (&(name, _, fname, _, _, _), pic) in ORIGINALS.iter().zip(pics) {
         let (data, h) = png(&pic, &[], None);
         let import = Import {
             size: 150_000 + g.rng.below(3_000_000),
@@ -885,6 +898,9 @@ pub fn write(out: &Path) {
         fs::create_dir_all(out.join(d)).unwrap();
     }
     g.write("README.md", README);
+    for d in g.drawing.drain(..) {
+        d.join().unwrap();
+    }
 }
 
 const README: &str = "# Sample IncreArt library

@@ -100,6 +100,11 @@ const EXTRA_SCENES: &[&str] = &[
     "41-check-rubber-band",
     "46-check-ref-double-click",
     "48-check-copy-image",
+    // the inbox's Save to input library: the filter clicked keeps the
+    // typing (the name took the focus back)
+    "03d-check-save-dialog-focus",
+    // New project from ideas: the same
+    "73b-check-new-project-focus",
     // after 02: the wheel over a followed log unticks follow
     "98h3-check-logs-scroll-unticks-follow",
     "98h4-check-logs-wrapped-scroll-unticks-follow",
@@ -113,6 +118,20 @@ const EXTRA_SCENES: &[&str] = &[
     "59-continue-without-servers",
     // after 02
     "60-server-settings",
+    // after 02: a connected-to server's Test, nothing answering there
+    "60b-server-test-button",
+    "60c-server-test",
+    // after 02, on a config whose sd-server is the suite's fake
+    // (increart-fake-sd-server): Validate servers…, its basic view, a
+    // preset's basic validation and its summary, the advanced view, a run
+    "60d-validate-servers-button",
+    "60e-validate-servers",
+    "60e2-validate-servers-summary",
+    "60e3-validate-servers-advanced",
+    "60e4-validate-servers-failed",
+    "60f-validate-servers-run",
+    // after 60d: opening a preset not validated asks to validate it first
+    "60g-validate-first",
     "61-duplicate-project",
     "62-rename",
     "63-projects-search",
@@ -125,12 +144,12 @@ const EXTRA_SCENES: &[&str] = &[
     "70-contact-sheet",
     "71-job-info",
     "72-review-sweep-button",
-    "73-promote",
+    "73-new-project-from-ideas",
     "74-notification-settings",
     "74b-timeout-settings",
     "74c-bell-ringing",
     "74d-snooze-dialog",
-    "75-promote-in-folder",
+    "75-new-project-from-ideas-in-folder",
     "76-top-bar-wide",
     "77-top-bar-medium",
     "78-top-bar-narrow",
@@ -224,6 +243,11 @@ const EXTRA_SCENES: &[&str] = &[
     "G11-export",
     // last: its status message would show in the shots after it
     "G12-crop-mark",
+    // the README gallery's Validate servers, after 02-server-dialog, on a
+    // config whose preset's sd-servers are the suite's fake: its basic view
+    // opened, then the preset's basic validation and its summary
+    "V1-check-validate-servers-open",
+    "V2-validate-servers",
 ];
 
 /// The tour library's fox-cafe project (clients/acme/fox-cafe).
@@ -353,6 +377,43 @@ impl Tour {
             "58-server-dialog-from-main" => vec![Msg::CloseNoServerWarning, Msg::OpenServerDialog],
             "59-continue-without-servers" => vec![Msg::AskContinueWithoutServers],
             "60-server-settings" => vec![Msg::CancelEdit, Msg::ServerSettings(true)],
+            "60b-server-test-button" => vec![Msg::CancelOpening, Msg::EditPreset(1)],
+            "60c-server-test" => vec![Msg::TestServer(increart_core::config::ServerConfig::Connect {
+                name: "box".into(),
+                url: "http://127.0.0.1:9".into(),
+                device: String::new(),
+            })],
+            "60d-validate-servers-button" => vec![Msg::CancelOpening, Msg::CloseServerTest, Msg::CancelEdit],
+            "60e-validate-servers" => vec![Msg::ApiTest(true)],
+            "60e2-validate-servers-summary" => match st.api_test.as_ref().and_then(|t| t.preset.clone()) {
+                Some(p) => vec![Msg::ValidateBasic(p)],
+                None => vec![],
+            },
+            "60e3-validate-servers-advanced" => vec![Msg::ApiTestAdvanced(true)],
+            // the preset connecting to a box that isn't there
+            "60e4-validate-servers-failed" => match st.config.server_presets.get(1) {
+                Some(p) => vec![Msg::ApiTestAdvanced(false), Msg::ValidateBasic(p.name.clone())],
+                None => vec![],
+            },
+            "60g-validate-first" => vec![Msg::ApiTest(false), Msg::OpenPreset(1)],
+            "60f-validate-servers-run" => {
+                // the first preset's light cases and its servers together
+                let Some(t) = &st.api_test else { return vec![] };
+                let first = t.cases.first().map(|c| c.case.preset.clone()).unwrap_or_default();
+                let pick: Vec<usize> = (0..t.cases.len())
+                    .filter(|&i| {
+                        let c = &t.cases[i].case;
+                        c.preset == first
+                            && (c.cost == increart_core::apitest::Cost::Light || c.id.ends_with("together.parallel"))
+                    })
+                    .collect();
+                vec![
+                    Msg::ApiTestAdvanced(true),
+                    Msg::ApiTestCheck((0..t.cases.len()).collect(), false),
+                    Msg::ApiTestCheck(pick, true),
+                    Msg::ApiTestRun(increart_gui_core::ApiRun::Checked),
+                ]
+            }
             "63-projects-search" => vec![
                 Msg::CancelDuplicate,
                 Msg::CancelRename,
@@ -805,19 +866,18 @@ impl Tour {
                 vec![Msg::ContinueWithoutServers, Msg::Settings(false), Msg::SetNotifications(n)]
             }
             "74d-snooze-dialog" => vec![],
-            "75-promote-in-folder" => {
+            "75-new-project-from-ideas-in-folder" => {
                 let idea = st.index.ideas.iter().find(|e| matches!(e.loc, increart_core::IdeaLoc::Library(_)));
                 let mut v = vec![Msg::ContinueWithoutServers, Msg::Settings(false), Msg::Tab(Tab::InputLibrary)];
                 if let Some(e) = idea {
-                    v.push(Msg::Promote(vec![e.idea.id.clone()]));
-                    // step 2: in clients, a new folder
-                    v.push(Msg::PromoteChoose(true));
-                    v.push(Msg::PromoteParent("clients".into()));
-                    v.push(Msg::PromoteNewFolder(Some("posters".into())));
+                    v.push(Msg::NewProjectFromIdeas(vec![e.idea.id.clone()]));
+                    // in clients, a new folder
+                    v.push(Msg::FromIdeasParent("clients".into()));
+                    v.push(Msg::FromIdeasNewFolder(Some("posters".into())));
                 }
                 v
             }
-            "76-top-bar-wide" => vec![Msg::ContinueWithoutServers, Msg::CancelPromote, Msg::Tab(Tab::Review)],
+            "76-top-bar-wide" => vec![Msg::ContinueWithoutServers, Msg::CancelFromIdeas, Msg::Tab(Tab::Review)],
             "71-job-info" => {
                 // glass-fish's edit run pretends to generate: a reference and a start image
                 let run = st.index.projects.iter().find(|p| p.name() == "glass-fish").and_then(|p| p.runs.first());
@@ -883,9 +943,9 @@ impl Tour {
                 Msg::ReviewView(ReviewView::Single),
                 Msg::ReviewNewest,
             ],
-            "73-promote" => {
+            "73-new-project-from-ideas" | "73b-check-new-project-focus" => {
                 let ideas: Vec<_> = st.library_ideas().iter().take(2).map(|e| e.idea.id.clone()).collect();
-                vec![Msg::ContinueWithoutServers, Msg::Tab(Tab::IdeaInbox), Msg::Promote(ideas)]
+                vec![Msg::ContinueWithoutServers, Msg::Tab(Tab::IdeaInbox), Msg::NewProjectFromIdeas(ideas)]
             }
             "62-rename" => vec![Msg::Tab(Tab::Projects), Msg::StartRename(Tree::Projects, PathBuf::from("stickers"))],
             "61-duplicate-project" => vec![Msg::Tab(Tab::Projects), Msg::DuplicateProject(PathBuf::from("stickers"))],
@@ -1012,7 +1072,7 @@ impl Tour {
                 let picks = st.inbox_queue().iter().take(3).map(|e| e.idea.id.clone()).collect();
                 vec![Msg::InboxPick(picks)]
             }
-            "03c-idea-inbox-save-dialog" => {
+            "03c-idea-inbox-save-dialog" | "03d-check-save-dialog-focus" => {
                 let first = st.inbox_queue().first().map(|e| e.idea.id.clone());
                 vec![Msg::InboxPick(vec![]), Msg::SaveIdeas(first.into_iter().collect())]
             }
@@ -1554,6 +1614,8 @@ impl Tour {
             ],
             "G01-server-wizard" => self.msgs("54-server-wizard", st),
             "G02a-home" => self.msgs("99a-home", st),
+            "V1-check-validate-servers-open" => self.msgs("60e-validate-servers", st),
+            "V2-validate-servers" => self.msgs("60e2-validate-servers-summary", st),
             "G02-idea-inbox" => {
                 let mut v = vec![Msg::ContinueWithoutServers];
                 // the default card and tile sizes, whatever the config has
@@ -1789,7 +1851,11 @@ impl Tour {
                 Msg::CancelNewProject,
             ]);
             out.extend(self.msgs(name, st));
-            if name.starts_with("54") || name.starts_with(['R', 'G']) || name == "02c-koboldcpp-entry" {
+            if name.starts_with("54")
+                || name.starts_with(['R', 'G', 'V'])
+                || name.starts_with("60e")
+                || name == "02c-koboldcpp-entry"
+            {
                 // the virtual display's pointer sits mid-window: no tooltip over it
                 self.inject = vec![egui::Event::PointerGone];
             }
@@ -1817,6 +1883,7 @@ impl Tour {
                     .iter()
                     .any(|j| matches!(&j.step, increart_gui_core::PeStep::Writing { pieces, .. } if *pieces > 12)))
             || tex.busy()
+            || st.api_test.as_ref().is_some_and(|t| t.listing || t.running)
             || matches!(st.phase, Phase::Library(LibraryDialog { busy: true, .. }))
             || (!opening_ok && matches!(st.phase, Phase::Servers(ServerDialog { opening: true, .. })))
             || matches!(&st.phase, Phase::Servers(ServerDialog { wizard: true, devices: None, kobold: None, .. }))
@@ -2009,6 +2076,36 @@ impl Tour {
                 (6, Some(p)) if !self.clicked => {
                     self.inject = vec![button(p, false)];
                     self.clicked = true;
+                }
+                _ => {}
+            }
+        }
+        if name == "03d-check-save-dialog-focus" || name == "73b-check-new-project-focus" {
+            // typed as it opens: the name; the filter clicked: the filter,
+            // and the name doesn't take it back
+            let dialog = if name.starts_with("03d") { "save_idea" } else { "from_ideas" };
+            let fields = || match dialog {
+                "save_idea" => st.save_idea.as_ref().map(|d| (d.name.clone(), d.filter.clone())),
+                _ => st.from_ideas.as_ref().map(|d| (d.name.clone(), d.filter.clone())),
+            };
+            let button = |pos, pressed| egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: Default::default(),
+            };
+            let filter = ctx.data(|d| d.get_temp::<egui::Rect>(egui::Id::unique(("tour_filter", dialog))));
+            match (self.settled, filter) {
+                (4, _) => self.inject = vec![egui::Event::Text("q".into())],
+                (7, Some(r)) => self.inject = vec![egui::Event::PointerMoved(r.center()), button(r.center(), true)],
+                (8, Some(r)) => self.inject = vec![button(r.center(), false)],
+                (7, None) => eprintln!("CHECK {name}: FAILED (no filter drawn)"),
+                (11, _) => self.inject = vec![egui::Event::Text("zz".into())],
+                (16, _) => {
+                    let f = fields();
+                    let ok =
+                        f.as_ref().is_some_and(|(n, filter)| n.ends_with('q') && !n.contains("zz") && filter == "zz");
+                    eprintln!("CHECK {name}: {} (name, filter: {f:?})", if ok { "ok" } else { "FAILED" });
                 }
                 _ => {}
             }

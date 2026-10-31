@@ -893,9 +893,12 @@ fn presets(ui: &mut egui::Ui, st: &AppState, d: &ServerDialog, out: &mut Vec<Msg
             ui,
             |ui| ui.selectable_label(editing, text).on_hover_text("Open").clicked(),
             |ui| {
-                // right to left: ✎ pinned to the right edge, the bin next to it, then the tag
+                // right to left: ✎ pinned to the right edge, the bin next to it, then the tags
                 let edit = ui.small_button(ph::PENCIL_SIMPLE).on_hover_text("Edit").clicked();
                 let delete = ui.small_button(ph::TRASH).on_hover_text("Delete preset…").clicked();
+                if validation_mark(ui, st, d, p) {
+                    out.push(Msg::ValidateBasic(p.name.clone()));
+                }
                 if last == Some(i) {
                     ui.label(RichText::new("last used").color(ACCENT_MUTED));
                 }
@@ -926,9 +929,75 @@ fn presets(ui: &mut egui::Ui, st: &AppState, d: &ServerDialog, out: &mut Vec<Msg
         {
             out.push(Msg::ServerWizard(true));
         }
+        // the suite starts the servers itself: not with any open
+        if !st.config.server_presets.is_empty()
+            && !d.opening
+            && st.servers.is_empty()
+            && st.background.is_none()
+            && ui
+                .button(ic(ph::STETHOSCOPE, "Validate servers…"))
+                .on_hover_text(
+                    "the server validation suite: opens each preset's servers and tests every call the app \
+                     makes, case by case, each request and answer logged",
+                )
+                .clicked()
+        {
+            out.push(Msg::ApiTest(true));
+        }
     });
     ui.add_space(6.0);
     ui.weak("Click a preset to open it");
+}
+
+/// Whether the preset passed the suite's basic cases with the settings it
+/// has: a mark saying so, which validates it when clicked (while the
+/// suite can run: no servers open); true when clicked.
+fn validation_mark(ui: &mut egui::Ui, st: &AppState, d: &ServerDialog, p: &config::ServerPreset) -> bool {
+    use increart_core::validation::Status;
+    if st.validations_path.is_none() || p.servers.is_empty() {
+        return false;
+    }
+    let (icon, text, color, tip) = match st.validations.status(&st.config, p) {
+        Status::Passed(s) => {
+            let warned = if s.counts.warn > 0 { format!(", with {} warning(s)", s.counts.warn) } else { String::new() };
+            (ph::SEAL_CHECK, "validated", GOOD, format!("its basic validation passed on {}{warned}", s.day()))
+        }
+        Status::Failed(s) => (
+            ph::SEAL_WARNING,
+            "validation failed",
+            BAD,
+            format!(
+                "its basic validation failed on {}: {} case(s) failed or were skipped",
+                s.day(),
+                s.counts.fail + s.counts.skipped
+            ),
+        ),
+        Status::Changed(s) => (
+            ph::SEAL_QUESTION,
+            "not validated",
+            NEUTRAL,
+            format!("validated on {}, but its settings have changed since", s.day()),
+        ),
+        Status::Never => (
+            ph::SEAL_QUESTION,
+            "not validated",
+            NEUTRAL,
+            "the server validation suite hasn't checked its servers".into(),
+        ),
+    };
+    let can = st.suite_found && !d.opening && st.servers.is_empty() && st.background.is_none() && st.api_test.is_none();
+    let label = RichText::new(ic(icon, text)).color(color);
+    if can {
+        ui.add(egui::Button::new(label).frame(false))
+            .on_hover_text(format!(
+                "{tip}\nClick to validate it now: each server answers, lists its models and makes a small \
+                 image, then a short run through them all"
+            ))
+            .clicked()
+    } else {
+        ui.label(label).on_hover_text(tip);
+        false
+    }
 }
 
 /// **Continue without servers**: nothing generates meanwhile; prompt
@@ -1063,6 +1132,19 @@ fn settings(ui: &mut egui::Ui, st: &AppState, d: &ServerDialog, out: &mut Vec<Ms
         .changed()
     {
         out.push(Msg::SetSkipRamCheck(!check));
+    }
+    let mut log = st.config.log_traffic;
+    let path = increart_gui_core::runtime::log_dir().join(increart_core::traffic::FILE);
+    let forced = increart_core::traffic::enabled() && !log;
+    let tip = format!(
+        "Every request to the image servers (sd-server, KoboldCpp) and their answers, for finding what a server \
+         does wrong, in {} (Logs). Images show as their length; a poll answered as the last time is counted, not \
+         written again{}",
+        path.display(),
+        if forced { ". On now: INCREART_TRAFFIC_LOG is set" } else { "" }
+    );
+    if ui.checkbox(&mut log, "Log server traffic").on_hover_text(tip).changed() {
+        out.push(Msg::SetLogTraffic(log));
     }
     ui.add_space(12.0);
     ui.label(RichText::new(ic(ph::TIMER, "Timeouts")).strong());
@@ -1829,13 +1911,91 @@ fn presets_table(ui: &mut egui::Ui, k: &mut KoboldWizard, plan: Option<&tiers::P
     }
 }
 
+/// A server's **Test**: each step with what came back, Copy, Stop / Close.
+pub fn server_test_window(ctx: &egui::Context, t: &increart_gui_core::state::ServerTest, out: &mut Vec<Msg>) {
+    use increart_core::servertest::{Outcome, as_text};
+    let m = egui::Modal::new(egui::Id::unique("server_test")).show(ctx, |ui| {
+        ui.set_width(640.0);
+        ui.heading(ic(ph::STETHOSCOPE, &format!("Test of {}", t.name)));
+        ui.add_space(6.0);
+        egui::ScrollArea::vertical().max_height(ctx.content_rect().height() * 0.7).show(ui, |ui| {
+            for s in &t.steps {
+                ui.horizontal_top(|ui| {
+                    match s.outcome {
+                        Outcome::Running => {
+                            ui.add(egui::Spinner::new());
+                        }
+                        Outcome::Ok => {
+                            ui.colored_label(GOOD, ph::CHECK_CIRCLE);
+                        }
+                        Outcome::Warning => {
+                            ui.colored_label(NEUTRAL, ph::WARNING);
+                        }
+                        Outcome::Failed => {
+                            ui.colored_label(BAD, ph::X_CIRCLE);
+                        }
+                        Outcome::Skipped => {
+                            ui.weak(ph::MINUS_CIRCLE);
+                        }
+                    }
+                    ui.vertical(|ui| {
+                        ui.label(RichText::new(&s.title).strong());
+                        if !s.detail.is_empty() {
+                            ui.add(egui::Label::new(&s.detail).wrap());
+                        }
+                    });
+                });
+                ui.add_space(4.0);
+            }
+        });
+        if !t.done && t.steps.is_empty() {
+            ui.add(egui::Spinner::new());
+        }
+        ui.add_space(6.0);
+        let (traffic, (close, stop)) = dialog_footer(
+            ui,
+            |ui| {
+                if ui.button(ic(ph::COPY, "Copy")).on_hover_text("the steps as text, to send").clicked() {
+                    ui.ctx().copy_text(as_text(&t.name, &t.steps));
+                }
+                ui.button(ic(ph::SCROLL, "Traffic log…"))
+                    .on_hover_text("this test's requests and answers, tagged with it")
+                    .clicked()
+            },
+            |ui| {
+                let close = ui.button(ic(ph::X, "Close")).clicked();
+                let stop = !t.done
+                    && ui.button(ic(ph::STOP, "Stop")).on_hover_text("cancels its job on the server, if any").clicked();
+                (close, stop)
+            },
+        );
+        if traffic {
+            let file = Some(increart_core::traffic::FILE.to_string());
+            out.push(Msg::Logs(Some(increart_gui_core::state::LogsView::new(file))));
+        }
+        if stop {
+            out.push(Msg::StopServerTest);
+        }
+        if close {
+            out.push(Msg::CloseServerTest);
+        }
+    });
+    if m.should_close() {
+        out.push(Msg::CloseServerTest);
+    }
+}
+
 /// The editor (✎ / New preset): name, servers, Save / Save and open / Open
 /// without saving / Cancel. Esc cancels; a click outside doesn't.
 fn editor_window(ctx: &egui::Context, st: &AppState, d: &ServerDialog, editing: Editing, out: &mut Vec<Msg>) {
     egui::Modal::new(egui::Id::unique("preset_editor")).show(ctx, |ui| {
         ui.set_width(620.0);
         editor(ui, st, d, editing, out);
-        if st.confirm.is_none() && st.pe.editor.is_none() && ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+        if st.confirm.is_none()
+            && st.pe.editor.is_none()
+            && st.server_test.is_none()
+            && ui.input(|i| i.key_pressed(egui::Key::Escape))
+        {
             out.push(Msg::CancelEdit);
         }
     });
@@ -1863,7 +2023,8 @@ fn editor(ui: &mut egui::Ui, st: &AppState, d: &ServerDialog, editing: Editing, 
         let remove = egui::Frame::group(ui.style())
             .show(ui, |ui| {
                 ui.set_width(ui.available_width());
-                let (_, remove) = egui::Sides::new().show(
+                let testable = increart_core::servertest::client_for(&edited).is_some();
+                let (_, (remove, test)) = egui::Sides::new().show(
                     ui,
                     |ui| match &mut edited {
                         ServerConfig::Start { name, port, device, .. } => {
@@ -1892,8 +2053,23 @@ fn editor(ui: &mut egui::Ui, st: &AppState, d: &ServerDialog, editing: Editing, 
                             ui.add(egui::TextEdit::singleline(&mut k.name).desired_width(90.0).hint_text("name"));
                         }
                     },
-                    |ui| ui.small_button(ph::X).on_hover_text("Remove").clicked(),
+                    |ui| {
+                        let remove = ui.small_button(ph::X).on_hover_text("Remove").clicked();
+                        let test = testable
+                            && ui
+                                .small_button(ic(ph::STETHOSCOPE, "Test"))
+                                .on_hover_text(
+                                    "Make the calls IncreArt makes to it, one by one, and say what came back: \
+                                     it answers, its model list, its status, then it loads a model preset, \
+                                     makes one small image and cancels a job",
+                                )
+                                .clicked();
+                        (remove, test)
+                    },
                 );
+                if test {
+                    out.push(Msg::TestServer(edited.clone()));
+                }
                 if let ServerConfig::Kobold(k) = &mut edited {
                     kobold_fields(ui, st, i, k, has_chat_entry, out);
                 }

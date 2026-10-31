@@ -48,8 +48,8 @@ pub struct LibFilter {
     pub text: String,
     pub starred_only: bool,
     pub with_images_only: bool,
-    /// `Some(true)`: promoted ideas only; `Some(false)`: not yet promoted.
-    pub promoted: Option<bool>,
+    /// `Some(true)`: ideas used in a project only; `Some(false)`: in none yet.
+    pub used_in_project: Option<bool>,
     /// Most used first (as ref or start image), instead of newest first.
     pub most_used: bool,
     /// The edited copies (Crop / mark…) too, from `input/edited/`.
@@ -404,7 +404,7 @@ impl OutputPreset {
 pub enum Smart {
     /// One day, from the image IDs (`YYYY.MM.DD`).
     Day(String),
-    /// Made from runs promoted from this idea.
+    /// Made from runs of projects made from this idea.
     Idea(Id),
     /// Runs with Transparent on.
     Transparent,
@@ -758,6 +758,8 @@ pub enum ProjectsTab {
     Folder,
     Generate,
     Jobs,
+    /// Discarded projects: restore or delete for good.
+    Discarded,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1174,6 +1176,8 @@ pub enum SheetCell<'a> {
 pub enum OutputTab {
     Grid,
     Folder,
+    /// Discarded images: restore or delete for good.
+    Discarded,
 }
 
 /// What the Output library's Grid shows.
@@ -1200,11 +1204,20 @@ pub struct Confirm {
     pub verb: String,
     pub then: Box<crate::Msg>,
     pub fix: Option<(String, Box<crate::Msg>)>,
+    /// Its heading, for a question that isn't "are you sure": its verb is
+    /// then what's recommended, not what can't be undone.
+    pub heading: Option<String>,
 }
 
 impl Confirm {
     pub fn new(text: impl Into<String>, verb: impl Into<String>, then: crate::Msg) -> Self {
-        Self { text: text.into(), verb: verb.into(), then: Box::new(then), fix: None }
+        Self { text: text.into(), verb: verb.into(), then: Box::new(then), fix: None, heading: None }
+    }
+
+    /// Asks under `heading`, `verb` recommended.
+    pub fn recommending(mut self, heading: impl Into<String>) -> Self {
+        self.heading = Some(heading.into());
+        self
     }
 
     pub fn with_fix(mut self, name: impl Into<String>, then: crate::Msg) -> Self {
@@ -1635,17 +1648,15 @@ pub enum StartRefs {
     Files,
 }
 
-/// Naming the project that promoting ideas makes (always asked: an idea's
+/// Naming the project New project from ideas makes (always asked: an idea's
 /// title needn't suit a project).
 #[derive(Clone, Debug, PartialEq)]
-pub struct PromoteDialog {
-    /// The ideas; empty: the New idea form's draft (Add and promote).
+pub struct FromIdeasDialog {
+    /// The ideas; empty: the New idea form's draft (Add & new project).
     pub ideas: Vec<Id>,
     /// Where the project goes, relative to `projects/` (step 2 picks it).
     pub parent: PathBuf,
     pub name: String,
-    /// Step 2: choosing where.
-    pub choosing: bool,
     /// A new folder to make in `parent` (on Create) and put the project in;
     /// an existing one of that name (any case) is used. It starts as the
     /// project's name and follows it while they match (`None`: in `parent`
@@ -1653,12 +1664,15 @@ pub struct PromoteDialog {
     pub new_folder: Option<String>,
     /// Step 2's folder filter.
     pub filter: String,
+    /// The draft from Save to input library's Save & new project: the
+    /// library folder it's saved in (else the top level).
+    pub saved_in: Option<PathBuf>,
 }
 
-impl PromoteDialog {
-    pub fn new(ideas: Vec<Id>, parent: PathBuf, name: String) -> PromoteDialog {
+impl FromIdeasDialog {
+    pub fn new(ideas: Vec<Id>, parent: PathBuf, name: String) -> FromIdeasDialog {
         let new_folder = Some(name.trim().to_string());
-        PromoteDialog { ideas, parent, name, choosing: false, new_folder, filter: String::new() }
+        FromIdeasDialog { ideas, parent, name, new_folder, filter: String::new(), saved_in: None }
     }
 
     /// The project goes in a new folder named after it.
@@ -2448,6 +2462,157 @@ pub enum PeFile {
     Config,
 }
 
+/// A server's **Test** (DESIGN.md, Testing a server): its steps so far.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ServerTest {
+    /// Numbers tests; steps from an older one are ignored.
+    pub run: u32,
+    pub name: String,
+    pub steps: Vec<increart_core::servertest::Step>,
+    pub done: bool,
+}
+
+/// **Validate servers…** (DESIGN.md, Validating servers): the suite,
+/// `increart-apitest` run as a child, over the config's server presets.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ApiTest {
+    /// Numbers lists and runs; events from an older one are ignored.
+    pub run: u32,
+    /// Asking the suite for its cases.
+    pub listing: bool,
+    pub running: bool,
+    /// Stop asked, the run not over yet.
+    pub stopping: bool,
+    pub cases: Vec<ApiCase>,
+    /// The server preset shown (its cases only); None: all of them.
+    pub preset: Option<String>,
+    /// The case shown on the right; None: the run's own log.
+    pub selected: Option<usize>,
+    /// The case shown follows the one running (until one is clicked).
+    pub follow: bool,
+    /// The run's log: between cases, and its end.
+    pub log: Vec<String>,
+    /// The last run's counts, report folder and zip.
+    pub done: Option<(increart_core::apitest::Counts, Option<PathBuf>, Option<PathBuf>)>,
+    /// It couldn't list or run (the suite missing, a bad config).
+    pub error: Option<String>,
+    /// Run the basic cases of the preset shown once they're listed
+    /// (**Validate now**).
+    pub basic_pending: bool,
+    /// The cases the last run ran, for its summary.
+    pub ran: Vec<usize>,
+    /// Stop was asked during the last run (it didn't finish).
+    pub stopped: bool,
+    /// When the last run started and ended (`AppState::now`).
+    pub started: f64,
+    pub ended: Option<f64>,
+}
+
+/// A case of the suite, in [`ApiTest`].
+#[derive(Clone, Debug, PartialEq)]
+pub struct ApiCase {
+    pub case: increart_core::apitest::Case,
+    pub checked: bool,
+    /// Of the last run that ran it.
+    pub outcome: Option<increart_core::apitest::Outcome>,
+    pub running: bool,
+    pub summary: String,
+    pub secs: f64,
+    pub log: Vec<String>,
+    pub traffic: Vec<String>,
+}
+
+/// Which cases **Run** runs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ApiRun {
+    Checked,
+    All,
+    /// Those that failed or were skipped last time.
+    Failed,
+}
+
+impl ApiTest {
+    pub fn index(&self, id: &str) -> Option<usize> {
+        self.cases.iter().position(|c| c.case.id == id)
+    }
+
+    /// Whether case `i` is shown: of the preset shown, if one is.
+    pub fn shown(&self, i: usize) -> bool {
+        self.cases.get(i).is_some_and(|c| self.preset.as_ref().is_none_or(|p| &c.case.preset == p))
+    }
+
+    /// The cases shown.
+    pub fn shown_cases(&self) -> Vec<usize> {
+        (0..self.cases.len()).filter(|&i| self.shown(i)).collect()
+    }
+
+    /// The server presets, in the order listed.
+    pub fn presets(&self) -> Vec<&str> {
+        let mut v: Vec<&str> = vec![];
+        for c in &self.cases {
+            if !v.contains(&c.case.preset.as_str()) {
+                v.push(&c.case.preset);
+            }
+        }
+        v
+    }
+
+    /// Shows `preset`'s cases only, checking those for its setup (not the
+    /// n/a ones) and no other's; None shows all, the checks as they are.
+    pub fn show_preset(&mut self, preset: Option<String>) {
+        let preset = preset.filter(|p| self.cases.iter().any(|c| &c.case.preset == p));
+        if let Some(p) = &preset {
+            for c in &mut self.cases {
+                c.checked = &c.case.preset == p && c.case.not_applicable.is_none();
+            }
+        }
+        self.preset = preset;
+        if self.selected.is_some_and(|i| !self.shown(i)) {
+            self.selected = None;
+        }
+    }
+
+    /// Checks the basic cases shown (those for its setup) and no others.
+    pub fn check_basic(&mut self) {
+        for i in 0..self.cases.len() {
+            let on = self.shown(i) && self.cases[i].case.basic && self.cases[i].case.not_applicable.is_none();
+            self.cases[i].checked = on;
+        }
+    }
+
+    /// The cases `which` runs, of the cases shown.
+    pub fn picked(&self, which: ApiRun) -> Vec<usize> {
+        use increart_core::apitest::Outcome;
+        let pick = |c: &ApiCase| match which {
+            ApiRun::Checked => c.checked,
+            ApiRun::All => true,
+            ApiRun::Failed => matches!(c.outcome, Some(Outcome::Fail | Outcome::Skipped)),
+        };
+        self.shown_cases().into_iter().filter(|&i| pick(&self.cases[i])).collect()
+    }
+
+    /// The IDs `which` runs (empty for all), of the cases shown.
+    pub fn ids(&self, which: ApiRun) -> Vec<String> {
+        if which == ApiRun::All && self.preset.is_none() {
+            return vec![];
+        }
+        self.picked(which).into_iter().map(|i| self.cases[i].case.id.clone()).collect()
+    }
+
+    /// The basic cases of the preset shown, for its setup.
+    pub fn basic_cases(&self) -> Vec<usize> {
+        self.shown_cases()
+            .into_iter()
+            .filter(|&i| self.cases[i].case.basic && self.cases[i].case.not_applicable.is_none())
+            .collect()
+    }
+
+    /// The last run is over and ran (some of) the preset shown.
+    pub fn finished(&self) -> bool {
+        !self.running && self.ended.is_some() && self.ran.iter().any(|&i| self.shown(i))
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct ServerStatus {
     /// What it was opened as.
@@ -2728,6 +2893,24 @@ pub struct AppState {
     /// The shared sd-server settings `servers` were opened with.
     pub servers_opened_with: Option<increart_core::config::SdServerConfig>,
     pub engine_running: bool,
+    /// The Test window of a server the app connects to.
+    pub server_test: Option<ServerTest>,
+    /// Tests started, numbering them.
+    pub server_tests: u32,
+    /// The **Validate servers…** window.
+    pub api_test: Option<ApiTest>,
+    /// It shows its advanced view (the cases as a tree, each one's log),
+    /// not the basic one (a preset's validation, step by step, and its
+    /// summary); kept for the session.
+    pub api_test_advanced: bool,
+    /// Which server presets passed the suite's basic cases (the stamps
+    /// file at `validations_path`).
+    pub validations: increart_core::validation::Validations,
+    /// The stamps file ([`increart_core::validation::path`]); None (as in
+    /// tests): nothing read or noted, and opening a preset doesn't ask.
+    pub validations_path: Option<PathBuf>,
+    /// `increart-apitest` is there to run (beside the app, or on PATH).
+    pub suite_found: bool,
     /// Numbers server-opening attempts; reports from older ones are ignored.
     pub open_attempt: u32,
     /// Servers still opening after **Continue in background**.
@@ -2895,11 +3078,11 @@ pub struct AppState {
     pub start_project: Option<StartProjectDialog>,
     /// Naming a project's plain Duplicate.
     pub duplicate: Option<DuplicateDialog>,
-    /// Naming the project for Promote.
-    pub promote: Option<PromoteDialog>,
-    /// Where the last promote put its project (this session), the next
+    /// Naming the project for New project from ideas.
+    pub from_ideas: Option<FromIdeasDialog>,
+    /// Where the last New project from ideas put its project (this session), the next
     /// one's first guess.
-    pub promote_last: Option<PathBuf>,
+    pub from_ideas_last: Option<PathBuf>,
     /// Saving inbox ideas to the input library.
     pub save_idea: Option<SaveIdeaDialog>,
     /// Where the last Save to input library went (this session), the next
@@ -3087,6 +3270,13 @@ impl AppState {
             server_models: BTreeMap::new(),
             servers_opened_with: None,
             engine_running: false,
+            server_test: None,
+            server_tests: 0,
+            api_test: None,
+            api_test_advanced: false,
+            validations: Default::default(),
+            validations_path: None,
+            suite_found: false,
             open_attempt: 0,
             background: None,
             start_log: vec![],
@@ -3154,8 +3344,8 @@ impl AppState {
             ref_picker: None,
             ref_picker_source: None,
             title_edit: None,
-            promote: None,
-            promote_last: None,
+            from_ideas: None,
+            from_ideas_last: None,
             save_idea: None,
             save_idea_last: None,
             job_info: None,
@@ -3254,7 +3444,7 @@ impl AppState {
                 || i.tags.iter().any(|t| t.to_lowercase().contains(&q)))
                 && (!f.starred_only || i.starred)
                 && (!f.with_images_only || !i.images.is_empty())
-                && f.promoted.is_none_or(|p| p == !i.projects.is_empty())
+                && f.used_in_project.is_none_or(|p| p == !i.projects.is_empty())
         });
         v.sort_by(|a, b| b.idea.id.cmp(&a.idea.id));
         if f.most_used {
@@ -4495,9 +4685,12 @@ impl AppState {
                     .map(|r| r.live_seeds().count() as u64)
                     .sum::<u64>()
                     .saturating_sub(images as u64);
-                let mut s = format!("{folders} folder(s), {} project(s), {images} image link(s)", ps.len());
+                let mut s = format!(
+                    "{folders} folder(s); {} project(s) with {images} image link(s) will be discarded (restorable)",
+                    ps.len()
+                );
                 if pending > 0 {
-                    s.push_str(&format!("; {pending} pending seed(s) will not be generated"));
+                    s.push_str(&format!("; {pending} pending seed(s) won't be generated unless restored"));
                 }
                 s
             }
@@ -4515,6 +4708,14 @@ impl AppState {
                 format!("{n} link(s); the images stay")
             }
         }
+    }
+
+    /// Discarded output images (every project's `discarded/`), newest
+    /// first.
+    pub fn discarded_outputs(&self) -> Vec<&OutputLink> {
+        let mut v: Vec<_> = self.index.projects.iter().flat_map(|p| &p.discarded).collect();
+        v.sort_by(|a, b| b.image.id.cmp(&a.image.id));
+        v
     }
 
     /// Every output image, any rating or none, newest first.

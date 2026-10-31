@@ -3,7 +3,7 @@
 //! library. The GUI talks to it with [`Engine::queue_run`] /
 //! [`Engine::cancel_run`] and reads [`Event`]s.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -59,6 +59,12 @@ pub struct EngineOptions {
     pub max_in_flight: usize,
     pub backoff_base: Duration,
     pub warm_up: bool,
+    /// How long a warm-up image may take before it's cancelled and counted
+    /// as a failed warm-up.
+    pub warm_up_limit: Duration,
+    /// How long no job on a server may move (no step, no status change)
+    /// before that's said.
+    pub stall_warning: Duration,
     pub order: Order,
     /// Loads on this machine don't wait for free RAM (see
     /// [`Engine::set_skip_ram_check`]).
@@ -74,6 +80,8 @@ impl Default for EngineOptions {
             max_in_flight: 2,
             backoff_base: Duration::from_secs(2),
             warm_up: true,
+            warm_up_limit: Duration::from_secs(20 * 60),
+            stall_warning: Duration::from_secs(10 * 60),
             order: Order::Spread,
             skip_ram_check: false,
         }
@@ -145,10 +153,16 @@ enum Cmd {
 
 enum Report {
     Probed(Result<ModelStatus, ApiError>),
-    /// What it can load (`None`: it couldn't say).
+    /// What it can load, or why it couldn't say (`None`: not asked, it
+    /// didn't answer its probe).
     Listed {
         round: u64,
-        loadable: Option<Loadable>,
+        loadable: Option<Result<Loadable, ApiError>>,
+    },
+    /// No job of its moved for this long: each job's ID and status.
+    Stalled {
+        jobs: Vec<(Ticket, String, &'static str)>,
+        quiet: Duration,
     },
     /// A job was seen generating (not waiting in the server's queue).
     Generating {
@@ -222,11 +236,11 @@ impl Engine {
                 let (ctx, crx) = mpsc::channel();
                 let client = ep.client.clone();
                 let report = tx.clone();
-                let poll = opts.poll_interval;
+                let (poll, limits) = (opts.poll_interval, (opts.warm_up_limit, opts.stall_warning));
                 let skip = skip_ram_check.clone();
                 std::thread::Builder::new()
                     .name(format!("sd-server {}", ep.name))
-                    .spawn(move || worker(i, client, crx, report, poll, skip))?;
+                    .spawn(move || worker(i, client, crx, report, poll, limits, skip))?;
                 Ok(ctx)
             })
             // (failing, the workers started end: their senders are dropped)
@@ -252,6 +266,7 @@ impl Engine {
             logs: HashMap::new(),
             load_started: vec![],
             body_logged: HashSet::new(),
+            troubled: vec![],
             events: etx,
             notify,
         };
@@ -340,6 +355,8 @@ struct Coordinator {
     load_started: Vec<Option<Instant>>,
     /// Runs whose request body is in their log (the first seed's).
     body_logged: HashSet<Id>,
+    /// Servers whose failing was said (once, until they answer again).
+    troubled: Vec<bool>,
     events: Sender<Event>,
     notify: Option<Box<dyn Fn() + Send>>,
 }
@@ -361,6 +378,7 @@ impl Coordinator {
         self.waiting = vec![None; self.servers.len()];
         self.listed = vec![None; self.servers.len()];
         self.load_started = vec![None; self.servers.len()];
+        self.troubled = vec![false; self.servers.len()];
         loop {
             match rx.recv_timeout(Duration::from_millis(250)) {
                 Ok(Msg::Shutdown) | Err(RecvTimeoutError::Disconnected) => return,
@@ -422,6 +440,20 @@ impl Coordinator {
         for run in runs {
             self.log(run, Some(server), text);
         }
+    }
+
+    /// A server failed at `what`: said once (a problem, and in the logs of
+    /// its runs) until it [answers](Self::answered) again; the engine
+    /// keeps trying meanwhile.
+    fn trouble(&mut self, s: ServerIdx, what: &str) {
+        self.log_server(s, what);
+        if !std::mem::replace(&mut self.troubled[s], true) {
+            self.emit(Event::Problem(format!("{}: {what}", self.servers[s].name)));
+        }
+    }
+
+    fn answered(&mut self, s: ServerIdx) {
+        self.troubled[s] = false;
     }
 
     /// Logs a line about a ticket's seed.
@@ -521,7 +553,11 @@ impl Coordinator {
                 match body {
                     Ok(body) => {
                         if self.body_logged.insert(seed.run.clone()) {
-                            self.log(&seed.run, Some(server), &format!("img_gen request: {}", redacted(&body)));
+                            self.log(
+                                &seed.run,
+                                Some(server),
+                                &format!("img_gen request: {}", crate::traffic::redacted(&body)),
+                            );
                         }
                         self.log(&seed.run, Some(server), &format!("seed {}: sent", seed.seed));
                         self.send(server, Cmd::Submit { ticket, body })
@@ -578,10 +614,42 @@ impl Coordinator {
                 self.check_done(&run);
             }
             Msg::Report(s, report) => match report {
-                Report::Probed(r) => self.sched.probed(s, r.map(|st| st.loaded()).map_err(drop), now),
+                Report::Probed(r) => {
+                    match &r {
+                        Ok(_) => self.answered(s),
+                        Err(e) => self.trouble(s, &format!("not answering ({e}); trying again after a pause")),
+                    }
+                    self.sched.probed(s, r.map(|st| st.loaded()).map_err(drop), now)
+                }
                 Report::Listed { round, loadable } => {
-                    self.sched.set_loadable(s, loadable);
+                    match loadable {
+                        None => {}
+                        Some(Ok(l)) => {
+                            self.answered(s);
+                            self.sched.set_loadable(s, Some(l));
+                        }
+                        // it has no list: any model may go to it
+                        Some(Err(ApiError::Http { status: 404, .. })) => self.sched.set_loadable(s, None),
+                        // the list it gave before stands (none: any model may go)
+                        Some(Err(e)) => self.trouble(s, &format!("listing its model files failed: {e}")),
+                    }
                     self.listed[s] = Some(round.max(self.listed[s].unwrap_or(0)));
+                }
+                Report::Stalled { jobs, quiet } => {
+                    let list: Vec<String> = jobs
+                        .iter()
+                        .map(|(ticket, id, status)| match self.sched.ticket(*ticket) {
+                            Some((_, seed)) => format!("seed {} as job {id}: {status}", seed.seed),
+                            None => format!("job {id}: {status}"),
+                        })
+                        .collect();
+                    let text = format!(
+                        "none of its jobs has moved for {} min ({}); it may be stuck (Stop now lets the runs go)",
+                        quiet.as_secs() / 60,
+                        list.join(", ")
+                    );
+                    self.log_server(s, &text);
+                    self.emit(Event::Problem(format!("{}: {text}", self.servers[s].name)));
                 }
                 Report::Generating { ticket } => {
                     if self.sched.ticket(ticket).is_some() {
@@ -590,6 +658,7 @@ impl Coordinator {
                     }
                 }
                 Report::Submitted { ticket, id } => {
+                    self.answered(s);
                     self.log_ticket(ticket, s, &format!("queued on the server as job {id}"))
                 }
                 Report::Warmed(r) => {
@@ -635,11 +704,24 @@ impl Coordinator {
                     };
                     self.log_model(&target, Some(s), &text);
                     let result = match r {
-                        Ok(st) if st.loaded().as_ref() == Some(&target) => LoadResult::Ok,
-                        Ok(st) => LoadResult::Broken {
-                            still_loaded: st.loaded(),
-                            why: "it answered the load with another model loaded".into(),
-                        },
+                        Ok(st) if st.loaded().as_ref() == Some(&target) => {
+                            self.answered(s);
+                            LoadResult::Ok
+                        }
+                        Ok(st) => {
+                            // the answer must name the recipe and files asked for, as they were asked
+                            let answered =
+                                serde_json::json!({ "state": st.state, "recipe": st.recipe, "models": st.models });
+                            let asked = serde_json::json!({ "recipe": target.recipe, "models": target.models });
+                            self.emit(Event::Problem(format!(
+                                "{}: asked to load {asked}, it answered {answered}; {} won't go to it",
+                                self.servers[s].name, target.recipe
+                            )));
+                            LoadResult::Broken {
+                                still_loaded: st.loaded(),
+                                why: format!("it answered the load with {answered}"),
+                            }
+                        }
                         Err(ApiError::InvalidModelConfig(m)) => {
                             self.emit(Event::Problem(format!(
                                 "{}: can't load {}: {m}",
@@ -654,7 +736,13 @@ impl Coordinator {
                             )));
                             LoadResult::Broken { still_loaded: None, why: format!("loading it failed: {m}") }
                         }
-                        Err(_) => LoadResult::ServerError,
+                        Err(e) => {
+                            self.trouble(
+                                s,
+                                &format!("loading {} failed: {e}; trying again after a pause", target.recipe),
+                            );
+                            LoadResult::ServerError
+                        }
                     };
                     self.sched.loaded(s, result, now);
                 }
@@ -666,7 +754,8 @@ impl Coordinator {
                             self.sched.finished(ticket, Outcome::Retry);
                         }
                         ApiError::BadRequest(m) => self.fail_seed(ticket, &m),
-                        _ => {
+                        e => {
+                            self.trouble(s, &format!("refused a seed: {e}; trying again after a pause"));
                             self.sched.finished(ticket, Outcome::Retry);
                             self.sched.server_failed(s, now);
                         }
@@ -707,8 +796,7 @@ impl Coordinator {
                     }
                 }
                 Report::PollFailed(e) => {
-                    self.log_server(s, &format!("asking for its jobs failed: {e}; their seeds go back to the queue"));
-                    self.emit(Event::Problem(format!("{}: {e}", self.servers[s].name)));
+                    self.trouble(s, &format!("asking for its jobs failed: {e}; their seeds go back to the queue"));
                     self.sched.server_failed(s, now);
                 }
             },
@@ -834,11 +922,16 @@ struct Polled {
     /// which steps (for seconds per step).
     first_step: Option<(Instant, u32, u32)>,
     latest_step: Option<(Instant, u32)>,
+    /// When last polled.
+    seen: Option<Seen>,
 }
+
+/// A job's status, place in the server's queue and `(pass, step)`.
+type Seen = (&'static str, i64, Option<(u32, u32)>);
 
 impl Polled {
     fn new(ticket: Ticket, id: String) -> Polled {
-        Polled { ticket, id, last: None, generating: false, first_step: None, latest_step: None }
+        Polled { ticket, id, last: None, generating: false, first_step: None, latest_step: None, seen: None }
     }
 
     fn step_seen(&mut self, pass: u32, step: u32) {
@@ -942,30 +1035,46 @@ fn worker(
     cmds: Receiver<Cmd>,
     reports: Sender<Msg>,
     poll: Duration,
+    (warm_up_limit, stall_warning): (Duration, Duration),
     skip_ram_check: Arc<AtomicBool>,
 ) {
     let report = |r: Report| reports.send(Msg::Report(server, r)).is_ok();
     let mut jobs: Vec<Polled> = vec![];
     let mut cancelled_early: Vec<Ticket> = vec![];
+    // commands that came during a warm-up
+    let mut pending: VecDeque<Cmd> = VecDeque::new();
+    // when one of its jobs last moved (a status or step seen new), and
+    // whether the quiet since was said
+    let (mut moved, mut stall_told) = (Instant::now(), false);
+    // its longest job yet: the quiet said is at least 3 of those (without
+    // previews a job's steps aren't seen)
+    let mut longest = Duration::ZERO;
     loop {
-        let cmd = match cmds.recv_timeout(if jobs.is_empty() { Duration::from_secs(3600) } else { poll }) {
-            Ok(c) => Some(c),
-            Err(RecvTimeoutError::Timeout) => None,
-            Err(RecvTimeoutError::Disconnected) => return,
+        let cmd = match pending.pop_front() {
+            Some(c) => Some(c),
+            None => match cmds.recv_timeout(if jobs.is_empty() { Duration::from_secs(3600) } else { poll }) {
+                Ok(c) => Some(c),
+                Err(RecvTimeoutError::Timeout) => None,
+                Err(RecvTimeoutError::Disconnected) => return,
+            },
         };
         let alive = match cmd {
             None => true,
             // the list first: a server is picked once it's probed
             Some(Cmd::Probe { round }) => {
-                report(Report::Listed { round, loadable: client.loadable().ok() })
-                    && report(Report::Probed(client.model_status()))
+                let status = client.model_status();
+                let loadable = status.is_ok().then(|| client.loadable());
+                report(Report::Listed { round, loadable }) && report(Report::Probed(status))
             }
-            Some(Cmd::List { round }) => report(Report::Listed { round, loadable: client.loadable().ok() }),
+            Some(Cmd::List { round }) => report(Report::Listed { round, loadable: Some(client.loadable()) }),
             Some(Cmd::Load(model)) => match load(&client, &model, &skip_ram_check, &report) {
                 Some(r) => report(Report::Loaded(r)),
                 None => false,
             },
-            Some(Cmd::WarmUp(body)) => report(Report::Warmed(warm_up(&client, &body, poll))),
+            Some(Cmd::WarmUp(body)) => match warm_up(&client, &body, poll, warm_up_limit, &cmds, &mut pending) {
+                Some(r) => report(Report::Warmed(r)),
+                None => false,
+            },
             Some(Cmd::Submit { ticket, body }) => {
                 if let Some(p) = cancelled_early.iter().position(|t| *t == ticket) {
                     cancelled_early.remove(p);
@@ -999,6 +1108,9 @@ fn worker(
             let ticket = jobs[i].ticket;
             match client.job(&jobs[i].id) {
                 Ok(job) if job.status.is_terminal() => {
+                    if let Some(s) = job.elapsed_s().filter(|s| s.is_finite() && *s > 0.0) {
+                        longest = longest.max(Duration::from_secs_f64(s));
+                    }
                     let step_s = jobs.remove(i).step_s();
                     if !report(Report::Finished { ticket, job: Box::new(job), step_s }) {
                         return;
@@ -1007,6 +1119,11 @@ fn worker(
                 }
                 Ok(job) => {
                     let j = &mut jobs[i];
+                    let seen = (job.status_name(), job.queue_position, job.preview.as_ref().map(|p| (p.pass, p.step)));
+                    if j.seen != Some(seen) {
+                        j.seen = Some(seen);
+                        (moved, stall_told) = (Instant::now(), false);
+                    }
                     if !j.generating && job.status == JobStatus::Generating {
                         j.generating = true;
                         if !report(Report::Generating { ticket }) {
@@ -1038,6 +1155,15 @@ fn worker(
             }
             i += 1;
         }
+        if jobs.is_empty() {
+            (moved, stall_told) = (Instant::now(), false);
+        } else if !stall_told && moved.elapsed() >= stall_warning.max(longest * 3) {
+            stall_told = true;
+            let list = jobs.iter().map(|j| (j.ticket, j.id.clone(), j.seen.map_or("not seen", |(s, ..)| s))).collect();
+            if !report(Report::Stalled { jobs: list, quiet: moved.elapsed() }) {
+                return;
+            }
+        }
     }
 }
 
@@ -1047,27 +1173,47 @@ fn model_text(m: &ModelKey) -> String {
     format!("{} ({})", m.recipe, files.join(", "))
 }
 
-/// A request body as logged: base64 data (no spaces, long) as its length.
-fn redacted(v: &Value) -> Value {
-    match v {
-        Value::String(s) if s.len() > 200 && !s.contains(' ') => Value::String(format!("<{} characters>", s.len())),
-        Value::Array(a) => Value::Array(a.iter().map(redacted).collect()),
-        Value::Object(o) => Value::Object(o.iter().map(|(k, v)| (k.clone(), redacted(v))).collect()),
-        v => v.clone(),
-    }
-}
-
-fn warm_up(client: &Client, body: &Value, poll: Duration) -> Result<(), ApiError> {
-    let id = client.img_gen(body)?;
+/// Generates the warm-up image: an error when its job fails, or when it
+/// isn't done after `limit` (cancelled then: a server that never ends it
+/// would keep the worker for good). Commands coming meanwhile wait in
+/// `pending`; `None` once the engine is gone.
+fn warm_up(
+    client: &Client,
+    body: &Value,
+    poll: Duration,
+    limit: Duration,
+    cmds: &Receiver<Cmd>,
+    pending: &mut VecDeque<Cmd>,
+) -> Option<Result<(), ApiError>> {
+    let id = match client.img_gen(body) {
+        Ok(id) => id,
+        Err(e) => return Some(Err(e)),
+    };
+    let since = Instant::now();
     loop {
-        let job = client.job(&id)?;
+        let job = match client.job(&id) {
+            Ok(job) => job,
+            Err(e) => return Some(Err(e)),
+        };
         match job.status {
-            JobStatus::Completed => return Ok(()),
+            JobStatus::Completed => return Some(Ok(())),
             JobStatus::Failed | JobStatus::Cancelled => {
                 let msg = job.error.as_ref().map(|e| e.message.clone()).unwrap_or_default();
-                return Err(ApiError::BadRequest(format!("warm-up job {}: {msg}", job.status_name())));
+                return Some(Err(ApiError::BadRequest(format!("warm-up job {}: {msg}", job.status_name()))));
             }
-            _ => std::thread::sleep(poll),
+            _ if since.elapsed() >= limit => {
+                let _ = client.cancel(&id);
+                let why = format!("warm-up job still {} after {limit:?}, cancelled", job.status_name());
+                return Some(Err(ApiError::Transport(why)));
+            }
+            _ => match cmds.recv_timeout(poll) {
+                Ok(c) => pending.push_back(c),
+                Err(RecvTimeoutError::Timeout) => {}
+                Err(RecvTimeoutError::Disconnected) => {
+                    let _ = client.cancel(&id);
+                    return None;
+                }
+            },
         }
     }
 }

@@ -8,11 +8,15 @@ simulated. Retaken by `scripts/make-readme-gallery.sh`; don't edit by hand.
 
 ![Set up servers](gallery/server-wizard.webp)
 
+**Validate servers.** Before a preset is first used, a few minutes of checks that IncreArt and its servers work together: each server answers, lists its models and makes a small image, then a short run goes through all of them. What fails comes with what to try.
+
+![Validate servers](gallery/validate-servers.webp)
+
 **Home.** Where the app opens: how ideas become finished images, step by step, each with its tab, its keys and what's waiting there. Start a new project (it asks for reference images too), write an idea, import images or open the drop folder.
 
 ![Home](gallery/home.webp)
 
-**Idea inbox.** Ideas come in as text, images or both: typed in, imported, or saved into the drop folder from a browser. Save each one to the input library, discard it or promote it.
+**Idea inbox.** Ideas come in as text, images or both: typed in, imported, or saved into the drop folder from a browser. Save each one to the input library, discard it or make a new project from it.
 
 ![Idea inbox](gallery/idea-inbox.webp)
 

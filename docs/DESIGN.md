@@ -19,7 +19,7 @@ folded into this document; each has a writeup.
 ## Goals
 
 - An **input review queue**: ideas (text, images, or both) collected into an
-  inbox, triaged with the same keyboard flow, and promoted into projects.
+  inbox, triaged with the same keyboard flow, and made into projects.
 - Projects containing runs of many seeds, generated across both GPUs.
 - Text-to-image **and** edit with reference images (Qwen-Image 2.1 `ref_images`).
 - **Transparent (RGBA) output** as a first-class option, preserved end to end.
@@ -45,7 +45,7 @@ The app is built around two symmetric queues, each feeding a library:
 ```
             ┌──────────────── R / I (output → input) ◄───────────────┐
             ▼                                                        │
-ideas ──► INPUT QUEUE ──review──► INPUT LIBRARY ──promote (P)──► PROJECT
+ideas ──► INPUT QUEUE ──review──► INPUT LIBRARY ──new project (P)──► PROJECT
 (text,    (Idea inbox)            (kept ideas,                    │ runs × seeds
  images,                           starred shortlist,             ▼ (both GPUs)
  drop                              ref images)              OUTPUT QUEUE ──review──► OUTPUT LIBRARY
@@ -56,7 +56,7 @@ ideas ──► INPUT QUEUE ──review──► INPUT LIBRARY ──promote (P
   rates with `1`/`2`/`3` (or `G`/`N`/`B`); the Idea inbox has two verdicts,
   save to input library (`1`/`2`/`S`) and discard (`3`/`B`); both take arrows
   and `Ctrl+Z`. (`Space`
-  differs: it promotes an idea in the Idea inbox and toggles grid / single in
+  differs: it makes a project from an idea in the Idea inbox and toggles grid / single in
   Review.) (On the
   input side the folder records keep vs. discard; the star is a flag in
   `idea.rsn`, so kept ideas can live in user folders — see Input library
@@ -348,7 +348,8 @@ asks among them):
   asked* when another chat server is there) and **Vision** (whether those
   see the reference images: ✓ with an mmproj, *text only* started without
   one, *assumed* when it can't be told, as for a server connected to; the
-  images are sent then). The presets list shows the same in a line under
+  images are sent then; to a text-only one they aren't, a KoboldCpp image
+  server's chat side included). The presets list shows the same in a line under
   each preset ("images: kobold, proxy · text: PE · vision: PE", or "·
   no prompt enhance"), and the top bar's server tooltips say which model
   presets each image server can generate (from its model list) and
@@ -1027,12 +1028,12 @@ it as a new entry.
 
 ```
 Inbox ── Idea (unreviewed) ──review──► Input library (kept ideas + ref images)
-                                            │ promote (one or many ideas)
+                                            │ new project (one or many ideas)
                                             ▼
 Project ─┬─ Run (prompt template, params, refs, N seeds)
          │    └─ Revision (edited params; new seeds go here)
          │         └─ Item (one seed → one image) ──review──► Output library
-         └─ sources: the ideas it was promoted from
+         └─ sources: the ideas it was made from
 ```
 
 ### Seeds
@@ -1102,7 +1103,7 @@ An `Idea` is a small folder: `idea.rsn` plus any attached images.
   with its origin: `Manual` or `Rewritten { model, system_prompt_hash }`),
   tags, source (`Manual`, `Clipboard`, `DroppedFile { original_path }`,
   `InboxFolder`, `FromOutput { image: ImageRef }`), created time,
-  `projects: Vec<ProjectId>` it has been promoted into, `starred: bool`.
+  `projects: Vec<ProjectId>` made from it, `starred: bool`.
 - Attached images live in the input image store
   (`input_images/<image-id>.png`, see Image stores), and the same picture
   used by several ideas and as a ref is stored once. `idea.rsn` lists the
@@ -1135,33 +1136,32 @@ moves it to `input/discarded/`:
 | good | keep, best | **keep**, starred: shortlist for new projects |
 | neutral | keep | **keep** in the input library |
 | bad | reject (out of the way, still recoverable) | **discard** (`input/discarded/`, still recoverable) |
-| `P` / `Space` | — | **promote**: new project (or add to an open one) seeded with the idea's text as prompt and its images as refs |
+| `P` / `Space` | — | **new project** from the idea (or add to an open one) seeded with the idea's text as prompt and its images as refs |
 | `W` | — | **rewrite** the idea's text with the PE model (adds a variant) |
 
-Promoting always asks for the new project's name first (an idea's title
-needn't suit a project): the first idea title that is a valid, free name is
-the guess (numbered when taken), else the field is empty; an invalid or taken
-name is refused. **Add & promote** in the New idea form asks the same way and
-keeps the draft until the name is given. By default the project goes in a new
-folder of its own name (**In a new folder of the same name**, ticked; the
-folder follows the name as it is typed); untick it to put the project in the
-location itself. The dialog shows where the project will go
-(`→ projects/clients/acme/Fox cafe/Fox cafe`); **Create here** (Enter) makes it
-there. **Choose location…** is a second step: a tree of the project folders
-(with a filter) to pick from, and the new folder in it, named in place (renamed
-there it no longer follows the project's name, and the step 1 box says
-"In a new folder “…”"; ✕ takes it away, **New folder in "…"** brings it back).
-It is only made on Create, and an existing folder of that name, in any case,
-is used. **Back** returns to the name. The first location is where the last
-promote went (this session), if that folder still exists, else the one below;
-after a project in its own folder, that is the folder's parent (so projects
-don't nest).
+**New project from idea** always asks for the new project's name first (an
+idea's title needn't suit a project): the first idea title that is a valid,
+free name is the guess (numbered when taken), else the field is empty; an
+invalid or taken name is refused. **Add & new project…** in the New idea form
+asks the same way and keeps the draft until the name is given. The dialog has
+the save dialog's layout. Left, the **Folder**: a tree of the project folders
+(with a filter) and, under it, the new folder to make in the one chosen. By
+default the project goes in a new folder of its own name (it follows the name
+as it is typed; renamed there, it no longer does); ✕ takes it away (the
+project goes in the folder itself) and **New folder** brings it back, named
+after the project. It is only made on Create, and an existing folder of that
+name, in any case, is used. Right, the **Project name** (it has the focus as
+the dialog opens; a field clicked keeps it) and where the project will be made
+(`projects/clients/acme/Fox cafe/Fox cafe`); **Create** (Enter) makes it
+there. The first folder is where the last project from ideas went (this
+session), if that folder still exists, else the top level; after a project in
+its own folder, that is the folder's parent (so projects don't nest).
 
-Promoting several selected ideas at once makes one project with all of them
+A new project from several selected ideas at once is one project with all of them
 as sources (e.g. a style image from one idea + a subject from another). An
-idea with several variants can be promoted as one run per variant.
+idea with several variants can become one run per variant.
 
-Promoted images become `ref_images`, never an implicit `init_image`;
+An idea's images become the project's `ref_images`, never an implicit `init_image`;
 `init_image` is only sent for an explicit Edit run.
 
 ### Output → input
@@ -1408,11 +1408,12 @@ WebP is chosen or WebP files exist, so an older IncreArt, which can't read
 them, refuses to open it instead of seeing missing images. Converting back
 to PNG returns it to format 1.
 
-**Clean up.** Deleting a project or a discarded idea only removes links, so
-store images can become unreferenced. A **Clean up library** command (never
-automatic) marks every image still referenced (links, `idea.rsn` images,
-`run.rsn` refs, recipes' `refs` / `init` / `parent`, `FromOutput` sources)
-and moves the rest to the system trash. An input image used as a ref by any
+**Clean up.** Deleting a discarded project or idea for good only removes
+links, so store images can become unreferenced. A **Clean up library**
+command (never automatic) marks every image still referenced (links, those
+of discarded projects too, `idea.rsn` images, `run.rsn` refs (discarded
+projects' too, so a restore finds them), recipes' `refs` / `init` /
+`parent`, `FromOutput` sources) and moves the rest to the system trash. An input image used as a ref by any
 kept output therefore survives even after its idea is gone.
 
 ## Scheduling (same as Yue2, plus model switching)
@@ -1485,6 +1486,26 @@ its details window, and for every run at once in the Jobs header:
   stuck the run for every server). A model no server can take is said
   once in the messages and in its runs' logs, with each server's reason
   ("no server can load krea2, so its runs wait (kobold: …; proxy: …)").
+  A list that fails (not a 404: no list there) leaves the one before; it
+  had made the server one that may have anything. A KoboldCpp started
+  elsewhere, matched by its running file's name alone, goes after a
+  server whose list has the files: it takes the model only once none
+  that lists them is left (a load there failed). Its file of that name may
+  be another one (a user's connected KoboldCpp took the runs of an
+  sd-server proxy's model and never finished them).
+- **A failing server is said**: one not answering its probe, failing to
+  list its files, to load (not refusing: an error, a 5xx), to take a seed
+  or to say how its jobs are is said once in the messages (and the logs
+  of its runs there) until it answers again; the engine retries
+  meanwhile, as before, when that was silent. A load answered with
+  another model than asked says both ("asked to load {recipe, models},
+  it answered {state, recipe, models}"): the answer must name the recipe
+  and the files as asked.
+- **Jobs that don't move**: when none of a server's jobs has changed
+  (status, place in its queue, step) for 10 minutes, or 3 times its
+  longest job yet if more (previews off, a job's steps aren't seen), that
+  is said once, each job with its ID and status; Stop now lets the runs
+  go.
 - **Generation log**: each run's `generation.log` (next to its `run.rsn`)
   has a timestamped line, tagged with the server, for everything the
   engine does for it: queued, which server loads its model (and why not
@@ -1514,7 +1535,10 @@ its details window, and for every run at once in the Jobs header:
   the wait and the message. Remote servers load freely.
 - **Warm-up**: after launch or load, each server runs one small throwaway job
   (e.g. 512², 1 step) so lazy weight loading doesn't land on the first real
-  seed.
+  seed. One not done after 20 minutes is cancelled and counts as a failed
+  warm-up (a server that never ends it had kept its worker for good, its
+  runs waiting with no word); commands coming meanwhile wait for it, and
+  the engine closing ends the wait.
 
 32 GB per GPU fits the int8 diffusion model + int8 text encoder;
 `--offload-to-cpu` is a per-server config option if it doesn't (on ROCm it
@@ -2228,8 +2252,8 @@ out as one image.
 
 - **Ideas**: the Idea inbox Grid picks ideas the same way (Ctrl+click,
   Shift+click, a box, Ctrl+A, Esc; numbered in pick order). While any are
-  picked, a bar shows **N picked · Tile… · Promote… · Save to input library… ·
-  Discard · Clear**, 1/2/S save them all (one dialog, below) and 3/B discard them, P promotes them and T
+  picked, a bar shows **N picked · Tile… · New project… · Save to input library… ·
+  Discard · Clear**, 1/2/S save them all (one dialog, below) and 3/B discard them, P makes a project from them and T
   tiles them (without picks the keys act on the cursor's idea, as before).
   The Input library's selection gains Shift+click (a range) and the box;
   with several selected the same bar (no Save / Discard) is shown above the
@@ -2398,6 +2422,154 @@ in the app's state folder (`$XDG_STATE_HOME/increart` when set, else
 - What a server writes (its output and errors, one stream) is timed as it
   comes: each line starts `HH:MM:SS.mmm `. A server left running when the
   app quits (`leave_running`) writes to the file itself, untimed.
+- **Server traffic** (Server settings: **Log server traffic**, or
+  `INCREART_TRAFFIC_LOG=1` for one start): `server-traffic.log` there
+  gets every request to the image servers, sd-server's API and
+  KoboldCpp's alike, connected-to ones included: time, method, URL,
+  status and time taken, the body sent and the answer (base64 data as its
+  length, a body cut after 4000 characters, `server-traffic-previous.log`
+  past 8 MB). A GET answered as the last time isn't written again; the
+  next different answer says "(after N answers as the one before)". For
+  finding what a server, such as a proxy in front of sd-server, does
+  wrong: a user's proxy answered nothing and IncreArt said nothing either.
+  The Logs window has the same checkbox.
+- **Testing a server**: a server the app connects to (sd-server at, and a
+  KoboldCpp connected to) has **Test** in the preset editor. It makes the
+  engine's calls one by one through the same client, each a step with
+  what came back: it answers (capabilities), its model list (and which
+  model presets it can load, and why not the others), its status, then it
+  loads a model preset (the answer must name it), makes a small image
+  (the warm-up's: a PNG must come back) and cancels a job (it must end
+  cancelled). A step that fails skips the rest, saying why; one that works
+  but not as IncreArt needs (no list: any model may go to it) is a
+  warning. With the engine using that server it stops after the status.
+  **Stop** cancels its job on the server; **Copy** gives the steps as text,
+  to send to whoever runs the server; **Traffic log…** opens the traffic
+  log. A test's traffic is always logged, the log setting on or not, each
+  line tagged `[test <server>]`.
+- **Validating servers** (`increart-apitest`, beside the app in each
+  release; see below).
+
+### Validating servers
+
+`increart-apitest` is a command-line suite that tests a config's server
+presets as the app uses them, case by case; the startup Servers screen's
+**Validate servers…** is a window around it. The suite starts the servers
+it needs itself, opening each preset's servers together as the app does,
+so the button is there only while no servers are open or opening, and
+nothing else uses the GPUs. Started servers are stopped when the suite
+ends, is stopped, or loses the app (its stdin closing).
+
+- Its cases, by ID: `preset/server/group.key` for one server,
+  `preset/group.key` for the preset's servers together.
+  - **together**: `open` (always first: a port already taken is said, and
+    nothing is started), `routing` (each model preset has a server, by
+    listed files, by a running file of that name, or "may get it"),
+    `parallel`, `pe-with-images`, `end-to-end` (a run through the engine
+    in a scratch library) and `failover` (the same with a started server
+    stopped after its first image: the rest go to the others).
+  - **connect**: `capabilities`, `latency`, `parallel-clients`,
+    `poll-burst`, `unknown-job` (a 404, not an error).
+  - **models**: `list`, `status`, `load-each` (the answer must name what
+    was asked), `load-missing` (a clean refusal).
+  - **generate**: `basic` (the Test button's steps), `txt2img`,
+    `same-seed`, `reference`, `large-request` (about 12 MB of reference
+    images: a proxy's body limit shows here), `lora`, `custom-sigmas`.
+  - **jobs**: `queue`, `cancel-running`, `cancel-queued`, `after-cancel`,
+    `poll-finished`.
+  - **prompt-enhance** (chat servers): `answers`, `chat`, `stop`, `vision`.
+- A case that isn't for the setup (no LoRA in any model preset, a
+  text-only chat server, failover with nothing started) is **n/a**, saying
+  why; one whose server didn't open is **skipped**. Outcomes: pass,
+  warning (works, not as well as it could), fail, skipped, n/a. Each is
+  `light` (asks only), `loads a model` or `GPU time`.
+- `increart-apitest list [--json]` lists the cases;
+  `increart-apitest run` runs them: `--config` (default
+  `$INCREART_CONFIG`, else the app's), `--preset` (again for more),
+  `--cases` (comma-separated, `*` for any text: `"*/jobs.*"`), `--light`,
+  `--basic`, `--url <url> --kind sd-server|koboldcpp|chat` (one running
+  server, no preset), `--out`, `--no-stamp`, `--verbose`, `--jsonl` (events
+  as JSON lines, a `stop` line on stdin stops: what the app reads). Exit
+  status: 0 all passed, 1 a failure, 2 warnings only, 3 it couldn't run.
+- **Basic validation**: the basic cases are `together.open`,
+  `connect.capabilities`, `models.list`, `generate.txt2img` (one small
+  image per image server), `prompt-enhance.answers`, `together.routing`
+  and `together.end-to-end`: a few minutes, the first image the longest.
+  A run with all of a preset's basic cases (`--basic`, **Basic only**,
+  **Run all**) notes it in `validated.json` in the app's state folder: a
+  stamp with the preset, its settings' fingerprint (a hash of its servers
+  and, for a started sd-server, the sd-server binary, model folders and
+  arguments; not its name, nor the model presets), the time, passed
+  (warnings allowed) or failed (a case failed or skipped), the basic
+  cases' counts, what each server said it runs, the suite's version, the
+  run's zip and the SHA-256 of its `report.json`. `--no-stamp` and `--url`
+  note nothing. Each preset keeps its newest 5. A stamp holds for the
+  settings it was run with: editing the preset, or the sd-server settings
+  a started one uses, makes it not validated again. Its seal (a hash of its
+  fields) catches a stamp edited by hand; it's no secret (the source is
+  public), so what shows a setup was validated is the report the stamp
+  names, with its hash: a bug report carries `validated.json` and each
+  preset's newest report zip (up to 16 MB each).
+- On the Servers screen each preset has a mark: **validated** (green, the
+  date and any warnings on hover), **validation failed** (red), or **not
+  validated** (never, or not since its settings changed). With no servers
+  open, clicking it validates the preset: the window opens on it and runs
+  its basic cases. Opening a preset not validated asks once per settings
+  (the fingerprints asked are noted in `validated.json` too) **Validate
+  these servers first?**, strongly recommending it: **Validate now** (the
+  same as the mark), **Open without**, or Cancel. Not asked while servers
+  are open (the suite can't run then), when the suite isn't beside the
+  app, or for `--servers`.
+- Every request of a case and its answer is logged to the case (the same
+  lines as the traffic log, tagged with the case). The `--out` folder gets
+  `report.md` (written to be handed to a person or an LLM: what the app
+  expects of each call, each case's result, log and traffic), `report.json`,
+  `traffic.log` and the started servers' logs, zipped beside it. The app's
+  runs go to `apitest/<date-time>` in the log folder.
+- The window opens on its basic view, for someone who doesn't know the
+  suite: one preset (**Server preset**, presets only) and its mark; before
+  a run, what validating does and its basic cases as plain steps ("gpu0:
+  makes a small image"), **Start validation** (its basic cases, as
+  **Validate now**) and **Skip and open**; during it, step k of n, a
+  progress bar, the time so far and the steps with their marks, **Stop**;
+  after, a summary: "<preset> works with IncreArt" (any warnings listed
+  under Worth knowing), "N problems found" (What went wrong, then the
+  steps Not checked as what they need failed, and what to do: Copy
+  report, Advanced view), or "Stopped before it finished"; whether the
+  Servers screen now marks it validated, and every step folded below
+  (open when all passed). **Open the preset** (**Open anyway** when
+  something failed) closes the window and opens it, not asking to
+  validate it again; **Run again**, **Copy report**, **Show report zip**.
+  A failure or warning of a common kind gets a **Try:** line under it (in
+  the summary, the advanced view's case, and `report.md`), from what the
+  case said (`apitest::hint`): nothing answering at an address, a server
+  that exits or goes quiet as it starts, a program not found, a 413 body
+  limit, out of memory, files listed but refused, a password, a 404, and a
+  model file no server lists. sd-server only looks in a model directory's
+  standard folders (`diffusion_models/`, `text_encoders/`, `vae/`,
+  `loras/`, `checkpoints/`…), so a file in another (`koboldcpp/`) is said
+  to be invisible to it: expected for a model preset meant for KoboldCpp.
+  **Advanced view…** shows what follows; **Basic view** goes back; the
+  choice is kept for the session.
+- The advanced view: **Server preset** shows one preset's cases only, those for
+  its setup checked and no other preset's (so only its servers start), or
+  **All presets**, the checks as they were; it opens on the last used
+  preset. Check all, Uncheck all, Light only, Basic only, Run all and Rerun failed are
+  of the cases shown. Left, the cases as a tree, preset, then server (or
+  "servers together"), then group; each branch's checkbox checks all in it (half
+  checked: some), its mark the worst of theirs. n/a cases start unchecked.
+  **Check ▾** (Check all, Uncheck all, Light only, Basic only). Right, the case clicked
+  (what it expects, its result, its log and traffic), else the last run's
+  counts and the run's log;
+  it follows the case running until one is clicked. **Run N checked**,
+  **Run all**, **Rerun failed** (failed and skipped), **Stop** (the case
+  going on, then the servers), **Copy report** (`report.md`), **Show
+  zip**, **Copy command** (the same run from a terminal). Close stops a
+  run first. A suite that isn't beside the app is said, with where it
+  comes from.
+- CI runs the suite against servers it starts: `increart-fake-sd-server`
+  (the `fake` feature), increart-core's test fake as a binary taking
+  sd-server's `--listen-ip` and `--listen-port`.
 
 - Each start first adds a line of the app's own to the log:
   `--- IncreArt, <date time>: <command line>` (the environment it set
@@ -2523,10 +2695,13 @@ real directories under `projects/`, so it looks the same in a file manager.
     templates — but **not** its images; copying a folder copies its subtree
     the same way. A pasted name that clashes gets a number suffix. Pasting a
     folder into itself or a descendant is refused.
-  - **Delete…**: confirmation showing the folders, projects and images
-    inside and how many pending seeds will be cancelled, then the whole
-    directory goes to the system trash. That only removes links; the images
-    stay in `output_images/` until **Clean up library**.
+  - **Discard…** (a project) / **Delete…** (a folder): confirmation
+    showing the folders, projects and images inside and how many pending
+    seeds won't be generated. Each project moves to `discarded_projects/`
+    (numbered if the name is taken there) with a `discarded.rsn` noting its
+    name, the folder it was in and when; it leaves the tree, the queue,
+    Review and the Output library, and shows under **Projects → Discarded**.
+    A folder itself goes to the system trash once its projects are out.
   - **Drag and drop** moves, like cut + paste: drop on a folder to move into
     it, on a project to move beside it, or on "All projects" / the empty
     area for the top level. The target is outlined blue, or red when the drop
@@ -2551,8 +2726,8 @@ real directories under `projects/`, so it looks the same in a file manager.
   inside collapsed folders without expanding them. Which folders are
   collapsed is remembered per library in the config
   (`collapsed_folders`); deleted or renamed folders drop out.
-- New projects from Promote land, unless another location is chosen, in a
-  folder of their own name where the last promote went, else at the top level.
+- New projects from ideas land, unless another folder is chosen, in a
+  folder of their own name where the last one went, else at the top level.
 
 ### Input library folders
 
@@ -2581,7 +2756,7 @@ drop and shortcuts (see Project folders). The differences:
 ## GUI
 
 Top-level tabs, in pipeline order after **Home**: **Idea inbox** · **Input library** ·
-**Projects** (Grid · Folder · Generate · Jobs; shows the project count, and
+**Projects** (Grid · Folder · Generate · Jobs · Discarded; shows the project count, and
 ✦ while generating) ·
 **Review** (the output queue) · **Output library**. Review is top-level, like
 the Idea inbox, because it is the busiest screen during batches and works
@@ -2645,35 +2820,41 @@ the keys and mouse buttons go through that view's own history instead.
     image (on hover, or when selected) opens the editor. Hovered or
     selected, the image also shows two buttons along its bottom, as on
     project tiles: here **Save** and **Discard** (`S`/`3`); in the Input
-    library **Promote** and **Add as refs** (Promote alone for a text-only
+    library **New project** and **Add as refs** (New project alone for a text-only
     idea); none in Discarded. They act on that card only; on a small card
     (zoomed out) they're icons, the name on hover (`widgets::cover_buttons`).
     The side panel showing the current idea keeps its buttons pinned to its
-    bottom (here **Save to input library…** / **Discard**, then **Promote**,
+    bottom (here **Save to input library…** / **Discard**, then **New project**,
     **Edit…**, **Copy text**, **Open folder**) and its header at the top;
     the details scroll between. Keys as in the
     table above, plus `Home`/`End` = the first / last idea, `Enter`/`T` = open the **Edit idea** window (title, tags,
     text, variants, images, and a finished PE rewrite's diff with Accept /
-    Reject). Right-click a card, in groups: promote (`P`), edit (`Enter`),
+    Reject). Right-click a card, in groups: new project from idea (`P`), edit (`Enter`),
     rewrite with PE (in the Edit window, so Use changes its text) · save to
     input library / discard (`S`/`3`) · copy
     text, copy image and describe image with PE (its first image) · open
     folder in file manager. (Planned: accept all ready rewrites.)
   - **Save to input library** (the card's Save, the side panel's button,
     the menus, `1`/`2`/`S`; the New idea form's **Add & save to input
-    library…**, for the draft) always asks first, in a modal: the **Name**
-    (the idea's title to start with; renames it; several picked ideas keep
-    theirs and the field is hidden) and the **Folder**, a filterable tree of
-    the input library's folders with **New folder in “…”** (an existing one
-    of that name, any case, is used). It starts in the folder the last save
-    went to (this session). The path it will go to is shown under the tree;
-    **Save** (`Enter`) moves the ideas there unstarred, making the folder;
-    **Cancel** (`Esc`) leaves them in the inbox (the draft in the form).
-    Discard doesn't ask.
+    library…**, for the draft) always asks first, in a modal. Left, the
+    **Folder**: a filterable tree of the input library's folders, **New
+    folder** under it (named in the folder chosen; an existing one of that
+    name, any case, is used). Right, the **Name** (the idea's title to start
+    with; renames it; several picked ideas keep theirs and the field is
+    hidden), and where it's **Saved in**. The name has the focus as it
+    opens, a new folder's name once asked for; neither takes it back from a
+    field clicked since. It starts in the folder the last save went to (this
+    session). **Save** (`Enter`) moves the ideas there unstarred, making the
+    folder; **Save & new project** saves them, then makes a project
+    from them at once, named as the idea (the first valid title of several),
+    where the last project from ideas went, in its own folder (the New project dialog asks
+    when that name won't do; the draft is saved in the folder chosen, not
+    the top level); **Cancel** (`Esc`) leaves them in the inbox (the draft in
+    the form). Discard doesn't ask.
   - **New idea** (`Ctrl+N` from anywhere): title, text, tags, images (drop /
     paste / browse), **Rewrite with PE**. **Add to inbox** (review it later),
     **Add & save to input library…** (asks the name and folder, as below),
-    **Add & promote** (keep it and start a project). The draft is kept while
+    **Add & new project…** (keep it and start a project). The draft is kept while
     switching tabs.
   - **Folder**: the file-manager view (see Projects → Folder) rooted at the
     inbox's own places only: `inbox_drop/` (waiting files, and `imported/`
@@ -2699,22 +2880,22 @@ the keys and mouse buttons go through that view's own history instead.
 - **Input library**: tabs **Grid** (default) · **Folder** (see Projects →
   Folder) · **Discarded** (the same Discarded view as in the Idea inbox). In
   Grid, the left panel holds the filters (tag / starred / text /
-  has-images / promoted-or-not), selection actions, and the library folder
+  has-images / **used in a project** or not), selection actions, and the library folder
   tree (see Input library folders); the grid shows the selected folder's
-  ideas, newest first (or most used first); cards show PE rewrite state like the inbox's. Multi-select → promote
+  ideas, newest first (or most used first); cards show PE rewrite state like the inbox's. Multi-select → new project
   (button or `P`/`Space`); ← → ↑ ↓ and `Home`/`End` select the previous /
   next / first / last idea and show it in the panel, `Ctrl+A` selects all,
   `Enter`/`T` edits; a **Keys** list is pinned at the bottom left; drag an image into a project's reference strip; drag
   cards onto a folder to file them. Right-click a card, in groups as in the
-  inbox: promote, edit, rewrite with PE, add its images as refs to the
+  inbox: new project, edit, rewrite with PE, add its images as refs to the
   current project, star/unstar · back to the Idea inbox, discard · copy
   text, copy image, describe image with PE · open folder in file manager.
   (Planned: accept all ready rewrites.) When the card is part of a multi-selection, the
-  bulk actions (star, promote, rewrite, back to inbox, discard) apply to the
+  bulk actions (star, new project, rewrite, back to inbox, discard) apply to the
   whole selection. A plain click on a card opens the **idea panel** on the
   right: the idea's images (double-click: full size), text, tags, created
   date and folder, what its images were used for, the projects it was
-  promoted into (links), and Edit…, Promote, Add as refs, Copy text, Open
+  **used in** (links), and Edit…, New project, Add as refs, Copy text, Open
   folder pinned to its bottom (the details scroll above them); × closes it. While the panel is closed it opens a moment after
   the click, so a double-click (full size) doesn't open it; while it's
   open, a click shows the clicked idea at once. Ctrl/Shift+click only
@@ -2741,7 +2922,7 @@ the keys and mouse buttons go through that view's own history instead.
   the project's folder only when that holds other projects (here and below)
   and **narrow to siblings** is ticked; otherwise the grid keeps showing what
   it did, if the project is in it, else the project's folder (the one above
-  when the project is alone in it, as Promote's own folders are). After
+  when the project is alone in it, as a project from ideas' own folder is). After
   Back / Forward that last rule decides. Each tile's cover is its best image: highest
   rated (good > neutral > unreviewed > bad), most recent among equals. A
   project with no output image yet shows its references and start images
@@ -2852,6 +3033,15 @@ the keys and mouse buttons go through that view's own history instead.
 - **Messages** (status bar, after the library path): the latest one, with
   "(+N more)" when there are others and ✕ to dismiss it. Clicking it opens
   a popover with every message, newest first, each with ✕, and **Clear all**.
+- **Discarded** (Projects' last tab, with its count): discarded projects,
+  newest first, as tiles (cover, name, rating counts, "from projects/…",
+  when). Hovered, a tile shows **Restore** and **Delete** on its cover;
+  right-click: Restore, Open in file manager, Delete permanently…
+  **Restore** puts the project back in the folder it was in (the top level
+  if that folder is gone), under its name (numbered if taken); its pending
+  seeds generate again. **Delete permanently** (asks first) sends its folder
+  to the system trash; the images stay until Clean up. **Empty
+  discarded…** (asks first) does it for all of them.
 - **Jobs**: per-run progress and per-server state (loading / draining /
   generating), with a live preview frame from `jobs/{id}`. Under **Runs**,
   the order toggle and **Finish & stop all** / **Stop all now** stay put
@@ -2936,7 +3126,8 @@ the keys and mouse buttons go through that view's own history instead.
   library as ref, `I` = new idea from this image, `Ctrl+Z` = undo last review
   action.
 - **Output library**: the place for finished work, as opposed to Projects
-  (where images are made and triaged). Tabs **Grid** (default) · **Folder**.
+  (where images are made and triaged). Tabs **Grid** (default) · **Folder**
+  · **Discarded**.
   The full-height left panel has, from the top: the **search** box with
   **in Images | Project names** under it (Images: an image's title or its
   run's prompt; Project names: narrows the "by project" smart folder to the
@@ -2973,9 +3164,9 @@ the keys and mouse buttons go through that view's own history instead.
     Clicking a tab replaces the filters (sets its ratings, clears text, refs
     and alpha); once the filters are changed the tab shows "•" and clicking
     it again resets them. **Rejected** follows the source, with **Delete these
-    N rejected…** (asks first; the links go to the system trash, the images
-    stay in the store until Clean up) and right-click to re-rate, send back to
-    Review or **Delete permanently…**. **Unreviewed** has **Review them**
+    N rejected…** (asks first; they go to **Discarded**, their seeds not
+    generated again) and right-click to re-rate, send back to Review or
+    **Delete…**. **Unreviewed** has **Review them**
     (Review scoped to the source). Double-clicking an image opens it full
     size over the window (the image preview: click, Esc or a click outside
     closes it; right-click copies it). Selecting an image shows the
@@ -2993,6 +3184,19 @@ the keys and mouse buttons go through that view's own history instead.
     Projects → Folder stays the place for project files (`runs/`,
     `unreviewed/`, triage); the "by project" smart folder is the project
     tree with only the kept images.
+  - **Discarded** (with its count): the images deleted from projects (the
+    Rejected tab's delete, Delete in a folder view), newest first, framed in
+    their rating's colour. Each moves to its project's
+    `discarded/<its rating folder>/`, kept out of the folder views, Review,
+    the queue and the other tabs, and its run records the seed as deleted
+    (not generated again, not a missing output). Hovered, an image shows
+    **Restore** and **Delete**; right-click: Restore, Show in file manager,
+    Delete permanently… **Restore** puts it back in its project, rated as it
+    was, and its seed is no longer deleted (refused if a link of that name is
+    there). **Delete permanently** (asks first) sends the link to the system
+    trash; the image stays until Clean up. **Empty discarded…** (asks first)
+    does it for all of them. Clean up and store conversion count discarded
+    images' links, so a restore finds its image.
   - **Titles**: an output image can be given a title (**Set title…** in the
     Grid's right-click menu, `F2` on the selected image, or the pencil in
     the lineage view). A small dialog edits it: Enter saves, an empty title
@@ -3215,7 +3419,7 @@ calls while the window is minimized or hidden, with a clock of the app's own
   second per write.
 - gui-core flows (`crates/increart-gui-core/tests/flows.rs`): the reducer
   with the real runtime and a real temp library (create library, add /
-  review / restore / promote ideas, queue a run, trees, drop files, review +
+  review / restore / make projects from ideas, queue a run, trees, drop files, review +
   undo) and the server dialog as a pure reducer.
 - The app's screenshot tour (`INCREART_TOUR`, see [gui/README.md](gui/README.md))
   drives every screen through the reducer and saves one PNG per screen.
@@ -3336,7 +3540,7 @@ matrix cores that hipBLAS uses. The same sd-server and int8 model takes
   more to put in it.
 
 - New idea form: which add button is the primary one (Add to inbox, Add &
-  keep, Add & promote)? POC1 shows all three with equal weight.
+  keep, Add & new project)? POC1 shows all three with equal weight.
 - IDs use a separate counter per kind, so the same string can be an idea, a
   run and an image. Keep that, or use one counter across kinds so every ID is
   unique in the library?

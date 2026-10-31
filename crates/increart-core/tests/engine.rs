@@ -15,6 +15,7 @@ use increart_core::engine::{Endpoint, Engine, EngineOptions, Event, Stop};
 use increart_core::model::*;
 use increart_core::sdserver::Client;
 use increart_core::{Id, ImageRef, Library, NewIdea, NewRun, Original, Store, png};
+use serde_json::json;
 
 const FILES: &[(&str, &str)] = &[("diffusion_model", "diffusion_models/q.safetensors"), ("vae", "vae/v.safetensors")];
 
@@ -343,6 +344,115 @@ fn stop_now_lets_go_of_jobs_their_server_never_ends() {
     let lib = s.lib.lock().unwrap();
     let (_, r) = lib.find_run(&run).unwrap();
     assert_eq!(r.cancelled, [Seeds { first: 0, count: 4 }]);
+}
+
+fn problems(events: &[Event], text: &str) -> usize {
+    events.iter().filter(|e| matches!(e, Event::Problem(p) if p.contains(text))).count()
+}
+
+#[test]
+fn a_list_that_fails_keeps_the_one_before() {
+    let s = setup();
+    let ids = |v: &[&str]| Some(v.iter().map(|x| x.to_string()).collect::<Vec<_>>());
+    let a = Fake::start(None);
+    a.with(|st| st.model_files = ids(&["other.safetensors"]));
+    let b = Fake::start(None);
+    b.with(|st| st.model_files = Some(FILES.iter().map(|(_, id)| id.to_string()).collect()));
+    let engine = start(&s, &[&a, &b]);
+    wait_until(|| a.count("/model-files") >= 1 && b.count("/model-files") >= 1, "both listed");
+    std::thread::sleep(Duration::from_millis(100));
+    // a's list fails now: not taken as "it may have anything"
+    a.with(|st| st.list_down = true);
+    let run = new_run(&s, "qwen-image-21", 2, false);
+    engine.queue_run(&run);
+    let events = collect(&engine, run_done(&run));
+    assert_eq!(a.count("/models/load"), 0, "nothing loaded on a");
+    assert_eq!(a.count("/img_gen"), 0);
+    assert_eq!(problems(&events, "gpu0: listing its model files failed"), 1, "{events:#?}");
+}
+
+#[test]
+fn a_server_not_answering_is_said_once() {
+    let s = setup();
+    let a = Fake::start(None);
+    a.with(|st| st.down = true);
+    let engine = start(&s, &[&a]);
+    wait_until(|| a.count("/models/status") >= 3, "probed again and again");
+    let mut events = vec![];
+    while let Ok(e) = engine.events().recv_timeout(Duration::from_millis(100)) {
+        events.push(e);
+    }
+    assert_eq!(problems(&events, "gpu0: not answering (HTTP 500"), 1, "{events:#?}");
+    assert_eq!(problems(&events, "listing its model files"), 0, "its list wasn't asked for");
+}
+
+#[test]
+fn a_load_answered_with_another_model_says_both() {
+    let s = setup();
+    let a = Fake::start(None);
+    a.with(|st| {
+        st.load_answer = Some(json!({"state": "ready", "recipe": "qwen-image-21", "models": {"diffusion_model": "q"}}))
+    });
+    let run = new_run(&s, "qwen-image-21", 1, false);
+    let engine = start(&s, &[&a]);
+    engine.queue_run(&run);
+    let events = collect(&engine, |e, _| matches!(e, Event::Problem(p) if p.contains("no server can load")));
+    let said = events.iter().find_map(|e| match e {
+        Event::Problem(p) if p.contains("asked to load") => Some(p.clone()),
+        _ => None,
+    });
+    let said = said.expect("the answer said");
+    assert!(said.contains(r#""diffusion_model":"diffusion_models/q.safetensors""#), "{said}");
+    assert!(said.contains(r#"it answered {"models":{"diffusion_model":"q"}"#), "{said}");
+}
+
+#[test]
+fn a_server_whose_jobs_never_move_is_said_once() {
+    let s = setup();
+    let a = Fake::start(LOADED);
+    a.with(|st| st.frozen = true);
+    let run = new_run(&s, "qwen-image-21", 2, false);
+    let mut o = opts();
+    o.warm_up = false;
+    o.stall_warning = Duration::from_millis(300);
+    let ep = Endpoint { name: "gpu0".into(), device: "ROCm0".into(), client: Client::new(&a.url) };
+    let engine = Engine::start(s.lib.clone(), vec![ep], o, None).unwrap();
+    engine.queue_run(&run);
+    let mut events =
+        collect(&engine, |e, _| matches!(e, Event::Problem(p) if p.contains("none of its jobs has moved")));
+    let said = events.iter().rev().find_map(|e| match e {
+        Event::Problem(p) => Some(p.clone()),
+        _ => None,
+    });
+    assert!(said.unwrap().contains("seed 0 as job job_fake_00000000: queued"));
+    while let Ok(e) = engine.events().recv_timeout(Duration::from_millis(500)) {
+        events.push(e);
+    }
+    assert_eq!(problems(&events, "none of its jobs has moved"), 1, "said once while nothing changes");
+    engine.cancel_run(&run, Stop::Now);
+    collect(&engine, run_done(&run));
+}
+
+#[test]
+fn a_warm_up_that_never_ends_is_cancelled_and_counts_as_failed() {
+    let s = setup();
+    let a = Fake::start(LOADED);
+    a.with(|st| st.steps = 1_000_000);
+    let run = new_run(&s, "qwen-image-21", 2, false);
+    let mut o = opts();
+    o.warm_up_limit = Duration::from_millis(200);
+    let ep = Endpoint { name: "gpu0".into(), device: "ROCm0".into(), client: Client::new(&a.url) };
+    let engine = Engine::start(s.lib.clone(), vec![ep], o, None).unwrap();
+    engine.queue_run(&run);
+    let events = collect(&engine, |e, _| matches!(e, Event::Problem(p) if p.contains("gave up on qwen-image-21")));
+    let timed_out =
+        |e: &Event| matches!(e, Event::Problem(p) if p.contains("warm-up job still generating after 200ms, cancelled"));
+    assert_eq!(events.iter().filter(|e| timed_out(e)).count(), 3, "{events:#?}");
+    assert_eq!(a.count("/cancel"), 3, "each warm-up job cancelled");
+    assert_eq!(a.count("/img_gen"), 3, "no seed sent");
+    // the worker still answers: the run can be stopped
+    engine.cancel_run(&run, Stop::Now);
+    collect(&engine, run_done(&run));
 }
 
 #[test]
@@ -719,6 +829,47 @@ fn koboldcpp_loads_the_model_and_generates() {
     let lib = s.lib.lock().unwrap();
     let recipe = lib.recipe(&outputs(&events)[0].1).unwrap().unwrap();
     assert_eq!((recipe.sdcpp.as_str(), recipe.device.as_str()), ("koboldcpp 1.123.1", "Vulkan1"));
+}
+
+/// As run on two GPUs: a KoboldCpp stops mid-run. Its seeds went with it
+/// (the one generating, the ones sent after); they go to the other, not
+/// failed (they failed for good: "KoboldCpp: connection closed").
+#[test]
+#[cfg(unix)]
+fn a_koboldcpp_stopping_sends_its_seeds_to_another() {
+    let s = setup();
+    let (tmp1, tmp2) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let (k1, k2) = (FakeKobold::start(""), FakeKobold::start(""));
+    let (a1, a2) = (admin(&k1, tmp1.path()), admin(&k2, tmp2.path()));
+    k1.with(|st| st.gen_ms = 400);
+    k2.with(|st| st.gen_ms = 400);
+    let mut cut = common::cut::Cut::start(&k1.url);
+    let run = new_run(&s, "qwen-image-21", 6, false);
+    let servers = vec![
+        Endpoint {
+            name: "k1".into(),
+            device: "Vulkan2".into(),
+            client: Client::kobold(&cut.url, "", Some(a1)).unwrap(),
+        },
+        Endpoint {
+            name: "k2".into(),
+            device: "Vulkan1".into(),
+            client: Client::kobold(&k2.url, "", Some(a2)).unwrap(),
+        },
+    ];
+    let engine = Engine::start(s.lib.clone(), servers, opts(), None).unwrap();
+    engine.queue_run(&run);
+    // k1 generating a seed of the run (not its warm-up)
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while k1.generations().is_empty() || k1.with(|st| st.step) == 0 {
+        assert!(Instant::now() < deadline, "k1 never generated");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    cut.cut();
+    let events = collect(&engine, run_done(&run));
+    let failed: Vec<_> = events.iter().filter(|e| matches!(e, Event::SeedFailed { .. })).collect();
+    assert!(failed.is_empty(), "{failed:?}");
+    assert_eq!(outputs(&events).iter().map(|(seed, _)| *seed).collect::<Vec<_>>(), [0, 1, 2, 3, 4, 5]);
 }
 
 #[test]

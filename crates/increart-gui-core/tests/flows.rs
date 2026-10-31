@@ -16,6 +16,9 @@ struct Harness {
     root: PathBuf,
 }
 
+/// How long `settle` waits for nothing more to come.
+const QUIET_MS: u64 = 25;
+
 impl Harness {
     fn new() -> Harness {
         increart_core::fsutil::set_fsync(false);
@@ -27,6 +30,8 @@ impl Harness {
         // started servers (stand-ins) log here, not in the real log folder
         rt.set_log_dir(tmp.path().join("logs"));
         rt.set_trash_dir(tmp.path().join("trash"));
+        // stand-in servers answer at once: no half-second polls
+        rt.set_engine_timing(Duration::from_millis(10), Duration::from_millis(50));
         let mut h = Harness { state: AppState::new(config, None), rt, _tmp: tmp, root };
         h.send(Msg::SetLibraryPath(h.root.to_string_lossy().into()));
         h.send(Msg::CreateLibrary);
@@ -57,7 +62,9 @@ impl Harness {
             // before the wait: the worker sends what it did before it's idle
             // (effects with no reply, like reading a history, are done then)
             let idle = self.rt.idle();
-            let msgs = self.rt.wait(Duration::from_millis(300));
+            // a short quiet spell: what isn't the worker's (threads of their
+            // own, the engine) has its chance to answer
+            let msgs = self.rt.wait(Duration::from_millis(QUIET_MS));
             if msgs.is_empty() {
                 // a library still opening sends nothing until it's open
                 let opening = matches!(&self.state.phase, Phase::Library(d) if d.busy);
@@ -86,7 +93,7 @@ impl Harness {
 }
 
 #[test]
-fn create_library_then_ideas_review_promote_generate() {
+fn create_library_then_ideas_review_new_project_generate() {
     let mut h = Harness::new();
     assert_eq!(h.state.phase, Phase::Main);
     assert_eq!(h.state.library.as_deref(), Some(h.root.as_path()));
@@ -119,15 +126,15 @@ fn create_library_then_ideas_review_promote_generate() {
     assert!(kept[0].idea.starred);
     assert_eq!(h.state.discarded_ideas()[0].idea.title, "Lighthouse");
 
-    // restore the discarded one to the library, then promote both
+    // restore the discarded one to the library, then make a project from both
     let lighthouse = h.state.discarded_ideas()[0].idea.id.clone();
     h.send(Msg::Restore(lighthouse.clone(), IdeaLoc::top_library()));
     h.settle();
     let fox = h.state.library_ideas()[1].idea.id.clone(); // newest first: Lighthouse, Fox
-    h.send(Msg::Promote(vec![fox.clone(), lighthouse]));
+    h.send(Msg::NewProjectFromIdeas(vec![fox.clone(), lighthouse]));
     // always named first: the first idea title is the guess
-    assert_eq!(h.state.promote.as_ref().unwrap().name, "Fox");
-    h.send(Msg::ConfirmPromote);
+    assert_eq!(h.state.from_ideas.as_ref().unwrap().name, "Fox");
+    h.send(Msg::ConfirmFromIdeas);
     h.settle();
     assert_eq!((h.state.tab, h.state.projects_tab), (Tab::Projects, ProjectsTab::Generate));
     let p = h.state.project_entry().unwrap();
@@ -247,24 +254,24 @@ fn grids_zoom_each_on_its_own_within_the_thumbnails_size() {
 }
 
 #[test]
-fn add_and_promote_in_one_step() {
+fn add_and_make_a_project_in_one_step() {
     let mut h = Harness::new();
     h.send(Msg::Draft(IdeaDraft {
         title: "Sticker set".into(),
         text: "cute robot sticker".into(),
         ..Default::default()
     }));
-    h.send(Msg::AddIdea(AddIdea::Promote));
+    h.send(Msg::AddIdea(AddIdea::NewProject));
     // named first; the draft waits, an empty or taken name is refused
-    assert_eq!(h.state.promote.as_ref().unwrap().name, "Sticker set");
+    assert_eq!(h.state.from_ideas.as_ref().unwrap().name, "Sticker set");
     assert!(!h.state.draft.is_empty(), "kept until the project is named");
-    h.send(Msg::EditPromoteName(" ".into()));
-    h.send(Msg::ConfirmPromote);
-    assert!(h.state.promote.is_some() && !h.errors().is_empty());
-    h.send(Msg::EditPromoteName("Robots".into()));
-    h.send(Msg::ConfirmPromote);
+    h.send(Msg::EditFromIdeasName(" ".into()));
+    h.send(Msg::ConfirmFromIdeas);
+    assert!(h.state.from_ideas.is_some() && !h.errors().is_empty());
+    h.send(Msg::EditFromIdeasName("Robots".into()));
+    h.send(Msg::ConfirmFromIdeas);
     h.settle();
-    assert!(h.state.promote.is_none());
+    assert!(h.state.from_ideas.is_none());
     assert_eq!(
         h.state.project_entry().unwrap().dir,
         Path::new("projects/Robots/Robots"),
@@ -365,6 +372,52 @@ fn save_to_input_library_asks_the_name_and_folder() {
     assert_eq!(h.state.draft, IdeaDraft::default(), "draft cleared");
     let e = h.state.index.ideas.iter().find(|e| e.idea.title == "Luna moth").unwrap();
     assert_eq!(e.loc, IdeaLoc::Library("Animals/insects".into()));
+}
+
+#[test]
+fn save_and_make_a_project_in_one_step() {
+    let mut h = Harness::new();
+    h.send(Msg::Draft(IdeaDraft { title: "Fox".into(), text: "a red fox".into(), ..Default::default() }));
+    h.send(Msg::AddIdea(AddIdea::Inbox));
+    h.settle();
+    let fox = h.state.inbox_queue()[0].idea.id.clone();
+
+    // an inbox idea: saved where asked, named as asked; the project too
+    h.send(Msg::SaveIdeas(vec![fox.clone()]));
+    h.send(Msg::EditSaveIdeaName("Red fox".into()));
+    h.send(Msg::SaveIdeaNewFolder(Some("Animals".into())));
+    h.send(Msg::SaveIdeaNewProject);
+    h.settle();
+    assert!(h.state.save_idea.is_none() && h.state.from_ideas.is_none(), "no dialog left");
+    let e = h.state.idea(&fox).unwrap();
+    assert_eq!((e.idea.title.as_str(), &e.loc), ("Red fox", &IdeaLoc::Library("Animals".into())));
+    let dirs: Vec<_> = h.state.index.projects.iter().map(|p| p.dir.clone()).collect();
+    assert_eq!(dirs, [Path::new("projects/Red fox/Red fox")]);
+
+    // the draft: saved in the folder chosen, as the project is made
+    h.send(Msg::Draft(IdeaDraft { title: "Moth".into(), text: "a moth".into(), ..Default::default() }));
+    h.send(Msg::AddIdea(AddIdea::Keep));
+    h.send(Msg::EditSaveIdeaName("Luna moth".into()));
+    h.send(Msg::SaveIdeaNewFolder(Some("insects".into())));
+    h.send(Msg::SaveIdeaNewProject);
+    h.settle();
+    assert_eq!(h.state.draft, IdeaDraft::default(), "draft cleared");
+    let e = h.state.index.ideas.iter().find(|e| e.idea.title == "Luna moth").unwrap();
+    assert_eq!(e.loc, IdeaLoc::Library("Animals/insects".into()));
+    assert!(h.state.index.projects.iter().any(|p| p.dir == Path::new("projects/Luna moth/Luna moth")));
+
+    // a name that won't do for a project: the New project dialog asks
+    h.send(Msg::Draft(IdeaDraft { title: "Owl".into(), text: "an owl".into(), ..Default::default() }));
+    h.send(Msg::AddIdea(AddIdea::Inbox));
+    h.settle();
+    let owl = h.state.inbox_queue()[0].idea.id.clone();
+    h.send(Msg::SaveIdeas(vec![owl.clone()]));
+    h.send(Msg::EditSaveIdeaName("owl/night".into()));
+    h.send(Msg::SaveIdeaNewProject);
+    h.settle();
+    let p = h.state.from_ideas.as_ref().expect("asked");
+    assert_eq!(p.ideas, std::slice::from_ref(&owl));
+    assert_eq!(h.state.idea(&owl).unwrap().idea.title, "owl/night", "saved all the same");
 }
 
 #[test]
@@ -510,6 +563,58 @@ fn trees_create_rename_move_delete() {
 }
 
 #[test]
+fn discarded_projects_restore_and_delete_for_good() {
+    use increart_core::Tree;
+    let mut h = Harness::new();
+    h.send(Msg::NewFolder(Tree::Projects, PathBuf::new()));
+    h.settle();
+    h.send(Msg::EditRename("clients".into()));
+    h.send(Msg::CommitRename);
+    h.settle();
+    // "new project" and "new project 2"
+    for _ in 0..2 {
+        h.send(Msg::NewProject("clients".into()));
+        h.send(Msg::CommitRename);
+        h.settle();
+        h.send(Msg::CancelRename);
+    }
+    let names = |h: &Harness| h.state.index.projects.iter().map(|p| p.name()).collect::<Vec<_>>();
+    assert_eq!(names(&h).len(), 2);
+    let id = |h: &Harness, n: &str| {
+        let d = h.state.index.discarded_projects.iter().find(|d| d.discarded.name == n).unwrap();
+        d.entry.project.id.clone()
+    };
+
+    // one project: to Discarded, from its folder
+    h.send(Msg::DeleteNode(Tree::Projects, "clients/new project".into()));
+    h.settle();
+    assert_eq!(names(&h), ["new project 2"]);
+    let d = &h.state.index.discarded_projects[0];
+    assert_eq!((d.discarded.name.as_str(), d.discarded.from.as_path()), ("new project", Path::new("clients")));
+    h.send(Msg::RestoreProject(id(&h, "new project")));
+    h.settle();
+    assert!(h.state.index.discarded_projects.is_empty());
+    assert!(h.state.index.projects.iter().any(|p| p.dir == Path::new("projects/clients/new project")));
+
+    // a folder: its projects to Discarded, the folder to the trash; restored
+    // with the folder gone, to the top level
+    h.send(Msg::DeleteNode(Tree::Projects, "clients".into()));
+    h.settle();
+    assert!(h.state.index.projects.is_empty() && h.state.index.project_folders.is_empty());
+    assert_eq!(h.state.index.discarded_projects.len(), 2);
+    h.send(Msg::RestoreProject(id(&h, "new project 2")));
+    h.settle();
+    assert_eq!(h.state.index.projects[0].dir, Path::new("projects/new project 2"));
+
+    // for good
+    h.send(Msg::EmptyDiscardedProjects);
+    h.settle();
+    assert!(h.state.index.discarded_projects.is_empty());
+    assert_eq!(names(&h), ["new project 2"]);
+    assert!(h.errors().is_empty(), "{:?}", h.errors());
+}
+
+#[test]
 fn library_settings_convert_the_stores() {
     use increart_core::model::StoreFormat;
     use increart_gui_core::state::SettingsTab;
@@ -580,19 +685,19 @@ fn review_and_undo() {
 #[test]
 fn review_tree_sorts_and_hides_reviewed() {
     let mut h = Harness::new();
-    let promote = |h: &mut Harness, name: &str, folder: Option<&str>| {
+    let from_ideas = |h: &mut Harness, name: &str, folder: Option<&str>| {
         h.send(Msg::Draft(IdeaDraft { title: name.into(), text: "x".into(), ..Default::default() }));
-        h.send(Msg::AddIdea(AddIdea::Promote));
-        h.send(Msg::PromoteParent(PathBuf::new()));
-        h.send(Msg::PromoteNewFolder(folder.map(String::from)));
-        h.send(Msg::ConfirmPromote);
+        h.send(Msg::AddIdea(AddIdea::NewProject));
+        h.send(Msg::FromIdeasParent(PathBuf::new()));
+        h.send(Msg::FromIdeasNewFolder(folder.map(String::from)));
+        h.send(Msg::ConfirmFromIdeas);
         h.settle();
         h.state.project.clone().unwrap()
     };
-    let zeta = promote(&mut h, "Zeta", Some("Zfold"));
-    let mid = promote(&mut h, "Mid", Some("Mfold"));
-    let alpha = promote(&mut h, "Alpha", None);
-    let beta = promote(&mut h, "Beta", None);
+    let zeta = from_ideas(&mut h, "Zeta", Some("Zfold"));
+    let mid = from_ideas(&mut h, "Mid", Some("Mfold"));
+    let alpha = from_ideas(&mut h, "Alpha", None);
+    let beta = from_ideas(&mut h, "Beta", None);
     for p in [&zeta, &mid, &beta] {
         Library_::steal(&h.root).write_two(p);
     }
@@ -1631,6 +1736,28 @@ fn review_views_compare_and_rejected() {
     assert!(h.state.confirm.is_none());
     assert!(h.state.output_source_images().is_empty(), "{:?}", h.errors());
     assert!(first.path(&h.root).is_file(), "the image itself stays until Clean up");
+
+    // the deleted image is in Discarded, rated as it was; restored, it's back
+    let discarded =
+        |h: &Harness| h.state.discarded_outputs().iter().map(|o| (o.image.clone(), o.verdict)).collect::<Vec<_>>();
+    assert_eq!(discarded(&h), vec![(second.clone(), Some(Verdict::Bad))]);
+    h.send(Msg::OutputTab(OutputTab::Discarded));
+    let path = h.state.discarded_outputs()[0].path.clone();
+    h.send(Msg::RestoreOutput(path));
+    h.settle();
+    assert!(discarded(&h).is_empty(), "{:?}", h.errors());
+    assert_eq!(h.state.output_source_images().len(), 1);
+    assert_eq!(h.state.output_link(&second).unwrap().verdict, Some(Verdict::Bad));
+    // discarded again, then emptied: gone for good
+    let link = h.state.output_link(&second).unwrap().path.clone();
+    h.send(Msg::DeleteOutput(link));
+    h.settle();
+    assert_eq!(discarded(&h).len(), 1);
+    h.send(Msg::Ask(Confirm::new("Empty discarded?", "Delete", Msg::EmptyDiscardedOutputs)));
+    h.send(Msg::ConfirmYes);
+    h.settle();
+    assert!(discarded(&h).is_empty(), "{:?}", h.errors());
+    assert!(h.state.output_link(&second).is_none());
 }
 
 #[test]
@@ -2078,7 +2205,7 @@ fn library_filters_and_output_sources() {
     assert_eq!(h.state.library_ideas().len(), 1);
     h.send(Msg::LibFilter(LibFilter { text: "alpine".into(), ..Default::default() }));
     assert_eq!(h.state.library_ideas()[0].idea.title, "Hut");
-    h.send(Msg::LibFilter(LibFilter { promoted: Some(true), ..Default::default() }));
+    h.send(Msg::LibFilter(LibFilter { used_in_project: Some(true), ..Default::default() }));
     assert!(h.state.library_ideas().is_empty());
     h.send(Msg::LibFilter(LibFilter::default()));
 
@@ -4013,20 +4140,20 @@ fn rating_in_the_preview() {
 #[test]
 fn selecting_a_project_narrows_the_grid_only_to_a_folder_with_others() {
     let mut h = Harness::new();
-    let promote = |h: &mut Harness, name: &str, folder: Option<&str>| {
+    let from_ideas = |h: &mut Harness, name: &str, folder: Option<&str>| {
         h.send(Msg::Draft(IdeaDraft { title: name.into(), text: "x".into(), ..Default::default() }));
-        h.send(Msg::AddIdea(AddIdea::Promote));
-        h.send(Msg::PromoteParent(PathBuf::new()));
-        h.send(Msg::PromoteNewFolder(folder.map(String::from)));
-        h.send(Msg::ConfirmPromote);
+        h.send(Msg::AddIdea(AddIdea::NewProject));
+        h.send(Msg::FromIdeasParent(PathBuf::new()));
+        h.send(Msg::FromIdeasNewFolder(folder.map(String::from)));
+        h.send(Msg::ConfirmFromIdeas);
         h.settle();
         h.state.project.clone().unwrap()
     };
-    let fox = promote(&mut h, "Fox", Some("Fox"));
-    promote(&mut h, "Owl", Some("Owl"));
-    let deer = promote(&mut h, "deer tail", Some("Deer"));
-    promote(&mut h, "deer river", Some("deer"));
-    let top = promote(&mut h, "Top", None);
+    let fox = from_ideas(&mut h, "Fox", Some("Fox"));
+    from_ideas(&mut h, "Owl", Some("Owl"));
+    let deer = from_ideas(&mut h, "deer tail", Some("Deer"));
+    from_ideas(&mut h, "deer river", Some("deer"));
+    let top = from_ideas(&mut h, "Top", None);
     let scope = |h: &mut Harness, id: &increart_core::Id| {
         h.send(Msg::SelectProject(id.clone()));
         (h.state.project_scope(), h.state.projects_in_scope().len())
@@ -4084,17 +4211,16 @@ fn selecting_a_project_narrows_the_grid_only_to_a_folder_with_others() {
 }
 
 #[test]
-fn promote_into_a_new_or_existing_folder() {
+fn new_project_from_ideas_in_a_new_or_existing_folder() {
     let mut h = Harness::new();
     h.send(Msg::Draft(IdeaDraft { title: "Fox".into(), text: "a red fox".into(), ..Default::default() }));
-    h.send(Msg::AddIdea(AddIdea::Promote));
+    h.send(Msg::AddIdea(AddIdea::NewProject));
     // step 2: a new folder at the top
-    h.send(Msg::EditPromoteName("Fox cafe".into()));
-    h.send(Msg::PromoteChoose(true));
-    h.send(Msg::PromoteNewFolder(Some("Fox cafe".into())));
-    let d = h.state.promote.clone().unwrap();
-    assert_eq!(promote_folder(&h.state, &d), (PathBuf::from("Fox cafe"), false));
-    h.send(Msg::ConfirmPromote);
+    h.send(Msg::EditFromIdeasName("Fox cafe".into()));
+    h.send(Msg::FromIdeasNewFolder(Some("Fox cafe".into())));
+    let d = h.state.from_ideas.clone().unwrap();
+    assert_eq!(from_ideas_folder(&h.state, &d), (PathBuf::from("Fox cafe"), false));
+    h.send(Msg::ConfirmFromIdeas);
     h.settle();
     assert_eq!(h.state.project_entry().unwrap().dir, Path::new("projects/Fox cafe/Fox cafe"));
     assert!(h.state.index.project_folders.contains(&PathBuf::from("Fox cafe")));
@@ -4103,35 +4229,38 @@ fn promote_into_a_new_or_existing_folder() {
     // folder chosen otherwise, where the last went; without a new folder, if
     // unticked
     let fox = h.state.library_ideas()[0].idea.id.clone();
-    h.send(Msg::Promote(vec![fox.clone()]));
-    assert_eq!(h.state.promote.as_ref().unwrap().parent, Path::new(""), "next to the last one's folder");
-    h.send(Msg::EditPromoteName("Fox bar".into()));
-    h.send(Msg::PromoteNewFolder(Some("bars".into())));
-    h.send(Msg::EditPromoteName("Fox pub".into()));
-    assert_eq!(h.state.promote.as_ref().unwrap().new_folder.as_deref(), Some("bars"), "a folder named otherwise stays");
-    h.send(Msg::ConfirmPromote);
+    h.send(Msg::NewProjectFromIdeas(vec![fox.clone()]));
+    assert_eq!(h.state.from_ideas.as_ref().unwrap().parent, Path::new(""), "next to the last one's folder");
+    h.send(Msg::EditFromIdeasName("Fox bar".into()));
+    h.send(Msg::FromIdeasNewFolder(Some("bars".into())));
+    h.send(Msg::EditFromIdeasName("Fox pub".into()));
+    assert_eq!(
+        h.state.from_ideas.as_ref().unwrap().new_folder.as_deref(),
+        Some("bars"),
+        "a folder named otherwise stays"
+    );
+    h.send(Msg::ConfirmFromIdeas);
     h.settle();
     assert_eq!(h.state.project_entry().unwrap().dir, Path::new("projects/bars/Fox pub"));
-    h.send(Msg::Promote(vec![fox.clone()]));
-    assert_eq!(h.state.promote.as_ref().unwrap().parent, Path::new("bars"), "where the last one went");
-    h.send(Msg::PromoteNewFolder(None));
-    h.send(Msg::EditPromoteName("Fox inn".into()));
-    h.send(Msg::ConfirmPromote);
+    h.send(Msg::NewProjectFromIdeas(vec![fox.clone()]));
+    assert_eq!(h.state.from_ideas.as_ref().unwrap().parent, Path::new("bars"), "where the last one went");
+    h.send(Msg::FromIdeasNewFolder(None));
+    h.send(Msg::EditFromIdeasName("Fox inn".into()));
+    h.send(Msg::ConfirmFromIdeas);
     h.settle();
     assert_eq!(h.state.project_entry().unwrap().dir, Path::new("projects/bars/Fox inn"), "no new folder");
 
     // a "new" folder that exists (any case) is used; a name taken there is refused
-    h.send(Msg::Promote(vec![fox]));
-    h.send(Msg::PromoteChoose(true));
-    h.send(Msg::PromoteParent(PathBuf::new()));
-    h.send(Msg::PromoteNewFolder(Some("fox cafe".into())));
-    h.send(Msg::EditPromoteName("Fox cafe".into()));
-    let d = h.state.promote.clone().unwrap();
-    assert_eq!(promote_folder(&h.state, &d), (PathBuf::from("Fox cafe"), true));
-    h.send(Msg::ConfirmPromote);
-    assert!(h.state.promote.is_some() && !h.errors().is_empty(), "the name is taken in that folder");
-    h.send(Msg::EditPromoteName("Fox night".into()));
-    h.send(Msg::ConfirmPromote);
+    h.send(Msg::NewProjectFromIdeas(vec![fox]));
+    h.send(Msg::FromIdeasParent(PathBuf::new()));
+    h.send(Msg::FromIdeasNewFolder(Some("fox cafe".into())));
+    h.send(Msg::EditFromIdeasName("Fox cafe".into()));
+    let d = h.state.from_ideas.clone().unwrap();
+    assert_eq!(from_ideas_folder(&h.state, &d), (PathBuf::from("Fox cafe"), true));
+    h.send(Msg::ConfirmFromIdeas);
+    assert!(h.state.from_ideas.is_some() && !h.errors().is_empty(), "the name is taken in that folder");
+    h.send(Msg::EditFromIdeasName("Fox night".into()));
+    h.send(Msg::ConfirmFromIdeas);
     h.settle();
     let p = h.state.project_entry().unwrap();
     assert_eq!(p.dir, Path::new("projects/Fox cafe/Fox night"));
@@ -4936,7 +5065,12 @@ fn chat_servers_go_with_their_preset() {
         args: vec![],
     };
     let a = PeServer { name: "A".into(), run: kobold(1), ..Default::default() };
-    let b = PeServer { name: "B".into(), run: PeRun::Connect { url: "http://x:2".into() }, start: PeStart::AtLaunch };
+    let b = PeServer {
+        name: "B".into(),
+        run: PeRun::Connect { url: "http://x:2".into() },
+        start: PeStart::AtLaunch,
+        ..Default::default()
+    };
     let gpu0 = start("gpu0", 1234);
     let presets = vec![
         ServerPreset { name: "GPU + A".into(), servers: vec![gpu0.clone(), ServerConfig::Chat(a.clone())] },
@@ -6429,6 +6563,363 @@ fn skipping_the_ram_check_is_saved_and_reaches_the_engine() {
     assert!(s.config.skip_ram_check);
     assert!(fx.iter().any(|f| matches!(f, Effect::SetSkipRamCheck(true))));
     assert!(update(&mut s, Msg::SetSkipRamCheck(true)).is_empty());
+}
+
+#[test]
+fn the_traffic_log_setting_is_saved_and_applied() {
+    let mut s = dialog_state(vec![], None);
+    assert!(!s.config.log_traffic);
+    let fx = update(&mut s, Msg::SetLogTraffic(true));
+    assert!(s.config.log_traffic);
+    assert!(fx.iter().any(|f| matches!(f, Effect::SetLogTraffic(true))));
+    assert!(fx.iter().any(|f| matches!(f, Effect::SaveConfig(..))), "{fx:?}");
+    assert!(update(&mut s, Msg::SetLogTraffic(true)).is_empty());
+    let text = increart_core::rsnfmt::to_string(&s.config).unwrap();
+    assert!(text.contains("log_traffic: true"), "{text}");
+}
+
+#[test]
+fn a_server_test_shows_its_steps_and_stops() {
+    use increart_core::servertest::{Outcome, Step};
+    let mut s = dialog_state(vec![], None);
+    let proxy =
+        ServerConfig::Connect { name: "proxy".into(), url: "http://127.0.0.1:7800/".into(), device: String::new() };
+    let fx = update(&mut s, Msg::TestServer(proxy.clone()));
+    let [Effect::TestServer { run, generate: Ok(()), .. }] = fx.as_slice() else { panic!("{fx:?}") };
+    let run = *run;
+    let step = |outcome| Step { title: "Answers".into(), outcome, detail: String::new() };
+    update(&mut s, Msg::ServerTestStep(run, 0, step(Outcome::Running)));
+    update(&mut s, Msg::ServerTestStep(run, 0, step(Outcome::Ok)));
+    // an older test's step is dropped
+    update(&mut s, Msg::ServerTestStep(run - 1, 1, step(Outcome::Failed)));
+    assert_eq!(s.server_test.as_ref().unwrap().steps, [step(Outcome::Ok)]);
+    assert_eq!(update(&mut s, Msg::StopServerTest), [Effect::StopServerTest]);
+    update(&mut s, Msg::ServerTestDone(run));
+    assert!(update(&mut s, Msg::StopServerTest).is_empty());
+    assert!(update(&mut s, Msg::CloseServerTest).is_empty());
+    assert!(s.server_test.is_none());
+    // one the engine uses doesn't load or make an image
+    s.engine_running = true;
+    s.servers = vec![ServerStatus {
+        config: Some(proxy.clone()),
+        name: "proxy".into(),
+        device: String::new(),
+        state: "ready".into(),
+        model: None,
+        idle_since: None,
+        worked: false,
+    }];
+    let fx = update(&mut s, Msg::TestServer(proxy));
+    let [Effect::TestServer { run: next, generate: Err(why), .. }] = fx.as_slice() else { panic!("{fx:?}") };
+    assert!(*next > run && why.contains("proxy"), "{why}");
+    // closing one still going stops it
+    assert_eq!(update(&mut s, Msg::CloseServerTest), [Effect::StopServerTest]);
+}
+
+#[test]
+fn validate_servers_lists_runs_checked_cases_and_stops() {
+    use increart_core::apitest::{Case, Cost, Counts, Event, Outcome};
+    let mut s = dialog_state(vec![], None);
+    let fx = update(&mut s, Msg::ApiTest(true));
+    let [Effect::ApiTestList { run, config }] = fx.as_slice() else { panic!("{fx:?}") };
+    assert_eq!(config, Path::new("/nonexistent/config.rsn"));
+    let run = *run;
+    assert!(s.api_test.as_ref().unwrap().listing);
+    let case = |id: &str, na: Option<&str>| Case {
+        id: id.into(),
+        preset: "Two".into(),
+        server: None,
+        group: "together".into(),
+        title: id.into(),
+        cost: Cost::Light,
+        basic: false,
+        not_applicable: na.map(String::from),
+        expects: String::new(),
+    };
+    let plan = vec![
+        case("Two/together.open", None),
+        case("Two/a/connect.latency", None),
+        case("Two/a/generate.lora", Some("no LoRA")),
+    ];
+    update(&mut s, Msg::ApiTestEvent(run, Event::Plan { cases: plan.clone() }));
+    update(&mut s, Msg::ApiTestEnded(run, None));
+    let t = s.api_test.as_ref().unwrap();
+    assert!(!t.listing && t.error.is_none());
+    // n/a ones start unchecked
+    assert_eq!(t.cases.iter().map(|c| c.checked).collect::<Vec<_>>(), [true, true, false]);
+    update(&mut s, Msg::ApiTestCheck(vec![0], false));
+    let fx = update(&mut s, Msg::ApiTestRun(ApiRun::Checked));
+    let [Effect::ApiTestRun { run, cases, .. }] = fx.as_slice() else { panic!("{fx:?}") };
+    assert_eq!(cases, &["Two/a/connect.latency"]);
+    let run = *run;
+    // a second run waits for the first
+    assert!(update(&mut s, Msg::ApiTestRun(ApiRun::All)).is_empty());
+    // its plan (the cases it runs) keeps the list as it is
+    update(&mut s, Msg::ApiTestEvent(run, Event::Plan { cases: plan[..2].to_vec() }));
+    assert_eq!(s.api_test.as_ref().unwrap().cases.len(), 3);
+    for e in [
+        Event::Start { id: "Two/together.open".into() },
+        Event::End { id: "Two/together.open".into(), outcome: Outcome::Pass, summary: "a answers".into(), secs: 0.1 },
+        Event::Start { id: "Two/a/connect.latency".into() },
+        Event::Log { id: Some("Two/a/connect.latency".into()), text: "20 asks".into() },
+        Event::Traffic { id: Some("Two/a/connect.latency".into()), text: "GET /sdcpp/v1/capabilities".into() },
+    ] {
+        update(&mut s, Msg::ApiTestEvent(run, e));
+    }
+    // an older run's event is dropped
+    update(&mut s, Msg::ApiTestEvent(run - 1, Event::Log { id: None, text: "old".into() }));
+    let t = s.api_test.as_ref().unwrap();
+    assert_eq!(t.selected, Some(1), "it follows the case running");
+    assert!(t.cases[1].running && t.cases[1].log == ["20 asks"] && t.cases[1].traffic.len() == 1);
+    assert_eq!(t.cases[0].outcome, Some(Outcome::Pass));
+    assert!(t.log.is_empty());
+    // closing while it runs stops it first, keeping the window
+    assert_eq!(update(&mut s, Msg::ApiTest(false)), [Effect::ApiTestStop]);
+    assert!(update(&mut s, Msg::ApiTestStop).is_empty());
+    assert!(s.api_test.is_some());
+    let end = Event::End {
+        id: "Two/a/connect.latency".into(),
+        outcome: Outcome::Fail,
+        summary: "slowest 9 s".into(),
+        secs: 9.0,
+    };
+    update(&mut s, Msg::ApiTestEvent(run, end));
+    let mut counts = Counts::default();
+    counts.add(Outcome::Pass);
+    counts.add(Outcome::Fail);
+    update(
+        &mut s,
+        Msg::ApiTestEvent(run, Event::Done { counts, report: Some("/r".into()), zip: Some("/r.zip".into()) }),
+    );
+    update(&mut s, Msg::ApiTestEnded(run, None));
+    let t = s.api_test.as_ref().unwrap();
+    assert!(!t.running && !t.stopping);
+    assert_eq!(t.done.as_ref().unwrap().2.as_deref(), Some(Path::new("/r.zip")));
+    // Rerun failed: the failed one
+    let fx = update(&mut s, Msg::ApiTestRun(ApiRun::Failed));
+    let [Effect::ApiTestRun { run, cases, .. }] = fx.as_slice() else { panic!("{fx:?}") };
+    assert_eq!(cases, &["Two/a/connect.latency"]);
+    // one that ends without a word says why
+    update(&mut s, Msg::ApiTestEnded(*run, Some("it ended (signal 9) before finishing".into())));
+    assert!(s.api_test.as_ref().unwrap().error.as_deref().unwrap().contains("signal 9"));
+    assert!(update(&mut s, Msg::ApiTest(false)).is_empty());
+    assert!(s.api_test.is_none());
+    // not with servers open: the suite starts its own
+    s.servers = vec![ServerStatus {
+        config: None,
+        name: "a".into(),
+        device: String::new(),
+        state: "ready".into(),
+        model: None,
+        idle_since: None,
+        worked: false,
+    }];
+    assert!(update(&mut s, Msg::ApiTest(true)).is_empty());
+    assert!(s.api_test.is_none());
+}
+
+#[test]
+fn validate_servers_opens_on_the_last_used_preset_and_shows_one_at_a_time() {
+    use increart_core::apitest::{Case, Cost, Event};
+    let preset = |name: &str| ServerPreset { name: name.into(), servers: vec![start("gpu0", 1234)] };
+    let mut s = dialog_state(vec![preset("Kobold"), preset("Sd")], Some("Sd"));
+    let fx = update(&mut s, Msg::ApiTest(true));
+    let [Effect::ApiTestList { run, .. }] = fx.as_slice() else { panic!("{fx:?}") };
+    let case = |preset: &str, key: &str, na: bool| Case {
+        id: format!("{preset}/gpu0/{key}"),
+        preset: preset.into(),
+        server: Some("gpu0".into()),
+        group: "connect".into(),
+        title: key.into(),
+        cost: Cost::Light,
+        basic: false,
+        not_applicable: na.then(|| "no LoRA".into()),
+        expects: String::new(),
+    };
+    let cases = vec![case("Kobold", "latency", false), case("Sd", "latency", false), case("Sd", "lora", true)];
+    update(&mut s, Msg::ApiTestEvent(*run, Event::Plan { cases }));
+    let t = s.api_test.as_ref().unwrap();
+    // the last used one, its cases for its setup checked, no other's
+    assert_eq!(t.preset.as_deref(), Some("Sd"));
+    assert_eq!(t.presets(), ["Kobold", "Sd"]);
+    assert_eq!(t.shown_cases(), [1, 2]);
+    assert_eq!(t.cases.iter().map(|c| c.checked).collect::<Vec<_>>(), [false, true, false]);
+    // Run all: all of the preset shown
+    assert_eq!(t.ids(ApiRun::All), ["Sd/gpu0/latency", "Sd/gpu0/lora"]);
+    // another: its cases, and only those
+    update(&mut s, Msg::ApiTestPreset(Some("Kobold".into())));
+    let t = s.api_test.as_ref().unwrap();
+    assert_eq!(t.shown_cases(), [0]);
+    assert_eq!(t.cases.iter().map(|c| c.checked).collect::<Vec<_>>(), [true, false, false]);
+    // all presets: all shown, the checks kept; Run all runs everything
+    update(&mut s, Msg::ApiTestPreset(None));
+    let t = s.api_test.as_ref().unwrap();
+    assert_eq!(t.shown_cases(), [0, 1, 2]);
+    assert_eq!(t.cases.iter().map(|c| c.checked).collect::<Vec<_>>(), [true, false, false]);
+    assert!(t.ids(ApiRun::All).is_empty());
+    // one that isn't there: all presets
+    update(&mut s, Msg::ApiTestPreset(Some("Gone".into())));
+    assert_eq!(s.api_test.as_ref().unwrap().preset, None);
+}
+
+#[test]
+fn opening_a_preset_not_validated_asks_once_to_validate_it_first() {
+    use increart_core::apitest::{Case, Cost, Counts, Event, Outcome};
+    use increart_core::validation::{Stamp, fingerprint};
+    let tmp = tempfile::tempdir().unwrap();
+    let preset = |name: &str, port| ServerPreset { name: name.into(), servers: vec![start("gpu0", port)] };
+    let mut s = dialog_state(vec![preset("Sd", 1234), preset("Checked", 1240)], Some("Sd"));
+    // tests have no stamps file: nothing asked
+    update(&mut s, Msg::OpenPreset(0));
+    assert!(s.confirm.is_none());
+    let mut s = dialog_state(vec![preset("Sd", 1234), preset("Checked", 1240)], Some("Sd"));
+    let path = tmp.path().join("validated.json");
+    s.validations_path = Some(path.clone());
+    s.suite_found = true;
+    // one validated with the settings it has
+    let checked = s.config.server_presets[1].clone();
+    s.validations.stamps.push(
+        Stamp {
+            preset: "Checked".into(),
+            fingerprint: fingerprint(&s.config, &checked),
+            when: "2026-10-31T17:00:00+01:00".into(),
+            outcome: Outcome::Warn,
+            counts: Counts::default(),
+            servers: vec![],
+            suite: String::new(),
+            report_sha256: String::new(),
+            zip: None,
+            seal: String::new(),
+        }
+        .sealed(),
+    );
+    update(&mut s, Msg::OpenPreset(1));
+    assert!(s.confirm.is_none(), "validated: opened without asking");
+    let mut s2 = dialog_state(vec![preset("Sd", 1234)], Some("Sd"));
+    s2.validations_path = Some(path.clone());
+    s2.suite_found = true;
+    let mut s = s2;
+    let fx = update(&mut s, Msg::OpenPreset(0));
+    let fp = fingerprint(&s.config, &s.config.server_presets[0].clone());
+    assert!(fx.contains(&Effect::ValidationAsked(path.clone(), fp)), "{fx:?}");
+    let c = s.confirm.clone().expect("asked");
+    assert_eq!(c.heading.as_deref(), Some("Validate these servers first?"));
+    assert!(c.text.contains("Sd hasn't been validated") && c.text.contains("Strongly recommended"), "{}", c.text);
+    // Validate now: the window on it; once listed, its basic cases run
+    let fx = update(&mut s, Msg::ConfirmYes);
+    let [Effect::ApiTestList { run, .. }] = fx.as_slice() else { panic!("{fx:?}") };
+    let run = *run;
+    let case = |key: &str, basic: bool| Case {
+        id: format!("Sd/gpu0/{key}"),
+        preset: "Sd".into(),
+        server: Some("gpu0".into()),
+        group: "connect".into(),
+        title: key.into(),
+        cost: Cost::Light,
+        basic,
+        not_applicable: None,
+        expects: String::new(),
+    };
+    let cases = vec![case("connect.capabilities", true), case("connect.latency", false)];
+    update(&mut s, Msg::ApiTestEvent(run, Event::Plan { cases }));
+    let fx = update(&mut s, Msg::ApiTestEnded(run, None));
+    let [Effect::ApiTestRun { run, cases, .. }] = fx.as_slice() else { panic!("{fx:?}") };
+    assert_eq!(cases, &["Sd/gpu0/connect.capabilities"]);
+    // its end: the stamps read again
+    let fx = update(&mut s, Msg::ApiTestEnded(*run, None));
+    assert_eq!(fx, [Effect::LoadValidations(path.clone())]);
+    update(&mut s, Msg::ApiTest(false));
+    // asked once for these settings: opened now, not asked again
+    update(&mut s, Msg::OpenPreset(0));
+    assert!(s.confirm.is_none());
+}
+
+#[test]
+fn a_basic_validation_ends_on_its_summary_and_continues_to_the_preset() {
+    use increart_core::apitest::{Case, Cost, Event, Outcome};
+    use increart_core::validation::fingerprint;
+    let tmp = tempfile::tempdir().unwrap();
+    let preset = |name: &str, port| ServerPreset { name: name.into(), servers: vec![start("gpu0", port)] };
+    let mut s = dialog_state(vec![preset("Sd", 1234)], Some("Sd"));
+    let path = tmp.path().join("validated.json");
+    s.validations_path = Some(path.clone());
+    s.suite_found = true;
+    assert!(!s.api_test_advanced, "the basic view first");
+    let fx = update(&mut s, Msg::ValidateBasic("Sd".into()));
+    let [Effect::ApiTestList { run, .. }] = fx.as_slice() else { panic!("{fx:?}") };
+    let case = |key: &str, basic: bool| Case {
+        id: format!("Sd/gpu0/{key}"),
+        preset: "Sd".into(),
+        server: Some("gpu0".into()),
+        group: "connect".into(),
+        title: key.into(),
+        cost: Cost::Light,
+        basic,
+        not_applicable: None,
+        expects: String::new(),
+    };
+    let cases = vec![case("connect.capabilities", true), case("models.list", true), case("connect.latency", false)];
+    update(&mut s, Msg::ApiTestEvent(*run, Event::Plan { cases }));
+    s.now = 10.0;
+    let fx = update(&mut s, Msg::ApiTestEnded(*run, None));
+    let [Effect::ApiTestRun { run, .. }] = fx.as_slice() else { panic!("{fx:?}") };
+    let run = *run;
+    let t = s.api_test.as_ref().unwrap();
+    assert_eq!(t.ran, [0, 1], "the basic cases");
+    assert_eq!(t.basic_cases(), [0, 1]);
+    assert!(!t.finished() && t.started == 10.0);
+    // Continue does nothing while it runs
+    update(&mut s, Msg::ApiTestContinue);
+    assert!(s.api_test.is_some());
+    for (id, outcome) in [("Sd/gpu0/connect.capabilities", Outcome::Pass), ("Sd/gpu0/models.list", Outcome::Fail)] {
+        update(&mut s, Msg::ApiTestEvent(run, Event::End { id: id.into(), outcome, summary: "x".into(), secs: 1.0 }));
+    }
+    s.now = 75.0;
+    update(&mut s, Msg::ApiTestEnded(run, None));
+    let t = s.api_test.as_ref().unwrap();
+    assert!(t.finished() && !t.stopped && t.ended == Some(75.0), "its summary");
+    // the advanced view, kept for the session
+    update(&mut s, Msg::ApiTestAdvanced(true));
+    assert!(s.api_test_advanced);
+    update(&mut s, Msg::ApiTestAdvanced(false));
+    // Open anyway: the window closes, the preset opens, not asked again
+    let fx = update(&mut s, Msg::ApiTestContinue);
+    let fp = fingerprint(&s.config, &s.config.server_presets[0].clone());
+    assert!(fx.contains(&Effect::ValidationAsked(path, fp)), "{fx:?}");
+    assert!(s.api_test.is_none());
+    let Phase::Servers(d) = &s.phase else { panic!() };
+    assert!(d.opening, "opening Sd");
+}
+
+#[test]
+fn a_validation_stopped_says_so() {
+    use increart_core::apitest::{Case, Cost, Event};
+    let mut s = dialog_state(vec![ServerPreset { name: "Sd".into(), servers: vec![start("gpu0", 1234)] }], Some("Sd"));
+    let fx = update(&mut s, Msg::ValidateBasic("Sd".into()));
+    let [Effect::ApiTestList { run, .. }] = fx.as_slice() else { panic!("{fx:?}") };
+    let cases = vec![Case {
+        id: "Sd/gpu0/models.list".into(),
+        preset: "Sd".into(),
+        server: Some("gpu0".into()),
+        group: "models".into(),
+        title: "models".into(),
+        cost: Cost::Light,
+        basic: true,
+        not_applicable: None,
+        expects: String::new(),
+    }];
+    update(&mut s, Msg::ApiTestEvent(*run, Event::Plan { cases }));
+    let fx = update(&mut s, Msg::ApiTestEnded(*run, None));
+    let [Effect::ApiTestRun { run, .. }] = fx.as_slice() else { panic!("{fx:?}") };
+    let run = *run;
+    update(&mut s, Msg::ApiTestStop);
+    update(&mut s, Msg::ApiTestEnded(run, None));
+    let t = s.api_test.as_ref().unwrap();
+    assert!(t.finished() && t.stopped);
+    // a run again starts over
+    update(&mut s, Msg::ApiTestRun(increart_gui_core::ApiRun::All));
+    let t = s.api_test.as_ref().unwrap();
+    assert!(!t.stopped && t.ended.is_none() && !t.finished());
 }
 
 #[test]

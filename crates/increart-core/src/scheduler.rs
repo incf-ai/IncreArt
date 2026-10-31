@@ -229,7 +229,24 @@ impl Scheduler {
         if let Some(why) = srv.failed.get(model) {
             return Some(why.clone());
         }
-        srv.loadable.as_ref().and_then(|l| l.why_not(&model.models))
+        let why = srv.loadable.as_ref().and_then(|l| l.why_not(&model.models));
+        // a KoboldCpp started elsewhere matches by its running file's name
+        // alone (an sd-server's int8 file of that name it can't run):
+        // not while a server whose list has the files can load it
+        if why.is_none() && matches!(srv.loadable, Some(Loadable::Only(_))) && self.listed_elsewhere(s, model) {
+            return Some("it's matched by its running file's name only, and another server lists the files".into());
+        }
+        why
+    }
+
+    /// Whether a server other than `s` lists all of `model`'s files and
+    /// hasn't failed to load it.
+    fn listed_elsewhere(&self, s: ServerIdx, model: &ModelKey) -> bool {
+        self.servers.iter().enumerate().any(|(i, o)| {
+            i != s
+                && !o.failed.contains_key(model)
+                && matches!(&o.loadable, Some(l @ Loadable::Files { .. }) if l.runs(&model.models))
+        })
     }
 
     /// Whether no server can take `model` (or it was given up on).
@@ -974,6 +991,22 @@ mod tests {
         assert_eq!(s.poll(now), [Action::Load { server: 1, model: m.clone() }]);
         assert_eq!(s.why_not(0, &m).as_deref(), Some("it doesn't have krea.safetensors"));
         assert!(s.stuck_runs().is_empty());
+    }
+
+    #[test]
+    fn a_connected_koboldcpp_goes_after_a_server_listing_the_files() {
+        // KoboldCpp first in line, running a file of the same name
+        let (mut s, now) = up(&[None, None]);
+        s.set_loadable(0, Some(Loadable::Only(Some("/m/krea.safetensors".into()))));
+        s.set_loadable(1, Some(Loadable::files(["krea.safetensors".to_string()])));
+        let m = with_file("krea", "krea.safetensors");
+        s.add_seeds(&run(0), m.clone(), seeds(1));
+        assert_eq!(s.poll(now), [Action::Load { server: 1, model: m.clone() }]);
+        assert!(s.why_not(0, &m).unwrap().contains("matched by its running file's name only"));
+        // the one listing them can't load it: KoboldCpp may
+        s.loaded(1, LoadResult::Broken { still_loaded: None, why: "no".into() }, now);
+        assert_eq!(s.why_not(0, &m), None);
+        assert_eq!(s.poll(now), [Action::Load { server: 0, model: m }]);
     }
 
     #[test]

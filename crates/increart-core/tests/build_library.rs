@@ -343,12 +343,31 @@ fn whole_library_through_the_api() {
     let report = common::verify(&root);
     assert!(report.trim_end().ends_with("problems: none"), "{report}");
 
-    // ---- delete + clean up
+    // ---- discard (restorable), delete for good + clean up
+    let copy_id = copy.project.id.clone();
     lib.delete_node(Tree::Projects, Path::new("fox")).unwrap();
+    assert!(root.join("discarded_projects/fox/project.rsn").exists());
+    lib.delete_discarded_project(&copy_id).unwrap();
     assert!(tmp.path().join("trash/fox").join("project.rsn").exists());
     assert!(lib.unreferenced().unwrap().is_empty());
+    // a discarded project keeps its images through Clean up, and comes back
+    // where it was, its links working
+    lib.delete_node(Tree::Projects, Path::new("fox 2")).unwrap();
+    let ix = lib.scan().unwrap();
+    assert!(ix.project(&project).is_none());
+    let d = &ix.discarded_projects[0];
+    assert_eq!((d.discarded.name.as_str(), d.discarded.from.as_path()), ("fox 2", Path::new("")));
+    let left = lib.unreferenced().unwrap();
+    assert!(left.is_empty(), "kept for a restore: {left:?}");
+    assert_eq!(lib.restore_project(&project).unwrap(), Path::new("fox 2"));
+    let ix = lib.scan().unwrap();
+    assert!(ix.discarded_projects.is_empty() && !root.join("projects/fox 2/discarded.rsn").exists());
+    for o in &ix.project(&project).unwrap().outputs {
+        resolves(&lib, &o.path, Store::Output);
+    }
     lib.delete_discarded_idea(&junk).unwrap();
     lib.delete_node(Tree::Projects, Path::new("fox 2")).unwrap();
+    lib.delete_discarded_project(&project).unwrap();
     let mut gone = lib.unreferenced().unwrap();
     gone.sort();
     let mut expect = vec![
@@ -634,6 +653,57 @@ fn a_generated_seed_without_its_link_isnt_pending() {
     assert!(report.problems.is_empty(), "{:?}", report.problems);
     assert_eq!(lib.find_run(&run).unwrap().1.deleted, vec![Seeds { first: 0, count: 2 }]);
     assert_eq!(lib.pending_seeds(&run).unwrap(), vec![(0, 2)]);
+}
+
+/// A deleted output link is discarded: kept in its project's `discarded/`
+/// with its rating, its seed not generated again; restored, it's back as it
+/// was; deleted for good, it's gone and its image unreferenced.
+#[test]
+fn deleted_outputs_are_discarded_restored_or_deleted_for_good() {
+    let (_tmp, mut lib) = setup(None);
+    let idea = lib.new_idea(NewIdea::text("A", "")).unwrap();
+    let (project, _) = lib.create_project(Path::new(""), None, std::slice::from_ref(&idea)).unwrap();
+    let run = lib.create_run(&project, new_run(vec![], Mode::Generate, 2)).unwrap();
+    let (_, def) = lib.find_run(&run).unwrap();
+    let (out, link) = lib.write_output(&run, 0, 0, &sdserver_png(1), &recipe(&def, 0, None)).unwrap();
+    let (_, other) = lib.write_output(&run, 0, 1, &sdserver_png(2), &recipe(&def, 1, None)).unwrap();
+    let bad = lib.review_output(&link, Some(Verdict::Bad)).unwrap();
+
+    let gone = lib.delete_output_link(&bad).unwrap();
+    // by components: Windows separates with \
+    let parts: Vec<_> = gone.components().map(|c| c.as_os_str().to_string_lossy().into_owned()).collect();
+    assert!(parts.windows(3).any(|w| w == ["discarded", "reviewed", "bad"]), "{}", gone.display());
+    assert!(lib.delete_output_link(&gone).is_err());
+    resolves(&lib, &gone, Store::Output);
+    let ix = lib.scan().unwrap();
+    assert!(ix.problems.is_empty(), "{:?}", ix.problems);
+    let p = ix.project(&project).unwrap();
+    assert_eq!(p.outputs.len(), 1);
+    assert_eq!(p.discarded.len(), 1);
+    assert_eq!(p.discarded[0].image, ImageRef::output(out.clone()));
+    assert_eq!(p.discarded[0].verdict, Some(Verdict::Bad));
+    assert_eq!(lib.find_run(&run).unwrap().1.deleted, vec![Seeds { first: 0, count: 1 }]);
+    assert!(lib.pending_seeds(&run).unwrap().is_empty());
+    assert!(lib.unreferenced().unwrap().is_empty());
+
+    let back = lib.restore_output_link(&gone).unwrap();
+    assert_eq!(back, bad);
+    resolves(&lib, &back, Store::Output);
+    assert!(lib.restore_output_link(&back).is_err());
+    assert!(lib.find_run(&run).unwrap().1.deleted.is_empty());
+    let ix = lib.scan().unwrap();
+    let p = ix.project(&project).unwrap();
+    assert_eq!((p.outputs.len(), p.discarded.len()), (2, 0));
+
+    let gone = lib.delete_output_link(&other).unwrap();
+    lib.delete_discarded_output(&gone).unwrap();
+    assert!(!lib.path(&gone).exists());
+    assert!(lib.delete_discarded_output(&bad).is_err());
+    let ix = lib.scan().unwrap();
+    let p = ix.project(&project).unwrap();
+    assert_eq!((p.outputs.len(), p.discarded.len()), (1, 0));
+    assert_eq!(lib.find_run(&run).unwrap().1.deleted, vec![Seeds { first: 1, count: 1 }]);
+    assert_eq!(lib.unreferenced().unwrap().len(), 1);
 }
 
 /// A library whose `library.rsn` names no link mode (the example library,

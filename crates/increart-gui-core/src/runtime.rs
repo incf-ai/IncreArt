@@ -52,6 +52,9 @@ struct Paths {
     disposal: OnceLock<increart_core::library::Disposal>,
     /// Where started servers log; unset: [`log_dir`].
     log_dir: OnceLock<PathBuf>,
+    /// How often engines poll their jobs, and their first retry's wait;
+    /// unset: the engine's defaults.
+    engine_timing: OnceLock<(Duration, Duration)>,
 }
 
 impl Paths {
@@ -97,10 +100,15 @@ pub struct Runtime {
     /// worker starts and stops engines.
     engine_events: Cell<Option<Receiver<Event>>>,
     engine_updates: Receiver<Option<Receiver<Event>>>,
-    /// Set to stop the model download, store conversion or archive going on.
+    /// Set to stop the model download, store conversion, archive or server
+    /// test going on.
     download_cancel: Cell<Arc<AtomicBool>>,
     convert_cancel: Cell<Arc<AtomicBool>>,
     archive_cancel: Cell<Arc<AtomicBool>>,
+    server_test_cancel: Cell<Arc<AtomicBool>>,
+    /// The suite's run going on (its number): its stdin, for `stop` (the
+    /// run's thread lets it go when the run ends).
+    api_test_stdin: Arc<Mutex<Option<(u32, std::process::ChildStdin)>>>,
     /// The open library's watch for outside changes.
     watch: Cell<Option<crate::watch::LibraryWatch>>,
 }
@@ -111,6 +119,39 @@ pub fn log_dir() -> PathBuf {
     increart_core::config::user_dir("XDG_STATE_HOME", ".local/state", "LOCALAPPDATA")
         .unwrap_or_else(|| std::env::temp_dir().join("increart"))
         .join("logs")
+}
+
+/// The server validation suite (beside the app), without a console.
+fn apitest_command() -> std::process::Command {
+    let mut cmd = std::process::Command::new(increart_core::apitest::binary());
+    increart_core::process::background(&mut cmd, false);
+    cmd
+}
+
+/// The suite couldn't be started: most likely, it isn't there.
+fn apitest_missing(e: &std::io::Error) -> String {
+    let bin = increart_core::apitest::binary();
+    let mut why = increart_core::process::spawn_error(&bin.display().to_string(), e);
+    if e.kind() == std::io::ErrorKind::NotFound {
+        why.push_str(&format!(
+            ". {} comes with the app, in its release zip; built from source: cargo build -p {}",
+            increart_core::apitest::BINARY,
+            increart_core::apitest::BINARY
+        ));
+    }
+    why
+}
+
+fn apitest_silent(stderr: &str) -> String {
+    format!("{} said nothing: {}", increart_core::apitest::BINARY, last_lines(stderr, 12))
+}
+
+fn last_lines(s: &str, n: usize) -> String {
+    let lines: Vec<&str> = s.lines().filter(|l| !l.trim().is_empty()).collect();
+    if lines.is_empty() {
+        return "(no output)".into();
+    }
+    lines[lines.len().saturating_sub(n)..].join("\n")
 }
 
 /// A fresh cancel flag for an operation starting, kept in `slot` for its
@@ -135,6 +176,12 @@ impl Runtime {
     /// Servers started after this log into `dir` rather than [`log_dir`].
     pub fn set_log_dir(&self, dir: PathBuf) {
         let _ = self.ctx.paths.log_dir.set(dir);
+    }
+
+    /// Engines started after this poll every `poll` and first retry after
+    /// `backoff` (tests: the defaults keep a stand-in server's runs waiting).
+    pub fn set_engine_timing(&self, poll: Duration, backoff: Duration) {
+        let _ = self.ctx.paths.engine_timing.set((poll, backoff));
     }
 
     /// `wake` is called whenever a message is ready (e.g. request a repaint).
@@ -184,6 +231,8 @@ impl Runtime {
             download_cancel: Cell::default(),
             convert_cancel: Cell::default(),
             archive_cancel: Cell::default(),
+            server_test_cancel: Cell::default(),
+            api_test_stdin: Arc::default(),
             watch: Cell::new(None),
         })
     }
@@ -203,6 +252,79 @@ impl Runtime {
             let _ = tx.send(f());
             wake();
         });
+    }
+
+    /// Starts the validation suite on `cases` (all: none) and sends what
+    /// it says as it runs.
+    fn api_test_run(&self, run: u32, config: PathBuf, cases: Vec<String>) {
+        let (tx, wake) = (self.ctx.tx.clone(), self.ctx.wake.clone());
+        let ended = move |why: Option<String>| {
+            let _ = tx.send(Msg::ApiTestEnded(run, why));
+            wake();
+        };
+        let out = self.ctx.paths.logs().join("apitest").join(chrono::Local::now().format("%Y%m%d-%H%M%S").to_string());
+        let mut cmd = apitest_command();
+        cmd.args(["run", "--jsonl", "--config"]).arg(&config).arg("--out").arg(&out);
+        if !cases.is_empty() {
+            cmd.arg("--cases").arg(cases.join(","));
+        }
+        cmd.stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
+        let mut child = match cmd.spawn() {
+            Ok(c) => c,
+            Err(e) => return ended(Some(apitest_missing(&e))),
+        };
+        if let Some(stdin) = child.stdin.take() {
+            *self.api_test_stdin.lock_or_recover() = Some((run, stdin));
+        }
+        let (tx, wake, stdin) = (self.ctx.tx.clone(), self.ctx.wake.clone(), self.api_test_stdin.clone());
+        let started = std::thread::Builder::new().name("apitest run".into()).spawn(move || {
+            use std::io::{BufRead, Read};
+            let mut stderr = child.stderr.take();
+            let errs = std::thread::Builder::new().name("apitest stderr".into()).spawn(move || {
+                let mut s = String::new();
+                if let Some(e) = stderr.as_mut() {
+                    let _ = e.read_to_string(&mut s);
+                }
+                s
+            });
+            let mut finished = false;
+            if let Some(stdout) = child.stdout.take() {
+                for line in std::io::BufReader::new(stdout).lines().map_while(Result::ok) {
+                    let e = serde_json::from_str(&line)
+                        .unwrap_or(increart_core::apitest::Event::Log { id: None, text: line });
+                    finished |= matches!(
+                        e,
+                        increart_core::apitest::Event::Done { .. } | increart_core::apitest::Event::Error { .. }
+                    );
+                    let _ = tx.send(Msg::ApiTestEvent(run, e));
+                    wake();
+                }
+            }
+            let status = child.wait();
+            // (its stderr unread if that thread couldn't start)
+            let errs = errs.ok().and_then(|t| t.join().ok()).unwrap_or_default();
+            {
+                let mut stdin = stdin.lock_or_recover();
+                if stdin.as_ref().is_some_and(|(r, _)| *r == run) {
+                    *stdin = None;
+                }
+            }
+            let why = (!finished).then(|| match status {
+                Ok(s) => format!("it ended ({s}) before finishing: {}", last_lines(&errs, 12)),
+                Err(e) => format!("it ended before finishing: {e}"),
+            });
+            let _ = tx.send(Msg::ApiTestEnded(run, why));
+            wake();
+        });
+        if let Err(e) = started {
+            // (the child is dropped with the closure: its stdin closed, it ends)
+            self.api_test_stdin.lock_or_recover().take();
+            let _ =
+                self.ctx.tx.send(Msg::ApiTestEnded(run, Some(format!("couldn't start the apitest run thread: {e}"))));
+            (self.ctx.wake)();
+        }
     }
 
     pub fn run(&self, fx: Effect) {
@@ -230,6 +352,69 @@ impl Runtime {
                 });
             }
             Effect::CancelDownload => cancel(&self.download_cancel),
+            Effect::TestServer { run, server, models, generate } => {
+                let (tx, wake) = (self.ctx.tx.clone(), self.ctx.wake.clone());
+                let cancel = new_cancel(&self.server_test_cancel);
+                self.spawn("server test", move || {
+                    use increart_core::servertest;
+                    match servertest::client_for(&server) {
+                        Some(Ok(client)) => {
+                            // a test's traffic is always logged, tagged with it
+                            let tag = format!("test {}", server.name());
+                            increart_core::traffic::tagged(&tag, || {
+                                servertest::run(&client, &models, generate, &cancel, &mut |i, step| {
+                                    let _ = tx.send(Msg::ServerTestStep(run, i, step));
+                                    wake();
+                                })
+                            });
+                        }
+                        Some(Err(e)) => {
+                            let _ = tx.send(Msg::Problem(format!("couldn't test {}: {e}", server.name())));
+                        }
+                        None => {}
+                    }
+                    let _ = tx.send(Msg::ServerTestDone(run));
+                    wake();
+                });
+            }
+            Effect::StopServerTest => cancel(&self.server_test_cancel),
+            Effect::ApiTestList { run, config } => {
+                let (tx, wake) = (self.ctx.tx.clone(), self.ctx.wake.clone());
+                self.spawn("apitest list", move || {
+                    let mut cmd = apitest_command();
+                    cmd.args(["list", "--json", "--config"]).arg(&config);
+                    let why = match cmd.output() {
+                        Ok(out) => {
+                            let mut said = false;
+                            for line in String::from_utf8_lossy(&out.stdout).lines() {
+                                if let Ok(e) = serde_json::from_str(line) {
+                                    said = true;
+                                    let _ = tx.send(Msg::ApiTestEvent(run, e));
+                                }
+                            }
+                            (!said).then(|| apitest_silent(&String::from_utf8_lossy(&out.stderr)))
+                        }
+                        Err(e) => Some(apitest_missing(&e)),
+                    };
+                    let _ = tx.send(Msg::ApiTestEnded(run, why));
+                    wake();
+                });
+            }
+            Effect::ApiTestRun { run, config, cases } => self.api_test_run(run, config, cases),
+            Effect::ApiTestStop => {
+                use std::io::Write;
+                if let Some((_, stdin)) = self.api_test_stdin.lock_or_recover().as_mut() {
+                    let _ = writeln!(stdin, "stop").and_then(|_| stdin.flush());
+                }
+            }
+            Effect::LoadValidations(path) => {
+                let _ = self.ctx.tx.send(Msg::Validations(increart_core::validation::Validations::load(&path)));
+                (self.ctx.wake)();
+            }
+            Effect::ValidationAsked(path, fingerprint) => {
+                // not noted: asked again next time, no worse
+                let _ = increart_core::validation::mark_asked(&path, &fingerprint);
+            }
             Effect::FolderPreviews { root, dir, names } => self.answer("folder previews", move || {
                 let found = names
                     .into_iter()
@@ -248,12 +433,13 @@ impl Runtime {
                 let cancel = new_cancel(&self.convert_cancel);
                 self.spawn("store conversion", move || convert_store(&lib, &ctx, to, &cancel));
             }
-            Effect::SaveBugReport { config, model_dirs, dest } => {
+            Effect::SaveBugReport { config, model_dirs, validations, dest } => {
                 let report = increart_core::bugreport::Report {
                     config,
                     logs: self.ctx.paths.logs(),
                     model_dirs: model_dirs.iter().map(|d| increart_core::config::full_path(d)).collect(),
                     about: increart_core::applog::about().unwrap_or("increart (version not known)").to_string(),
+                    validations,
                 };
                 self.answer("bug report", move || {
                     let r = increart_core::bugreport::write(&report, &dest);
@@ -1080,7 +1266,10 @@ fn list_dir(root: &Path, rel: &Path) -> Vec<FvEntry> {
     for e in rd.flatten() {
         let path = e.path();
         let name = e.file_name().to_string_lossy().into_owned();
-        if name.starts_with('.') {
+        // a project's discarded images are shown in Output library → Discarded
+        if name.starts_with('.')
+            || (name == increart_core::scan::DISCARDED_OUTPUTS && dir.join("project.rsn").is_file())
+        {
             continue;
         }
         let meta = std::fs::metadata(&path).ok();
@@ -1344,6 +1533,10 @@ fn work_on(ctx: &Ctx, fx: Effect) -> Vec<Msg> {
             }
             vec![]
         }
+        Effect::SetLogTraffic(on) => {
+            increart_core::traffic::set_on(on);
+            vec![]
+        }
         Effect::StartEngine { shared: cfg, order, skip_ram_check } => {
             let Some(lib) = ctx.library() else { return vec![] };
             // Runs with seeds left, found before taking any other lock (the
@@ -1368,13 +1561,16 @@ fn work_on(ctx: &Ctx, fx: Effect) -> Vec<Msg> {
                 .flatten()
                 .map(|(_, p)| Endpoint { name: p.name.clone(), device: p.device.clone(), client: p.client.clone() })
                 .collect();
-            let opts = EngineOptions {
+            let mut opts = EngineOptions {
                 generation: GenOptions { preview: cfg.preview.clone(), ..Default::default() },
                 sdcpp: cfg.commit.clone(),
                 order,
                 skip_ram_check,
                 ..Default::default()
             };
+            if let Some(&(poll, backoff)) = ctx.paths.engine_timing.get() {
+                (opts.poll_interval, opts.backoff_base) = (poll, backoff);
+            }
             let w = ctx.wake.clone();
             let mut engine = match Engine::start(lib.clone(), endpoints, opts, Some(Box::new(move || w()))) {
                 Ok(e) => e,
@@ -1435,6 +1631,13 @@ fn work_on(ctx: &Ctx, fx: Effect) -> Vec<Msg> {
         | Effect::KoboldVersion(_)
         | Effect::DownloadModels { .. }
         | Effect::CancelDownload
+        | Effect::TestServer { .. }
+        | Effect::StopServerTest
+        | Effect::ApiTestList { .. }
+        | Effect::ApiTestRun { .. }
+        | Effect::ApiTestStop
+        | Effect::LoadValidations(_)
+        | Effect::ValidationAsked(..)
         | Effect::PlaySound { .. }
         | Effect::OpenServers { .. }
         | Effect::Pick { .. }
@@ -1687,9 +1890,13 @@ pub fn lib_op(lib: &mut Library, op: LibOp) -> Result<OpOk, String> {
             }
             lib.new_idea(n).map(OpOk::Idea).map_err(err)
         }
-        LibOp::NewIdeaPromote(n, folder, name) => {
+        LibOp::NewIdeaNewProject(n, folder, name) => {
+            // Save & new project may name a new library folder
+            if let IdeaLoc::Library(f) = &n.loc {
+                lib.make_library_folder(f).map_err(err)?;
+            }
             let id = lib.new_idea(n).map_err(err)?;
-            promote(lib, &[id], &folder, &name)
+            new_project_from_ideas(lib, &[id], &folder, &name)
         }
         LibOp::ImportFiles(paths) => {
             for p in paths {
@@ -1722,7 +1929,9 @@ pub fn lib_op(lib: &mut Library, op: LibOp) -> Result<OpOk, String> {
         LibOp::MoveIdea(id, loc) => lib.move_idea(&id, &loc).map(|_| OpOk::Done).map_err(err),
         LibOp::SetStar(id, on) => lib.update_idea(&id, |i| i.starred = on).map(|_| OpOk::Done).map_err(err),
         LibOp::DeleteDiscarded(id) => lib.delete_discarded_idea(&id).map(|_| OpOk::Done).map_err(err),
-        LibOp::Promote(ids, folder, name) => promote(lib, &ids, &folder, &name),
+        LibOp::RestoreProject(id) => lib.restore_project(&id).map(|_| OpOk::Done).map_err(err),
+        LibOp::DeleteDiscardedProject(id) => lib.delete_discarded_project(&id).map(|_| OpOk::Done).map_err(err),
+        LibOp::NewProjectFromIdeas(ids, folder, name) => new_project_from_ideas(lib, &ids, &folder, &name),
         LibOp::CreateFolder(tree, parent) => {
             lib.create_folder(tree, &parent, None).map(|p| OpOk::Created(tree, p)).map_err(err)
         }
@@ -1819,6 +2028,18 @@ pub fn lib_op(lib: &mut Library, op: LibOp) -> Result<OpOk, String> {
             }
             Ok(OpOk::Done)
         }
+        LibOp::RestoreOutputs(links) => {
+            for l in links {
+                lib.restore_output_link(&l).map_err(err)?;
+            }
+            Ok(OpOk::Done)
+        }
+        LibOp::DeleteDiscardedOutputs(links) => {
+            for l in links {
+                lib.delete_discarded_output(&l).map_err(err)?;
+            }
+            Ok(OpOk::Done)
+        }
         LibOp::ReviewOutputs { links, undo } => {
             let mut done = vec![];
             for (link, verdict) in links {
@@ -1837,7 +2058,7 @@ pub fn lib_op(lib: &mut Library, op: LibOp) -> Result<OpOk, String> {
 
 /// Keeps the ideas (inbox ones move to the top of the input library) and
 /// makes one project from them, named after the first idea's title.
-fn promote(lib: &mut Library, ids: &[Id], folder: &Path, name: &str) -> Result<OpOk, String> {
+fn new_project_from_ideas(lib: &mut Library, ids: &[Id], folder: &Path, name: &str) -> Result<OpOk, String> {
     // Create in folder: a new folder is made first
     if !lib.root().join("projects").join(folder).is_dir()
         && let (Some(parent), Some(last)) = (folder.parent(), folder.file_name())
@@ -1854,7 +2075,7 @@ fn promote(lib: &mut Library, ids: &[Id], folder: &Path, name: &str) -> Result<O
     let (project, _) = lib.create_project(folder, Some(name), ids).map_err(err)?;
     let prompt = ideas.iter().map(|i| i.text.trim()).find(|t| !t.is_empty()).unwrap_or("").to_string();
     let refs = ideas.iter().flat_map(|i| i.images.iter().cloned().map(ImageRef::input)).collect();
-    Ok(OpOk::Promoted { project, prompt, refs, idea: ids.first().cloned() })
+    Ok(OpOk::ProjectFromIdeas { project, prompt, refs, idea: ids.first().cloned() })
 }
 
 /// Hashes a new run's model files into the library's cache before the

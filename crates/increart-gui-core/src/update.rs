@@ -143,6 +143,42 @@ pub enum Msg {
     ServerStatus(bool),
     /// Settings: loads wait for free RAM, or don't.
     SetSkipRamCheck(bool),
+    /// Settings: the image servers' traffic is logged, or isn't.
+    SetLogTraffic(bool),
+    /// **Test** on a server the app connects to: opens the Test window.
+    TestServer(ServerConfig),
+    /// A test's step (by test number and index) started or ended.
+    ServerTestStep(u32, usize, increart_core::servertest::Step),
+    ServerTestDone(u32),
+    /// Stops the test, keeping its window.
+    StopServerTest,
+    /// Closes the Test window, stopping the test.
+    CloseServerTest,
+    /// **Validate servers…** (on the startup server screen): opens the
+    /// window, listing the suite's cases; or closes it (stopping a run).
+    ApiTest(bool),
+    /// The suite said something, in the list or run of that number.
+    ApiTestEvent(u32, increart_core::apitest::Event),
+    /// The suite's process ended: None, or why it said nothing more (it
+    /// isn't there, it ended early).
+    ApiTestEnded(u32, Option<String>),
+    /// Checks (or unchecks) these cases.
+    ApiTestCheck(Vec<usize>, bool),
+    /// Shows a case's log (None: the run's).
+    ApiTestSelect(Option<usize>),
+    /// Shows one server preset's cases, checking those (None: all presets).
+    ApiTestPreset(Option<String>),
+    ApiTestRun(crate::state::ApiRun),
+    /// Stops the run: the case going on, then the servers it started.
+    ApiTestStop,
+    /// **Validate now**: the window on this preset, its basic cases run.
+    ValidateBasic(String),
+    /// The window's advanced view (true) or basic one.
+    ApiTestAdvanced(bool),
+    /// After validating: closes the window and opens the preset shown.
+    ApiTestContinue,
+    /// The stamps file, read.
+    Validations(increart_core::validation::Validations),
     /// The Settings window.
     Settings(bool),
     SetNotifications(increart_core::notify::Notifications),
@@ -203,7 +239,7 @@ pub enum Msg {
     ProjectsTab(ProjectsTab),
     // ---- ideas
     Draft(IdeaDraft),
-    /// Add the draft: to the inbox, straight to the library, or keep and promote.
+    /// Add the draft: to the inbox, straight to the library, or keep it and make a project.
     AddIdea(AddIdea),
     DropFiles(Vec<PathBuf>),
     InboxCursor(usize),
@@ -220,26 +256,34 @@ pub enum Msg {
     SaveIdeaNewFolder(Option<String>),
     SaveIdeaFilter(String),
     ConfirmSaveIdea,
+    /// Save, then a project from what was saved: named as the idea is (the
+    /// first idea's title of several), where the last project from ideas went, in
+    /// its own folder; the New project dialog when that name won't do.
+    SaveIdeaNewProject,
     CancelSaveIdea,
-    /// Asks for the new project's name, then promotes these ideas.
-    Promote(Vec<Id>),
-    EditPromoteName(String),
-    /// The Promote dialog's step: choosing where (true) or naming.
-    PromoteChoose(bool),
-    PromoteParent(PathBuf),
+    /// Asks for the new project's name and folder, then makes it from these ideas.
+    NewProjectFromIdeas(Vec<Id>),
+    EditFromIdeasName(String),
+    FromIdeasParent(PathBuf),
     /// Step 2's new folder (`None`: none).
-    PromoteNewFolder(Option<String>),
-    PromoteFilter(String),
+    FromIdeasNewFolder(Option<String>),
+    FromIdeasFilter(String),
     /// Collapses or expands a folder of the project tree.
     ToggleProjectFolder(PathBuf),
     /// Collapses (true) or expands every folder of the project tree.
     CollapseProjectFolders(bool),
     /// `true`: in the dialog's folder (Create in folder).
-    ConfirmPromote,
-    CancelPromote,
+    ConfirmFromIdeas,
+    CancelFromIdeas,
     Restore(Id, IdeaLoc),
     SetStar(Id, bool),
     DeleteDiscarded(Id),
+    /// A discarded project back where it was (Projects → Discarded).
+    RestoreProject(Id),
+    /// A discarded project for good (asks first in the GUI).
+    DeleteDiscardedProject(Id),
+    /// Every discarded project for good (asks first in the GUI).
+    EmptyDiscardedProjects,
     // ---- input library
     LibFolder(Option<PathBuf>),
     /// The idea in the Input library's side panel (`None` closes it).
@@ -408,6 +452,13 @@ pub enum Msg {
     OutputTab(OutputTab),
     OutputSource(OutputSource),
     DeleteOutput(PathBuf),
+    /// A discarded image's link back in its project (Output library →
+    /// Discarded).
+    RestoreOutput(PathBuf),
+    /// A discarded image's link for good (asks first in the GUI).
+    DeleteDiscardedOutput(PathBuf),
+    /// Every discarded image's link for good (asks first in the GUI).
+    EmptyDiscardedOutputs,
     /// Deletes the bad images the Grid shows.
     DeleteShownRejected,
     // ---- confirmation
@@ -866,7 +917,7 @@ pub enum Msg {
 pub enum AddIdea {
     Inbox,
     Keep,
-    Promote,
+    NewProject,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -917,6 +968,37 @@ pub enum Effect {
     SetJobOrder(Order),
     /// Loads stop (or start again) waiting for free RAM.
     SetSkipRamCheck(bool),
+    /// The image servers' traffic log goes on or off.
+    SetLogTraffic(bool),
+    /// Test `server` (with `models` to load one of; not loading or making
+    /// an image when `generate` says why), answered with `ServerTestStep`s
+    /// and `ServerTestDone`.
+    TestServer {
+        run: u32,
+        server: ServerConfig,
+        models: Vec<(String, increart_core::sdserver::ModelKey)>,
+        generate: Result<(), String>,
+    },
+    StopServerTest,
+    /// List the suite's cases for the config saved at `config`, answered
+    /// with an `ApiTestEvent` (its plan, or an error) and `ApiTestEnded`.
+    ApiTestList {
+        run: u32,
+        config: PathBuf,
+    },
+    /// Run the suite on `cases` (empty: all), answered with
+    /// `ApiTestEvent`s and `ApiTestEnded`.
+    ApiTestRun {
+        run: u32,
+        config: PathBuf,
+        cases: Vec<String>,
+    },
+    ApiTestStop,
+    /// Read the stamps file, answered with `Validations`.
+    LoadValidations(PathBuf),
+    /// Note in the stamps file that opening these settings (a
+    /// fingerprint) asked whether to validate them.
+    ValidationAsked(PathBuf, String),
     /// Stop the engine and the servers the app started.
     StopServers,
     /// Stop the engine only, keeping the servers (switching libraries).
@@ -996,6 +1078,8 @@ pub enum Effect {
     SaveBugReport {
         config: Option<PathBuf>,
         model_dirs: Vec<String>,
+        /// The stamps file: it and each preset's newest report go in.
+        validations: Option<PathBuf>,
         dest: PathBuf,
     },
     /// Writes the library at `root` to `dest`, on its own thread, reporting
@@ -1057,9 +1141,9 @@ pub enum DraftSave {
 #[derive(Clone, Debug, PartialEq)]
 pub enum LibOp {
     NewIdea(NewIdea),
-    /// Keep a new idea and promote it to a project in `folder`.
+    /// Keep a new idea and make a project from it in `folder`.
     /// The idea, then a project named so in this folder.
-    NewIdeaPromote(NewIdea, PathBuf, String),
+    NewIdeaNewProject(NewIdea, PathBuf, String),
     ImportFiles(Vec<PathBuf>),
     /// Import images into the input store (for the New idea draft).
     ImportImages(Vec<PathBuf>),
@@ -1072,9 +1156,11 @@ pub enum LibOp {
     MoveIdea(Id, IdeaLoc),
     SetStar(Id, bool),
     DeleteDiscarded(Id),
+    RestoreProject(Id),
+    DeleteDiscardedProject(Id),
     /// Keep the ideas (if still in the inbox) and make one project from them.
     /// The ideas into a new project named so in this folder.
-    Promote(Vec<Id>, PathBuf, String),
+    NewProjectFromIdeas(Vec<Id>, PathBuf, String),
     CreateFolder(Tree, PathBuf),
     CreateProject(PathBuf, String),
     Rename(Tree, PathBuf, String),
@@ -1106,6 +1192,8 @@ pub enum LibOp {
     },
     /// Output links to the trash (the images stay until Clean up).
     DeleteOutputs(Vec<PathBuf>),
+    RestoreOutputs(Vec<PathBuf>),
+    DeleteDiscardedOutputs(Vec<PathBuf>),
     /// A new project in `parent` named after `name`, or a copy of the
     /// project at `copy_of` (relative to `projects/`); then the Generate form
     /// `form` opens on it.
@@ -1184,7 +1272,7 @@ pub enum OpOk {
     /// An edited copy's image, and where it goes.
     Edited(Id, EditedTo),
     /// A new project from ideas: the Generate panel is seeded from them.
-    Promoted {
+    ProjectFromIdeas {
         project: Id,
         prompt: String,
         refs: Vec<ImageRef>,
@@ -1348,6 +1436,80 @@ fn check_presets(list: &PromptPresets) -> Result<(), String> {
     Ok(())
 }
 
+/// An event of the suite, into its window.
+fn api_test_event(t: &mut crate::state::ApiTest, event: increart_core::apitest::Event) {
+    use increart_core::apitest::Event;
+    let case = |t: &mut crate::state::ApiTest, id: &str| t.index(id);
+    match event {
+        // a run's plan is the cases it runs, of those listed: kept as listed
+        Event::Plan { cases } if !t.running => {
+            let was: std::collections::HashMap<String, bool> =
+                t.cases.iter().map(|c| (c.case.id.clone(), c.checked)).collect();
+            let first = t.cases.is_empty();
+            t.cases = cases
+                .into_iter()
+                .map(|c| crate::state::ApiCase {
+                    checked: was.get(&c.id).copied().unwrap_or(c.not_applicable.is_none()),
+                    case: c,
+                    outcome: None,
+                    running: false,
+                    summary: String::new(),
+                    secs: 0.0,
+                    log: vec![],
+                    traffic: vec![],
+                })
+                .collect();
+            t.selected = None;
+            if first {
+                let preset = t.preset.take();
+                t.show_preset(preset);
+            }
+        }
+        Event::Plan { .. } => {}
+        Event::Start { id } => {
+            if let Some(i) = case(t, &id) {
+                let c = &mut t.cases[i];
+                c.running = true;
+                c.outcome = None;
+                c.summary.clear();
+                c.log.clear();
+                c.traffic.clear();
+                if t.follow {
+                    t.selected = Some(i);
+                }
+            }
+        }
+        Event::Log { id: Some(id), text } => match case(t, &id) {
+            Some(i) => t.cases[i].log.push(text),
+            None => t.log.push(text),
+        },
+        Event::Log { id: None, text } => t.log.push(text),
+        Event::Traffic { id: Some(id), text } => {
+            if let Some(i) = case(t, &id) {
+                t.cases[i].traffic.push(text);
+            }
+        }
+        Event::Traffic { id: None, .. } => {}
+        Event::End { id, outcome, summary, secs } => {
+            if let Some(i) = case(t, &id) {
+                let c = &mut t.cases[i];
+                c.running = false;
+                c.outcome = Some(outcome);
+                c.summary = summary;
+                c.secs = secs;
+            }
+        }
+        Event::Done { counts, report, zip } => {
+            t.log.push(counts.line());
+            t.done = Some((counts, report, zip));
+            if t.follow {
+                t.selected = None;
+            }
+        }
+        Event::Error { text } => t.error = Some(text),
+    }
+}
+
 fn save_config(state: &AppState) -> Vec<Effect> {
     state.config_path.iter().map(|p| Effect::SaveConfig(state.config.clone(), p.clone())).collect()
 }
@@ -1391,6 +1553,44 @@ fn skip_servers(state: &mut AppState, choice: StartupServers) -> Vec<Effect> {
     let mut fx = update(state, Msg::OpenPresetNow(found.unwrap_or_default()));
     fx.extend(update(state, Msg::ContinueInBackground));
     fx
+}
+
+/// The first time a preset is opened with settings not validated (the
+/// suite's basic cases never passed for them), asks whether to validate
+/// them first; asked once per settings. None: nothing to ask.
+fn ask_to_validate(state: &mut AppState, i: usize, p: &ServerPreset) -> Option<Vec<Effect>> {
+    use increart_core::validation::{Status, fingerprint};
+    let path = state.validations_path.clone()?;
+    // the suite starts the servers itself: not with any open
+    let idle = matches!(&state.phase, Phase::Servers(d) if !d.opening)
+        && state.servers.is_empty()
+        && state.background.is_none()
+        && state.api_test.is_none();
+    if !state.suite_found || !idle || p.servers.is_empty() || state.validations.was_asked(&state.config, p) {
+        return None;
+    }
+    let said = match state.validations.status(&state.config, p) {
+        Status::Passed(_) => return None,
+        Status::Never => {
+            format!("{} hasn't been validated: the server validation suite hasn't checked its servers.", p.name)
+        }
+        Status::Changed(s) => format!("{} was validated on {}, but its settings have changed since.", p.name, s.day()),
+        Status::Failed(s) => format!("{} failed its basic validation on {}.", p.name, s.day()),
+    };
+    let fp = fingerprint(&state.config, p);
+    state.validations.asked.push(fp.clone());
+    let text = format!(
+        "{said}\n\nStrongly recommended: validate it now. Each server answers, lists its models and makes a \
+         small image, then a short run goes through them all, as the app uses them. It takes a few minutes \
+         (the first image the longest); a problem is said case by case, with a report to send.\n\n\
+         Asked once for these settings: the preset's mark on this screen says whether it's validated."
+    );
+    let ask = Confirm::new(text, "Validate now", Msg::ValidateBasic(p.name.clone()))
+        .with_fix("Open without", Msg::OpenPreset(i))
+        .recommending("Validate these servers first?");
+    let mut fx = vec![Effect::ValidationAsked(path, fp)];
+    fx.extend(update(state, Msg::Ask(ask)));
+    Some(fx)
 }
 
 /// Opening a preset stops the sd-servers in use it doesn't have, and
@@ -1824,6 +2024,9 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
         Msg::OpenPreset(i) => match state.config.server_presets.get(i) {
             Some(p) => {
                 let p = p.clone();
+                if let Some(fx) = ask_to_validate(state, i, &p) {
+                    return fx;
+                }
                 ask_before_replacing(state, &p, Msg::OpenPresetNow(i))
             }
             None => vec![],
@@ -2453,6 +2656,247 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
             fx.push(Effect::SetSkipRamCheck(skip));
             fx
         }
+        Msg::SetLogTraffic(on) => {
+            if state.config.log_traffic == on {
+                return vec![];
+            }
+            state.config.log_traffic = on;
+            let mut fx = save_config(state);
+            fx.push(Effect::SetLogTraffic(on));
+            fx
+        }
+        Msg::TestServer(server) => {
+            state.server_tests += 1;
+            let run = state.server_tests;
+            let running = state.server_test.as_ref().is_some_and(|t| !t.done);
+            let url = server.base_url();
+            let in_use: Vec<&str> = state
+                .servers
+                .iter()
+                .filter(|s| s.config.as_ref().is_some_and(|c| c.base_url() == url))
+                .map(|s| s.name.as_str())
+                .collect();
+            let generate = if state.engine_running && !in_use.is_empty() {
+                Err(format!("not while the open servers use it ({}): close them first", in_use.join(", ")))
+            } else {
+                Ok(())
+            };
+            let models = state
+                .config
+                .recipes
+                .iter()
+                .map(|r| {
+                    let key = increart_core::sdserver::ModelKey { recipe: r.recipe.clone(), models: r.files.clone() };
+                    (r.name.clone(), key)
+                })
+                .collect();
+            state.server_test =
+                Some(crate::state::ServerTest { run, name: server.name().to_string(), steps: vec![], done: false });
+            let mut fx = vec![];
+            if running {
+                fx.push(Effect::StopServerTest);
+            }
+            fx.push(Effect::TestServer { run, server, models, generate });
+            fx
+        }
+        Msg::ServerTestStep(run, i, step) => {
+            if let Some(t) = state.server_test.as_mut().filter(|t| t.run == run) {
+                if i < t.steps.len() {
+                    t.steps[i] = step;
+                } else {
+                    t.steps.push(step);
+                }
+            }
+            vec![]
+        }
+        Msg::ServerTestDone(run) => {
+            if let Some(t) = state.server_test.as_mut().filter(|t| t.run == run) {
+                t.done = true;
+            }
+            vec![]
+        }
+        Msg::StopServerTest => match &state.server_test {
+            Some(t) if !t.done => vec![Effect::StopServerTest],
+            _ => vec![],
+        },
+        Msg::CloseServerTest => match state.server_test.take() {
+            Some(t) if !t.done => vec![Effect::StopServerTest],
+            _ => vec![],
+        },
+        Msg::ApiTest(true) => {
+            // the suite starts the servers itself: not with any open
+            let idle = matches!(&state.phase, Phase::Servers(d) if !d.opening)
+                && state.servers.is_empty()
+                && state.background.is_none();
+            if !idle || state.api_test.is_some() {
+                return vec![];
+            }
+            state.server_tests += 1;
+            let run = state.server_tests;
+            // on the last used preset, once its cases are listed
+            let preset = state.config.last_preset.clone();
+            let mut t = crate::state::ApiTest { run, follow: true, preset, ..Default::default() };
+            let fx = match &state.config_path {
+                Some(config) => {
+                    t.listing = true;
+                    vec![Effect::ApiTestList { run, config: config.clone() }]
+                }
+                None => {
+                    t.error = Some("the config isn't saved anywhere: the suite reads it from its file".into());
+                    vec![]
+                }
+            };
+            state.api_test = Some(t);
+            fx
+        }
+        Msg::ApiTest(false) => match &mut state.api_test {
+            // stopped first; closed once it's over
+            Some(t) if t.running => {
+                let stop = !t.stopping;
+                t.stopping = true;
+                t.stopped = true;
+                if stop { vec![Effect::ApiTestStop] } else { vec![] }
+            }
+            _ => {
+                state.api_test = None;
+                vec![]
+            }
+        },
+        Msg::ApiTestEvent(run, event) => {
+            if let Some(t) = state.api_test.as_mut().filter(|t| t.run == run) {
+                api_test_event(t, event);
+            }
+            vec![]
+        }
+        Msg::ApiTestEnded(run, why) => {
+            let mut fx = vec![];
+            if let Some(t) = state.api_test.as_mut().filter(|t| t.run == run) {
+                // a run may have noted a preset validated
+                if t.running
+                    && let Some(path) = &state.validations_path
+                {
+                    fx.push(Effect::LoadValidations(path.clone()));
+                }
+                if t.running {
+                    t.ended = Some(state.now);
+                }
+                let listed = t.listing;
+                t.listing = false;
+                t.running = false;
+                t.stopping = false;
+                for c in t.cases.iter_mut().filter(|c| c.running) {
+                    c.running = false;
+                }
+                if t.error.is_none() {
+                    t.error = why;
+                }
+                // Validate now: its basic cases, once listed
+                if listed && t.basic_pending && t.error.is_none() && !t.cases.is_empty() {
+                    t.basic_pending = false;
+                    t.check_basic();
+                    fx.extend(update(state, Msg::ApiTestRun(crate::state::ApiRun::Checked)));
+                }
+            }
+            fx
+        }
+        Msg::ValidateBasic(preset) => {
+            if state.api_test.is_none() {
+                let fx = update(state, Msg::ApiTest(true));
+                if let Some(t) = &mut state.api_test {
+                    t.preset = Some(preset);
+                    t.basic_pending = true;
+                }
+                return fx;
+            }
+            let Some(t) = &mut state.api_test else { return vec![] };
+            if t.running || t.listing || !t.presets().contains(&preset.as_str()) {
+                return vec![];
+            }
+            t.show_preset(Some(preset));
+            t.check_basic();
+            update(state, Msg::ApiTestRun(crate::state::ApiRun::Checked))
+        }
+        Msg::Validations(v) => {
+            state.validations = v;
+            vec![]
+        }
+        Msg::ApiTestAdvanced(on) => {
+            state.api_test_advanced = on;
+            vec![]
+        }
+        Msg::ApiTestContinue => {
+            let Some(t) = state.api_test.as_ref().filter(|t| !t.running && !t.listing) else { return vec![] };
+            let Some(i) = t.preset.as_ref().and_then(|p| state.config.server_presets.iter().position(|x| &x.name == p))
+            else {
+                return vec![];
+            };
+            state.api_test = None;
+            // validated (or chosen not to be): not asked again on opening
+            let mut fx = vec![];
+            let fp = increart_core::validation::fingerprint(&state.config, &state.config.server_presets[i]);
+            if let Some(path) = &state.validations_path
+                && !state.validations.asked.contains(&fp)
+            {
+                state.validations.asked.push(fp.clone());
+                fx.push(Effect::ValidationAsked(path.clone(), fp));
+            }
+            fx.extend(update(state, Msg::OpenPresetNow(i)));
+            fx
+        }
+        Msg::ApiTestCheck(ix, on) => {
+            if let Some(t) = &mut state.api_test {
+                for i in ix {
+                    if let Some(c) = t.cases.get_mut(i) {
+                        c.checked = on;
+                    }
+                }
+            }
+            vec![]
+        }
+        Msg::ApiTestPreset(preset) => {
+            if let Some(t) = &mut state.api_test {
+                t.show_preset(preset);
+            }
+            vec![]
+        }
+        Msg::ApiTestSelect(i) => {
+            if let Some(t) = &mut state.api_test {
+                t.selected = i.filter(|&i| i < t.cases.len());
+                t.follow = false;
+            }
+            vec![]
+        }
+        Msg::ApiTestRun(which) => {
+            let Some(config) = state.config_path.clone() else { return vec![] };
+            let Some(t) = &mut state.api_test else { return vec![] };
+            if t.running || t.listing || t.cases.is_empty() {
+                return vec![];
+            }
+            let cases = t.ids(which);
+            if cases.is_empty() && which != crate::state::ApiRun::All {
+                return vec![];
+            }
+            state.server_tests += 1;
+            t.run = state.server_tests;
+            t.ran = t.picked(which);
+            t.stopped = false;
+            t.started = state.now;
+            t.ended = None;
+            t.running = true;
+            t.follow = true;
+            t.done = None;
+            t.error = None;
+            t.log.clear();
+            vec![Effect::ApiTestRun { run: t.run, config, cases }]
+        }
+        Msg::ApiTestStop => match &mut state.api_test {
+            Some(t) if t.running && !t.stopping => {
+                t.stopping = true;
+                t.stopped = true;
+                vec![Effect::ApiTestStop]
+            }
+            _ => vec![],
+        },
         Msg::Settings(open) => {
             state.settings_open = open && state.phase == Phase::Main;
             if state.settings_open && state.settings_tab == crate::state::SettingsTab::Library {
@@ -2687,10 +3131,10 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
                 state.messages_error("The idea is empty");
                 return vec![];
             }
-            if how == AddIdea::Promote {
+            if how == AddIdea::NewProject {
                 // the draft stays until the project is named
-                let name = promote_name(state, [state.draft.title.as_str()]);
-                state.promote = Some(PromoteDialog::new(vec![], promote_parent(state), name));
+                let name = from_ideas_name(state, [state.draft.title.as_str()]);
+                state.from_ideas = Some(FromIdeasDialog::new(vec![], from_ideas_parent(state), name));
                 return vec![];
             }
             if how == AddIdea::Keep {
@@ -2699,7 +3143,7 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
                 state.save_idea = Some(SaveIdeaDialog::new(state, vec![], name));
                 return vec![];
             }
-            add_idea(state, how, PathBuf::new(), String::new())
+            add_idea(state, how, PathBuf::new(), String::new(), None)
         }
         Msg::DropFiles(paths) => {
             if paths.is_empty() || state.library.is_none() {
@@ -2769,7 +3213,7 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
             let (folder, _) = save_idea_folder(state, &d);
             state.save_idea_last = Some(folder.clone());
             if d.ideas.is_empty() {
-                return add_idea(state, AddIdea::Keep, folder, d.name.trim().to_string());
+                return add_idea(state, AddIdea::Keep, folder, d.name.trim().to_string(), None);
             }
             // the picks they were go with them
             state.inbox_picked.retain(|p| !d.ideas.contains(p));
@@ -2779,22 +3223,52 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
                 .flat_map(|id| lib(state, LibOp::SaveToLibrary(id, title.clone(), folder.clone())))
                 .collect()
         }
+        Msg::SaveIdeaNewProject => {
+            let Some(d) = state.save_idea.clone() else { return vec![] };
+            if let Some(e) = save_idea_problem(&d) {
+                state.messages_error(e);
+                return vec![];
+            }
+            let titles: Vec<String> = match &d.ideas[..] {
+                [] | [_] => vec![d.name.trim().to_string()],
+                ids => ids.iter().filter_map(|i| state.index.idea(i)).map(|e| e.idea.title.clone()).collect(),
+            };
+            let name = from_ideas_name(state, titles.iter().map(String::as_str));
+            let mut p = FromIdeasDialog::new(d.ideas.clone(), from_ideas_parent(state), name);
+            let mut fx = vec![];
+            if d.ideas.is_empty() {
+                // the draft: saved there as the project is made
+                let (folder, _) = save_idea_folder(state, &d);
+                state.save_idea = None;
+                state.save_idea_last = Some(folder.clone());
+                state.draft.title = d.name.trim().to_string();
+                p.saved_in = Some(folder);
+            } else {
+                fx = update(state, Msg::ConfirmSaveIdea);
+            }
+            let ok = from_ideas_problem(state, &p).is_none();
+            state.from_ideas = Some(p);
+            if ok {
+                fx.extend(update(state, Msg::ConfirmFromIdeas));
+            }
+            fx
+        }
         Msg::CancelSaveIdea => {
             state.save_idea = None;
             vec![]
         }
-        Msg::Promote(ids) => {
+        Msg::NewProjectFromIdeas(ids) => {
             if ids.is_empty() {
                 return vec![];
             }
             let titles: Vec<String> =
                 ids.iter().filter_map(|i| state.index.idea(i)).map(|e| e.idea.title.clone()).collect();
-            let name = promote_name(state, titles.iter().map(String::as_str));
-            state.promote = Some(PromoteDialog::new(ids, promote_parent(state), name));
+            let name = from_ideas_name(state, titles.iter().map(String::as_str));
+            state.from_ideas = Some(FromIdeasDialog::new(ids, from_ideas_parent(state), name));
             vec![]
         }
-        Msg::EditPromoteName(n) => {
-            if let Some(d) = &mut state.promote {
+        Msg::EditFromIdeasName(n) => {
+            if let Some(d) = &mut state.from_ideas {
                 if d.own_folder() {
                     d.new_folder = Some(n.trim().to_string());
                 }
@@ -2802,53 +3276,53 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
             }
             vec![]
         }
-        Msg::PromoteChoose(on) => {
-            if let Some(d) = &mut state.promote {
-                d.choosing = on;
-            }
-            vec![]
-        }
-        Msg::PromoteParent(p) => {
-            if let Some(d) = &mut state.promote {
+        Msg::FromIdeasParent(p) => {
+            if let Some(d) = &mut state.from_ideas {
                 d.parent = p;
             }
             vec![]
         }
-        Msg::PromoteNewFolder(f) => {
-            if let Some(d) = &mut state.promote {
+        Msg::FromIdeasNewFolder(f) => {
+            if let Some(d) = &mut state.from_ideas {
                 d.new_folder = f;
             }
             vec![]
         }
-        Msg::PromoteFilter(f) => {
-            if let Some(d) = &mut state.promote {
+        Msg::FromIdeasFilter(f) => {
+            if let Some(d) = &mut state.from_ideas {
                 d.filter = f;
             }
             vec![]
         }
-        Msg::ConfirmPromote => {
-            let Some(d) = state.promote.take() else { return vec![] };
+        Msg::ConfirmFromIdeas => {
+            let Some(d) = state.from_ideas.take() else { return vec![] };
             let name = d.name.trim().to_string();
-            let (parent, _) = promote_folder(state, &d);
-            if let Some(e) = promote_problem(state, &d) {
+            let (parent, _) = from_ideas_folder(state, &d);
+            if let Some(e) = from_ideas_problem(state, &d) {
                 state.messages_error(e);
-                state.promote = Some(d);
+                state.from_ideas = Some(d);
                 return vec![];
             }
             // the next one goes next to a project's own folder, not in it
-            state.promote_last = Some(if d.own_folder() { d.parent.clone() } else { parent.clone() });
+            state.from_ideas_last = Some(if d.own_folder() { d.parent.clone() } else { parent.clone() });
             if d.ideas.is_empty() {
-                return add_idea(state, AddIdea::Promote, parent, name);
+                return add_idea(state, AddIdea::NewProject, parent, name, d.saved_in);
             }
-            lib(state, LibOp::Promote(d.ideas, parent, name))
+            lib(state, LibOp::NewProjectFromIdeas(d.ideas, parent, name))
         }
-        Msg::CancelPromote => {
-            state.promote = None;
+        Msg::CancelFromIdeas => {
+            state.from_ideas = None;
             vec![]
         }
         Msg::Restore(id, loc) => lib(state, LibOp::MoveIdea(id, loc)),
         Msg::SetStar(id, on) => lib(state, LibOp::SetStar(id, on)),
         Msg::DeleteDiscarded(id) => lib(state, LibOp::DeleteDiscarded(id)),
+        Msg::RestoreProject(id) => lib(state, LibOp::RestoreProject(id)),
+        Msg::DeleteDiscardedProject(id) => lib(state, LibOp::DeleteDiscardedProject(id)),
+        Msg::EmptyDiscardedProjects => {
+            let ids: Vec<Id> = state.index.discarded_projects.iter().map(|d| d.entry.project.id.clone()).collect();
+            ids.into_iter().flat_map(|id| lib(state, LibOp::DeleteDiscardedProject(id))).collect()
+        }
 
         // ------------------------------------------------ input library
         Msg::LibFolder(f) => {
@@ -5646,6 +6120,15 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
             vec![]
         }
         Msg::DeleteOutput(link) => lib(state, LibOp::DeleteOutputs(vec![link])),
+        Msg::RestoreOutput(link) => lib(state, LibOp::RestoreOutputs(vec![link])),
+        Msg::DeleteDiscardedOutput(link) => lib(state, LibOp::DeleteDiscardedOutputs(vec![link])),
+        Msg::EmptyDiscardedOutputs => {
+            let links: Vec<_> = state.discarded_outputs().iter().map(|o| o.path.clone()).collect();
+            if links.is_empty() {
+                return vec![];
+            }
+            lib(state, LibOp::DeleteDiscardedOutputs(links))
+        }
         Msg::DeleteShownRejected => {
             let links: Vec<_> = state
                 .output_source_images()
@@ -5887,7 +6370,12 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
                 }
                 state.saving_bug_report = true;
                 let config = state.config_path.clone();
-                vec![Effect::SaveBugReport { config, model_dirs: state.config.sdserver.model_dirs.clone(), dest }]
+                vec![Effect::SaveBugReport {
+                    config,
+                    model_dirs: state.config.sdserver.model_dirs.clone(),
+                    validations: state.validations_path.clone(),
+                    dest,
+                }]
             }
             PickKind::ExportDir => {
                 if let Some(e) = &mut state.export {
@@ -6318,7 +6806,7 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
                 )
             } else {
                 format!(
-                    "Delete {} item(s)? Folders and projects go to the trash with everything in them; image links go to the trash too, the images stay in the store until Clean up.",
+                    "Delete {} item(s)? Projects go to Discarded (restore them from Projects → Discarded); images go to Output library → Discarded; folders go to the trash.",
                     targets.len()
                 )
             };
@@ -6413,9 +6901,17 @@ fn lib(state: &mut AppState, op: LibOp) -> Vec<Effect> {
 }
 
 /// The New idea form's draft as an idea: into the inbox, (Keep) named
-/// `name` into the library folder `parent`, or (Promote) the library and a
+/// `name` into the library folder `parent`, or (New project) the library and a
 /// new project `name` in `parent`.
-fn add_idea(state: &mut AppState, how: AddIdea, parent: PathBuf, name: String) -> Vec<Effect> {
+/// `saved_in`: New project, the library folder the idea goes in (else the
+/// top level).
+fn add_idea(
+    state: &mut AppState,
+    how: AddIdea,
+    parent: PathBuf,
+    name: String,
+    saved_in: Option<PathBuf>,
+) -> Vec<Effect> {
     let mut d = std::mem::take(&mut state.draft);
     if how == AddIdea::Keep {
         d.title = name.clone();
@@ -6426,12 +6922,12 @@ fn add_idea(state: &mut AppState, how: AddIdea, parent: PathBuf, name: String) -
     let loc = match how {
         AddIdea::Inbox => IdeaLoc::Unreviewed,
         AddIdea::Keep => IdeaLoc::Library(parent.clone()),
-        AddIdea::Promote => IdeaLoc::top_library(),
+        AddIdea::NewProject => saved_in.map_or_else(IdeaLoc::top_library, IdeaLoc::Library),
     };
     let idea = NewIdea { title: d.title, text: d.text, tags, images: d.images, loc, ..NewIdea::text("", "") };
     state.busy += 1;
     let add = match how {
-        AddIdea::Promote => Effect::Lib(LibOp::NewIdeaPromote(idea, parent, name)),
+        AddIdea::NewProject => Effect::Lib(LibOp::NewIdeaNewProject(idea, parent, name)),
         _ => Effect::Lib(LibOp::NewIdea(idea)),
     };
     state.saving += 1;
@@ -6467,14 +6963,14 @@ pub fn save_idea_folder(state: &AppState, d: &SaveIdeaDialog) -> (PathBuf, bool)
     }
 }
 
-/// Why the Promote dialog can't create the project (in its folder when
+/// Why the New project from ideas dialog can't create the project (in its folder when
 /// `in_folder`): a bad or taken name, or a folder name a project has.
-pub fn promote_problem(state: &AppState, d: &PromoteDialog) -> Option<String> {
+pub fn from_ideas_problem(state: &AppState, d: &FromIdeasDialog) -> Option<String> {
     let name = d.name.trim();
     if let Err(e) = increart_core::library::validate_name(name) {
         return Some(e.to_string());
     }
-    let (at, exists) = promote_folder(state, d);
+    let (at, exists) = from_ideas_folder(state, d);
     if let Some(folder) = d.new_folder.as_deref().map(str::trim) {
         if let Err(e) = increart_core::library::validate_name(folder) {
             return Some(format!("new folder: {e}"));
@@ -6489,7 +6985,7 @@ pub fn promote_problem(state: &AppState, d: &PromoteDialog) -> Option<String> {
 /// Where the project goes: the dialog's folder, or its new folder in it
 /// (an existing one of that name, any case, is used); and whether that
 /// folder exists.
-pub fn promote_folder(state: &AppState, d: &PromoteDialog) -> (PathBuf, bool) {
+pub fn from_ideas_folder(state: &AppState, d: &FromIdeasDialog) -> (PathBuf, bool) {
     let Some(new) = &d.new_folder else {
         return (d.parent.clone(), true);
     };
@@ -6517,20 +7013,20 @@ fn set_collapsed(state: &mut AppState, change: impl FnOnce(&mut Vec<PathBuf>)) -
     save_config(state)
 }
 
-/// The Promote dialog's first folder: where the last promote went, if it's
+/// The New project from ideas dialog's first folder: where the last one went, if it's
 /// still there, else the top level.
-fn promote_parent(state: &AppState) -> PathBuf {
+fn from_ideas_parent(state: &AppState) -> PathBuf {
     state
-        .promote_last
+        .from_ideas_last
         .clone()
         .filter(|p| p.as_os_str().is_empty() || state.index.project_folders.contains(p))
         .unwrap_or_default()
 }
 
-/// The Promote dialog's first guess: the first idea title that makes a
+/// The New project from ideas dialog's first guess: the first idea title that makes a
 /// valid, free project name (numbered if taken), else empty.
-fn promote_name<'a>(state: &AppState, titles: impl IntoIterator<Item = &'a str>) -> String {
-    let at = promote_parent(state).join("_");
+fn from_ideas_name<'a>(state: &AppState, titles: impl IntoIterator<Item = &'a str>) -> String {
+    let at = from_ideas_parent(state).join("_");
     titles
         .into_iter()
         .map(str::trim)
@@ -8415,7 +8911,7 @@ fn op_done(state: &mut AppState, ok: OpOk) -> Vec<Effect> {
             }
             state.idea_dirty = Some(state.now);
         }
-        OpOk::Promoted { project, prompt, refs, idea } => {
+        OpOk::ProjectFromIdeas { project, prompt, refs, idea } => {
             let fx = leave_generate(state);
             state.project = Some(project);
             state.proj_folder = None;

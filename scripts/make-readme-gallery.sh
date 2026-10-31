@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Retakes the README's gallery, docs/readme/GALLERY.md: the screenshot
-# tour's G scenes (crates/increart-gui/src/tour.rs) on a fresh copy of the
+# tour's G and V scenes (crates/increart-gui/src/tour.rs) on a fresh copy of the
 # example library, on a private display (scripts/headless.sh), each shot
 # saved as WebP in docs/readme/gallery/. The page also shows the README's
 # own five shots.
@@ -9,8 +9,9 @@
 #
 # The copy of example-library/ is put where a release zip would unpack it,
 # ~/Downloads/increart-v<version>-linux-x86_64/, like the README's shots, as
-# its path shows in them; it's removed afterwards. Build first:
-# cargo build --release -p increart-gui
+# its path shows in them; it's removed afterwards. The V scenes validate a
+# preset whose sd-servers are the suite's fake. Build first:
+# cargo build --release -p increart-gui -p increart-apitest --features increart-apitest/fake
 set -euo pipefail
 
 root=$(cd "$(dirname "$0")/.." && pwd)
@@ -25,24 +26,51 @@ mkdir -p "$unpack"
 cp -R "$root/example-library" "$unpack/Example library"
 rm -rf "$unpack/Example library/"{cache,thumbs,library.lock}
 
-# 02 opens the library; a new config, so nothing of this machine's shows
-"$root/scripts/headless.sh" env INCREART_CONFIG="$work/config/config.rsn" INCREART_TOUR="$work/shots" \
-    INCREART_TOUR_LIBRARY="$unpack/Example library" INCREART_TOUR_SCENES=02-server-dialog,G \
+# 02 opens the library; a new config and state, so nothing of this machine's shows
+"$root/scripts/headless.sh" env INCREART_CONFIG="$work/config/config.rsn" XDG_STATE_HOME="$work/state" \
+    INCREART_TOUR="$work/shots" INCREART_TOUR_LIBRARY="$unpack/Example library" \
+    INCREART_TOUR_SCENES=02-server-dialog,G \
     "$root/target/release/increart" > "$work/run.log" 2>&1 || { cat "$work/run.log" >&2; exit 1; }
+
+# Validate servers: two fake sd-servers listing the default model preset's files
+fake=$root/target/release/increart-fake-sd-server
+[[ -x $fake ]] || { echo "no $fake: build it first (see above)" >&2; exit 1; }
+files=diffusion_models/qwen_image_2.1_int8_convrot.safetensors,text_encoders/qwen3vl_8b_int8_convrot.safetensors,vae/qwen_image_2.1_vae_bf16.safetensors
+mkdir -p "$work/vconfig"
+cat > "$work/vconfig/config.rsn" <<RSN
+Config {
+    server_presets: [
+        ServerPreset {
+            name: "Two GPUs",
+            servers: [
+                Start { name: "gpu0", host: "127.0.0.1", port: 18931, device: "", args: ["--fake-files", "$files"] },
+                Start { name: "gpu1", host: "127.0.0.1", port: 18932, device: "", args: ["--fake-files", "$files"] }
+            ]
+        }
+    ],
+    last_preset: "Two GPUs",
+    sdserver: SdServer { binary: "$fake" }
+}
+RSN
+"$root/scripts/headless.sh" env INCREART_CONFIG="$work/vconfig/config.rsn" XDG_STATE_HOME="$work/vstate" \
+    INCREART_TOUR="$work/shots" INCREART_TOUR_LIBRARY="$unpack/Example library" \
+    INCREART_TOUR_SCENES=02-server-dialog,V \
+    "$root/target/release/increart" > "$work/vrun.log" 2>&1 || { cat "$work/vrun.log" >&2; exit 1; }
 
 rm -rf "$out"
 mkdir -p "$out"
-for png in "$work"/shots/G*.png; do
+for png in "$work"/shots/[GV]*.png; do
     name=$(basename "$png" .png)
     # G02a-home → home
-    magick "$png" -quality 85 -define webp:method=6 "$out/${name#G*-}.webp"
+    magick "$png" -quality 85 -define webp:method=6 "$out/${name#*-}.webp"
 done
 
 # file | caption; files without a folder are the gallery's, the rest the README's
 captions=(
     "server-wizard|**Set up servers.** Choose KoboldCpp and IncreArt finds your GPUs, picks a preset for each card's memory and shares the work between them: here two 24 GB cards each make images and run prompt enhance."
+    "validate-servers|**Validate servers.** Before a preset is first used, a few minutes of checks that IncreArt and its servers work together: each server answers, lists its models and makes a small image, then a short run goes through all of them. What fails comes with what to try."
     "home|**Home.** Where the app opens: how ideas become finished images, step by step, each with its tab, its keys and what's waiting there. Start a new project (it asks for reference images too), write an idea, import images or open the drop folder."
-    "idea-inbox|**Idea inbox.** Ideas come in as text, images or both: typed in, imported, or saved into the drop folder from a browser. Keep, discard or promote each one."
+    "idea-inbox|**Idea inbox.** Ideas come in as text, images or both: typed in, imported, or saved into the drop folder from a browser. Save each one to the input library, discard it or make a new project from it."
     "../input-library.png|**Input library.** Kept ideas in folders, with their source images, ready to start projects from."
     "projects-grid|**Projects.** Each project with its cover and its counts of good, neutral, bad and new images, in folders."
     "../generate.png|**Generate: a style sweep.** One prompt in several styles. Prompt enhance suggested values for its blanks, \`{cat_gear}\` and \`{sky}\`, and one of each is picked."
