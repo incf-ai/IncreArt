@@ -368,6 +368,52 @@ fn save_to_input_library_asks_the_name_and_folder() {
 }
 
 #[test]
+fn save_and_make_a_project_in_one_step() {
+    let mut h = Harness::new();
+    h.send(Msg::Draft(IdeaDraft { title: "Fox".into(), text: "a red fox".into(), ..Default::default() }));
+    h.send(Msg::AddIdea(AddIdea::Inbox));
+    h.settle();
+    let fox = h.state.inbox_queue()[0].idea.id.clone();
+
+    // an inbox idea: saved where asked, named as asked; the project too
+    h.send(Msg::SaveIdeas(vec![fox.clone()]));
+    h.send(Msg::EditSaveIdeaName("Red fox".into()));
+    h.send(Msg::SaveIdeaNewFolder(Some("Animals".into())));
+    h.send(Msg::SaveIdeaPromote);
+    h.settle();
+    assert!(h.state.save_idea.is_none() && h.state.promote.is_none(), "no dialog left");
+    let e = h.state.idea(&fox).unwrap();
+    assert_eq!((e.idea.title.as_str(), &e.loc), ("Red fox", &IdeaLoc::Library("Animals".into())));
+    let dirs: Vec<_> = h.state.index.projects.iter().map(|p| p.dir.clone()).collect();
+    assert_eq!(dirs, [Path::new("projects/Red fox/Red fox")]);
+
+    // the draft: saved in the folder chosen, as the project is made
+    h.send(Msg::Draft(IdeaDraft { title: "Moth".into(), text: "a moth".into(), ..Default::default() }));
+    h.send(Msg::AddIdea(AddIdea::Keep));
+    h.send(Msg::EditSaveIdeaName("Luna moth".into()));
+    h.send(Msg::SaveIdeaNewFolder(Some("insects".into())));
+    h.send(Msg::SaveIdeaPromote);
+    h.settle();
+    assert_eq!(h.state.draft, IdeaDraft::default(), "draft cleared");
+    let e = h.state.index.ideas.iter().find(|e| e.idea.title == "Luna moth").unwrap();
+    assert_eq!(e.loc, IdeaLoc::Library("Animals/insects".into()));
+    assert!(h.state.index.projects.iter().any(|p| p.dir == Path::new("projects/Luna moth/Luna moth")));
+
+    // a name that won't do for a project: the Promote dialog asks
+    h.send(Msg::Draft(IdeaDraft { title: "Owl".into(), text: "an owl".into(), ..Default::default() }));
+    h.send(Msg::AddIdea(AddIdea::Inbox));
+    h.settle();
+    let owl = h.state.inbox_queue()[0].idea.id.clone();
+    h.send(Msg::SaveIdeas(vec![owl.clone()]));
+    h.send(Msg::EditSaveIdeaName("owl/night".into()));
+    h.send(Msg::SaveIdeaPromote);
+    h.settle();
+    let p = h.state.promote.as_ref().expect("asked");
+    assert_eq!(p.ideas, std::slice::from_ref(&owl));
+    assert_eq!(h.state.idea(&owl).unwrap().idea.title, "owl/night", "saved all the same");
+}
+
+#[test]
 fn idea_picks_tile_and_triage_together() {
     let mut h = Harness::new();
     let dir = h._tmp.path().join("drop");

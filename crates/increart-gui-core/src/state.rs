@@ -1657,12 +1657,15 @@ pub struct PromoteDialog {
     pub new_folder: Option<String>,
     /// Step 2's folder filter.
     pub filter: String,
+    /// The draft from Save to input library's Save and make a project: the
+    /// library folder it's saved in (else the top level).
+    pub saved_in: Option<PathBuf>,
 }
 
 impl PromoteDialog {
     pub fn new(ideas: Vec<Id>, parent: PathBuf, name: String) -> PromoteDialog {
         let new_folder = Some(name.trim().to_string());
-        PromoteDialog { ideas, parent, name, choosing: false, new_folder, filter: String::new() }
+        PromoteDialog { ideas, parent, name, choosing: false, new_folder, filter: String::new(), saved_in: None }
     }
 
     /// The project goes in a new folder named after it.

@@ -1590,6 +1590,10 @@ pub fn lib_op(lib: &mut Library, op: LibOp) -> Result<OpOk, String> {
             lib.new_idea(n).map(OpOk::Idea).map_err(err)
         }
         LibOp::NewIdeaPromote(n, folder, name) => {
+            // Save and make a project may name a new library folder
+            if let IdeaLoc::Library(f) = &n.loc {
+                lib.make_library_folder(f).map_err(err)?;
+            }
             let id = lib.new_idea(n).map_err(err)?;
             promote(lib, &[id], &folder, &name)
         }

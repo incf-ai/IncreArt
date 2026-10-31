@@ -1768,67 +1768,153 @@ pub fn global_keys(ctx: &egui::Context, out: &mut Vec<Msg>) {
 }
 
 /// Save to input library, from the Idea inbox or the New idea form: the
-/// idea's name (one idea or the draft; several keep their titles), then the
-/// library folder from a tree,
-/// optionally a new folder in it.
+/// library folders on the left (a filter, the tree, New folder under it),
+/// the idea's name on the right (one idea or the draft; several keep their
+/// titles), where it goes, Save and Save and make a project.
 pub fn save_window(ctx: &egui::Context, st: &AppState, out: &mut Vec<Msg>) {
-    let Some(d) = &st.save_idea else { return };
+    // the name takes the focus as the dialog opens, the new folder's as
+    // it's asked for: once, not back from a field clicked since
+    let opened = egui::Id::unique("save_idea_opened");
+    let new_asked = egui::Id::unique("save_idea_new_folder_asked");
+    let Some(d) = &st.save_idea else {
+        ctx.data_mut(|m| m.remove::<()>(opened));
+        return;
+    };
+    let opening = ctx.data_mut(|m| {
+        let first = m.get_temp::<()>(opened).is_none();
+        m.insert_temp(opened, ());
+        first
+    });
     let m = egui::Modal::new(egui::Id::unique("save_idea")).show(ctx, |ui| {
-        ui.set_width(480.0);
+        ui.set_width(760.0);
         ui.heading(ic(ph::BOOKMARK_SIMPLE, "Save to input library"));
+        ui.add_space(4.0);
         // the dialog as edited this frame
         let mut d = d.clone();
         // Enter in the filter or the new folder's name only leaves the field
         let mut field_enter = false;
-        if d.ideas.len() <= 1 {
-            ui.label("Name");
-            let mut name = d.name.clone();
-            let r = ui.add(egui::TextEdit::singleline(&mut name).desired_width(f32::INFINITY).hint_text("idea name"));
-            crate::widgets::focus_until_done(&r);
-            if name != d.name {
-                out.push(Msg::EditSaveIdeaName(name.clone()));
-                d.name = name;
-            }
-            let old = match d.ideas.first() {
-                Some(id) => st.idea(id).map(|e| e.idea.title.trim().to_string()).unwrap_or_default(),
-                None => st.draft.title.trim().to_string(),
-            };
-            if !old.is_empty() && old != d.name.trim() {
-                ui.weak(format!("was “{old}”"));
-            }
-        } else {
-            ui.weak(format!("The {} ideas keep their names.", d.ideas.len()));
-        }
-        ui.add_space(4.0);
-        ui.label("Folder");
-        let mut filter = d.filter.clone();
-        ui.horizontal(|ui| {
-            ui.label(ph::MAGNIFYING_GLASS);
-            let r = ui
-                .add(egui::TextEdit::singleline(&mut filter).hint_text("filter folders").desired_width(f32::INFINITY));
-            field_enter |= r.lost_focus();
-        });
-        if filter != d.filter {
-            out.push(Msg::SaveIdeaFilter(filter.clone()));
-        }
-        let words: Vec<String> = filter.to_lowercase().split_whitespace().map(String::from).collect();
-        let folders = &st.index.library_folders;
-        // shown: matches and their ancestors (the selected folder always)
-        let matches = |f: &Path| words.iter().all(|w| f.to_string_lossy().to_lowercase().contains(w));
-        let shown =
-            |f: &Path| words.is_empty() || f == d.folder || folders.iter().any(|g| g.starts_with(f) && matches(g));
-        let row = |ui: &mut egui::Ui, path: &Path, label: &str, depth: usize, out: &mut Vec<Msg>| {
-            ui.horizontal(|ui| {
-                ui.add_space(depth as f32 * 16.0);
-                let selected = d.folder == path;
-                let icon = if selected { ph::FOLDER_OPEN } else { ph::FOLDER };
-                if ui.selectable_label(selected, ic(icon, label)).clicked() {
-                    out.push(Msg::SaveIdeaFolder(path.to_path_buf()));
+        ui.horizontal_top(|ui| {
+            ui.vertical(|ui| {
+                ui.set_width(300.0);
+                field_enter |= folders_column(ui, st, &mut d, new_asked, out);
+            });
+            // a line as tall as the folders (a separator here grows with
+            // the modal, which grows with it)
+            let (r, _) = ui.allocate_exact_size(egui::vec2(12.0, 340.0), egui::Sense::hover());
+            ui.painter().vline(r.center().x, r.y_range(), ui.visuals().widgets.noninteractive.bg_stroke);
+            ui.vertical(|ui| {
+                if d.ideas.len() <= 1 {
+                    ui.label(RichText::new("Name").strong());
+                    let mut name = d.name.clone();
+                    let r = ui
+                        .add(egui::TextEdit::singleline(&mut name).desired_width(f32::INFINITY).hint_text("idea name"));
+                    if opening {
+                        r.request_focus();
+                    }
+                    if name != d.name {
+                        out.push(Msg::EditSaveIdeaName(name.clone()));
+                        d.name = name;
+                    }
+                    let old = match d.ideas.first() {
+                        Some(id) => st.idea(id).map(|e| e.idea.title.trim().to_string()).unwrap_or_default(),
+                        None => st.draft.title.trim().to_string(),
+                    };
+                    if !old.is_empty() && old != d.name.trim() {
+                        ui.weak(format!("was “{old}”"));
+                    }
+                } else {
+                    ui.weak(format!("The {} ideas keep their names.", d.ideas.len()));
+                }
+                ui.add_space(8.0);
+                ui.label(RichText::new("Saved in").strong());
+                let (at, exists) = increart_gui_core::save_idea_folder(st, &d);
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(RichText::new(Path::new("input/library").join(&at).display().to_string()).monospace());
+                    if !exists {
+                        ui.weak("(new folder)");
+                    }
+                });
+                if let Some(e) = increart_gui_core::save_idea_problem(&d) {
+                    ui.add_space(4.0);
+                    ui.colored_label(crate::widgets::BAD, e);
                 }
             });
-        };
-        egui::Frame::group(ui.style()).show(ui, |ui| {
-            ScrollArea::vertical().max_height(240.0).auto_shrink([false, true]).show(ui, |ui| {
+        });
+        ui.add_space(4.0);
+        let problem = increart_gui_core::save_idea_problem(&d);
+        let enter = ui.input(|i| i.key_pressed(egui::Key::Enter));
+        crate::widgets::dialog_buttons(ui, |ui| {
+            let save = egui::Button::new(RichText::new(ic(ph::CHECK, "Save   Enter")).strong());
+            if ui.add_enabled(problem.is_none(), save).clicked() || enter && !field_enter && problem.is_none() {
+                out.push(Msg::ConfirmSaveIdea);
+            }
+            let promote = egui::Button::new(ic(ph::ROCKET_LAUNCH, "Save and make a project"));
+            let what = if d.ideas.len() > 1 { "them" } else { "it" };
+            if ui
+                .add_enabled(problem.is_none(), promote)
+                .on_hover_text(format!(
+                    "saves {what}, then makes a project from {what}, named as the idea, where the last \
+                     project made from ideas went (asked when that name won't do)"
+                ))
+                .clicked()
+            {
+                out.push(Msg::SaveIdeaPromote);
+            }
+            if ui.button("Cancel   Esc").clicked() {
+                out.push(Msg::CancelSaveIdea);
+            }
+        });
+    });
+    if m.should_close() {
+        out.push(Msg::CancelSaveIdea);
+    }
+}
+
+/// The save dialog's left column: the folder filter, the tree, and New
+/// folder under it. True when Enter left one of its fields.
+fn folders_column(
+    ui: &mut egui::Ui,
+    st: &AppState,
+    d: &mut increart_gui_core::SaveIdeaDialog,
+    new_asked: egui::Id,
+    out: &mut Vec<Msg>,
+) -> bool {
+    let mut field_enter = false;
+    ui.label(RichText::new("Folder").strong());
+    let mut filter = d.filter.clone();
+    ui.horizontal(|ui| {
+        ui.label(ph::MAGNIFYING_GLASS);
+        let r =
+            ui.add(egui::TextEdit::singleline(&mut filter).hint_text("filter folders").desired_width(f32::INFINITY));
+        field_enter |= r.lost_focus();
+        ui.ctx().data_mut(|d| d.insert_temp(egui::Id::unique("tour_save_filter"), r.rect));
+    });
+    if filter != d.filter {
+        out.push(Msg::SaveIdeaFilter(filter.clone()));
+    }
+    let words: Vec<String> = filter.to_lowercase().split_whitespace().map(String::from).collect();
+    let folders = &st.index.library_folders;
+    // shown: matches and their ancestors (the selected folder always)
+    let matches = |f: &Path| words.iter().all(|w| f.to_string_lossy().to_lowercase().contains(w));
+    let shown = |f: &Path| words.is_empty() || f == d.folder || folders.iter().any(|g| g.starts_with(f) && matches(g));
+    let row = |ui: &mut egui::Ui, path: &Path, label: &str, depth: usize, out: &mut Vec<Msg>| {
+        ui.horizontal(|ui| {
+            ui.add_space(depth as f32 * 16.0);
+            let selected = d.folder == path;
+            let icon = match depth {
+                0 => ph::BOOKS,
+                _ if selected => ph::FOLDER_OPEN,
+                _ => ph::FOLDER,
+            };
+            if ui.selectable_label(selected, ic(icon, label)).clicked() {
+                out.push(Msg::SaveIdeaFolder(path.to_path_buf()));
+            }
+        });
+    };
+    egui::Frame::group(ui.style()).show(ui, |ui| {
+        ScrollArea::vertical().min_scrolled_height(280.0).max_height(280.0).auto_shrink([false, false]).show(
+            ui,
+            |ui| {
                 row(ui, Path::new(""), "input library", 0, out);
                 let mut sorted: Vec<&std::path::PathBuf> = folders.iter().filter(|f| shown(f)).collect();
                 sorted.sort_by_key(|f| f.to_string_lossy().to_lowercase());
@@ -1839,62 +1925,39 @@ pub fn save_window(ctx: &egui::Context, st: &AppState, out: &mut Vec<Msg>) {
                 if !words.is_empty() && !folders.iter().any(|g| matches(g)) {
                     ui.weak("No folder matches.");
                 }
-            });
-        });
-        let here = match d.folder.file_name() {
-            Some(n) => n.to_string_lossy().into_owned(),
-            None => "input library".to_string(),
-        };
-        match d.new_folder.clone() {
-            None => {
-                if ui.button(ic(ph::FOLDER_PLUS, &format!("New folder in “{here}”"))).clicked() {
-                    out.push(Msg::SaveIdeaNewFolder(Some(String::new())));
-                }
-            }
-            Some(new) => {
-                ui.horizontal(|ui| {
-                    ui.label(ic(ph::FOLDER_PLUS, &format!("New folder in “{here}”")));
-                    let mut name = new.clone();
-                    let r = ui.add(egui::TextEdit::singleline(&mut name).hint_text("folder name").desired_width(200.0));
-                    if new.is_empty() && ui.memory(|m| m.focused().is_none()) {
-                        r.request_focus();
-                    }
-                    field_enter |= r.lost_focus();
-                    if name != new {
-                        out.push(Msg::SaveIdeaNewFolder(Some(name.clone())));
-                    }
-                    if ui.small_button(ph::X).on_hover_text("no new folder").clicked() {
-                        out.push(Msg::SaveIdeaNewFolder(None));
-                    }
-                    d.new_folder = Some(name);
-                });
-            }
-        }
-        let problem = increart_gui_core::save_idea_problem(&d);
-        if let Some(e) = &problem {
-            ui.colored_label(crate::widgets::BAD, e);
-        }
-        let (at, exists) = increart_gui_core::save_idea_folder(st, &d);
-        ui.horizontal_wrapped(|ui| {
-            ui.weak("→");
-            ui.label(RichText::new(Path::new("input/library").join(&at).display().to_string()).monospace());
-            if !exists {
-                ui.weak("(new folder)");
-            }
-        });
-        ui.add_space(4.0);
-        let enter = ui.input(|i| i.key_pressed(egui::Key::Enter));
-        crate::widgets::dialog_buttons(ui, |ui| {
-            let save = egui::Button::new(RichText::new(ic(ph::CHECK, "Save   Enter")).strong());
-            if ui.add_enabled(problem.is_none(), save).clicked() || enter && !field_enter && problem.is_none() {
-                out.push(Msg::ConfirmSaveIdea);
-            }
-            if ui.button("Cancel   Esc").clicked() {
-                out.push(Msg::CancelSaveIdea);
-            }
-        });
+            },
+        );
     });
-    if m.should_close() {
-        out.push(Msg::CancelSaveIdea);
+    let here = match d.folder.file_name() {
+        Some(n) => n.to_string_lossy().into_owned(),
+        None => "input library".to_string(),
+    };
+    match d.new_folder.clone() {
+        None => {
+            if ui.button(ic(ph::FOLDER_PLUS, "New folder")).on_hover_text(format!("in “{here}”")).clicked() {
+                ui.ctx().data_mut(|m| m.insert_temp(new_asked, ()));
+                out.push(Msg::SaveIdeaNewFolder(Some(String::new())));
+            }
+        }
+        Some(new) => {
+            ui.weak(format!("New folder in “{here}”"));
+            ui.horizontal(|ui| {
+                ui.label(ph::FOLDER_PLUS);
+                let mut name = new.clone();
+                let r = ui.add(egui::TextEdit::singleline(&mut name).hint_text("folder name").desired_width(220.0));
+                if ui.ctx().data_mut(|m| m.remove_temp::<()>(new_asked)).is_some() {
+                    r.request_focus();
+                }
+                field_enter |= r.lost_focus();
+                if name != new {
+                    out.push(Msg::SaveIdeaNewFolder(Some(name.clone())));
+                }
+                if ui.small_button(ph::X).on_hover_text("no new folder").clicked() {
+                    out.push(Msg::SaveIdeaNewFolder(None));
+                }
+                d.new_folder = Some(name);
+            });
+        }
     }
+    field_enter
 }
