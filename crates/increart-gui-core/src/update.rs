@@ -693,6 +693,11 @@ pub enum Msg {
     EditScale(ScaleDialog),
     ApplyScale,
     CloseScale,
+    /// Home's Start a new project dialog: open (`true`) or close it, its
+    /// name and references, Create.
+    StartProject(bool),
+    EditStartProject(StartProjectDialog),
+    ConfirmStartProject,
     /// The New project / Duplicate dialog's name, Create, Cancel.
     EditNewProjectName(String),
     ConfirmNewProject,
@@ -1097,6 +1102,8 @@ pub enum LibOp {
         name: String,
         copy_of: Option<PathBuf>,
         form: GenerateForm,
+        /// The references picker to open on the form.
+        then: StartRefs,
     },
     IdeaFromOutput {
         image: Id,
@@ -1187,6 +1194,7 @@ pub enum OpOk {
     ProjectReady {
         path: PathBuf,
         form: Box<GenerateForm>,
+        then: StartRefs,
     },
     /// (link path now, verdict before) of each rated link; `error`: why
     /// the rest weren't.
@@ -4310,6 +4318,41 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
             }
             prepare_project(state, d.image, d.target, name)
         }
+        Msg::StartProject(true) => {
+            if state.library.is_none() {
+                return vec![];
+            }
+            let mut name = "new project".to_string();
+            for n in 2.. {
+                if !state.project_name_taken(std::path::Path::new("_"), &name) {
+                    break;
+                }
+                name = format!("new project {n}");
+            }
+            state.start_project = Some(StartProjectDialog { name, refs: StartRefs::Library });
+            vec![]
+        }
+        Msg::StartProject(false) => {
+            state.start_project = None;
+            vec![]
+        }
+        Msg::EditStartProject(d) => {
+            if state.start_project.is_some() {
+                state.start_project = Some(d);
+            }
+            vec![]
+        }
+        Msg::ConfirmStartProject => {
+            let Some(d) = state.start_project.take() else { return vec![] };
+            let name = d.name.trim().to_string();
+            if increart_core::library::validate_name(&name).is_err() {
+                state.start_project = Some(d);
+                return vec![];
+            }
+            let mut form = GenerateForm::new(&state.config);
+            form.label = "r00".into();
+            lib(state, LibOp::PrepareProject { parent: PathBuf::new(), name, copy_of: None, form, then: d.refs })
+        }
         Msg::CancelNewProject => {
             state.new_project = None;
             vec![]
@@ -7053,7 +7096,7 @@ fn prepare_project(state: &mut AppState, image: ImageRef, target: UseTarget, nam
         f.add_reference(image);
         (f, Some(rel))
     };
-    lib(state, LibOp::PrepareProject { parent, name, copy_of, form })
+    lib(state, LibOp::PrepareProject { parent, name, copy_of, form, then: StartRefs::None })
 }
 
 /// One chat request to the PE server.
@@ -8306,7 +8349,7 @@ fn op_done(state: &mut AppState, ok: OpOk) -> Vec<Effect> {
             load_generate(state);
             return fx;
         }
-        OpOk::ProjectReady { path, form } => {
+        OpOk::ProjectReady { path, form, then } => {
             let dir = std::path::Path::new("projects").join(&path);
             let Some(id) = state.index.projects.iter().find(|p| p.dir == dir).map(|p| p.project.id.clone()) else {
                 return vec![];
@@ -8324,7 +8367,12 @@ fn op_done(state: &mut AppState, ok: OpOk) -> Vec<Effect> {
             // named in the dialog already
             let name = path.file_name().unwrap_or_default().to_string_lossy().into_owned();
             state.messages_info(format!("Project {name} ready"));
-            return fx;
+            let pick = match then {
+                StartRefs::None => vec![],
+                StartRefs::Library => update(state, Msg::RefPicker(true)),
+                StartRefs::Files => update(state, Msg::Pick(PickKind::GenerateRefs)),
+            };
+            return fx.into_iter().chain(pick).collect();
         }
         OpOk::SeedsAdded(run, n) => {
             let label = state.index.run(&run).map(|(p, r)| format!("{} · {}", p.name(), r.label)).unwrap_or_default();
@@ -8430,7 +8478,7 @@ fn engine_event(state: &mut AppState, e: Event) -> Vec<Effect> {
             vec![Effect::Rescan]
         }
         Event::Problem(p) => {
-            state.messages_error(p);
+            state.messages_server_error(p);
             vec![]
         }
         Event::Log { run, line } => {

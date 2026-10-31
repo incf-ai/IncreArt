@@ -2553,7 +2553,7 @@ drop and shortcuts (see Project folders). The differences:
 
 ## GUI
 
-Top-level tabs, in pipeline order: **Idea inbox** · **Input library** ·
+Top-level tabs, in pipeline order after **Home**: **Idea inbox** · **Input library** ·
 **Projects** (Grid · Folder · Generate · Jobs; shows the project count, and
 ✦ while generating) ·
 **Review** (the output queue) · **Output library**. Review is top-level, like
@@ -2573,7 +2573,8 @@ fixed 520 px) and the server status window's PE line (Start now / Stop
 before the state, which is cut to the room left). The window is at least
 1000 × 640.
 
-Each tab label is an icon, a Title Case name and a count: 📥 **Idea Inbox
+Each tab label is an icon, a Title Case name and a count (Home has none):
+🏠 **Home**, 📥 **Idea Inbox
 (7)**, 📚 **Input Library**, 🚀 **Projects** (✨ while runs generate),
 👍 **Review**, 🖼 **Output Library**. When the full labels would leave the
 right side less than its compact width (a narrow window or a large zoom),
@@ -2587,6 +2588,20 @@ that changes it is one step (Show outputs, which switches tab and source, is
 one). A new step drops the forward ones; up to 100 are kept. In a folder view
 the keys and mouse buttons go through that view's own history instead.
 
+- **Home** (the tab the app opens on): how the tabs fit together, as six
+  numbered cards in rows (Collect: scraped or downloaded files saved into
+  the drop folder, dragged in, or written; Sort the inbox: keep or discard
+  into the Input library; Input library; Projects; Review; Output library),
+  each with its keys, a count and a button to its tab (Collect's opens the
+  drop folder, and counts only files waiting there: they are imported as
+  soon as they have finished copying). Above them: **Start a
+  new project…**, **Write an idea**, **Import images…**, **Open the drop
+  folder**, and links to the ideas and images waiting. Below: the six
+  projects with the latest runs. **Start a new project** asks the name
+  (`new project`, numbered if taken; made at the top of `projects/`) and
+  whether to add reference images: from the libraries (the default; From
+  library… opens on its Generate form once it is made), image files (Add
+  file…'s picker), or not now.
 - **Idea inbox**: tabs **New idea** · **Grid** · **Folder** · **Import** ·
   **Discarded**. (PE rewrites have no tab; see Prompt rewriting.) Files dragged from the desktop onto any Idea
   inbox tab are imported as new ideas (images re-encoded as usual, text files

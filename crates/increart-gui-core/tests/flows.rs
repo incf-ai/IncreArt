@@ -6275,3 +6275,94 @@ fn skipping_the_ram_check_is_saved_and_reaches_the_engine() {
     assert!(fx.iter().any(|f| matches!(f, Effect::SetSkipRamCheck(true))));
     assert!(update(&mut s, Msg::SetSkipRamCheck(true)).is_empty());
 }
+
+#[test]
+fn a_server_problem_links_the_servers_log() {
+    let mut s = dialog_state(vec![], None);
+    let status = |name: &str, config: Option<ServerConfig>| ServerStatus {
+        config,
+        name: name.into(),
+        device: String::new(),
+        state: "ready".into(),
+        model: None,
+        idle_since: None,
+        worked: false,
+    };
+    let connect =
+        ServerConfig::Connect { name: "far".into(), url: "http://10.0.0.2:1234".into(), device: String::new() };
+    s.servers = vec![
+        status("sd-rocm0", Some(start("sd-rocm0", 1234))),
+        status("sd-rocm01", Some(start("sd-rocm01", 1235))),
+        status("far", Some(connect)),
+    ];
+    let problem = |s: &mut AppState, text: &str| {
+        update(s, Msg::Engine(increart_core::engine::Event::Problem(text.into())));
+        s.messages.last().cloned().unwrap()
+    };
+    let m = problem(&mut s, "sd-rocm0: can't load qwen-image-21: unknown model or incorrect category");
+    assert!(m.error);
+    assert_eq!(m.log.as_deref(), Some("sd-server-sd-rocm0.log"), "its own, not sd-rocm01's");
+    // connected to, not started: the app has no log of it
+    assert_eq!(problem(&mut s, "far: loading x failed: oom").log, None);
+    assert_eq!(problem(&mut s, "no server can take qwen-image-21").log, None);
+}
+
+#[test]
+fn home_starts_a_project_and_asks_for_references() {
+    let mut h = Harness::new();
+    assert_eq!(h.state.tab, Tab::Home, "the app opens on Home");
+
+    // with references from the library: the picker opens on its form
+    h.send(Msg::StartProject(true));
+    let d = h.state.start_project.clone().unwrap();
+    assert_eq!((d.name.as_str(), d.refs), ("new project", StartRefs::Library));
+    h.send(Msg::EditStartProject(StartProjectDialog { name: "otters".into(), refs: StartRefs::Library }));
+    h.send(Msg::ConfirmStartProject);
+    h.settle();
+    assert!(h.state.start_project.is_none());
+    assert!(h.root.join("projects/otters").is_dir());
+    let otters = h.state.index.projects.iter().find(|p| p.name() == "otters").unwrap().project.id.clone();
+    assert_eq!(h.state.project.as_ref(), Some(&otters));
+    assert_eq!((h.state.tab, h.state.projects_tab), (Tab::Projects, ProjectsTab::Generate));
+    assert_eq!(h.state.ref_picker.as_ref().map(|p| p.target.clone()), Some(PickTarget::Generate));
+    h.send(Msg::RefPicker(false));
+
+    // an invalid name keeps the dialog open
+    h.send(Msg::StartProject(true));
+    h.send(Msg::EditStartProject(StartProjectDialog { name: "a/b".into(), refs: StartRefs::None }));
+    assert!(h.send(Msg::ConfirmStartProject).is_empty());
+    assert!(h.state.start_project.is_some());
+
+    // from files: Generate's Add file… picker
+    h.send(Msg::EditStartProject(StartProjectDialog { name: "badgers".into(), refs: StartRefs::Files }));
+    h.send(Msg::ConfirmStartProject);
+    let mut picked = false;
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    while h.state.busy > 0 && std::time::Instant::now() < deadline {
+        for m in h.rt.wait(Duration::from_millis(300)) {
+            picked |= h.send(m).iter().any(|f| matches!(f, Effect::Pick { kind: PickKind::GenerateRefs, .. }));
+        }
+    }
+    h.settle();
+    assert!(picked, "Add file… opened");
+    assert!(h.state.ref_picker.is_none());
+    assert!(h.root.join("projects/badgers").is_dir());
+
+    // a taken name: the next number; not now: just the form
+    h.send(Msg::StartProject(true));
+    h.send(Msg::EditStartProject(StartProjectDialog { name: "stoats".into(), refs: StartRefs::None }));
+    h.send(Msg::ConfirmStartProject);
+    h.settle();
+    assert!(h.state.ref_picker.is_none());
+    assert_eq!((h.state.tab, h.state.projects_tab), (Tab::Projects, ProjectsTab::Generate));
+    h.send(Msg::StartProject(true));
+    h.send(Msg::ConfirmStartProject);
+    h.settle();
+    assert!(h.root.join("projects/new project").is_dir());
+    h.send(Msg::RefPicker(false));
+    h.send(Msg::StartProject(true));
+    assert_eq!(h.state.start_project.as_ref().unwrap().name, "new project 2");
+    h.send(Msg::StartProject(false));
+    assert!(h.state.start_project.is_none());
+    assert!(h.errors().is_empty(), "{:?}", h.errors());
+}

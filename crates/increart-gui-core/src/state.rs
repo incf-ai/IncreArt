@@ -16,6 +16,8 @@ use increart_core::{Id, IdeaLoc, ImageRef, Index, Tree, Verdict};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Tab {
+    /// The welcome screen: how the tabs fit together, and buttons to start.
+    Home,
     IdeaInbox,
     InputLibrary,
     Projects,
@@ -1586,6 +1588,26 @@ pub struct NewProjectDialog {
     pub name: String,
 }
 
+/// Home's Start a new project: its name, and the references to add once
+/// it is made.
+#[derive(Clone, Debug, PartialEq)]
+pub struct StartProjectDialog {
+    pub name: String,
+    pub refs: StartRefs,
+}
+
+/// Where a new project's first references come from: the picker that
+/// opens on its Generate form once it is made.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StartRefs {
+    /// No picker; the form starts empty.
+    None,
+    /// From library…, over the input and output libraries.
+    Library,
+    /// Image files from the disk.
+    Files,
+}
+
 /// Naming the project that promoting ideas makes (always asked: an idea's
 /// title needn't suit a project).
 #[derive(Clone, Debug, PartialEq)]
@@ -2488,6 +2510,9 @@ pub struct Message {
     pub error: bool,
     /// A notification alert's reason: shown with Snooze and Settings links.
     pub alert: bool,
+    /// The log file (in the log folder) of the server it is about, when the
+    /// app started that server: shown with a button opening it.
+    pub log: Option<String>,
 }
 
 /// An inline rename in a tree: which node, and the edited name.
@@ -2809,6 +2834,8 @@ pub struct AppState {
     pub watch_status: String,
     /// Naming the project New project / Duplicate with an image makes.
     pub new_project: Option<NewProjectDialog>,
+    /// Home's Start a new project dialog.
+    pub start_project: Option<StartProjectDialog>,
     /// Naming a project's plain Duplicate.
     pub duplicate: Option<DuplicateDialog>,
     /// Naming the project for Promote.
@@ -2980,7 +3007,7 @@ impl AppState {
             phase: Phase::Library(LibraryDialog::default()),
             library: None,
             index: Index::default(),
-            tab: Tab::IdeaInbox,
+            tab: Tab::Home,
             inbox_tab: InboxTab::NewIdea,
             projects_tab: ProjectsTab::Grid,
             draft: IdeaDraft::default(),
@@ -3079,6 +3106,7 @@ impl AppState {
             alerts: Alerts { focused: true, ..Default::default() },
             retag: None,
             new_project: None,
+            start_project: None,
             sweep_order_ask: None,
             sweep_order_asked: false,
             duplicate: None,
@@ -3261,7 +3289,7 @@ impl AppState {
             Tab::IdeaInbox => self.inbox_tab == InboxTab::Folder,
             Tab::InputLibrary => self.lib_tab == LibTab::Folder,
             Tab::Projects => self.projects_tab == ProjectsTab::Folder,
-            Tab::Review => false,
+            Tab::Home | Tab::Review => false,
             Tab::OutputLibrary => self.output_tab == OutputTab::Folder,
         }
     }
@@ -4448,20 +4476,39 @@ impl AppState {
     pub fn messages_error(&mut self, text: impl Into<String>) {
         let text = text.into();
         increart_core::applog::line("error", &text);
-        self.messages.push(Message { text, error: true, alert: false });
+        self.messages.push(Message { text, error: true, alert: false, log: None });
     }
 
     pub fn messages_info(&mut self, text: impl Into<String>) {
         let text = text.into();
         increart_core::applog::line("info", &text);
-        self.messages.push(Message { text, error: false, alert: false });
+        self.messages.push(Message { text, error: false, alert: false, log: None });
     }
 
     /// A notification alert's reason (its message, when so set).
     pub fn messages_alert(&mut self, text: impl Into<String>) {
         let text = text.into();
         increart_core::applog::line("alert", &text);
-        self.messages.push(Message { text, error: false, alert: true });
+        self.messages.push(Message { text, error: false, alert: true, log: None });
+    }
+
+    /// An error about a server (`"<name>: …"`, as the engine words them),
+    /// with that server's log when the app started it.
+    pub fn messages_server_error(&mut self, text: impl Into<String>) {
+        let text = text.into();
+        increart_core::applog::line("error", &text);
+        let log = self
+            .servers
+            .iter()
+            .filter(|s| text.strip_prefix(s.name.as_str()).is_some_and(|rest| rest.starts_with(':')))
+            .find_map(|s| match &s.config {
+                Some(c @ (ServerConfig::Start { .. } | ServerConfig::Kobold(_))) => {
+                    let path = increart_core::launcher::log_path(Path::new(""), c);
+                    Some(path.display().to_string())
+                }
+                _ => None,
+            });
+        self.messages.push(Message { text, error: true, alert: false, log });
     }
 }
 

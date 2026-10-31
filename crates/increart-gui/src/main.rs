@@ -11,6 +11,7 @@
 mod app;
 mod folderview;
 mod history;
+mod home;
 mod ideas;
 mod logs;
 mod markup;

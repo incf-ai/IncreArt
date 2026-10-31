@@ -11,7 +11,7 @@ use increart_gui_core::{AppState, Msg, Phase, ProjectsTab, Runtime, Tab, update}
 use crate::textures::Textures;
 use crate::tour::Tour;
 use crate::widgets::{BAD, GOOD, NEUTRAL, dialog_buttons, dialog_footer, ic, ph};
-use crate::{ideas, projects, review};
+use crate::{home, ideas, projects, review};
 
 pub struct App {
     st: AppState,
@@ -163,17 +163,21 @@ impl App {
                 // "📥 (7)". The right side gets what it needs at its compact
                 // size first.
                 let projects_icon = if st.active_runs.is_empty() { ph::ROCKET_LAUNCH } else { ph::SPARKLE };
+                // Home has no count
                 let tabs = [
-                    (Tab::IdeaInbox, ph::TRAY, "Idea Inbox", st.unreviewed_ideas().len()),
-                    (Tab::InputLibrary, ph::BOOKS, "Input Library", st.library_ideas_all()),
-                    (Tab::Projects, projects_icon, "Projects", st.index.projects.len()),
-                    (Tab::Review, ph::THUMBS_UP, "Review", st.unreviewed_outputs()),
-                    (Tab::OutputLibrary, ph::IMAGES, "Output Library", st.kept_outputs().len()),
+                    (Tab::Home, ph::HOUSE, "Home", None),
+                    (Tab::IdeaInbox, ph::TRAY, "Idea Inbox", Some(st.unreviewed_ideas().len())),
+                    (Tab::InputLibrary, ph::BOOKS, "Input Library", Some(st.library_ideas_all())),
+                    (Tab::Projects, projects_icon, "Projects", Some(st.index.projects.len())),
+                    (Tab::Review, ph::THUMBS_UP, "Review", Some(st.unreviewed_outputs())),
+                    (Tab::OutputLibrary, ph::IMAGES, "Output Library", Some(st.kept_outputs().len())),
                 ];
-                let text = |icon: &str, name: Option<&str>, n: usize| {
-                    let t = match name {
-                        Some(name) => format!("{icon} {name}  ({n})"),
-                        None => format!("{icon} ({n})"),
+                let text = |icon: &str, name: Option<&str>, n: Option<usize>| {
+                    let t = match (name, n) {
+                        (Some(name), Some(n)) => format!("{icon} {name}  ({n})"),
+                        (Some(name), None) => format!("{icon} {name}"),
+                        (None, Some(n)) => format!("{icon} ({n})"),
+                        (None, None) => icon.to_string(),
                     };
                     RichText::new(t).size(15.0)
                 };
@@ -189,7 +193,8 @@ impl App {
                 let short = full > ui.available_width() - TOP_RIGHT_MIN;
                 for (tab, icon, name, n) in tabs {
                     let r = ui.selectable_label(st.tab == tab, text(icon, (!short).then_some(name), n));
-                    let r = if short { r.on_hover_text(format!("{name} ({n})")) } else { r };
+                    let tip = || n.map(|n| format!("{name} ({n})")).unwrap_or_else(|| name.to_string());
+                    let r = if short { r.on_hover_text(tip()) } else { r };
                     if r.clicked() {
                         out.push(Msg::Tab(tab));
                     }
@@ -277,6 +282,7 @@ impl App {
                         if m.alert {
                             crate::settings::alert_links(ui, out);
                         }
+                        message_log_button(ui, m, out);
                         let force_open = self.tour.as_ref().is_some_and(|t| t.messages_popover());
                         messages_line(ui, st, m, out, force_open);
                     }
@@ -285,6 +291,7 @@ impl App {
         });
         let tex = &mut self.tex;
         match st.tab {
+            Tab::Home => home::view(ui, st, out),
             Tab::IdeaInbox => ideas::inbox(ui, st, tex, out),
             Tab::InputLibrary => ideas::input_library(ui, st, tex, out),
             Tab::Projects => projects::view(ui, st, tex, out),
@@ -617,6 +624,19 @@ fn zoom_control(ui: &mut egui::Ui, st: &AppState, out: &mut Vec<Msg>) {
 
 /// The latest message on the status line ("(+1 more) All GPUs idle …");
 /// click for a popover with all of them, newest first, and Clear all.
+/// A message about a server the app started: a button opening its log in
+/// the log viewer (none while it has no log file yet).
+fn message_log_button(ui: &mut egui::Ui, m: &increart_gui_core::Message, out: &mut Vec<Msg>) {
+    let Some(file) = &m.log else { return };
+    if !increart_gui_core::runtime::log_dir().join(file).is_file() {
+        return;
+    }
+    if ui.small_button(ic(ph::SCROLL, "Log")).on_hover_text(format!("open the server's log ({file})")).clicked() {
+        out.push(Msg::OpenLogs(Some(file.clone())));
+        egui::Popup::close_all(ui.ctx());
+    }
+}
+
 fn messages_line(
     ui: &mut egui::Ui,
     st: &AppState,
@@ -666,6 +686,7 @@ fn messages_line(
                         if m.alert {
                             crate::settings::alert_links(ui, out);
                         }
+                        message_log_button(ui, m, out);
                         let (icon, c) = if m.error { (ph::WARNING, BAD) } else { (ph::INFO, Color32::LIGHT_GRAY) };
                         ui.add(egui::Label::new(RichText::new(format!("{icon} {}", m.text)).color(c)).wrap());
                     });
@@ -982,7 +1003,7 @@ pub fn draft_note(ui: &mut egui::Ui, st: &AppState, dirty: Option<f64>) {
     }
 }
 
-trait Counts {
+pub trait Counts {
     fn library_ideas_all(&self) -> usize;
 }
 
@@ -1094,6 +1115,7 @@ impl eframe::App for App {
             crate::projects::retag_window(&ctx, &self.st, &mut out);
             crate::projects::new_project_window(&ctx, &self.st, &mut self.tex, &mut out);
             crate::projects::duplicate_window(&ctx, &self.st, &mut out);
+            crate::home::start_project_window(&ctx, &self.st, &mut out);
             crate::projects::promote_window(&ctx, &self.st, &mut out);
             crate::projects::sweep_order_window(&ctx, &self.st, &mut out);
             crate::tree::rename_window(&ctx, &self.st, &mut out);

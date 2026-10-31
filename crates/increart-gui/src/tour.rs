@@ -79,6 +79,8 @@ const SCENES: &[&str] = &[
     "45-reference-preview",
     "47-new-project-name",
     "49-output-library-show-outputs",
+    "99a-home",
+    "99b-home-start-project",
     // last: it leaves the server dialog open
     "52-server-dialog-edit",
 ];
@@ -1365,8 +1367,16 @@ impl Tour {
                 vec![Msg::OutputPreset(increart_gui_core::OutputPreset::All)]
             }
             // closes a dialog still open from scene 16 (when run right after it) first
+            "99a-home" => vec![Msg::ContinueWithoutServers, Msg::Tab(Tab::Home)],
+            "99b-home-start-project" => vec![Msg::StartProject(true)],
             "52-server-dialog-edit" => {
-                vec![Msg::CancelOpening, Msg::ContinueWithoutServers, Msg::OpenServerDialog, Msg::EditPreset(0)]
+                vec![
+                    Msg::StartProject(false),
+                    Msg::CancelOpening,
+                    Msg::ContinueWithoutServers,
+                    Msg::OpenServerDialog,
+                    Msg::EditPreset(0),
+                ]
             }
             "48-check-copy-image" | "82-preview-zoom" | "83-preview-next" => {
                 let img = st.kept_outputs().first().map(|o| o.image.clone());

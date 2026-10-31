@@ -1636,7 +1636,7 @@ pub fn lib_op(lib: &mut Library, op: LibOp) -> Result<OpOk, String> {
             let run = new_run(lib, &form, &preset, &model_dirs);
             lib.create_run(&project, run).map(|id| OpOk::Run(id, queued)).map_err(err)
         }
-        LibOp::PrepareProject { parent, name, copy_of, form } => {
+        LibOp::PrepareProject { parent, name, copy_of, form, then } => {
             let path = match copy_of {
                 // the copy, renamed as asked (a taken name gets a number)
                 Some(src) => {
@@ -1656,7 +1656,7 @@ pub fn lib_op(lib: &mut Library, op: LibOp) -> Result<OpOk, String> {
                     lib.create_project(&parent, Some(&free), &[]).map_err(err)?.1
                 }
             };
-            Ok(OpOk::ProjectReady { path, form: Box::new(form) })
+            Ok(OpOk::ProjectReady { path, form: Box::new(form), then })
         }
         LibOp::CopyProject(path, name) => lib.duplicate_project(&path, &name).map(OpOk::Duplicated).map_err(err),
         LibOp::EditedCopy { image, edits, title, to } => {
