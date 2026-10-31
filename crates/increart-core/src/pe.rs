@@ -485,7 +485,15 @@ impl Client {
     /// Whether a chat server answers.
     pub fn ready(&self) -> bool {
         let quick = agent(Some(Duration::from_secs(3)), None);
-        quick.get(format!("{}/v1/models", self.base)).call().is_ok_and(|r| r.status().is_success())
+        let url = format!("{}/v1/models", self.base);
+        let t = std::time::Instant::now();
+        let answer = quick
+            .get(&url)
+            .call()
+            .map_err(|e| e.to_string())
+            .and_then(|mut r| Ok((r.status().as_u16(), r.body_mut().read_to_string().map_err(|e| e.to_string())?)));
+        crate::traffic::exchange("GET", &url, None, &answer, t.elapsed());
+        answer.is_ok_and(|(status, _)| (200..300).contains(&status))
     }
 
     /// One chat completion: the system prompt, then the user's text with
@@ -511,7 +519,7 @@ impl Client {
         images: &[Vec<u8>],
         max_tokens: u32,
         sampling: Sampling,
-        mut on: impl FnMut(u32, &str) -> bool,
+        on: impl FnMut(u32, &str) -> bool,
     ) -> ChatResult {
         // the images first: asks that share them then share the start of
         // the request, which KoboldCpp doesn't read again (an image costs
@@ -536,9 +544,18 @@ impl Client {
             "stream": true,
         });
         let url = format!("{}/v1/chat/completions", self.base);
+        let t = std::time::Instant::now();
+        let r = self.send_chat(&url, &body, on);
+        // the answer as one text (streamed or not); an error as no answer
+        let logged = r.as_ref().map(|a| (200, a.clone())).map_err(Clone::clone);
+        crate::traffic::exchange("POST", &url, Some(&body), &logged, t.elapsed());
+        r
+    }
+
+    fn send_chat(&self, url: &str, body: &Value, mut on: impl FnMut(u32, &str) -> bool) -> ChatResult {
         // a KoboldCpp swapping with images: after the image it's making
         let _turn = crate::kobold_image::chat_turn(&self.base).map_err(|e| format!("{url}: {e}"))?;
-        let mut resp = self.agent.post(&url).send_json(&body).map_err(|e| format!("{url}: {e}"))?;
+        let mut resp = self.agent.post(url).send_json(body).map_err(|e| format!("{url}: {e}"))?;
         let status = resp.status().as_u16();
         let sse = resp
             .headers()

@@ -681,9 +681,20 @@ pub fn servers(ui: &mut egui::Ui, st: &AppState, d: &ServerDialog, out: &mut Vec
             || st.confirm.is_some()
             || st.pe.editor.is_some();
         // the settings on the left, the ways out on the right
-        let ((settings, logs), _) = dialog_footer(
+        let ((settings, logs, validate), _) = dialog_footer(
             ui,
             |ui| {
+                // the suite starts the servers itself: not with any open
+                let validate = !d.opening
+                    && st.servers.is_empty()
+                    && st.background.is_none()
+                    && ui
+                        .button(ic(ph::STETHOSCOPE, "Validate servers…"))
+                        .on_hover_text(
+                            "the server validation suite: opens each preset's servers and tests every call the \
+                             app makes, case by case, each request and answer logged",
+                        )
+                        .clicked();
                 let settings = !d.opening
                     && ui
                         .button(ic(ph::GEAR, "Server settings…"))
@@ -695,10 +706,13 @@ pub fn servers(ui: &mut egui::Ui, st: &AppState, d: &ServerDialog, out: &mut Vec
                     .button(ic(ph::SCROLL, "Logs…"))
                     .on_hover_text("the logs of the servers IncreArt started")
                     .clicked();
-                (settings, logs)
+                (settings, logs, validate)
             },
             |ui| ways_out(ui, st, d, modal, out),
         );
+        if validate {
+            out.push(Msg::ApiTest(true));
+        }
         if settings {
             out.push(Msg::ServerSettings(true));
         }
@@ -1889,7 +1903,9 @@ pub fn server_test_window(ctx: &egui::Context, t: &increart_gui_core::state::Ser
                 if ui.button(ic(ph::COPY, "Copy")).on_hover_text("the steps as text, to send").clicked() {
                     ui.ctx().copy_text(as_text(&t.name, &t.steps));
                 }
-                increart_core::traffic::enabled() && ui.button(ic(ph::SCROLL, "Traffic log…")).clicked()
+                ui.button(ic(ph::SCROLL, "Traffic log…"))
+                    .on_hover_text("this test's requests and answers, tagged with it")
+                    .clicked()
             },
             |ui| {
                 let close = ui.button(ic(ph::X, "Close")).clicked();

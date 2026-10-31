@@ -112,6 +112,11 @@ const EXTRA_SCENES: &[&str] = &[
     // after 02: a connected-to server's Test, nothing answering there
     "60b-server-test-button",
     "60c-server-test",
+    // after 02, on a config whose sd-server is the suite's fake
+    // (increart-fake-sd-server): Validate servers…, its cases, a run
+    "60d-validate-servers-button",
+    "60e-validate-servers",
+    "60f-validate-servers-run",
     "61-duplicate-project",
     "62-rename",
     "63-projects-search",
@@ -332,6 +337,25 @@ impl Tour {
                 url: "http://127.0.0.1:9".into(),
                 device: String::new(),
             })],
+            "60d-validate-servers-button" => vec![Msg::CancelOpening, Msg::CloseServerTest, Msg::CancelEdit],
+            "60e-validate-servers" => vec![Msg::ApiTest(true)],
+            "60f-validate-servers-run" => {
+                // the first preset's light cases and its servers together
+                let Some(t) = &st.api_test else { return vec![] };
+                let first = t.cases.first().map(|c| c.case.preset.clone()).unwrap_or_default();
+                let pick: Vec<usize> = (0..t.cases.len())
+                    .filter(|&i| {
+                        let c = &t.cases[i].case;
+                        c.preset == first
+                            && (c.cost == increart_core::apitest::Cost::Light || c.id.ends_with("together.parallel"))
+                    })
+                    .collect();
+                vec![
+                    Msg::ApiTestCheck((0..t.cases.len()).collect(), false),
+                    Msg::ApiTestCheck(pick, true),
+                    Msg::ApiTestRun(increart_gui_core::ApiRun::Checked),
+                ]
+            }
             "63-projects-search" => vec![
                 Msg::CancelDuplicate,
                 Msg::CancelRename,
@@ -1786,6 +1810,7 @@ impl Tour {
                     .iter()
                     .any(|j| matches!(&j.step, increart_gui_core::PeStep::Writing { pieces, .. } if *pieces > 12)))
             || tex.busy()
+            || st.api_test.as_ref().is_some_and(|t| t.listing || t.running)
             || matches!(st.phase, Phase::Library(LibraryDialog { busy: true, .. }))
             || (!opening_ok && matches!(st.phase, Phase::Servers(ServerDialog { opening: true, .. })))
             || matches!(&st.phase, Phase::Servers(ServerDialog { wizard: true, devices: None, kobold: None, .. }))

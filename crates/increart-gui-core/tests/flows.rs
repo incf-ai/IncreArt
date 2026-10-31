@@ -6334,6 +6334,107 @@ fn a_server_test_shows_its_steps_and_stops() {
 }
 
 #[test]
+fn validate_servers_lists_runs_checked_cases_and_stops() {
+    use increart_core::apitest::{Case, Cost, Counts, Event, Outcome};
+    let mut s = dialog_state(vec![], None);
+    let fx = update(&mut s, Msg::ApiTest(true));
+    let [Effect::ApiTestList { run, config }] = fx.as_slice() else { panic!("{fx:?}") };
+    assert_eq!(config, Path::new("/nonexistent/config.rsn"));
+    let run = *run;
+    assert!(s.api_test.as_ref().unwrap().listing);
+    let case = |id: &str, na: Option<&str>| Case {
+        id: id.into(),
+        preset: "Two".into(),
+        server: None,
+        group: "together".into(),
+        title: id.into(),
+        cost: Cost::Light,
+        not_applicable: na.map(String::from),
+        expects: String::new(),
+    };
+    let plan = vec![
+        case("Two/together.open", None),
+        case("Two/a/connect.latency", None),
+        case("Two/a/generate.lora", Some("no LoRA")),
+    ];
+    update(&mut s, Msg::ApiTestEvent(run, Event::Plan { cases: plan.clone() }));
+    update(&mut s, Msg::ApiTestEnded(run, None));
+    let t = s.api_test.as_ref().unwrap();
+    assert!(!t.listing && t.error.is_none());
+    // n/a ones start unchecked
+    assert_eq!(t.cases.iter().map(|c| c.checked).collect::<Vec<_>>(), [true, true, false]);
+    update(&mut s, Msg::ApiTestCheck(vec![0], false));
+    let fx = update(&mut s, Msg::ApiTestRun(ApiRun::Checked));
+    let [Effect::ApiTestRun { run, cases, .. }] = fx.as_slice() else { panic!("{fx:?}") };
+    assert_eq!(cases, &["Two/a/connect.latency"]);
+    let run = *run;
+    // a second run waits for the first
+    assert!(update(&mut s, Msg::ApiTestRun(ApiRun::All)).is_empty());
+    // its plan (the cases it runs) keeps the list as it is
+    update(&mut s, Msg::ApiTestEvent(run, Event::Plan { cases: plan[..2].to_vec() }));
+    assert_eq!(s.api_test.as_ref().unwrap().cases.len(), 3);
+    for e in [
+        Event::Start { id: "Two/together.open".into() },
+        Event::End { id: "Two/together.open".into(), outcome: Outcome::Pass, summary: "a answers".into(), secs: 0.1 },
+        Event::Start { id: "Two/a/connect.latency".into() },
+        Event::Log { id: Some("Two/a/connect.latency".into()), text: "20 asks".into() },
+        Event::Traffic { id: Some("Two/a/connect.latency".into()), text: "GET /sdcpp/v1/capabilities".into() },
+    ] {
+        update(&mut s, Msg::ApiTestEvent(run, e));
+    }
+    // an older run's event is dropped
+    update(&mut s, Msg::ApiTestEvent(run - 1, Event::Log { id: None, text: "old".into() }));
+    let t = s.api_test.as_ref().unwrap();
+    assert_eq!(t.selected, Some(1), "it follows the case running");
+    assert!(t.cases[1].running && t.cases[1].log == ["20 asks"] && t.cases[1].traffic.len() == 1);
+    assert_eq!(t.cases[0].outcome, Some(Outcome::Pass));
+    assert!(t.log.is_empty());
+    // closing while it runs stops it first, keeping the window
+    assert_eq!(update(&mut s, Msg::ApiTest(false)), [Effect::ApiTestStop]);
+    assert!(update(&mut s, Msg::ApiTestStop).is_empty());
+    assert!(s.api_test.is_some());
+    let end = Event::End {
+        id: "Two/a/connect.latency".into(),
+        outcome: Outcome::Fail,
+        summary: "slowest 9 s".into(),
+        secs: 9.0,
+    };
+    update(&mut s, Msg::ApiTestEvent(run, end));
+    let mut counts = Counts::default();
+    counts.add(Outcome::Pass);
+    counts.add(Outcome::Fail);
+    update(
+        &mut s,
+        Msg::ApiTestEvent(run, Event::Done { counts, report: Some("/r".into()), zip: Some("/r.zip".into()) }),
+    );
+    update(&mut s, Msg::ApiTestEnded(run, None));
+    let t = s.api_test.as_ref().unwrap();
+    assert!(!t.running && !t.stopping);
+    assert_eq!(t.done.as_ref().unwrap().2.as_deref(), Some(Path::new("/r.zip")));
+    // Rerun failed: the failed one
+    let fx = update(&mut s, Msg::ApiTestRun(ApiRun::Failed));
+    let [Effect::ApiTestRun { run, cases, .. }] = fx.as_slice() else { panic!("{fx:?}") };
+    assert_eq!(cases, &["Two/a/connect.latency"]);
+    // one that ends without a word says why
+    update(&mut s, Msg::ApiTestEnded(*run, Some("it ended (signal 9) before finishing".into())));
+    assert!(s.api_test.as_ref().unwrap().error.as_deref().unwrap().contains("signal 9"));
+    assert!(update(&mut s, Msg::ApiTest(false)).is_empty());
+    assert!(s.api_test.is_none());
+    // not with servers open: the suite starts its own
+    s.servers = vec![ServerStatus {
+        config: None,
+        name: "a".into(),
+        device: String::new(),
+        state: "ready".into(),
+        model: None,
+        idle_since: None,
+        worked: false,
+    }];
+    assert!(update(&mut s, Msg::ApiTest(true)).is_empty());
+    assert!(s.api_test.is_none());
+}
+
+#[test]
 fn a_server_problem_links_the_servers_log() {
     let mut s = dialog_state(vec![], None);
     let status = |name: &str, config: Option<ServerConfig>| ServerStatus {

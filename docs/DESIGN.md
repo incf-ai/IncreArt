@@ -2439,7 +2439,72 @@ in the app's state folder (`$XDG_STATE_HOME/increart` when set, else
   warning. With the engine using that server it stops after the status.
   **Stop** cancels its job on the server; **Copy** gives the steps as text,
   to send to whoever runs the server; **Traffic log…** opens the traffic
-  log when it's on.
+  log. A test's traffic is always logged, the log setting on or not, each
+  line tagged `[test <server>]`.
+- **Validating servers** (`increart-apitest`, beside the app in each
+  release; see below).
+
+### Validating servers
+
+`increart-apitest` is a command-line suite that tests a config's server
+presets as the app uses them, case by case; the startup Servers screen's
+**Validate servers…** is a window around it. The suite starts the servers
+it needs itself, opening each preset's servers together as the app does,
+so the button is there only while no servers are open or opening, and
+nothing else uses the GPUs. Started servers are stopped when the suite
+ends, is stopped, or loses the app (its stdin closing).
+
+- Its cases, by ID: `preset/server/group.key` for one server,
+  `preset/group.key` for the preset's servers together.
+  - **together**: `open` (always first: a port already taken is said, and
+    nothing is started), `routing` (each model preset has a server, by
+    listed files, by a running file of that name, or "may get it"),
+    `parallel`, `pe-with-images`, `end-to-end` (a run through the engine
+    in a scratch library) and `failover` (the same with a started server
+    stopped after its first image: the rest go to the others).
+  - **connect**: `capabilities`, `latency`, `parallel-clients`,
+    `poll-burst`, `unknown-job` (a 404, not an error).
+  - **models**: `list`, `status`, `load-each` (the answer must name what
+    was asked), `load-missing` (a clean refusal).
+  - **generate**: `basic` (the Test button's steps), `txt2img`,
+    `same-seed`, `reference`, `large-request` (about 12 MB of reference
+    images: a proxy's body limit shows here), `lora`, `custom-sigmas`.
+  - **jobs**: `queue`, `cancel-running`, `cancel-queued`, `after-cancel`,
+    `poll-finished`.
+  - **prompt-enhance** (chat servers): `answers`, `chat`, `stop`, `vision`.
+- A case that isn't for the setup (no LoRA in any model preset, a
+  text-only chat server, failover with nothing started) is **n/a**, saying
+  why; one whose server didn't open is **skipped**. Outcomes: pass,
+  warning (works, not as well as it could), fail, skipped, n/a. Each is
+  `light` (asks only), `loads a model` or `GPU time`.
+- `increart-apitest list [--json]` lists the cases;
+  `increart-apitest run` runs them: `--config` (default
+  `$INCREART_CONFIG`, else the app's), `--preset` (again for more),
+  `--cases` (comma-separated, `*` for any text: `"*/jobs.*"`), `--light`,
+  `--url <url> --kind sd-server|koboldcpp|chat` (one running server, no
+  preset), `--out`, `--verbose`, `--jsonl` (events as JSON lines, a `stop`
+  line on stdin stops: what the app reads). Exit status: 0 all passed,
+  1 a failure, 2 warnings only, 3 it couldn't run.
+- Every request of a case and its answer is logged to the case (the same
+  lines as the traffic log, tagged with the case). The `--out` folder gets
+  `report.md` (written to be handed to a person or an LLM: what the app
+  expects of each call, each case's result, log and traffic), `report.json`,
+  `traffic.log` and the started servers' logs, zipped beside it. The app's
+  runs go to `apitest/<date-time>` in the log folder.
+- The window: left, the cases as a tree, preset, then server (or "servers
+  together"), then group; each branch's checkbox checks all in it (half
+  checked: some), its mark the worst of theirs. n/a cases start unchecked.
+  **Check all**, **Uncheck all**, **Light only**. Right, the case clicked
+  (what it expects, its result, its log and traffic), else the run's log;
+  it follows the case running until one is clicked. **Run N checked**,
+  **Run all**, **Rerun failed** (failed and skipped), **Stop** (the case
+  going on, then the servers), **Copy report** (`report.md`), **Show
+  zip**, **Copy command** (the same run from a terminal). Close stops a
+  run first. A suite that isn't beside the app is said, with where it
+  comes from.
+- CI runs the suite against servers it starts: `increart-fake-sd-server`
+  (the `fake` feature), increart-core's test fake as a binary taking
+  sd-server's `--listen-ip` and `--listen-port`.
 
 - Each start first adds a line of the app's own to the log:
   `--- IncreArt, <date time>: <command line>` (the environment it set

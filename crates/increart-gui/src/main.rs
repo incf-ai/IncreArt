@@ -8,6 +8,7 @@
 //! `INCREART_CONFIG`. The command line can skip the start-up screens (see
 //! `USAGE`); a screen is only skipped when its argument is valid.
 
+mod apitest;
 mod app;
 mod folderview;
 mod history;

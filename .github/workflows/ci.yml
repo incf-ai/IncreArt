@@ -48,6 +48,11 @@ jobs:
       - if: ${{ !matrix.link_mode }}
         run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace --no-fail-fast
+      - name: The server validation suite, against servers it starts (the fake sd-server)
+        if: ${{ !matrix.link_mode }}
+        run: |
+          cargo clippy -p increart-apitest --all-targets --features fake -- -D warnings
+          cargo test -p increart-apitest --features fake
       - if: ${{ !matrix.link_mode }}
         run: cargo build --release -p increart-gui
       - name: The example library, as releases ship it

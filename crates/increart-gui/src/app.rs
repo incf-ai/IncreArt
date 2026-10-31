@@ -1148,6 +1148,10 @@ impl eframe::App for App {
         if let Some(t) = &self.st.server_test {
             crate::startup::server_test_window(&ctx, t, &mut out);
         }
+        // over the server dialog
+        if let Some(t) = &self.st.api_test {
+            crate::apitest::window(&ctx, &self.st, t, &mut out);
+        }
         // over whichever window it was opened from
         if let Some(v) = &self.st.logs {
             crate::logs::window(&ctx, &self.st, v, &mut self.logs, &mut out);

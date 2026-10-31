@@ -2401,6 +2401,70 @@ pub struct ServerTest {
     pub done: bool,
 }
 
+/// **Validate servers…** (DESIGN.md, Validating servers): the suite,
+/// `increart-apitest` run as a child, over the config's server presets.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ApiTest {
+    /// Numbers lists and runs; events from an older one are ignored.
+    pub run: u32,
+    /// Asking the suite for its cases.
+    pub listing: bool,
+    pub running: bool,
+    /// Stop asked, the run not over yet.
+    pub stopping: bool,
+    pub cases: Vec<ApiCase>,
+    /// The case shown on the right; None: the run's own log.
+    pub selected: Option<usize>,
+    /// The case shown follows the one running (until one is clicked).
+    pub follow: bool,
+    /// The run's log: between cases, and its end.
+    pub log: Vec<String>,
+    /// The last run's counts, report folder and zip.
+    pub done: Option<(increart_core::apitest::Counts, Option<PathBuf>, Option<PathBuf>)>,
+    /// It couldn't list or run (the suite missing, a bad config).
+    pub error: Option<String>,
+}
+
+/// A case of the suite, in [`ApiTest`].
+#[derive(Clone, Debug, PartialEq)]
+pub struct ApiCase {
+    pub case: increart_core::apitest::Case,
+    pub checked: bool,
+    /// Of the last run that ran it.
+    pub outcome: Option<increart_core::apitest::Outcome>,
+    pub running: bool,
+    pub summary: String,
+    pub secs: f64,
+    pub log: Vec<String>,
+    pub traffic: Vec<String>,
+}
+
+/// Which cases **Run** runs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ApiRun {
+    Checked,
+    All,
+    /// Those that failed or were skipped last time.
+    Failed,
+}
+
+impl ApiTest {
+    pub fn index(&self, id: &str) -> Option<usize> {
+        self.cases.iter().position(|c| c.case.id == id)
+    }
+
+    /// The IDs `which` runs (empty for all).
+    pub fn ids(&self, which: ApiRun) -> Vec<String> {
+        use increart_core::apitest::Outcome;
+        let pick = |c: &&ApiCase| match which {
+            ApiRun::Checked => c.checked,
+            ApiRun::All => false,
+            ApiRun::Failed => matches!(c.outcome, Some(Outcome::Fail | Outcome::Skipped)),
+        };
+        self.cases.iter().filter(pick).map(|c| c.case.id.clone()).collect()
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct ServerStatus {
     /// What it was opened as.
@@ -2685,6 +2749,8 @@ pub struct AppState {
     pub server_test: Option<ServerTest>,
     /// Tests started, numbering them.
     pub server_tests: u32,
+    /// The **Validate servers…** window.
+    pub api_test: Option<ApiTest>,
     /// Numbers server-opening attempts; reports from older ones are ignored.
     pub open_attempt: u32,
     /// Servers still opening after **Continue in background**.
@@ -3041,6 +3107,7 @@ impl AppState {
             engine_running: false,
             server_test: None,
             server_tests: 0,
+            api_test: None,
             open_attempt: 0,
             background: None,
             start_log: vec![],

@@ -154,6 +154,21 @@ pub enum Msg {
     StopServerTest,
     /// Closes the Test window, stopping the test.
     CloseServerTest,
+    /// **Validate servers…** (on the startup server screen): opens the
+    /// window, listing the suite's cases; or closes it (stopping a run).
+    ApiTest(bool),
+    /// The suite said something, in the list or run of that number.
+    ApiTestEvent(u32, increart_core::apitest::Event),
+    /// The suite's process ended: None, or why it said nothing more (it
+    /// isn't there, it ended early).
+    ApiTestEnded(u32, Option<String>),
+    /// Checks (or unchecks) these cases.
+    ApiTestCheck(Vec<usize>, bool),
+    /// Shows a case's log (None: the run's).
+    ApiTestSelect(Option<usize>),
+    ApiTestRun(crate::state::ApiRun),
+    /// Stops the run: the case going on, then the servers it started.
+    ApiTestStop,
     /// The Settings window.
     Settings(bool),
     SetNotifications(increart_core::notify::Notifications),
@@ -931,6 +946,20 @@ pub enum Effect {
         generate: Result<(), String>,
     },
     StopServerTest,
+    /// List the suite's cases for the config saved at `config`, answered
+    /// with an `ApiTestEvent` (its plan, or an error) and `ApiTestEnded`.
+    ApiTestList {
+        run: u32,
+        config: PathBuf,
+    },
+    /// Run the suite on `cases` (empty: all), answered with
+    /// `ApiTestEvent`s and `ApiTestEnded`.
+    ApiTestRun {
+        run: u32,
+        config: PathBuf,
+        cases: Vec<String>,
+    },
+    ApiTestStop,
     /// Stop the engine and the servers the app started.
     StopServers,
     /// Stop the engine only, keeping the servers (switching libraries).
@@ -1357,6 +1386,75 @@ fn check_presets(list: &PromptPresets) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+/// An event of the suite, into its window.
+fn api_test_event(t: &mut crate::state::ApiTest, event: increart_core::apitest::Event) {
+    use increart_core::apitest::Event;
+    let case = |t: &mut crate::state::ApiTest, id: &str| t.index(id);
+    match event {
+        // a run's plan is the cases it runs, of those listed: kept as listed
+        Event::Plan { cases } if !t.running => {
+            let was: std::collections::HashMap<String, bool> =
+                t.cases.iter().map(|c| (c.case.id.clone(), c.checked)).collect();
+            t.cases = cases
+                .into_iter()
+                .map(|c| crate::state::ApiCase {
+                    checked: was.get(&c.id).copied().unwrap_or(c.not_applicable.is_none()),
+                    case: c,
+                    outcome: None,
+                    running: false,
+                    summary: String::new(),
+                    secs: 0.0,
+                    log: vec![],
+                    traffic: vec![],
+                })
+                .collect();
+            t.selected = None;
+        }
+        Event::Plan { .. } => {}
+        Event::Start { id } => {
+            if let Some(i) = case(t, &id) {
+                let c = &mut t.cases[i];
+                c.running = true;
+                c.outcome = None;
+                c.summary.clear();
+                c.log.clear();
+                c.traffic.clear();
+                if t.follow {
+                    t.selected = Some(i);
+                }
+            }
+        }
+        Event::Log { id: Some(id), text } => match case(t, &id) {
+            Some(i) => t.cases[i].log.push(text),
+            None => t.log.push(text),
+        },
+        Event::Log { id: None, text } => t.log.push(text),
+        Event::Traffic { id: Some(id), text } => {
+            if let Some(i) = case(t, &id) {
+                t.cases[i].traffic.push(text);
+            }
+        }
+        Event::Traffic { id: None, .. } => {}
+        Event::End { id, outcome, summary, secs } => {
+            if let Some(i) = case(t, &id) {
+                let c = &mut t.cases[i];
+                c.running = false;
+                c.outcome = Some(outcome);
+                c.summary = summary;
+                c.secs = secs;
+            }
+        }
+        Event::Done { counts, report, zip } => {
+            t.log.push(counts.line());
+            t.done = Some((counts, report, zip));
+            if t.follow {
+                t.selected = None;
+            }
+        }
+        Event::Error { text } => t.error = Some(text),
+    }
 }
 
 fn save_config(state: &AppState) -> Vec<Effect> {
@@ -2529,6 +2627,105 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
         },
         Msg::CloseServerTest => match state.server_test.take() {
             Some(t) if !t.done => vec![Effect::StopServerTest],
+            _ => vec![],
+        },
+        Msg::ApiTest(true) => {
+            // the suite starts the servers itself: not with any open
+            let idle = matches!(&state.phase, Phase::Servers(d) if !d.opening)
+                && state.servers.is_empty()
+                && state.background.is_none();
+            if !idle || state.api_test.is_some() {
+                return vec![];
+            }
+            state.server_tests += 1;
+            let run = state.server_tests;
+            let mut t = crate::state::ApiTest { run, follow: true, ..Default::default() };
+            let fx = match &state.config_path {
+                Some(config) => {
+                    t.listing = true;
+                    vec![Effect::ApiTestList { run, config: config.clone() }]
+                }
+                None => {
+                    t.error = Some("the config isn't saved anywhere: the suite reads it from its file".into());
+                    vec![]
+                }
+            };
+            state.api_test = Some(t);
+            fx
+        }
+        Msg::ApiTest(false) => match &mut state.api_test {
+            // stopped first; closed once it's over
+            Some(t) if t.running => {
+                let stop = !t.stopping;
+                t.stopping = true;
+                if stop { vec![Effect::ApiTestStop] } else { vec![] }
+            }
+            _ => {
+                state.api_test = None;
+                vec![]
+            }
+        },
+        Msg::ApiTestEvent(run, event) => {
+            if let Some(t) = state.api_test.as_mut().filter(|t| t.run == run) {
+                api_test_event(t, event);
+            }
+            vec![]
+        }
+        Msg::ApiTestEnded(run, why) => {
+            if let Some(t) = state.api_test.as_mut().filter(|t| t.run == run) {
+                t.listing = false;
+                t.running = false;
+                t.stopping = false;
+                for c in t.cases.iter_mut().filter(|c| c.running) {
+                    c.running = false;
+                }
+                if t.error.is_none() {
+                    t.error = why;
+                }
+            }
+            vec![]
+        }
+        Msg::ApiTestCheck(ix, on) => {
+            if let Some(t) = &mut state.api_test {
+                for i in ix {
+                    if let Some(c) = t.cases.get_mut(i) {
+                        c.checked = on;
+                    }
+                }
+            }
+            vec![]
+        }
+        Msg::ApiTestSelect(i) => {
+            if let Some(t) = &mut state.api_test {
+                t.selected = i.filter(|&i| i < t.cases.len());
+                t.follow = false;
+            }
+            vec![]
+        }
+        Msg::ApiTestRun(which) => {
+            let Some(config) = state.config_path.clone() else { return vec![] };
+            let Some(t) = &mut state.api_test else { return vec![] };
+            if t.running || t.listing || t.cases.is_empty() {
+                return vec![];
+            }
+            let cases = t.ids(which);
+            if cases.is_empty() && which != crate::state::ApiRun::All {
+                return vec![];
+            }
+            state.server_tests += 1;
+            t.run = state.server_tests;
+            t.running = true;
+            t.follow = true;
+            t.done = None;
+            t.error = None;
+            t.log.clear();
+            vec![Effect::ApiTestRun { run: t.run, config, cases }]
+        }
+        Msg::ApiTestStop => match &mut state.api_test {
+            Some(t) if t.running && !t.stopping => {
+                t.stopping = true;
+                vec![Effect::ApiTestStop]
+            }
             _ => vec![],
         },
         Msg::Settings(open) => {

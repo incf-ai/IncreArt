@@ -66,6 +66,12 @@ images into the inbox's drop folder, keep or discard them into the input
 library, start projects, review the results) and has buttons to start a new
 project, write an idea or import images.
 
+If a server misbehaves (a proxy in front of sd-server, a remote box),
+**Validate servers…** on that screen tests every call the app makes, case
+by case, and gives a report to send, or to hand to an LLM. The same suite
+runs from a terminal as `increart-apitest`, which comes in the zip
+([how it works](docs/DESIGN.md#validating-servers)).
+
 The [setup guides](docs/setup/README.md) go step by step: get the models,
 install KoboldCpp or sd-server, configure them, or build IncreArt from
 source. They're written so that a coding agent can follow them too
