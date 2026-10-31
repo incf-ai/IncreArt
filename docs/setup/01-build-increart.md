@@ -162,7 +162,7 @@ unknown preset, sd-server or models folder missing), with the reason. An
 unknown argument prints the usage and exits with status 2.
 
 **Expected result:** a 1400 × 900 window titled "IncreArt" with "Open a
-library" (see [../gui/01-library-dialog.png](../gui/01-library-dialog.png)).
+library" (see [../gui/01-library-dialog.webp](../gui/01-library-dialog.webp)).
 Continue with [06-configure-increart.md](06-configure-increart.md).
 
 **Verify (without looking at the screen):**

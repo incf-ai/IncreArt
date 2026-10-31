@@ -15,7 +15,7 @@ Order at start-up: **library screen → servers screen → main window** (on its
 
 1. `./target/release/increart`
 2. "Open a library" screen ("No libraries yet…" the first time):
-   **Create a new library…** ([../gui/53-library-wizard.png](../gui/53-library-wizard.png)).
+   **Create a new library…** ([../gui/53-library-wizard.webp](../gui/53-library-wizard.webp)).
 3. Pick **In your home folder** (`~/IncreArt`, preselected), **In the current
    folder**, or **Somewhere else:** (type or **Browse…**).
 4. **Create library**. The folder is created if missing.
