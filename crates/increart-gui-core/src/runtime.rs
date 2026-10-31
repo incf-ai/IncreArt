@@ -373,7 +373,8 @@ impl Runtime {
     }
 
     /// Stops the engine and the servers the app started, or with
-    /// `leave_running` lets started servers outlive the app.
+    /// `leave_running` lets started servers outlive the app, and closes the
+    /// library (its lock let go once a job using it ends).
     pub fn shutdown(&self, leave_running: bool) {
         // Stop servers still starting (they would outlive the app), and give
         // their threads a moment to do it.
@@ -392,6 +393,7 @@ impl Runtime {
                 std::thread::sleep(Duration::from_millis(50));
             }
         }
+        let mut lib = None;
         if let Ok(mut s) = self.shared.lock() {
             if let Some(engine) = s.engine.take() {
                 engine.shutdown();
@@ -403,8 +405,19 @@ impl Runtime {
             // a KoboldCpp the app started stops with it
             s.pe.clear();
             s.pe_queue.clear();
+            // threads still going (one stopping a KoboldCpp, the worker)
+            // hold `shared`, not the library; jobs after this find none
+            s.watch = None;
+            lib = s.library.take();
         }
         self.pe_signal.notify_all();
+        // a job using it (a save, a usage check) ends first
+        if let Some(lib) = lib {
+            let deadline = std::time::Instant::now() + Duration::from_secs(5);
+            while Arc::strong_count(&lib) > 1 && std::time::Instant::now() < deadline {
+                std::thread::sleep(Duration::from_millis(20));
+            }
+        }
     }
 }
 

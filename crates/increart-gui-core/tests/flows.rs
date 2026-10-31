@@ -175,6 +175,15 @@ fn create_library_then_ideas_review_promote_generate() {
 }
 
 #[test]
+fn shutdown_lets_the_library_go() {
+    let h = Harness::new();
+    assert!(matches!(increart_core::Library::open(&h.root), Err(increart_core::Error::Locked(_))));
+    // its threads may outlive this (one stopping a KoboldCpp held it)
+    h.rt.shutdown(false);
+    increart_core::Library::open(&h.root).expect("opened again with the runtime still there");
+}
+
+#[test]
 fn inbox_filters_narrow_the_triage_queue() {
     let mut h = Harness::new();
     for (t, x, tags) in
