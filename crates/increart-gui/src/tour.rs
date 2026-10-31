@@ -100,6 +100,9 @@ const EXTRA_SCENES: &[&str] = &[
     "41-check-rubber-band",
     "46-check-ref-double-click",
     "48-check-copy-image",
+    // the inbox's Save to input library: the filter clicked keeps the
+    // typing (the name took the focus back)
+    "03d-check-save-dialog-focus",
     // after 02: the wheel over a followed log unticks follow
     "98h3-check-logs-scroll-unticks-follow",
     "98h4-check-logs-wrapped-scroll-unticks-follow",
@@ -1012,7 +1015,7 @@ impl Tour {
                 let picks = st.inbox_queue().iter().take(3).map(|e| e.idea.id.clone()).collect();
                 vec![Msg::InboxPick(picks)]
             }
-            "03c-idea-inbox-save-dialog" => {
+            "03c-idea-inbox-save-dialog" | "03d-check-save-dialog-focus" => {
                 let first = st.inbox_queue().first().map(|e| e.idea.id.clone());
                 vec![Msg::InboxPick(vec![]), Msg::SaveIdeas(first.into_iter().collect())]
             }
@@ -2009,6 +2012,34 @@ impl Tour {
                 (6, Some(p)) if !self.clicked => {
                     self.inject = vec![button(p, false)];
                     self.clicked = true;
+                }
+                _ => {}
+            }
+        }
+        if name == "03d-check-save-dialog-focus" {
+            let button = |pos, pressed| egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: Default::default(),
+            };
+            match self.settled {
+                5 | 6 => match ctx.data(|d| d.get_temp::<egui::Rect>(egui::Id::unique("tour_save_filter"))) {
+                    Some(r) if self.settled == 5 => {
+                        self.inject = vec![egui::Event::PointerMoved(r.center()), button(r.center(), true)]
+                    }
+                    Some(r) => self.inject = vec![button(r.center(), false)],
+                    None => eprintln!("CHECK {name}: FAILED (no filter drawn)"),
+                },
+                9 => self.inject = vec![egui::Event::Text("zz".into())],
+                14 => {
+                    let d = st.save_idea.as_ref();
+                    let (filter, name_now) = (d.map(|d| d.filter.as_str()), d.map(|d| d.name.as_str()));
+                    let ok = filter == Some("zz") && name_now.is_some_and(|n| !n.contains("zz"));
+                    eprintln!(
+                        "CHECK {name}: {} (filter {filter:?}, name {name_now:?})",
+                        if ok { "ok" } else { "FAILED" }
+                    );
                 }
                 _ => {}
             }

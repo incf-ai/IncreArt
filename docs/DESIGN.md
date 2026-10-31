@@ -2661,15 +2661,21 @@ the keys and mouse buttons go through that view's own history instead.
     folder in file manager. (Planned: accept all ready rewrites.)
   - **Save to input library** (the card's Save, the side panel's button,
     the menus, `1`/`2`/`S`; the New idea form's **Add & save to input
-    library…**, for the draft) always asks first, in a modal: the **Name**
-    (the idea's title to start with; renames it; several picked ideas keep
-    theirs and the field is hidden) and the **Folder**, a filterable tree of
-    the input library's folders with **New folder in “…”** (an existing one
-    of that name, any case, is used). It starts in the folder the last save
-    went to (this session). The path it will go to is shown under the tree;
-    **Save** (`Enter`) moves the ideas there unstarred, making the folder;
-    **Cancel** (`Esc`) leaves them in the inbox (the draft in the form).
-    Discard doesn't ask.
+    library…**, for the draft) always asks first, in a modal. Left, the
+    **Folder**: a filterable tree of the input library's folders, **New
+    folder** under it (named in the folder chosen; an existing one of that
+    name, any case, is used). Right, the **Name** (the idea's title to start
+    with; renames it; several picked ideas keep theirs and the field is
+    hidden), and where it's **Saved in**. The name has the focus as it
+    opens, a new folder's name once asked for; neither takes it back from a
+    field clicked since. It starts in the folder the last save went to (this
+    session). **Save** (`Enter`) moves the ideas there unstarred, making the
+    folder; **Save and make a project** saves them, then makes a project
+    from them at once, named as the idea (the first valid title of several),
+    where the last promote went, in its own folder (the Promote dialog asks
+    when that name won't do; the draft is saved in the folder chosen, not
+    the top level); **Cancel** (`Esc`) leaves them in the inbox (the draft in
+    the form). Discard doesn't ask.
   - **New idea** (`Ctrl+N` from anywhere): title, text, tags, images (drop /
     paste / browse), **Rewrite with PE**. **Add to inbox** (review it later),
     **Add & save to input library…** (asks the name and folder, as below),
