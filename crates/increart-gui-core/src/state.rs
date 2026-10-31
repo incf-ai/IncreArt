@@ -2713,6 +2713,10 @@ pub struct AppState {
     pub logs: Option<LogsView>,
     /// That warning was shown this session (it shows once per start).
     pub no_server_warned: bool,
+    /// The runs and sweeps being saved (project, label): Queue again for
+    /// one before it's saved (a double-click) would save it twice, as the
+    /// label only moves on once it is.
+    pub queueing: Vec<(Id, String)>,
     /// Queueing a sweep while the jobs go one at a time: asking whether to
     /// spread them evenly (holds the sweep's "big one confirmed").
     pub sweep_order_ask: Option<bool>,
@@ -3018,6 +3022,7 @@ impl AppState {
             no_server_warning: false,
             logs: None,
             no_server_warned: false,
+            queueing: vec![],
             folder_view: FolderView::new(FvPlace::Projects),
             parked_folder_views: FvPlace::ALL[1..].iter().map(|p| FolderView::new(*p)).collect(),
             fv_clipboard: None,

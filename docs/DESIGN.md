@@ -1605,6 +1605,9 @@ quitting:
   starts from its latest run's prompt, refs and settings.
   Queueing keeps the draft (with the next label and seed) so a variation is
   one edit away; **Clear** resets it. Copying a project copies its draft.
+  Queue again before that run or sweep is saved (a double-click; the label
+  moves on only once it is) says "r05 is being queued already" and saves
+  nothing: a sweep saved twice showed each style twice on its contact sheet.
 - Run labels count from `r00` (a sweep counts once), always past the highest
   `rNN` the project already has, so libraries numbered from `r01` carry on.
 - **New idea**: `input/draft.rsn` (`IdeaDraft { title, text, tags, images }`;

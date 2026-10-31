@@ -3687,6 +3687,43 @@ fn preview_steps_through_review_and_the_output_library() {
 }
 
 #[test]
+fn queue_pressed_twice_before_the_save_lands_saves_once() {
+    use increart_core::prompts::SweepVary;
+    let mut h = Harness::new();
+    h.send(Msg::NewProject(PathBuf::new()));
+    h.send(Msg::CommitRename);
+    h.settle();
+    h.state.no_server_warned = true;
+
+    // a run: the second Queue comes before the first is saved (a double-click)
+    let mut f = h.state.generate.clone();
+    f.prompt = "a fox".into();
+    h.send(Msg::Generate(f));
+    h.send(Msg::QueueGenerate);
+    assert!(h.send(Msg::QueueGenerate).is_empty(), "not saved again");
+    assert!(h.state.messages.iter().any(|m| m.text.contains("r00 is being queued already")));
+    h.settle();
+    assert_eq!(h.state.project_entry().unwrap().runs.len(), 1);
+    assert!(h.state.queueing.is_empty());
+
+    // a sweep: the same, then the next label queues as usual
+    let mut f = h.state.generate.clone();
+    f.sweep.on = true;
+    f.sweep.vary = SweepVary::Cfg;
+    f.sweep.values = "1, 2".into();
+    h.send(Msg::Generate(f));
+    h.send(Msg::QueueGenerate);
+    assert!(h.send(Msg::QueueGenerate).is_empty(), "not saved again");
+    h.settle();
+    assert!(h.errors().is_empty(), "{:?}", h.errors());
+    assert_eq!(h.state.project_entry().unwrap().runs.len(), 3, "the run and the sweep's two");
+    assert_eq!(h.state.generate.label, "r02");
+    h.send(Msg::QueueGenerate);
+    h.settle();
+    assert_eq!(h.state.project_entry().unwrap().runs.len(), 5, "queued again under its new label");
+}
+
+#[test]
 fn setting_sweeps_vary_cfg_steps_or_the_model() {
     use increart_core::prompts::SweepVary;
     let mut h = Harness::new();

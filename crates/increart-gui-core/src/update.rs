@@ -5057,7 +5057,11 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
                 state.no_server_warning = true;
                 return vec![];
             }
+            if still_saving(state, &project, &f.label) {
+                return vec![];
+            }
             let queued = Box::new(Queued { project: project.clone(), form: Box::new(f.to_draft(&state.config)) });
+            state.queueing.push((project.clone(), f.label.clone()));
             let op = LibOp::CreateRun {
                 project,
                 form: f.clone(),
@@ -5531,6 +5535,9 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
                     if let Some(m) = &mut state.markup {
                         m.saving = false;
                     }
+                    // (which op failed isn't known: a failed run or sweep
+                    // can be queued again)
+                    state.queueing.clear();
                     state.messages_error(e)
                 }
                 Ok(ok) => fx.extend(op_done(state, ok)),
@@ -6721,6 +6728,16 @@ pub fn sweep_defaults(vary: increart_core::prompts::SweepVary, f: &GenerateForm)
     v.into_iter().map(fmt_value).collect::<Vec<_>>().join(", ")
 }
 
+/// A run or sweep of this label is still being saved (Queue pressed
+/// again before it was, as with a double-click): said, and not saved twice.
+fn still_saving(state: &mut AppState, project: &Id, label: &str) -> bool {
+    let saving = state.queueing.iter().any(|(p, l)| p == project && l == label);
+    if saving {
+        state.messages_info(format!("{} is being queued already", label.trim()));
+    }
+    saving
+}
+
 fn queue_sweep(state: &mut AppState, confirmed: bool) -> Vec<Effect> {
     let Some(project) = state.project.clone() else {
         state.messages_error("Select a project first");
@@ -6778,7 +6795,11 @@ fn queue_sweep(state: &mut AppState, confirmed: bool) -> Vec<Effect> {
         state.no_server_warning = true;
         return vec![];
     }
+    if still_saving(state, &project, &state.generate.label.clone()) {
+        return vec![];
+    }
     let queued = Box::new(Queued { project: project.clone(), form: Box::new(state.generate.to_draft(&state.config)) });
+    state.queueing.push((project.clone(), state.generate.label.clone()));
     let op = LibOp::CreateSweep {
         project,
         runs,
@@ -8159,6 +8180,11 @@ fn runnable_preset(state: &mut AppState) {
     state.messages_info(format!("Model preset {to} instead of {from}, which no open server can run"));
 }
 
+/// A queued run or sweep is saved: Queue works for its label again.
+fn saved_queued(state: &mut AppState, q: &Queued) {
+    state.queueing.retain(|(p, l)| !(*p == q.project && *l == q.form.label));
+}
+
 fn op_done(state: &mut AppState, ok: OpOk) -> Vec<Effect> {
     match ok {
         OpOk::Done | OpOk::Idea(_) => {}
@@ -8248,6 +8274,7 @@ fn op_done(state: &mut AppState, ok: OpOk) -> Vec<Effect> {
             state.messages_info(format!("+{n} seeds added to {label}; they run once servers are connected"));
         }
         OpOk::Sweep(ids, name, queued) => {
+            saved_queued(state, &queued);
             if state.engine_running {
                 state.active_runs.extend(ids.iter().cloned());
             }
@@ -8259,6 +8286,7 @@ fn op_done(state: &mut AppState, ok: OpOk) -> Vec<Effect> {
             return fx;
         }
         OpOk::Run(id, queued) => {
+            saved_queued(state, &queued);
             if state.engine_running {
                 state.active_runs.insert(id.clone());
             }
