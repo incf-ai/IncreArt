@@ -16,6 +16,9 @@
 //!   *drain* (no new jobs) and then load it, but never the last server of a
 //!   model that still has work; a server with no work for its model switches
 //!   to the most due one.
+//! - Which servers: a model goes only to servers whose model list (when
+//!   known, [`Scheduler::set_loadable`]) has all of its files, and not to
+//!   one where loading it failed; it is stuck only when no server is left.
 //! - Back-off: a failing server's in-flight seeds go back to the pool and it
 //!   is probed again after an exponentially growing delay.
 
@@ -23,10 +26,12 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::time::{Duration, Instant};
 
 use crate::id::Id;
-use crate::sdserver::ModelKey;
+use crate::sdserver::{Loadable, ModelKey};
 
 pub type ServerIdx = usize;
 pub type Ticket = u64;
+/// A submitted seed's server and ticket.
+pub type InFlight = (ServerIdx, Ticket);
 
 /// One seed of one revision of a run.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -46,8 +51,6 @@ pub enum Action {
     Load { server: ServerIdx, model: ModelKey },
     /// Submit one seed; answer with [`Scheduler::finished`].
     Submit { server: ServerIdx, ticket: Ticket, seed: SeedRef },
-    /// Cancel a submitted seed (it still gets a [`Scheduler::finished`]).
-    Cancel { server: ServerIdx, ticket: Ticket },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -85,12 +88,13 @@ pub enum Outcome {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum LoadResult {
     Ok,
-    /// The model can't be loaded (invalid config or load failure): runs
-    /// that need it are stuck until it is fixed. `still_loaded` is what the
-    /// server has afterwards (the old model for an invalid config, none for
-    /// a failed load).
+    /// The model can't be loaded there (invalid config or load failure):
+    /// other servers may still take it; runs that need it are stuck once no
+    /// server can. `still_loaded` is what the server has afterwards (the old
+    /// model for an invalid config, none for a failed load); `why` is shown.
     Broken {
         still_loaded: Option<ModelKey>,
+        why: String,
     },
     /// The server failed (connection lost, …): back off.
     ServerError,
@@ -118,6 +122,10 @@ struct Server {
     loaded: Option<ModelKey>,
     in_flight: Vec<(Ticket, SeedRef)>,
     failures: u32,
+    /// What it can load (`None`: unknown, anything is tried).
+    loadable: Option<Loadable>,
+    /// Models that failed to load on it, with why.
+    failed: HashMap<ModelKey, String>,
 }
 
 #[derive(Debug)]
@@ -137,6 +145,7 @@ struct RunQueue {
 pub struct Scheduler {
     servers: Vec<Server>,
     runs: Vec<RunQueue>,
+    /// Models given up on everywhere (failed warm-ups).
     broken: HashSet<ModelKey>,
     /// Warm-ups failed in a row, by model (a server that crashes on it
     /// would otherwise be restarted and reloaded forever).
@@ -152,7 +161,14 @@ impl Scheduler {
     pub fn new(servers: usize) -> Scheduler {
         Scheduler {
             servers: (0..servers)
-                .map(|_| Server { state: ServerState::Unknown, loaded: None, in_flight: vec![], failures: 0 })
+                .map(|_| Server {
+                    state: ServerState::Unknown,
+                    loaded: None,
+                    in_flight: vec![],
+                    failures: 0,
+                    loadable: None,
+                    failed: HashMap::new(),
+                })
                 .collect(),
             runs: vec![],
             broken: HashSet::new(),
@@ -197,10 +213,44 @@ impl Scheduler {
         self.runs.iter().map(|r| &r.id)
     }
 
-    /// Runs whose model failed to load: they wait until it is fixed (and
+    /// Runs whose model no server can load: they wait until it is fixed (and
     /// [`Self::retry_model`] is called) or they are cancelled.
     pub fn stuck_runs(&self) -> Vec<&Id> {
-        self.runs.iter().filter(|r| self.broken.contains(&r.model)).map(|r| &r.id).collect()
+        self.runs.iter().filter(|r| self.is_broken(&r.model)).map(|r| &r.id).collect()
+    }
+
+    /// Why server `s` can't take `model`, if it can't: loading it failed
+    /// there, or its model list lacks a file.
+    pub fn why_not(&self, s: ServerIdx, model: &ModelKey) -> Option<String> {
+        let srv = &self.servers[s];
+        if srv.loaded.as_ref() == Some(model) {
+            return None;
+        }
+        if let Some(why) = srv.failed.get(model) {
+            return Some(why.clone());
+        }
+        srv.loadable.as_ref().and_then(|l| l.why_not(&model.models))
+    }
+
+    /// Whether no server can take `model` (or it was given up on).
+    pub fn is_broken(&self, model: &ModelKey) -> bool {
+        self.broken.contains(model) || (0..self.servers.len()).all(|s| self.why_not(s, model).is_some())
+    }
+
+    /// Whether `model` was given up on after failed warm-ups.
+    pub fn gave_up(&self, model: &ModelKey) -> bool {
+        self.broken.contains(model)
+    }
+
+    /// The queued models (with seeds left) no server can take.
+    pub fn stuck_models(&self) -> Vec<&ModelKey> {
+        let mut out: Vec<&ModelKey> = vec![];
+        for r in &self.runs {
+            if !r.pending.is_empty() && self.is_broken(&r.model) && !out.contains(&&r.model) {
+                out.push(&r.model);
+            }
+        }
+        out
     }
 
     pub fn is_idle(&self) -> bool {
@@ -250,28 +300,37 @@ impl Scheduler {
         }
     }
 
-    /// Drops a run's pending seeds and cancels its in-flight ones. Returns
-    /// the dropped seeds and the cancel actions.
-    pub fn cancel_run(&mut self, run: &Id) -> (Vec<(u32, u64)>, Vec<Action>) {
+    /// Drops a run's pending seeds. Returns them and the run's in-flight
+    /// tickets (for the caller to cancel: [`Self::finished`] with
+    /// [`Outcome::Dropped`] lets one go without waiting for its server).
+    pub fn cancel_run(&mut self, run: &Id) -> (Vec<(u32, u64)>, Vec<InFlight>) {
         let Some(pos) = self.runs.iter().position(|r| &r.id == run) else { return (vec![], vec![]) };
         let dropped: Vec<_> = self.runs[pos].pending.drain(..).collect();
-        let mut actions = vec![];
+        let mut in_flight = vec![];
         for (i, s) in self.servers.iter().enumerate() {
             for (t, r) in &s.in_flight {
                 if &r.run == run {
-                    actions.push(Action::Cancel { server: i, ticket: *t });
+                    in_flight.push((i, *t));
                 }
             }
         }
         if self.runs[pos].in_flight == 0 {
             self.runs.remove(pos);
         }
-        (dropped, actions)
+        (dropped, in_flight)
     }
 
     /// Lets runs needing a model that failed to load try again.
     pub fn retry_model(&mut self, model: &ModelKey) {
         self.broken.remove(model);
+        for srv in &mut self.servers {
+            srv.failed.remove(model);
+        }
+    }
+
+    /// What server `s` can load (`None`: unknown).
+    pub fn set_loadable(&mut self, s: ServerIdx, loadable: Option<Loadable>) {
+        self.servers[s].loadable = loadable;
     }
 
     // ---------------------------------------------------------- reports
@@ -325,8 +384,8 @@ impl Scheduler {
                 self.servers[s].loaded = Some(target);
                 self.servers[s].state = ServerState::NeedsWarmUp;
             }
-            LoadResult::Broken { still_loaded } => {
-                self.broken.insert(target);
+            LoadResult::Broken { still_loaded, why } => {
+                self.servers[s].failed.insert(target, why);
                 self.servers[s].loaded = still_loaded;
                 self.servers[s].state = ServerState::Ready;
             }
@@ -442,12 +501,8 @@ impl Scheduler {
 
     /// Models with pending (dispatchable) work, most due first.
     fn demand(&self) -> Vec<ModelKey> {
-        let mut runs: Vec<_> = self
-            .runs
-            .iter()
-            .enumerate()
-            .filter(|(_, r)| !r.pending.is_empty() && !self.broken.contains(&r.model))
-            .collect();
+        let mut runs: Vec<_> =
+            self.runs.iter().enumerate().filter(|(_, r)| !r.pending.is_empty() && !self.is_broken(&r.model)).collect();
         runs.sort_by_key(|(i, r)| self.due(*i, r));
         let mut out: Vec<ModelKey> = vec![];
         for (_, r) in runs {
@@ -483,7 +538,7 @@ impl Scheduler {
                 continue;
             }
             let spare = (0..self.servers.len())
-                .filter(|&i| self.servers[i].state == ServerState::Ready)
+                .filter(|&i| self.servers[i].state == ServerState::Ready && self.why_not(i, model).is_none())
                 .filter(|&i| match &self.servers[i].loaded {
                     None => true,
                     Some(own) => !demand.contains(own) || self.coverage(own) >= 2,
@@ -508,7 +563,7 @@ impl Scheduler {
                     matches!(&s.state, ServerState::Draining { target } | ServerState::Loading { target } if target == m)
                 })
             };
-            if let Some(m) = demand.iter().find(|m| !loading(m)) {
+            if let Some(m) = demand.iter().find(|m| !loading(m) && self.why_not(i, m).is_none()) {
                 self.servers[i].state = ServerState::Draining { target: m.clone() };
             }
         }
@@ -866,10 +921,9 @@ mod tests {
         let (mut s, now) = up(&[Some("a")]);
         s.add_seeds(&run(0), model("a"), seeds(5));
         let sub = submits(&s.poll(now));
-        let (dropped, acts) = s.cancel_run(&run(0));
+        let (dropped, in_flight) = s.cancel_run(&run(0));
         assert_eq!(dropped.len(), 3);
-        assert_eq!(acts.len(), 2);
-        assert!(matches!(acts[0], Action::Cancel { server: 0, .. }));
+        assert_eq!(in_flight, sub.iter().map(|(srv, t, _)| (*srv, *t)).collect::<Vec<_>>());
         assert!(s.poll(now).is_empty());
         for (_, t, _) in sub {
             s.finished(t, Outcome::Dropped);
@@ -895,12 +949,59 @@ mod tests {
         let (mut s, now) = up(&[Some("a")]);
         s.add_seeds(&run(0), model("b"), seeds(1));
         assert_eq!(s.poll(now), [Action::Load { server: 0, model: model("b") }]);
-        s.loaded(0, LoadResult::Broken { still_loaded: Some(model("a")) }, now);
+        s.loaded(0, LoadResult::Broken { still_loaded: Some(model("a")), why: "bad".into() }, now);
         assert!(s.poll(now).is_empty(), "no reload loop");
         assert_eq!(s.stuck_runs(), [&run(0)]);
+        assert_eq!(s.stuck_models(), [&model("b")]);
+        assert_eq!(s.why_not(0, &model("b")).as_deref(), Some("bad"));
         assert_eq!(s.model_of(0).cloned(), Some(model("a")));
         s.retry_model(&model("b"));
         assert_eq!(s.poll(now), [Action::Load { server: 0, model: model("b") }]);
+    }
+
+    fn with_file(name: &str, file: &str) -> ModelKey {
+        ModelKey { recipe: name.into(), models: [("diffusion_model".to_string(), file.to_string())].into() }
+    }
+
+    #[test]
+    fn a_model_goes_only_to_a_server_that_has_its_files() {
+        // the first server is idle and first in line, but lacks the file
+        let (mut s, now) = up(&[None, None]);
+        s.set_loadable(0, Some(Loadable::files(["other.gguf".to_string()])));
+        s.set_loadable(1, Some(Loadable::files(["krea.safetensors".to_string()])));
+        let m = with_file("krea", "krea.safetensors");
+        s.add_seeds(&run(0), m.clone(), seeds(1));
+        assert_eq!(s.poll(now), [Action::Load { server: 1, model: m.clone() }]);
+        assert_eq!(s.why_not(0, &m).as_deref(), Some("it doesn't have krea.safetensors"));
+        assert!(s.stuck_runs().is_empty());
+    }
+
+    #[test]
+    fn a_model_no_server_lists_is_stuck_and_loads_nowhere() {
+        let (mut s, now) = up(&[None, None]);
+        for i in 0..2 {
+            s.set_loadable(i, Some(Loadable::files(["other.gguf".to_string()])));
+        }
+        let m = with_file("krea", "krea.safetensors");
+        s.add_seeds(&run(0), m.clone(), seeds(1));
+        assert!(s.poll(now).is_empty(), "no load sent anywhere");
+        assert_eq!(s.stuck_models(), [&m]);
+        // a server that gets the file takes it
+        s.set_loadable(1, Some(Loadable::files(["krea.safetensors".to_string()])));
+        assert_eq!(s.poll(now), [Action::Load { server: 1, model: m }]);
+    }
+
+    #[test]
+    fn a_load_that_fails_on_one_server_is_tried_on_the_next() {
+        let (mut s, now) = up(&[None, None]);
+        s.add_seeds(&run(0), model("b"), seeds(1));
+        assert_eq!(s.poll(now), [Action::Load { server: 0, model: model("b") }]);
+        s.loaded(0, LoadResult::Broken { still_loaded: None, why: "no".into() }, now);
+        assert_eq!(s.poll(now), [Action::Load { server: 1, model: model("b") }]);
+        assert!(s.stuck_runs().is_empty(), "not stuck while a server is left");
+        s.loaded(1, LoadResult::Broken { still_loaded: None, why: "no".into() }, now);
+        assert!(s.poll(now).is_empty());
+        assert_eq!(s.stuck_runs(), [&run(0)]);
     }
 
     #[test]

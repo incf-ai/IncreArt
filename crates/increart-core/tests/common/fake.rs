@@ -43,6 +43,10 @@ pub struct State {
     pub unloadable: Option<String>,
     /// One job generates at a time, the others wait queued (as sd-server).
     pub serial: bool,
+    /// `model-files` lists these IDs (`None`: 404, as before it had one).
+    pub model_files: Option<Vec<String>>,
+    /// A cancel is taken but the job generates on, never ending.
+    pub ignore_cancel: bool,
 }
 
 pub struct Fake {
@@ -167,6 +171,10 @@ fn handle(s: &mut State, method: &Method, path: &str, body: Value) -> (u16, Valu
     match (method, rest) {
         (Method::Get, "capabilities") => (200, json!({"supported_modes": ["img_gen"], "runtime": model_status(s)})),
         (Method::Get, "models/status") => (200, model_status(s)),
+        (Method::Get, "model-files") => match &s.model_files {
+            Some(ids) => (200, json!({"files": ids.iter().map(|id| json!({"id": id})).collect::<Vec<_>>()})),
+            None => (404, json!({"error": "not found"})),
+        },
         (Method::Post, "models/load") => {
             if pending > 0 {
                 return err(409, "model_busy", "Finish or cancel pending generation jobs before switching models");
@@ -238,6 +246,7 @@ fn handle(s: &mut State, method: &Method, path: &str, body: Value) -> (u16, Valu
             let id = &p[5..p.len() - 7];
             let Some(j) = s.jobs.get_mut(id) else { return (404, json!({"error": "job not found"})) };
             match j.status {
+                _ if s.ignore_cancel => {}
                 "queued" => j.status = "cancelled",
                 "generating" => j.cancel_requested = true,
                 _ => {}

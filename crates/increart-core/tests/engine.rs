@@ -120,6 +120,15 @@ fn collect(engine: &Engine, mut stop: impl FnMut(&Event, &[Event]) -> bool) -> V
     panic!("timed out; events so far: {out:#?}");
 }
 
+/// Waits up to 5 s for `cond`.
+fn wait_until(cond: impl Fn() -> bool, what: &str) {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !cond() {
+        assert!(Instant::now() < deadline, "timed out: {what}");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
 fn run_done(run: &Id) -> impl FnMut(&Event, &[Event]) -> bool + '_ {
     move |e, _| matches!(e, Event::RunDone { run: r } if r == run)
 }
@@ -302,11 +311,101 @@ fn cancel_stops_a_run() {
     engine.cancel_run(&run, Stop::Now);
     let events = collect(&engine, run_done(&run));
     assert!(outputs(&events).is_empty());
-    assert_eq!(a.count("/cancel"), 2, "both in-flight jobs cancelled");
+    // the run is let go at once; the cancels follow
+    wait_until(|| a.count("/cancel") == 2, "both in-flight jobs cancelled");
     let lib = s.lib.lock().unwrap();
     let (_, r) = lib.find_run(&run).unwrap();
     assert_eq!(r.cancelled, [Seeds { first: 0, count: 8 }]);
     assert!(lib.pending_seeds(&run).unwrap().is_empty());
+}
+
+#[test]
+fn stop_now_lets_go_of_jobs_their_server_never_ends() {
+    let s = setup();
+    let a = Fake::start(LOADED);
+    a.with(|st| {
+        st.steps = 1_000_000;
+        st.ignore_cancel = true;
+    });
+    let run = new_run(&s, "qwen-image-21", 4, false);
+    let mut o = opts();
+    o.warm_up = false;
+    let ep = Endpoint { name: "gpu0".into(), device: "ROCm0".into(), client: Client::new(&a.url) };
+    let engine = Engine::start(s.lib.clone(), vec![ep], o, None);
+    engine.queue_run(&run);
+    collect(&engine, |e, _| matches!(e, Event::Progress { .. }));
+    let t = Instant::now();
+    engine.cancel_run(&run, Stop::Now);
+    collect(&engine, run_done(&run));
+    assert!(t.elapsed() < Duration::from_secs(2), "not left finishing: {:?}", t.elapsed());
+    let lib = s.lib.lock().unwrap();
+    let (_, r) = lib.find_run(&run).unwrap();
+    assert_eq!(r.cancelled, [Seeds { first: 0, count: 4 }]);
+}
+
+#[test]
+fn finish_and_stop_then_stop_now_ends_a_job_that_never_finishes() {
+    let s = setup();
+    let a = Fake::start(LOADED);
+    a.with(|st| {
+        st.steps = 1_000_000;
+        st.ignore_cancel = true;
+    });
+    let run = new_run(&s, "qwen-image-21", 4, false);
+    let mut o = opts();
+    o.warm_up = false;
+    let ep = Endpoint { name: "gpu0".into(), device: "ROCm0".into(), client: Client::new(&a.url) };
+    let engine = Engine::start(s.lib.clone(), vec![ep], o, None);
+    engine.queue_run(&run);
+    collect(&engine, |e, _| matches!(e, Event::Progress { .. }));
+    engine.cancel_run(&run, Stop::Finish);
+    std::thread::sleep(Duration::from_millis(200));
+    assert!(
+        !engine.events().try_iter().any(|e| matches!(e, Event::RunDone { .. })),
+        "the generating images are waited for"
+    );
+    engine.cancel_run(&run, Stop::Now);
+    collect(&engine, run_done(&run));
+}
+
+#[test]
+fn a_run_goes_to_the_server_that_has_its_files() {
+    let s = setup();
+    let (a, b) = (Fake::start(None), Fake::start(None));
+    a.with(|st| st.model_files = Some(vec!["other.gguf".into()]));
+    b.with(|st| st.model_files = Some(FILES.iter().map(|(_, id)| id.to_string()).collect()));
+    let run = new_run(&s, "qwen-image-21", 3, false);
+    let engine = start(&s, &[&a, &b]);
+    engine.queue_run(&run);
+    let events = collect(&engine, run_done(&run));
+    assert_eq!(outputs(&events).len(), 3);
+    assert_eq!(a.count("models/load"), 0, "the first server lacks the files");
+    assert_eq!(a.count("img_gen"), 0);
+    assert_eq!(b.count("models/load"), 1);
+}
+
+#[test]
+fn a_run_no_server_can_load_says_why_once() {
+    let s = setup();
+    let (a, b) = (Fake::start(None), Fake::start(None));
+    a.with(|st| st.model_files = Some(vec!["other.gguf".into()]));
+    b.with(|st| st.model_files = Some(vec!["diffusion_models/q.safetensors".into()]));
+    let run = new_run(&s, "qwen-image-21", 2, false);
+    let engine = start(&s, &[&a, &b]);
+    engine.queue_run(&run);
+    let events = collect(&engine, |e, _| matches!(e, Event::Problem(_)));
+    let Some(Event::Problem(p)) = events.last() else { unreachable!() };
+    assert_eq!(
+        p,
+        "no server can load qwen-image-21, so its runs wait (gpu0: it doesn't have diffusion_models/q.safetensors; \
+         gpu1: it doesn't have vae/v.safetensors)"
+    );
+    std::thread::sleep(Duration::from_millis(300));
+    assert!(!engine.events().try_iter().any(|e| matches!(e, Event::Problem(_))), "said once");
+    assert_eq!(a.count("models/load") + b.count("models/load"), 0);
+    // Stop ends the waiting run
+    engine.cancel_run(&run, Stop::Finish);
+    collect(&engine, run_done(&run));
 }
 
 #[test]
@@ -492,6 +591,35 @@ fn admin(k: &FakeKobold, dir: &Path) -> Admin {
     }
 }
 
+/// As reported: KoboldCpp first, an sd-server (a proxy) second, the run's
+/// model an sd-server int8 file in KoboldCpp's model folders too.
+#[test]
+#[cfg(unix)]
+fn an_int8_model_skips_koboldcpp_for_the_sd_server() {
+    let s = setup();
+    let tmp = tempfile::tempdir().unwrap();
+    let k = FakeKobold::start("");
+    let admin = admin(&k, tmp.path());
+    let header = r#"{"w":{"dtype":"I8","shape":[2],"data_offsets":[0,2]}}"#;
+    let mut int8 = (header.len() as u64).to_le_bytes().to_vec();
+    int8.extend(header.as_bytes());
+    int8.extend([0u8; 2]);
+    std::fs::write(Path::new(&admin.model_dirs[0]).join(FILES[0].1), int8).unwrap();
+    let proxy = Fake::start(None);
+    proxy.with(|st| st.model_files = Some(FILES.iter().map(|(_, id)| id.to_string()).collect()));
+    let run = new_run(&s, "qwen-image-21", 2, false);
+    let servers = vec![
+        Endpoint { name: "kobold".into(), device: "Vulkan1".into(), client: Client::kobold(&k.url, "", Some(admin)) },
+        Endpoint { name: "proxy".into(), device: "ROCm0".into(), client: Client::new(&proxy.url) },
+    ];
+    let engine = Engine::start(s.lib.clone(), servers, opts(), None);
+    engine.queue_run(&run);
+    let events = collect(&engine, run_done(&run));
+    assert_eq!(outputs(&events).len(), 2);
+    assert_eq!(k.count("reload_config"), 0, "KoboldCpp not restarted with it");
+    assert_eq!(proxy.count("models/load"), 1);
+}
+
 #[test]
 #[cfg(unix)]
 fn koboldcpp_loads_the_model_and_generates() {
@@ -636,8 +764,11 @@ fn koboldcpp_without_admin_keeps_its_model() {
     engine.queue_run(&run);
     let events = collect(&engine, |e, _| matches!(e, Event::Problem(_)));
     let Some(Event::Problem(p)) = events.last() else { unreachable!() };
-    assert!(p.contains("it runs other.safetensors and can't switch to q.safetensors"), "{p}");
+    // its model list says so: no load is tried
+    assert!(p.contains("no server can load qwen-image-21"), "{p}");
+    assert!(p.contains("it runs other.safetensors and can't switch"), "{p}");
     engine.cancel_run(&run, Stop::Now);
+    collect(&engine, run_done(&run));
 }
 
 #[test]

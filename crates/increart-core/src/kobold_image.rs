@@ -543,6 +543,13 @@ impl Inner {
     fn load(&self, key: &ModelKey) -> ApiResult<ModelStatus> {
         let dirs = self.admin.as_ref().map(|a| a.model_dirs.clone()).unwrap_or_default();
         let flags = model_flags(key, &dirs).map_err(ApiError::InvalidModelConfig)?;
+        // as its model list says: restarting with one would only fail, slowly
+        if let Some((_, p)) = flags.iter().find(|(_, p)| int8_safetensors(Path::new(p))) {
+            return Err(ApiError::InvalidModelConfig(format!(
+                "{} is in sd-server's int8 format, which KoboldCpp can't load",
+                file_name(p)
+            )));
+        }
         let wanted = flags.iter().find(|(f, _)| f == "--sdmodel").map(|(_, p)| p.clone()).unwrap_or_default();
         if let Some(admin) = self.admin.as_ref().filter(|a| a.swap) {
             return self.load_swapping(admin, key, &flags, &wanted);

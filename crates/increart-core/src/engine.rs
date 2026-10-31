@@ -3,7 +3,7 @@
 //! library. The GUI talks to it with [`Engine::queue_run`] /
 //! [`Engine::cancel_run`] and reads [`Event`]s.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
@@ -19,7 +19,7 @@ use crate::library::Library;
 use crate::model::Run;
 use crate::request::{self, GenOptions, Provenance};
 use crate::scheduler::{Action, LoadResult, Order, Outcome, Scheduler, ServerIdx, ServerState, Ticket};
-use crate::sdserver::{ApiError, Client, Job, JobStatus, ModelKey, ModelStatus};
+use crate::sdserver::{ApiError, Client, Job, JobStatus, Loadable, ModelKey, ModelStatus};
 
 /// One server the engine may use.
 #[derive(Clone, Debug)]
@@ -87,7 +87,8 @@ type Shown = (String, Option<ModelKey>, bool, Vec<Id>);
 pub enum Stop {
     /// They finish and are kept; jobs still waiting are cancelled.
     Finish,
-    /// They are cancelled too (sd-server stops them at its next checkpoint).
+    /// They are cancelled too, and let go at once (sd-server stops them at
+    /// its next checkpoint; the run doesn't wait for that).
     Now,
 }
 
@@ -100,22 +101,38 @@ enum Msg {
 }
 
 enum Cmd {
-    Probe,
+    /// Its model list (for list round `round`), then its status.
+    Probe {
+        round: u64,
+    },
+    /// Its model list again.
+    List {
+        round: u64,
+    },
     WarmUp(Value),
     Load(ModelKey),
     Submit {
         ticket: Ticket,
         body: Value,
     },
-    /// `waiting_only`: leave the job be if it is generating already.
+    /// Cancels a job and stops polling it (the coordinator has let its
+    /// seed go already).
     Cancel {
         ticket: Ticket,
-        waiting_only: bool,
     },
 }
 
 enum Report {
     Probed(Result<ModelStatus, ApiError>),
+    /// What it can load (`None`: it couldn't say).
+    Listed {
+        round: u64,
+        loadable: Option<Loadable>,
+    },
+    /// A job was seen generating (not waiting in the server's queue).
+    Generating {
+        ticket: Ticket,
+    },
     Warmed(Result<(), ApiError>),
     Loaded(Result<ModelStatus, ApiError>),
     SubmitFailed {
@@ -201,6 +218,11 @@ impl Engine {
             runs: HashMap::new(),
             shown: vec![],
             waiting: vec![],
+            list_round: 0,
+            listed: vec![],
+            relist: false,
+            generating: HashSet::new(),
+            told_stuck: HashSet::new(),
             events: etx,
             notify,
         };
@@ -267,6 +289,16 @@ struct Coordinator {
     shown: Vec<Option<Shown>>,
     /// Why a server's load waits, shown in place of "loading …".
     waiting: Vec<Option<String>>,
+    /// The latest round of model lists asked for, and the round of each
+    /// server's latest list (`None`: none yet).
+    list_round: u64,
+    listed: Vec<Option<u64>>,
+    /// Runs were queued: the servers' model lists are asked for again.
+    relist: bool,
+    /// Tickets whose job was seen generating.
+    generating: HashSet<Ticket>,
+    /// Models said to be loadable nowhere (said once until that changes).
+    told_stuck: HashSet<ModelKey>,
     events: Sender<Event>,
     notify: Option<Box<dyn Fn() + Send>>,
 }
@@ -286,6 +318,7 @@ impl Coordinator {
     fn run(&mut self, rx: Receiver<Msg>) {
         self.shown = vec![None; self.servers.len()];
         self.waiting = vec![None; self.servers.len()];
+        self.listed = vec![None; self.servers.len()];
         loop {
             match rx.recv_timeout(Duration::from_millis(250)) {
                 Ok(Msg::Shutdown) | Err(RecvTimeoutError::Disconnected) => return,
@@ -316,9 +349,16 @@ impl Coordinator {
 
     fn step(&mut self) {
         let now = Instant::now();
+        if std::mem::take(&mut self.relist) {
+            self.list_round += 1;
+            for i in 0..self.servers.len() {
+                self.send(i, Cmd::List { round: self.list_round });
+            }
+        }
         for action in self.sched.poll(now) {
             self.perform(action);
         }
+        self.tell_stuck();
         for i in 0..self.servers.len() {
             let mut state = state_label(self.sched.server_state(i));
             if let (ServerState::Loading { .. }, Some(w)) = (self.sched.server_state(i), &self.waiting[i]) {
@@ -342,16 +382,39 @@ impl Coordinator {
         }
     }
 
+    /// Says which queued models no server can load, and why for each, once
+    /// every server has given its latest model list.
+    fn tell_stuck(&mut self) {
+        if self.listed.iter().any(|l| *l != Some(self.list_round)) {
+            return;
+        }
+        let stuck: Vec<ModelKey> =
+            self.sched.stuck_models().into_iter().filter(|m| !self.sched.gave_up(m)).cloned().collect();
+        self.told_stuck.retain(|m| stuck.contains(m));
+        for m in stuck {
+            if !self.told_stuck.insert(m.clone()) {
+                continue;
+            }
+            let why: Vec<String> = (0..self.servers.len())
+                .filter_map(|i| self.sched.why_not(i, &m).map(|w| format!("{}: {w}", self.servers[i].name)))
+                .collect();
+            self.emit(Event::Problem(format!(
+                "no server can load {}, so its runs wait ({})",
+                m.recipe,
+                why.join("; ")
+            )));
+        }
+    }
+
     fn perform(&mut self, action: Action) {
         let now = Instant::now();
         match action {
-            Action::Probe { server } => self.send(server, Cmd::Probe),
+            Action::Probe { server } => self.send(server, Cmd::Probe { round: self.list_round }),
             Action::WarmUp { server } if self.opts.warm_up => self.send(server, Cmd::WarmUp(request::warmup_body())),
             Action::WarmUp { server } => {
                 self.sched.warmed(server, true, now);
             }
             Action::Load { server, model } => self.send(server, Cmd::Load(model)),
-            Action::Cancel { server, ticket } => self.send(server, Cmd::Cancel { ticket, waiting_only: false }),
             Action::Submit { server, ticket, seed } => {
                 let body = match self.runs.get(&seed.run) {
                     Some(run) => request::img_gen_body(&self.lib(), run, seed.seed, &self.opts.generation)
@@ -373,30 +436,42 @@ impl Coordinator {
     fn handle(&mut self, msg: Msg) {
         let now = Instant::now();
         match msg {
-            Msg::Queue(run) => self.queue(&run),
+            Msg::Queue(run) => {
+                self.queue(&run);
+                self.relist = true;
+            }
             Msg::Order(order) => self.sched.order = order,
             Msg::Cancel(run, how) => {
-                let (dropped, actions) = self.sched.cancel_run(&run);
+                let (dropped, in_flight) = self.sched.cancel_run(&run);
                 let mut seeds: Vec<u64> = dropped.iter().map(|(_, s)| *s).collect();
-                // finishing: in-flight seeds are recorded as their jobs end cancelled
-                if how == Stop::Now {
-                    for i in 0..self.servers.len() {
-                        seeds.extend(self.sched.in_flight(i).filter(|(_, r)| r.run == run).map(|(_, r)| r.seed));
+                for (server, ticket) in in_flight {
+                    // finishing: a job generating finishes and is kept
+                    if how == Stop::Finish && self.generating.contains(&ticket) {
+                        continue;
                     }
+                    // let go now, not when its server says the job ended: one
+                    // that never does (or a worker busy loading) would hold
+                    // the run up for good
+                    if let Some(seed) = self.sched.finished(ticket, Outcome::Dropped) {
+                        seeds.push(seed.seed);
+                    }
+                    self.generating.remove(&ticket);
+                    self.send(server, Cmd::Cancel { ticket });
                 }
                 self.record_cancelled(&run, &seeds);
-                for a in actions {
-                    match a {
-                        Action::Cancel { server, ticket } => {
-                            self.send(server, Cmd::Cancel { ticket, waiting_only: how == Stop::Finish })
-                        }
-                        a => self.perform(a),
-                    }
-                }
                 self.check_done(&run);
             }
             Msg::Report(s, report) => match report {
                 Report::Probed(r) => self.sched.probed(s, r.map(|st| st.loaded()).map_err(drop), now),
+                Report::Listed { round, loadable } => {
+                    self.sched.set_loadable(s, loadable);
+                    self.listed[s] = Some(round.max(self.listed[s].unwrap_or(0)));
+                }
+                Report::Generating { ticket } => {
+                    if self.sched.ticket(ticket).is_some() {
+                        self.generating.insert(ticket);
+                    }
+                }
                 Report::Warmed(r) => {
                     if let Err(e) = &r {
                         self.emit(Event::Problem(format!("{}: warm-up failed: {e}", self.servers[s].name)));
@@ -424,20 +499,23 @@ impl Coordinator {
                     };
                     let result = match r {
                         Ok(st) if st.loaded().as_ref() == Some(&target) => LoadResult::Ok,
-                        Ok(st) => LoadResult::Broken { still_loaded: st.loaded() },
+                        Ok(st) => LoadResult::Broken {
+                            still_loaded: st.loaded(),
+                            why: "it answered the load with another model loaded".into(),
+                        },
                         Err(ApiError::InvalidModelConfig(m)) => {
                             self.emit(Event::Problem(format!(
                                 "{}: can't load {}: {m}",
                                 self.servers[s].name, target.recipe
                             )));
-                            LoadResult::Broken { still_loaded: self.sched.model_of(s).cloned() }
+                            LoadResult::Broken { still_loaded: self.sched.model_of(s).cloned(), why: m }
                         }
                         Err(ApiError::ModelLoadFailed(m)) => {
                             self.emit(Event::Problem(format!(
                                 "{}: loading {} failed: {m}",
                                 self.servers[s].name, target.recipe
                             )));
-                            LoadResult::Broken { still_loaded: None }
+                            LoadResult::Broken { still_loaded: None, why: format!("loading it failed: {m}") }
                         }
                         Err(_) => LoadResult::ServerError,
                     };
@@ -468,8 +546,12 @@ impl Coordinator {
                         self.emit(e);
                     }
                 }
-                Report::Finished { ticket, job, step_s } => self.finished(s, ticket, *job, step_s),
+                Report::Finished { ticket, job, step_s } => {
+                    self.generating.remove(&ticket);
+                    self.finished(s, ticket, *job, step_s)
+                }
                 Report::Gone { ticket } => {
+                    self.generating.remove(&ticket);
                     self.sched.finished(ticket, Outcome::Retry);
                 }
                 Report::NotSubmitted { ticket } => {
@@ -710,7 +792,12 @@ fn worker(
         };
         let alive = match cmd {
             None => true,
-            Some(Cmd::Probe) => report(Report::Probed(client.model_status())),
+            // the list first: a server is picked once it's probed
+            Some(Cmd::Probe { round }) => {
+                report(Report::Listed { round, loadable: client.loadable().ok() })
+                    && report(Report::Probed(client.model_status()))
+            }
+            Some(Cmd::List { round }) => report(Report::Listed { round, loadable: client.loadable().ok() }),
             Some(Cmd::Load(model)) => match load(&client, &model, &skip_ram_check, &report) {
                 Some(r) => report(Report::Loaded(r)),
                 None => false,
@@ -730,10 +817,10 @@ fn worker(
                     }
                 }
             }
-            Some(Cmd::Cancel { ticket, waiting_only }) => {
-                match jobs.iter().find(|j| j.ticket == ticket) {
-                    Some(j) if waiting_only && j.generating => {}
-                    Some(j) => {
+            Some(Cmd::Cancel { ticket }) => {
+                match jobs.iter().position(|j| j.ticket == ticket) {
+                    Some(i) => {
+                        let j = jobs.remove(i);
                         let _ = client.cancel(&j.id);
                     }
                     None => cancelled_early.push(ticket),
@@ -757,7 +844,12 @@ fn worker(
                 }
                 Ok(job) => {
                     let j = &mut jobs[i];
-                    j.generating |= job.status == JobStatus::Generating;
+                    if !j.generating && job.status == JobStatus::Generating {
+                        j.generating = true;
+                        if !report(Report::Generating { ticket }) {
+                            return;
+                        }
+                    }
                     if let Some(p) = &job.preview
                         && j.last != Some((p.pass, p.step))
                     {
