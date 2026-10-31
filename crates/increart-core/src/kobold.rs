@@ -111,11 +111,17 @@ impl KoboldServer {
     }
 
     /// Prompt enhance's chat server, when it is one: asked at its address
-    /// (a started one is running by the time it's asked).
+    /// (a started one is running by the time it's asked); text only when
+    /// started without a projector (and not from a `.kcpps` that may name
+    /// one).
     pub fn chat_server(&self) -> Option<PeServer> {
-        self.chat.as_ref()?;
+        let chat = self.chat.as_ref()?;
         let run = PeRun::Connect { url: self.base_url() };
-        Some(PeServer { name: self.name.clone(), run, start: PeStart::OnDemand })
+        let text_only = match &self.run {
+            KoboldRun::Start { config, .. } => chat.mmproj.is_empty() && !(chat.model.is_empty() && !config.is_empty()),
+            KoboldRun::Connect { .. } => false,
+        };
+        Some(PeServer { name: self.name.clone(), run, start: PeStart::OnDemand, text_only })
     }
 
     /// The launch command line: no image model (each is loaded by an

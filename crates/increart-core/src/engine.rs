@@ -3,7 +3,7 @@
 //! library. The GUI talks to it with [`Engine::queue_run`] /
 //! [`Engine::cancel_run`] and reads [`Event`]s.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -58,6 +58,9 @@ pub struct EngineOptions {
     pub max_in_flight: usize,
     pub backoff_base: Duration,
     pub warm_up: bool,
+    /// How long a warm-up image may take before it's cancelled and counted
+    /// as a failed warm-up.
+    pub warm_up_limit: Duration,
     pub order: Order,
     /// Loads on this machine don't wait for free RAM (see
     /// [`Engine::set_skip_ram_check`]).
@@ -73,6 +76,7 @@ impl Default for EngineOptions {
             max_in_flight: 2,
             backoff_base: Duration::from_secs(2),
             warm_up: true,
+            warm_up_limit: Duration::from_secs(20 * 60),
             order: Order::Spread,
             skip_ram_check: false,
         }
@@ -221,11 +225,11 @@ impl Engine {
                 let (ctx, crx) = mpsc::channel();
                 let client = ep.client.clone();
                 let report = tx.clone();
-                let poll = opts.poll_interval;
+                let (poll, limit) = (opts.poll_interval, opts.warm_up_limit);
                 let skip = skip_ram_check.clone();
                 std::thread::Builder::new()
                     .name(format!("sd-server {}", ep.name))
-                    .spawn(move || worker(i, client, crx, report, poll, skip))
+                    .spawn(move || worker(i, client, crx, report, poll, limit, skip))
                     .expect("spawn worker");
                 ctx
             })
@@ -935,16 +939,22 @@ fn worker(
     cmds: Receiver<Cmd>,
     reports: Sender<Msg>,
     poll: Duration,
+    warm_up_limit: Duration,
     skip_ram_check: Arc<AtomicBool>,
 ) {
     let report = |r: Report| reports.send(Msg::Report(server, r)).is_ok();
     let mut jobs: Vec<Polled> = vec![];
     let mut cancelled_early: Vec<Ticket> = vec![];
+    // commands that came during a warm-up
+    let mut pending: VecDeque<Cmd> = VecDeque::new();
     loop {
-        let cmd = match cmds.recv_timeout(if jobs.is_empty() { Duration::from_secs(3600) } else { poll }) {
-            Ok(c) => Some(c),
-            Err(RecvTimeoutError::Timeout) => None,
-            Err(RecvTimeoutError::Disconnected) => return,
+        let cmd = match pending.pop_front() {
+            Some(c) => Some(c),
+            None => match cmds.recv_timeout(if jobs.is_empty() { Duration::from_secs(3600) } else { poll }) {
+                Ok(c) => Some(c),
+                Err(RecvTimeoutError::Timeout) => None,
+                Err(RecvTimeoutError::Disconnected) => return,
+            },
         };
         let alive = match cmd {
             None => true,
@@ -958,7 +968,10 @@ fn worker(
                 Some(r) => report(Report::Loaded(r)),
                 None => false,
             },
-            Some(Cmd::WarmUp(body)) => report(Report::Warmed(warm_up(&client, &body, poll))),
+            Some(Cmd::WarmUp(body)) => match warm_up(&client, &body, poll, warm_up_limit, &cmds, &mut pending) {
+                Some(r) => report(Report::Warmed(r)),
+                None => false,
+            },
             Some(Cmd::Submit { ticket, body }) => {
                 if let Some(p) = cancelled_early.iter().position(|t| *t == ticket) {
                     cancelled_early.remove(p);
@@ -1050,17 +1063,47 @@ fn redacted(v: &Value) -> Value {
     }
 }
 
-fn warm_up(client: &Client, body: &Value, poll: Duration) -> Result<(), ApiError> {
-    let id = client.img_gen(body)?;
+/// Generates the warm-up image: an error when its job fails, or when it
+/// isn't done after `limit` (cancelled then: a server that never ends it
+/// would keep the worker for good). Commands coming meanwhile wait in
+/// `pending`; `None` once the engine is gone.
+fn warm_up(
+    client: &Client,
+    body: &Value,
+    poll: Duration,
+    limit: Duration,
+    cmds: &Receiver<Cmd>,
+    pending: &mut VecDeque<Cmd>,
+) -> Option<Result<(), ApiError>> {
+    let id = match client.img_gen(body) {
+        Ok(id) => id,
+        Err(e) => return Some(Err(e)),
+    };
+    let since = Instant::now();
     loop {
-        let job = client.job(&id)?;
+        let job = match client.job(&id) {
+            Ok(job) => job,
+            Err(e) => return Some(Err(e)),
+        };
         match job.status {
-            JobStatus::Completed => return Ok(()),
+            JobStatus::Completed => return Some(Ok(())),
             JobStatus::Failed | JobStatus::Cancelled => {
                 let msg = job.error.as_ref().map(|e| e.message.clone()).unwrap_or_default();
-                return Err(ApiError::BadRequest(format!("warm-up job {}: {msg}", job.status_name())));
+                return Some(Err(ApiError::BadRequest(format!("warm-up job {}: {msg}", job.status_name()))));
             }
-            _ => std::thread::sleep(poll),
+            _ if since.elapsed() >= limit => {
+                let _ = client.cancel(&id);
+                let why = format!("warm-up job still {} after {limit:?}, cancelled", job.status_name());
+                return Some(Err(ApiError::Transport(why)));
+            }
+            _ => match cmds.recv_timeout(poll) {
+                Ok(c) => pending.push_back(c),
+                Err(RecvTimeoutError::Timeout) => {}
+                Err(RecvTimeoutError::Disconnected) => {
+                    let _ = client.cancel(&id);
+                    return None;
+                }
+            },
         }
     }
 }

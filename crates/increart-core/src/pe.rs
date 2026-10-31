@@ -117,6 +117,10 @@ pub struct PeServer {
     /// Started (or connected to) when first asked, or when its preset opens.
     #[serde(skip_serializing_if = "is_default")]
     pub start: PeStart,
+    /// Known to have no vision though `run` connects: a KoboldCpp image
+    /// server's chat side started without a projector. Not saved.
+    #[serde(skip)]
+    pub text_only: bool,
 }
 
 /// A PE server as config files had them, with its own system prompts and
@@ -266,13 +270,22 @@ impl PeServer {
         }
     }
 
-    /// Whether requests carry images (a KoboldCpp without `mmproj` has no
-    /// vision; a Connect server is assumed to have it).
-    pub fn vision(&self) -> bool {
+    /// Whether it sees images, when that's known: a KoboldCpp with
+    /// `mmproj` does, one without doesn't (unless its `.kcpps` names the
+    /// model: unknown), a Connect server is unknown.
+    pub fn vision_known(&self) -> Option<bool> {
         match &self.run {
-            PeRun::KoboldCpp { mmproj, .. } => !mmproj.is_empty(),
-            PeRun::Connect { .. } => true,
+            _ if self.text_only => Some(false),
+            PeRun::KoboldCpp { mmproj, .. } if !mmproj.is_empty() => Some(true),
+            PeRun::KoboldCpp { model, config, .. } if model.is_empty() && !config.is_empty() => None,
+            PeRun::KoboldCpp { .. } => Some(false),
+            PeRun::Connect { .. } => None,
         }
+    }
+
+    /// Whether requests carry images: unless it's known to have no vision.
+    pub fn vision(&self) -> bool {
+        self.vision_known() != Some(false)
     }
 }
 

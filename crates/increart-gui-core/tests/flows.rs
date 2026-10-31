@@ -61,7 +61,8 @@ impl Harness {
             if msgs.is_empty() {
                 // a library still opening sends nothing until it's open
                 let opening = matches!(&self.state.phase, Phase::Library(d) if d.busy);
-                if idle && self.state.busy == 0 && self.state.saving == 0 && !opening && self.state.archiving.is_none() {
+                if idle && self.state.busy == 0 && self.state.saving == 0 && !opening && self.state.archiving.is_none()
+                {
                     return;
                 }
                 assert!(
@@ -4843,7 +4844,12 @@ fn chat_servers_go_with_their_preset() {
         args: vec![],
     };
     let a = PeServer { name: "A".into(), run: kobold(1), ..Default::default() };
-    let b = PeServer { name: "B".into(), run: PeRun::Connect { url: "http://x:2".into() }, start: PeStart::AtLaunch };
+    let b = PeServer {
+        name: "B".into(),
+        run: PeRun::Connect { url: "http://x:2".into() },
+        start: PeStart::AtLaunch,
+        ..Default::default()
+    };
     let gpu0 = start("gpu0", 1234);
     let presets = vec![
         ServerPreset { name: "GPU + A".into(), servers: vec![gpu0.clone(), ServerConfig::Chat(a.clone())] },

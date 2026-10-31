@@ -358,7 +358,7 @@ fn open_pe(c: &PeCase, logs: &Path) -> Result<(pe::PeProcess, f64), String> {
             args: vec![],
         }
     };
-    let server = PeServer { name: format!("bench{}", c.port), run, start: PeStart::OnDemand };
+    let server = PeServer { name: format!("bench{}", c.port), run, start: PeStart::OnDemand, ..Default::default() };
     let t = Instant::now();
     let proc = pe::open(&server, logs, Duration::from_secs(900), &AtomicBool::new(false))?;
     Ok((proc, t.elapsed().as_secs_f64()))

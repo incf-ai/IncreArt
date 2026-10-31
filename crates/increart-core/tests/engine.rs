@@ -344,6 +344,28 @@ fn stop_now_lets_go_of_jobs_their_server_never_ends() {
 }
 
 #[test]
+fn a_warm_up_that_never_ends_is_cancelled_and_counts_as_failed() {
+    let s = setup();
+    let a = Fake::start(LOADED);
+    a.with(|st| st.steps = 1_000_000);
+    let run = new_run(&s, "qwen-image-21", 2, false);
+    let mut o = opts();
+    o.warm_up_limit = Duration::from_millis(200);
+    let ep = Endpoint { name: "gpu0".into(), device: "ROCm0".into(), client: Client::new(&a.url) };
+    let engine = Engine::start(s.lib.clone(), vec![ep], o, None);
+    engine.queue_run(&run);
+    let events = collect(&engine, |e, _| matches!(e, Event::Problem(p) if p.contains("gave up on qwen-image-21")));
+    let timed_out =
+        |e: &Event| matches!(e, Event::Problem(p) if p.contains("warm-up job still generating after 200ms, cancelled"));
+    assert_eq!(events.iter().filter(|e| timed_out(e)).count(), 3, "{events:#?}");
+    assert_eq!(a.count("/cancel"), 3, "each warm-up job cancelled");
+    assert_eq!(a.count("/img_gen"), 3, "no seed sent");
+    // the worker still answers: the run can be stopped
+    engine.cancel_run(&run, Stop::Now);
+    collect(&engine, run_done(&run));
+}
+
+#[test]
 fn finish_and_stop_then_stop_now_ends_a_job_that_never_finishes() {
     let s = setup();
     let a = Fake::start(LOADED);

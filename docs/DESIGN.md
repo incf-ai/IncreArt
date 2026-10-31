@@ -346,7 +346,8 @@ asks among them):
   asked* when another chat server is there) and **Vision** (whether those
   see the reference images: ✓ with an mmproj, *text only* started without
   one, *assumed* when it can't be told, as for a server connected to; the
-  images are sent then). The presets list shows the same in a line under
+  images are sent then; to a text-only one they aren't, a KoboldCpp image
+  server's chat side included). The presets list shows the same in a line under
   each preset ("images: kobold, proxy · text: PE · vision: PE", or "·
   no prompt enhance"), and the top bar's server tooltips say which model
   presets each image server can generate (from its model list) and
@@ -1511,7 +1512,10 @@ its details window, and for every run at once in the Jobs header:
   the wait and the message. Remote servers load freely.
 - **Warm-up**: after launch or load, each server runs one small throwaway job
   (e.g. 512², 1 step) so lazy weight loading doesn't land on the first real
-  seed.
+  seed. One not done after 20 minutes is cancelled and counts as a failed
+  warm-up (a server that never ends it had kept its worker for good, its
+  runs waiting with no word); commands coming meanwhile wait for it, and
+  the engine closing ends the wait.
 
 32 GB per GPU fits the int8 diffusion model + int8 text encoder;
 `--offload-to-cpu` is a per-server config option if it doesn't (on ROCm it
