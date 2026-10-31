@@ -103,6 +103,8 @@ const EXTRA_SCENES: &[&str] = &[
     // the inbox's Save to input library: the filter clicked keeps the
     // typing (the name took the focus back)
     "03d-check-save-dialog-focus",
+    // New project from ideas: the same
+    "73b-check-new-project-focus",
     // after 02: the wheel over a followed log unticks follow
     "98h3-check-logs-scroll-unticks-follow",
     "98h4-check-logs-wrapped-scroll-unticks-follow",
@@ -128,12 +130,12 @@ const EXTRA_SCENES: &[&str] = &[
     "70-contact-sheet",
     "71-job-info",
     "72-review-sweep-button",
-    "73-promote",
+    "73-new-project-from-ideas",
     "74-notification-settings",
     "74b-timeout-settings",
     "74c-bell-ringing",
     "74d-snooze-dialog",
-    "75-promote-in-folder",
+    "75-new-project-from-ideas-in-folder",
     "76-top-bar-wide",
     "77-top-bar-medium",
     "78-top-bar-narrow",
@@ -808,19 +810,18 @@ impl Tour {
                 vec![Msg::ContinueWithoutServers, Msg::Settings(false), Msg::SetNotifications(n)]
             }
             "74d-snooze-dialog" => vec![],
-            "75-promote-in-folder" => {
+            "75-new-project-from-ideas-in-folder" => {
                 let idea = st.index.ideas.iter().find(|e| matches!(e.loc, increart_core::IdeaLoc::Library(_)));
                 let mut v = vec![Msg::ContinueWithoutServers, Msg::Settings(false), Msg::Tab(Tab::InputLibrary)];
                 if let Some(e) = idea {
-                    v.push(Msg::Promote(vec![e.idea.id.clone()]));
-                    // step 2: in clients, a new folder
-                    v.push(Msg::PromoteChoose(true));
-                    v.push(Msg::PromoteParent("clients".into()));
-                    v.push(Msg::PromoteNewFolder(Some("posters".into())));
+                    v.push(Msg::NewProjectFromIdeas(vec![e.idea.id.clone()]));
+                    // in clients, a new folder
+                    v.push(Msg::FromIdeasParent("clients".into()));
+                    v.push(Msg::FromIdeasNewFolder(Some("posters".into())));
                 }
                 v
             }
-            "76-top-bar-wide" => vec![Msg::ContinueWithoutServers, Msg::CancelPromote, Msg::Tab(Tab::Review)],
+            "76-top-bar-wide" => vec![Msg::ContinueWithoutServers, Msg::CancelFromIdeas, Msg::Tab(Tab::Review)],
             "71-job-info" => {
                 // glass-fish's edit run pretends to generate: a reference and a start image
                 let run = st.index.projects.iter().find(|p| p.name() == "glass-fish").and_then(|p| p.runs.first());
@@ -886,9 +887,9 @@ impl Tour {
                 Msg::ReviewView(ReviewView::Single),
                 Msg::ReviewNewest,
             ],
-            "73-promote" => {
+            "73-new-project-from-ideas" | "73b-check-new-project-focus" => {
                 let ideas: Vec<_> = st.library_ideas().iter().take(2).map(|e| e.idea.id.clone()).collect();
-                vec![Msg::ContinueWithoutServers, Msg::Tab(Tab::IdeaInbox), Msg::Promote(ideas)]
+                vec![Msg::ContinueWithoutServers, Msg::Tab(Tab::IdeaInbox), Msg::NewProjectFromIdeas(ideas)]
             }
             "62-rename" => vec![Msg::Tab(Tab::Projects), Msg::StartRename(Tree::Projects, PathBuf::from("stickers"))],
             "61-duplicate-project" => vec![Msg::Tab(Tab::Projects), Msg::DuplicateProject(PathBuf::from("stickers"))],
@@ -2016,30 +2017,32 @@ impl Tour {
                 _ => {}
             }
         }
-        if name == "03d-check-save-dialog-focus" {
+        if name == "03d-check-save-dialog-focus" || name == "73b-check-new-project-focus" {
+            // typed as it opens: the name; the filter clicked: the filter,
+            // and the name doesn't take it back
+            let dialog = if name.starts_with("03d") { "save_idea" } else { "from_ideas" };
+            let fields = || match dialog {
+                "save_idea" => st.save_idea.as_ref().map(|d| (d.name.clone(), d.filter.clone())),
+                _ => st.from_ideas.as_ref().map(|d| (d.name.clone(), d.filter.clone())),
+            };
             let button = |pos, pressed| egui::Event::PointerButton {
                 pos,
                 button: egui::PointerButton::Primary,
                 pressed,
                 modifiers: Default::default(),
             };
-            match self.settled {
-                5 | 6 => match ctx.data(|d| d.get_temp::<egui::Rect>(egui::Id::unique("tour_save_filter"))) {
-                    Some(r) if self.settled == 5 => {
-                        self.inject = vec![egui::Event::PointerMoved(r.center()), button(r.center(), true)]
-                    }
-                    Some(r) => self.inject = vec![button(r.center(), false)],
-                    None => eprintln!("CHECK {name}: FAILED (no filter drawn)"),
-                },
-                9 => self.inject = vec![egui::Event::Text("zz".into())],
-                14 => {
-                    let d = st.save_idea.as_ref();
-                    let (filter, name_now) = (d.map(|d| d.filter.as_str()), d.map(|d| d.name.as_str()));
-                    let ok = filter == Some("zz") && name_now.is_some_and(|n| !n.contains("zz"));
-                    eprintln!(
-                        "CHECK {name}: {} (filter {filter:?}, name {name_now:?})",
-                        if ok { "ok" } else { "FAILED" }
-                    );
+            let filter = ctx.data(|d| d.get_temp::<egui::Rect>(egui::Id::unique(("tour_filter", dialog))));
+            match (self.settled, filter) {
+                (4, _) => self.inject = vec![egui::Event::Text("q".into())],
+                (7, Some(r)) => self.inject = vec![egui::Event::PointerMoved(r.center()), button(r.center(), true)],
+                (8, Some(r)) => self.inject = vec![button(r.center(), false)],
+                (7, None) => eprintln!("CHECK {name}: FAILED (no filter drawn)"),
+                (11, _) => self.inject = vec![egui::Event::Text("zz".into())],
+                (16, _) => {
+                    let f = fields();
+                    let ok =
+                        f.as_ref().is_some_and(|(n, filter)| n.ends_with('q') && !n.contains("zz") && filter == "zz");
+                    eprintln!("CHECK {name}: {} (name, filter: {f:?})", if ok { "ok" } else { "FAILED" });
                 }
                 _ => {}
             }

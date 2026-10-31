@@ -19,7 +19,7 @@ folded into this document; each has a writeup.
 ## Goals
 
 - An **input review queue**: ideas (text, images, or both) collected into an
-  inbox, triaged with the same keyboard flow, and promoted into projects.
+  inbox, triaged with the same keyboard flow, and made into projects.
 - Projects containing runs of many seeds, generated across both GPUs.
 - Text-to-image **and** edit with reference images (Qwen-Image 2.1 `ref_images`).
 - **Transparent (RGBA) output** as a first-class option, preserved end to end.
@@ -45,7 +45,7 @@ The app is built around two symmetric queues, each feeding a library:
 ```
             ┌──────────────── R / I (output → input) ◄───────────────┐
             ▼                                                        │
-ideas ──► INPUT QUEUE ──review──► INPUT LIBRARY ──promote (P)──► PROJECT
+ideas ──► INPUT QUEUE ──review──► INPUT LIBRARY ──new project (P)──► PROJECT
 (text,    (Idea inbox)            (kept ideas,                    │ runs × seeds
  images,                           starred shortlist,             ▼ (both GPUs)
  drop                              ref images)              OUTPUT QUEUE ──review──► OUTPUT LIBRARY
@@ -56,7 +56,7 @@ ideas ──► INPUT QUEUE ──review──► INPUT LIBRARY ──promote (P
   rates with `1`/`2`/`3` (or `G`/`N`/`B`); the Idea inbox has two verdicts,
   save to input library (`1`/`2`/`S`) and discard (`3`/`B`); both take arrows
   and `Ctrl+Z`. (`Space`
-  differs: it promotes an idea in the Idea inbox and toggles grid / single in
+  differs: it makes a project from an idea in the Idea inbox and toggles grid / single in
   Review.) (On the
   input side the folder records keep vs. discard; the star is a flag in
   `idea.rsn`, so kept ideas can live in user folders — see Input library
@@ -1027,12 +1027,12 @@ it as a new entry.
 
 ```
 Inbox ── Idea (unreviewed) ──review──► Input library (kept ideas + ref images)
-                                            │ promote (one or many ideas)
+                                            │ new project (one or many ideas)
                                             ▼
 Project ─┬─ Run (prompt template, params, refs, N seeds)
          │    └─ Revision (edited params; new seeds go here)
          │         └─ Item (one seed → one image) ──review──► Output library
-         └─ sources: the ideas it was promoted from
+         └─ sources: the ideas it was made from
 ```
 
 ### Seeds
@@ -1102,7 +1102,7 @@ An `Idea` is a small folder: `idea.rsn` plus any attached images.
   with its origin: `Manual` or `Rewritten { model, system_prompt_hash }`),
   tags, source (`Manual`, `Clipboard`, `DroppedFile { original_path }`,
   `InboxFolder`, `FromOutput { image: ImageRef }`), created time,
-  `projects: Vec<ProjectId>` it has been promoted into, `starred: bool`.
+  `projects: Vec<ProjectId>` made from it, `starred: bool`.
 - Attached images live in the input image store
   (`input_images/<image-id>.png`, see Image stores), and the same picture
   used by several ideas and as a ref is stored once. `idea.rsn` lists the
@@ -1135,33 +1135,32 @@ moves it to `input/discarded/`:
 | good | keep, best | **keep**, starred: shortlist for new projects |
 | neutral | keep | **keep** in the input library |
 | bad | reject (out of the way, still recoverable) | **discard** (`input/discarded/`, still recoverable) |
-| `P` / `Space` | — | **promote**: new project (or add to an open one) seeded with the idea's text as prompt and its images as refs |
+| `P` / `Space` | — | **new project** from the idea (or add to an open one) seeded with the idea's text as prompt and its images as refs |
 | `W` | — | **rewrite** the idea's text with the PE model (adds a variant) |
 
-Promoting always asks for the new project's name first (an idea's title
-needn't suit a project): the first idea title that is a valid, free name is
-the guess (numbered when taken), else the field is empty; an invalid or taken
-name is refused. **Add & promote** in the New idea form asks the same way and
-keeps the draft until the name is given. By default the project goes in a new
-folder of its own name (**In a new folder of the same name**, ticked; the
-folder follows the name as it is typed); untick it to put the project in the
-location itself. The dialog shows where the project will go
-(`→ projects/clients/acme/Fox cafe/Fox cafe`); **Create here** (Enter) makes it
-there. **Choose location…** is a second step: a tree of the project folders
-(with a filter) to pick from, and the new folder in it, named in place (renamed
-there it no longer follows the project's name, and the step 1 box says
-"In a new folder “…”"; ✕ takes it away, **New folder in "…"** brings it back).
-It is only made on Create, and an existing folder of that name, in any case,
-is used. **Back** returns to the name. The first location is where the last
-promote went (this session), if that folder still exists, else the one below;
-after a project in its own folder, that is the folder's parent (so projects
-don't nest).
+**New project from idea** always asks for the new project's name first (an
+idea's title needn't suit a project): the first idea title that is a valid,
+free name is the guess (numbered when taken), else the field is empty; an
+invalid or taken name is refused. **Add & new project…** in the New idea form
+asks the same way and keeps the draft until the name is given. The dialog has
+the save dialog's layout. Left, the **Folder**: a tree of the project folders
+(with a filter) and, under it, the new folder to make in the one chosen. By
+default the project goes in a new folder of its own name (it follows the name
+as it is typed; renamed there, it no longer does); ✕ takes it away (the
+project goes in the folder itself) and **New folder** brings it back, named
+after the project. It is only made on Create, and an existing folder of that
+name, in any case, is used. Right, the **Project name** (it has the focus as
+the dialog opens; a field clicked keeps it) and where the project will be made
+(`projects/clients/acme/Fox cafe/Fox cafe`); **Create** (Enter) makes it
+there. The first folder is where the last project from ideas went (this
+session), if that folder still exists, else the top level; after a project in
+its own folder, that is the folder's parent (so projects don't nest).
 
-Promoting several selected ideas at once makes one project with all of them
+A new project from several selected ideas at once is one project with all of them
 as sources (e.g. a style image from one idea + a subject from another). An
-idea with several variants can be promoted as one run per variant.
+idea with several variants can become one run per variant.
 
-Promoted images become `ref_images`, never an implicit `init_image`;
+An idea's images become the project's `ref_images`, never an implicit `init_image`;
 `init_image` is only sent for an explicit Edit run.
 
 ### Output → input
@@ -2229,8 +2228,8 @@ out as one image.
 
 - **Ideas**: the Idea inbox Grid picks ideas the same way (Ctrl+click,
   Shift+click, a box, Ctrl+A, Esc; numbered in pick order). While any are
-  picked, a bar shows **N picked · Tile… · Promote… · Save to input library… ·
-  Discard · Clear**, 1/2/S save them all (one dialog, below) and 3/B discard them, P promotes them and T
+  picked, a bar shows **N picked · Tile… · New project… · Save to input library… ·
+  Discard · Clear**, 1/2/S save them all (one dialog, below) and 3/B discard them, P makes a project from them and T
   tiles them (without picks the keys act on the cursor's idea, as before).
   The Input library's selection gains Shift+click (a range) and the box;
   with several selected the same bar (no Save / Discard) is shown above the
@@ -2555,8 +2554,8 @@ real directories under `projects/`, so it looks the same in a file manager.
   inside collapsed folders without expanding them. Which folders are
   collapsed is remembered per library in the config
   (`collapsed_folders`); deleted or renamed folders drop out.
-- New projects from Promote land, unless another location is chosen, in a
-  folder of their own name where the last promote went, else at the top level.
+- New projects from ideas land, unless another folder is chosen, in a
+  folder of their own name where the last one went, else at the top level.
 
 ### Input library folders
 
@@ -2649,16 +2648,16 @@ the keys and mouse buttons go through that view's own history instead.
     image (on hover, or when selected) opens the editor. Hovered or
     selected, the image also shows two buttons along its bottom, as on
     project tiles: here **Save** and **Discard** (`S`/`3`); in the Input
-    library **Promote** and **Add as refs** (Promote alone for a text-only
+    library **New project** and **Add as refs** (New project alone for a text-only
     idea); none in Discarded. They act on that card only; on a small card
     (zoomed out) they're icons, the name on hover (`widgets::cover_buttons`).
     The side panel showing the current idea keeps its buttons pinned to its
-    bottom (here **Save to input library…** / **Discard**, then **Promote**,
+    bottom (here **Save to input library…** / **Discard**, then **New project**,
     **Edit…**, **Copy text**, **Open folder**) and its header at the top;
     the details scroll between. Keys as in the
     table above, plus `Home`/`End` = the first / last idea, `Enter`/`T` = open the **Edit idea** window (title, tags,
     text, variants, images, and a finished PE rewrite's diff with Accept /
-    Reject). Right-click a card, in groups: promote (`P`), edit (`Enter`),
+    Reject). Right-click a card, in groups: new project from idea (`P`), edit (`Enter`),
     rewrite with PE (in the Edit window, so Use changes its text) · save to
     input library / discard (`S`/`3`) · copy
     text, copy image and describe image with PE (its first image) · open
@@ -2674,16 +2673,16 @@ the keys and mouse buttons go through that view's own history instead.
     opens, a new folder's name once asked for; neither takes it back from a
     field clicked since. It starts in the folder the last save went to (this
     session). **Save** (`Enter`) moves the ideas there unstarred, making the
-    folder; **Save and make a project** saves them, then makes a project
+    folder; **Save & new project** saves them, then makes a project
     from them at once, named as the idea (the first valid title of several),
-    where the last promote went, in its own folder (the Promote dialog asks
+    where the last project from ideas went, in its own folder (the New project dialog asks
     when that name won't do; the draft is saved in the folder chosen, not
     the top level); **Cancel** (`Esc`) leaves them in the inbox (the draft in
     the form). Discard doesn't ask.
   - **New idea** (`Ctrl+N` from anywhere): title, text, tags, images (drop /
     paste / browse), **Rewrite with PE**. **Add to inbox** (review it later),
     **Add & save to input library…** (asks the name and folder, as below),
-    **Add & promote** (keep it and start a project). The draft is kept while
+    **Add & new project…** (keep it and start a project). The draft is kept while
     switching tabs.
   - **Folder**: the file-manager view (see Projects → Folder) rooted at the
     inbox's own places only: `inbox_drop/` (waiting files, and `imported/`
@@ -2709,22 +2708,22 @@ the keys and mouse buttons go through that view's own history instead.
 - **Input library**: tabs **Grid** (default) · **Folder** (see Projects →
   Folder) · **Discarded** (the same Discarded view as in the Idea inbox). In
   Grid, the left panel holds the filters (tag / starred / text /
-  has-images / promoted-or-not), selection actions, and the library folder
+  has-images / **used in a project** or not), selection actions, and the library folder
   tree (see Input library folders); the grid shows the selected folder's
-  ideas, newest first (or most used first); cards show PE rewrite state like the inbox's. Multi-select → promote
+  ideas, newest first (or most used first); cards show PE rewrite state like the inbox's. Multi-select → new project
   (button or `P`/`Space`); ← → ↑ ↓ and `Home`/`End` select the previous /
   next / first / last idea and show it in the panel, `Ctrl+A` selects all,
   `Enter`/`T` edits; a **Keys** list is pinned at the bottom left; drag an image into a project's reference strip; drag
   cards onto a folder to file them. Right-click a card, in groups as in the
-  inbox: promote, edit, rewrite with PE, add its images as refs to the
+  inbox: new project, edit, rewrite with PE, add its images as refs to the
   current project, star/unstar · back to the Idea inbox, discard · copy
   text, copy image, describe image with PE · open folder in file manager.
   (Planned: accept all ready rewrites.) When the card is part of a multi-selection, the
-  bulk actions (star, promote, rewrite, back to inbox, discard) apply to the
+  bulk actions (star, new project, rewrite, back to inbox, discard) apply to the
   whole selection. A plain click on a card opens the **idea panel** on the
   right: the idea's images (double-click: full size), text, tags, created
   date and folder, what its images were used for, the projects it was
-  promoted into (links), and Edit…, Promote, Add as refs, Copy text, Open
+  **used in** (links), and Edit…, New project, Add as refs, Copy text, Open
   folder pinned to its bottom (the details scroll above them); × closes it. While the panel is closed it opens a moment after
   the click, so a double-click (full size) doesn't open it; while it's
   open, a click shows the clicked idea at once. Ctrl/Shift+click only
@@ -2751,7 +2750,7 @@ the keys and mouse buttons go through that view's own history instead.
   the project's folder only when that holds other projects (here and below)
   and **narrow to siblings** is ticked; otherwise the grid keeps showing what
   it did, if the project is in it, else the project's folder (the one above
-  when the project is alone in it, as Promote's own folders are). After
+  when the project is alone in it, as a project from ideas' own folder is). After
   Back / Forward that last rule decides. Each tile's cover is its best image: highest
   rated (good > neutral > unreviewed > bad), most recent among equals. A
   project with no output image yet shows its references and start images
@@ -3248,7 +3247,7 @@ calls while the window is minimized or hidden, with a clock of the app's own
   second per write.
 - gui-core flows (`crates/increart-gui-core/tests/flows.rs`): the reducer
   with the real runtime and a real temp library (create library, add /
-  review / restore / promote ideas, queue a run, trees, drop files, review +
+  review / restore / make projects from ideas, queue a run, trees, drop files, review +
   undo) and the server dialog as a pure reducer.
 - The app's screenshot tour (`INCREART_TOUR`, see [gui/README.md](gui/README.md))
   drives every screen through the reducer and saves one PNG per screen.
@@ -3369,7 +3368,7 @@ matrix cores that hipBLAS uses. The same sd-server and int8 model takes
   more to put in it.
 
 - New idea form: which add button is the primary one (Add to inbox, Add &
-  keep, Add & promote)? POC1 shows all three with equal weight.
+  keep, Add & new project)? POC1 shows all three with equal weight.
 - IDs use a separate counter per kind, so the same string can be an idea, a
   run and an image. Keep that, or use one counter across kinds so every ID is
   unique in the library?

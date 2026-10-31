@@ -1589,13 +1589,13 @@ pub fn lib_op(lib: &mut Library, op: LibOp) -> Result<OpOk, String> {
             }
             lib.new_idea(n).map(OpOk::Idea).map_err(err)
         }
-        LibOp::NewIdeaPromote(n, folder, name) => {
-            // Save and make a project may name a new library folder
+        LibOp::NewIdeaNewProject(n, folder, name) => {
+            // Save & new project may name a new library folder
             if let IdeaLoc::Library(f) = &n.loc {
                 lib.make_library_folder(f).map_err(err)?;
             }
             let id = lib.new_idea(n).map_err(err)?;
-            promote(lib, &[id], &folder, &name)
+            new_project_from_ideas(lib, &[id], &folder, &name)
         }
         LibOp::ImportFiles(paths) => {
             for p in paths {
@@ -1630,7 +1630,7 @@ pub fn lib_op(lib: &mut Library, op: LibOp) -> Result<OpOk, String> {
         LibOp::DeleteDiscarded(id) => lib.delete_discarded_idea(&id).map(|_| OpOk::Done).map_err(err),
         LibOp::RestoreProject(id) => lib.restore_project(&id).map(|_| OpOk::Done).map_err(err),
         LibOp::DeleteDiscardedProject(id) => lib.delete_discarded_project(&id).map(|_| OpOk::Done).map_err(err),
-        LibOp::Promote(ids, folder, name) => promote(lib, &ids, &folder, &name),
+        LibOp::NewProjectFromIdeas(ids, folder, name) => new_project_from_ideas(lib, &ids, &folder, &name),
         LibOp::CreateFolder(tree, parent) => {
             lib.create_folder(tree, &parent, None).map(|p| OpOk::Created(tree, p)).map_err(err)
         }
@@ -1757,7 +1757,7 @@ pub fn lib_op(lib: &mut Library, op: LibOp) -> Result<OpOk, String> {
 
 /// Keeps the ideas (inbox ones move to the top of the input library) and
 /// makes one project from them, named after the first idea's title.
-fn promote(lib: &mut Library, ids: &[Id], folder: &Path, name: &str) -> Result<OpOk, String> {
+fn new_project_from_ideas(lib: &mut Library, ids: &[Id], folder: &Path, name: &str) -> Result<OpOk, String> {
     // Create in folder: a new folder is made first
     if !lib.root().join("projects").join(folder).is_dir()
         && let (Some(parent), Some(last)) = (folder.parent(), folder.file_name())
@@ -1774,7 +1774,7 @@ fn promote(lib: &mut Library, ids: &[Id], folder: &Path, name: &str) -> Result<O
     let (project, _) = lib.create_project(folder, Some(name), ids).map_err(err)?;
     let prompt = ideas.iter().map(|i| i.text.trim()).find(|t| !t.is_empty()).unwrap_or("").to_string();
     let refs = ideas.iter().flat_map(|i| i.images.iter().cloned().map(ImageRef::input)).collect();
-    Ok(OpOk::Promoted { project, prompt, refs, idea: ids.first().cloned() })
+    Ok(OpOk::ProjectFromIdeas { project, prompt, refs, idea: ids.first().cloned() })
 }
 
 /// Hashes a new run's model files into the library's cache before the

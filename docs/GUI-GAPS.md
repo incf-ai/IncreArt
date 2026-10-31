@@ -19,9 +19,9 @@ What POC1 (`tmp/gui-prototype`, [POC1.md](POC1.md)) had that the real app
 
 | Item | Status |
 | --- | --- |
-| Grid, folder tree with new / rename / delete, multi-select, promote, add as refs | ✓ |
+| Grid, folder tree with new / rename / delete, multi-select, new project from ideas, add as refs | ✓ |
 | **Discarded** tab | ✓ (this round) |
-| Left-panel **filters**: text, tag, starred, has images, promoted / not | ✓ (this round) |
+| Left-panel **filters**: text, tag, starred, has images, used in a project / not | ✓ (this round) |
 | Drag cards onto a folder; copy / cut / paste in the tree | later |
 | **Folder** tab (folders and ideas: new folder, rename, move, copy, discard; the folder tree drives it) | ✓ |
 
