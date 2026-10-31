@@ -349,6 +349,9 @@ fn engine_run(cx: &mut Ctx, stop_one: bool) -> Verdict {
     let (mut made, mut failed, mut problems) = (0u64, vec![], vec![]);
     let mut by_server: BTreeMap<String, u64> = BTreeMap::new();
     let mut seed_server: BTreeMap<u64, usize> = BTreeMap::new();
+    // servers whose load of it failed in the run ("may have anything":
+    // listing no files, they are sent it and refuse it)
+    let mut refused: Vec<String> = vec![];
     let mut shown: BTreeMap<usize, String> = BTreeMap::new();
     let mut stopped_victim = false;
     let done = loop {
@@ -398,6 +401,11 @@ fn engine_run(cx: &mut Ctx, stop_one: bool) -> Verdict {
                 if let Some((s, seed)) = sent_to(&line, &names) {
                     seed_server.insert(seed, s);
                 }
+                if let Some(n) = names.iter().find(|n| line.contains(&format!("[{n}] loading failed")))
+                    && !refused.contains(n)
+                {
+                    refused.push(n.clone());
+                }
                 cx.log(format!("engine: {line}"));
             }
             Event::RunDone { .. } => break Ok(()),
@@ -416,7 +424,15 @@ fn engine_run(cx: &mut Ctx, stop_one: bool) -> Verdict {
             pass(format!("all {seeds} made after {} went ({spread})", victim.map(|v| cx.name(v)).unwrap_or("")))
         }
         Ok(()) if takers.len() > 1 && by_server.len() < 2 => {
-            warn(format!("all {seeds} made, but on one server though {} can load it ({spread})", takers.len()))
+            let left = takers.iter().filter(|&&s| !refused.iter().any(|n| n == cx.name(s))).count();
+            if left < 2 {
+                pass(format!(
+                    "all {seeds} made ({spread}); {} was sent it and refused it (the log says why)",
+                    refused.join(", ")
+                ))
+            } else {
+                warn(format!("all {seeds} made, but on one server though {} can load it ({spread})", takers.len()))
+            }
         }
         Ok(()) if !problems.is_empty() => {
             warn(format!("all {seeds} made ({spread}); the engine said: {}", problems[0]))
