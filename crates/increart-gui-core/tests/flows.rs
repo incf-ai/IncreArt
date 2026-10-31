@@ -2665,6 +2665,27 @@ fn outside_changes_are_picked_up_and_the_drop_folder_imports_itself() {
 }
 
 #[test]
+fn a_failed_presets_save_leaves_the_operations_count_alone() {
+    let mut h = Harness::new();
+    // a folder that can't be made: its parent is a file
+    let blocked = h.root.join("library.rsn").join("prompts");
+    h.rt.run(Effect::SavePresets(h.state.prompt_presets.clone(), blocked));
+    let mut msgs = vec![];
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while !h.rt.idle() && std::time::Instant::now() < deadline {
+        msgs.extend(h.rt.wait(Duration::from_millis(50)));
+    }
+    msgs.extend(h.rt.poll());
+    // an operation of the library's still going
+    h.state.busy = 1;
+    for m in msgs {
+        h.send(m);
+    }
+    assert_eq!(h.state.busy, 1, "an op not counted can't end one that is");
+    assert!(h.errors().iter().any(|e| e.contains("saving prompt presets")), "{:?}", h.errors());
+}
+
+#[test]
 fn prompt_presets_apply_insert_save_and_edit() {
     use increart_core::HistoryKey;
     use increart_core::history::HistoryKind;
