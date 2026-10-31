@@ -48,8 +48,8 @@ pub struct LibFilter {
     pub text: String,
     pub starred_only: bool,
     pub with_images_only: bool,
-    /// `Some(true)`: promoted ideas only; `Some(false)`: not yet promoted.
-    pub promoted: Option<bool>,
+    /// `Some(true)`: ideas used in a project only; `Some(false)`: in none yet.
+    pub used_in_project: Option<bool>,
     /// Most used first (as ref or start image), instead of newest first.
     pub most_used: bool,
     /// The edited copies (Crop / mark…) too, from `input/edited/`.
@@ -404,7 +404,7 @@ impl OutputPreset {
 pub enum Smart {
     /// One day, from the image IDs (`YYYY.MM.DD`).
     Day(String),
-    /// Made from runs promoted from this idea.
+    /// Made from runs of projects made from this idea.
     Idea(Id),
     /// Runs with Transparent on.
     Transparent,
@@ -1639,17 +1639,15 @@ pub enum StartRefs {
     Files,
 }
 
-/// Naming the project that promoting ideas makes (always asked: an idea's
+/// Naming the project New project from ideas makes (always asked: an idea's
 /// title needn't suit a project).
 #[derive(Clone, Debug, PartialEq)]
-pub struct PromoteDialog {
-    /// The ideas; empty: the New idea form's draft (Add and promote).
+pub struct FromIdeasDialog {
+    /// The ideas; empty: the New idea form's draft (Add & new project).
     pub ideas: Vec<Id>,
     /// Where the project goes, relative to `projects/` (step 2 picks it).
     pub parent: PathBuf,
     pub name: String,
-    /// Step 2: choosing where.
-    pub choosing: bool,
     /// A new folder to make in `parent` (on Create) and put the project in;
     /// an existing one of that name (any case) is used. It starts as the
     /// project's name and follows it while they match (`None`: in `parent`
@@ -1657,15 +1655,15 @@ pub struct PromoteDialog {
     pub new_folder: Option<String>,
     /// Step 2's folder filter.
     pub filter: String,
-    /// The draft from Save to input library's Save and make a project: the
+    /// The draft from Save to input library's Save & new project: the
     /// library folder it's saved in (else the top level).
     pub saved_in: Option<PathBuf>,
 }
 
-impl PromoteDialog {
-    pub fn new(ideas: Vec<Id>, parent: PathBuf, name: String) -> PromoteDialog {
+impl FromIdeasDialog {
+    pub fn new(ideas: Vec<Id>, parent: PathBuf, name: String) -> FromIdeasDialog {
         let new_folder = Some(name.trim().to_string());
-        PromoteDialog { ideas, parent, name, choosing: false, new_folder, filter: String::new(), saved_in: None }
+        FromIdeasDialog { ideas, parent, name, new_folder, filter: String::new(), saved_in: None }
     }
 
     /// The project goes in a new folder named after it.
@@ -2902,11 +2900,11 @@ pub struct AppState {
     pub start_project: Option<StartProjectDialog>,
     /// Naming a project's plain Duplicate.
     pub duplicate: Option<DuplicateDialog>,
-    /// Naming the project for Promote.
-    pub promote: Option<PromoteDialog>,
-    /// Where the last promote put its project (this session), the next
+    /// Naming the project for New project from ideas.
+    pub from_ideas: Option<FromIdeasDialog>,
+    /// Where the last New project from ideas put its project (this session), the next
     /// one's first guess.
-    pub promote_last: Option<PathBuf>,
+    pub from_ideas_last: Option<PathBuf>,
     /// Saving inbox ideas to the input library.
     pub save_idea: Option<SaveIdeaDialog>,
     /// Where the last Save to input library went (this session), the next
@@ -3161,8 +3159,8 @@ impl AppState {
             ref_picker: None,
             ref_picker_source: None,
             title_edit: None,
-            promote: None,
-            promote_last: None,
+            from_ideas: None,
+            from_ideas_last: None,
             save_idea: None,
             save_idea_last: None,
             job_info: None,
@@ -3261,7 +3259,7 @@ impl AppState {
                 || i.tags.iter().any(|t| t.to_lowercase().contains(&q)))
                 && (!f.starred_only || i.starred)
                 && (!f.with_images_only || !i.images.is_empty())
-                && f.promoted.is_none_or(|p| p == !i.projects.is_empty())
+                && f.used_in_project.is_none_or(|p| p == !i.projects.is_empty())
         });
         v.sort_by(|a, b| b.idea.id.cmp(&a.idea.id));
         if f.most_used {

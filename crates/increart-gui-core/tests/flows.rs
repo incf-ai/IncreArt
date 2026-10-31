@@ -86,7 +86,7 @@ impl Harness {
 }
 
 #[test]
-fn create_library_then_ideas_review_promote_generate() {
+fn create_library_then_ideas_review_new_project_generate() {
     let mut h = Harness::new();
     assert_eq!(h.state.phase, Phase::Main);
     assert_eq!(h.state.library.as_deref(), Some(h.root.as_path()));
@@ -119,15 +119,15 @@ fn create_library_then_ideas_review_promote_generate() {
     assert!(kept[0].idea.starred);
     assert_eq!(h.state.discarded_ideas()[0].idea.title, "Lighthouse");
 
-    // restore the discarded one to the library, then promote both
+    // restore the discarded one to the library, then make a project from both
     let lighthouse = h.state.discarded_ideas()[0].idea.id.clone();
     h.send(Msg::Restore(lighthouse.clone(), IdeaLoc::top_library()));
     h.settle();
     let fox = h.state.library_ideas()[1].idea.id.clone(); // newest first: Lighthouse, Fox
-    h.send(Msg::Promote(vec![fox.clone(), lighthouse]));
+    h.send(Msg::NewProjectFromIdeas(vec![fox.clone(), lighthouse]));
     // always named first: the first idea title is the guess
-    assert_eq!(h.state.promote.as_ref().unwrap().name, "Fox");
-    h.send(Msg::ConfirmPromote);
+    assert_eq!(h.state.from_ideas.as_ref().unwrap().name, "Fox");
+    h.send(Msg::ConfirmFromIdeas);
     h.settle();
     assert_eq!((h.state.tab, h.state.projects_tab), (Tab::Projects, ProjectsTab::Generate));
     let p = h.state.project_entry().unwrap();
@@ -247,24 +247,24 @@ fn grids_zoom_each_on_its_own_within_the_thumbnails_size() {
 }
 
 #[test]
-fn add_and_promote_in_one_step() {
+fn add_and_make_a_project_in_one_step() {
     let mut h = Harness::new();
     h.send(Msg::Draft(IdeaDraft {
         title: "Sticker set".into(),
         text: "cute robot sticker".into(),
         ..Default::default()
     }));
-    h.send(Msg::AddIdea(AddIdea::Promote));
+    h.send(Msg::AddIdea(AddIdea::NewProject));
     // named first; the draft waits, an empty or taken name is refused
-    assert_eq!(h.state.promote.as_ref().unwrap().name, "Sticker set");
+    assert_eq!(h.state.from_ideas.as_ref().unwrap().name, "Sticker set");
     assert!(!h.state.draft.is_empty(), "kept until the project is named");
-    h.send(Msg::EditPromoteName(" ".into()));
-    h.send(Msg::ConfirmPromote);
-    assert!(h.state.promote.is_some() && !h.errors().is_empty());
-    h.send(Msg::EditPromoteName("Robots".into()));
-    h.send(Msg::ConfirmPromote);
+    h.send(Msg::EditFromIdeasName(" ".into()));
+    h.send(Msg::ConfirmFromIdeas);
+    assert!(h.state.from_ideas.is_some() && !h.errors().is_empty());
+    h.send(Msg::EditFromIdeasName("Robots".into()));
+    h.send(Msg::ConfirmFromIdeas);
     h.settle();
-    assert!(h.state.promote.is_none());
+    assert!(h.state.from_ideas.is_none());
     assert_eq!(
         h.state.project_entry().unwrap().dir,
         Path::new("projects/Robots/Robots"),
@@ -379,9 +379,9 @@ fn save_and_make_a_project_in_one_step() {
     h.send(Msg::SaveIdeas(vec![fox.clone()]));
     h.send(Msg::EditSaveIdeaName("Red fox".into()));
     h.send(Msg::SaveIdeaNewFolder(Some("Animals".into())));
-    h.send(Msg::SaveIdeaPromote);
+    h.send(Msg::SaveIdeaNewProject);
     h.settle();
-    assert!(h.state.save_idea.is_none() && h.state.promote.is_none(), "no dialog left");
+    assert!(h.state.save_idea.is_none() && h.state.from_ideas.is_none(), "no dialog left");
     let e = h.state.idea(&fox).unwrap();
     assert_eq!((e.idea.title.as_str(), &e.loc), ("Red fox", &IdeaLoc::Library("Animals".into())));
     let dirs: Vec<_> = h.state.index.projects.iter().map(|p| p.dir.clone()).collect();
@@ -392,23 +392,23 @@ fn save_and_make_a_project_in_one_step() {
     h.send(Msg::AddIdea(AddIdea::Keep));
     h.send(Msg::EditSaveIdeaName("Luna moth".into()));
     h.send(Msg::SaveIdeaNewFolder(Some("insects".into())));
-    h.send(Msg::SaveIdeaPromote);
+    h.send(Msg::SaveIdeaNewProject);
     h.settle();
     assert_eq!(h.state.draft, IdeaDraft::default(), "draft cleared");
     let e = h.state.index.ideas.iter().find(|e| e.idea.title == "Luna moth").unwrap();
     assert_eq!(e.loc, IdeaLoc::Library("Animals/insects".into()));
     assert!(h.state.index.projects.iter().any(|p| p.dir == Path::new("projects/Luna moth/Luna moth")));
 
-    // a name that won't do for a project: the Promote dialog asks
+    // a name that won't do for a project: the New project dialog asks
     h.send(Msg::Draft(IdeaDraft { title: "Owl".into(), text: "an owl".into(), ..Default::default() }));
     h.send(Msg::AddIdea(AddIdea::Inbox));
     h.settle();
     let owl = h.state.inbox_queue()[0].idea.id.clone();
     h.send(Msg::SaveIdeas(vec![owl.clone()]));
     h.send(Msg::EditSaveIdeaName("owl/night".into()));
-    h.send(Msg::SaveIdeaPromote);
+    h.send(Msg::SaveIdeaNewProject);
     h.settle();
-    let p = h.state.promote.as_ref().expect("asked");
+    let p = h.state.from_ideas.as_ref().expect("asked");
     assert_eq!(p.ideas, std::slice::from_ref(&owl));
     assert_eq!(h.state.idea(&owl).unwrap().idea.title, "owl/night", "saved all the same");
 }
@@ -678,19 +678,19 @@ fn review_and_undo() {
 #[test]
 fn review_tree_sorts_and_hides_reviewed() {
     let mut h = Harness::new();
-    let promote = |h: &mut Harness, name: &str, folder: Option<&str>| {
+    let from_ideas = |h: &mut Harness, name: &str, folder: Option<&str>| {
         h.send(Msg::Draft(IdeaDraft { title: name.into(), text: "x".into(), ..Default::default() }));
-        h.send(Msg::AddIdea(AddIdea::Promote));
-        h.send(Msg::PromoteParent(PathBuf::new()));
-        h.send(Msg::PromoteNewFolder(folder.map(String::from)));
-        h.send(Msg::ConfirmPromote);
+        h.send(Msg::AddIdea(AddIdea::NewProject));
+        h.send(Msg::FromIdeasParent(PathBuf::new()));
+        h.send(Msg::FromIdeasNewFolder(folder.map(String::from)));
+        h.send(Msg::ConfirmFromIdeas);
         h.settle();
         h.state.project.clone().unwrap()
     };
-    let zeta = promote(&mut h, "Zeta", Some("Zfold"));
-    let mid = promote(&mut h, "Mid", Some("Mfold"));
-    let alpha = promote(&mut h, "Alpha", None);
-    let beta = promote(&mut h, "Beta", None);
+    let zeta = from_ideas(&mut h, "Zeta", Some("Zfold"));
+    let mid = from_ideas(&mut h, "Mid", Some("Mfold"));
+    let alpha = from_ideas(&mut h, "Alpha", None);
+    let beta = from_ideas(&mut h, "Beta", None);
     for p in [&zeta, &mid, &beta] {
         Library_::steal(&h.root).write_two(p);
     }
@@ -2198,7 +2198,7 @@ fn library_filters_and_output_sources() {
     assert_eq!(h.state.library_ideas().len(), 1);
     h.send(Msg::LibFilter(LibFilter { text: "alpine".into(), ..Default::default() }));
     assert_eq!(h.state.library_ideas()[0].idea.title, "Hut");
-    h.send(Msg::LibFilter(LibFilter { promoted: Some(true), ..Default::default() }));
+    h.send(Msg::LibFilter(LibFilter { used_in_project: Some(true), ..Default::default() }));
     assert!(h.state.library_ideas().is_empty());
     h.send(Msg::LibFilter(LibFilter::default()));
 
@@ -4133,20 +4133,20 @@ fn rating_in_the_preview() {
 #[test]
 fn selecting_a_project_narrows_the_grid_only_to_a_folder_with_others() {
     let mut h = Harness::new();
-    let promote = |h: &mut Harness, name: &str, folder: Option<&str>| {
+    let from_ideas = |h: &mut Harness, name: &str, folder: Option<&str>| {
         h.send(Msg::Draft(IdeaDraft { title: name.into(), text: "x".into(), ..Default::default() }));
-        h.send(Msg::AddIdea(AddIdea::Promote));
-        h.send(Msg::PromoteParent(PathBuf::new()));
-        h.send(Msg::PromoteNewFolder(folder.map(String::from)));
-        h.send(Msg::ConfirmPromote);
+        h.send(Msg::AddIdea(AddIdea::NewProject));
+        h.send(Msg::FromIdeasParent(PathBuf::new()));
+        h.send(Msg::FromIdeasNewFolder(folder.map(String::from)));
+        h.send(Msg::ConfirmFromIdeas);
         h.settle();
         h.state.project.clone().unwrap()
     };
-    let fox = promote(&mut h, "Fox", Some("Fox"));
-    promote(&mut h, "Owl", Some("Owl"));
-    let deer = promote(&mut h, "deer tail", Some("Deer"));
-    promote(&mut h, "deer river", Some("deer"));
-    let top = promote(&mut h, "Top", None);
+    let fox = from_ideas(&mut h, "Fox", Some("Fox"));
+    from_ideas(&mut h, "Owl", Some("Owl"));
+    let deer = from_ideas(&mut h, "deer tail", Some("Deer"));
+    from_ideas(&mut h, "deer river", Some("deer"));
+    let top = from_ideas(&mut h, "Top", None);
     let scope = |h: &mut Harness, id: &increart_core::Id| {
         h.send(Msg::SelectProject(id.clone()));
         (h.state.project_scope(), h.state.projects_in_scope().len())
@@ -4204,17 +4204,16 @@ fn selecting_a_project_narrows_the_grid_only_to_a_folder_with_others() {
 }
 
 #[test]
-fn promote_into_a_new_or_existing_folder() {
+fn new_project_from_ideas_in_a_new_or_existing_folder() {
     let mut h = Harness::new();
     h.send(Msg::Draft(IdeaDraft { title: "Fox".into(), text: "a red fox".into(), ..Default::default() }));
-    h.send(Msg::AddIdea(AddIdea::Promote));
+    h.send(Msg::AddIdea(AddIdea::NewProject));
     // step 2: a new folder at the top
-    h.send(Msg::EditPromoteName("Fox cafe".into()));
-    h.send(Msg::PromoteChoose(true));
-    h.send(Msg::PromoteNewFolder(Some("Fox cafe".into())));
-    let d = h.state.promote.clone().unwrap();
-    assert_eq!(promote_folder(&h.state, &d), (PathBuf::from("Fox cafe"), false));
-    h.send(Msg::ConfirmPromote);
+    h.send(Msg::EditFromIdeasName("Fox cafe".into()));
+    h.send(Msg::FromIdeasNewFolder(Some("Fox cafe".into())));
+    let d = h.state.from_ideas.clone().unwrap();
+    assert_eq!(from_ideas_folder(&h.state, &d), (PathBuf::from("Fox cafe"), false));
+    h.send(Msg::ConfirmFromIdeas);
     h.settle();
     assert_eq!(h.state.project_entry().unwrap().dir, Path::new("projects/Fox cafe/Fox cafe"));
     assert!(h.state.index.project_folders.contains(&PathBuf::from("Fox cafe")));
@@ -4223,35 +4222,38 @@ fn promote_into_a_new_or_existing_folder() {
     // folder chosen otherwise, where the last went; without a new folder, if
     // unticked
     let fox = h.state.library_ideas()[0].idea.id.clone();
-    h.send(Msg::Promote(vec![fox.clone()]));
-    assert_eq!(h.state.promote.as_ref().unwrap().parent, Path::new(""), "next to the last one's folder");
-    h.send(Msg::EditPromoteName("Fox bar".into()));
-    h.send(Msg::PromoteNewFolder(Some("bars".into())));
-    h.send(Msg::EditPromoteName("Fox pub".into()));
-    assert_eq!(h.state.promote.as_ref().unwrap().new_folder.as_deref(), Some("bars"), "a folder named otherwise stays");
-    h.send(Msg::ConfirmPromote);
+    h.send(Msg::NewProjectFromIdeas(vec![fox.clone()]));
+    assert_eq!(h.state.from_ideas.as_ref().unwrap().parent, Path::new(""), "next to the last one's folder");
+    h.send(Msg::EditFromIdeasName("Fox bar".into()));
+    h.send(Msg::FromIdeasNewFolder(Some("bars".into())));
+    h.send(Msg::EditFromIdeasName("Fox pub".into()));
+    assert_eq!(
+        h.state.from_ideas.as_ref().unwrap().new_folder.as_deref(),
+        Some("bars"),
+        "a folder named otherwise stays"
+    );
+    h.send(Msg::ConfirmFromIdeas);
     h.settle();
     assert_eq!(h.state.project_entry().unwrap().dir, Path::new("projects/bars/Fox pub"));
-    h.send(Msg::Promote(vec![fox.clone()]));
-    assert_eq!(h.state.promote.as_ref().unwrap().parent, Path::new("bars"), "where the last one went");
-    h.send(Msg::PromoteNewFolder(None));
-    h.send(Msg::EditPromoteName("Fox inn".into()));
-    h.send(Msg::ConfirmPromote);
+    h.send(Msg::NewProjectFromIdeas(vec![fox.clone()]));
+    assert_eq!(h.state.from_ideas.as_ref().unwrap().parent, Path::new("bars"), "where the last one went");
+    h.send(Msg::FromIdeasNewFolder(None));
+    h.send(Msg::EditFromIdeasName("Fox inn".into()));
+    h.send(Msg::ConfirmFromIdeas);
     h.settle();
     assert_eq!(h.state.project_entry().unwrap().dir, Path::new("projects/bars/Fox inn"), "no new folder");
 
     // a "new" folder that exists (any case) is used; a name taken there is refused
-    h.send(Msg::Promote(vec![fox]));
-    h.send(Msg::PromoteChoose(true));
-    h.send(Msg::PromoteParent(PathBuf::new()));
-    h.send(Msg::PromoteNewFolder(Some("fox cafe".into())));
-    h.send(Msg::EditPromoteName("Fox cafe".into()));
-    let d = h.state.promote.clone().unwrap();
-    assert_eq!(promote_folder(&h.state, &d), (PathBuf::from("Fox cafe"), true));
-    h.send(Msg::ConfirmPromote);
-    assert!(h.state.promote.is_some() && !h.errors().is_empty(), "the name is taken in that folder");
-    h.send(Msg::EditPromoteName("Fox night".into()));
-    h.send(Msg::ConfirmPromote);
+    h.send(Msg::NewProjectFromIdeas(vec![fox]));
+    h.send(Msg::FromIdeasParent(PathBuf::new()));
+    h.send(Msg::FromIdeasNewFolder(Some("fox cafe".into())));
+    h.send(Msg::EditFromIdeasName("Fox cafe".into()));
+    let d = h.state.from_ideas.clone().unwrap();
+    assert_eq!(from_ideas_folder(&h.state, &d), (PathBuf::from("Fox cafe"), true));
+    h.send(Msg::ConfirmFromIdeas);
+    assert!(h.state.from_ideas.is_some() && !h.errors().is_empty(), "the name is taken in that folder");
+    h.send(Msg::EditFromIdeasName("Fox night".into()));
+    h.send(Msg::ConfirmFromIdeas);
     h.settle();
     let p = h.state.project_entry().unwrap();
     assert_eq!(p.dir, Path::new("projects/Fox cafe/Fox night"));

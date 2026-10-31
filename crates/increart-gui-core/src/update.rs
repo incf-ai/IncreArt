@@ -203,7 +203,7 @@ pub enum Msg {
     ProjectsTab(ProjectsTab),
     // ---- ideas
     Draft(IdeaDraft),
-    /// Add the draft: to the inbox, straight to the library, or keep and promote.
+    /// Add the draft: to the inbox, straight to the library, or keep it and make a project.
     AddIdea(AddIdea),
     DropFiles(Vec<PathBuf>),
     InboxCursor(usize),
@@ -221,26 +221,24 @@ pub enum Msg {
     SaveIdeaFilter(String),
     ConfirmSaveIdea,
     /// Save, then a project from what was saved: named as the idea is (the
-    /// first idea's title of several), where the last promote went, in its
-    /// own folder; the Promote dialog when that name won't do.
-    SaveIdeaPromote,
+    /// first idea's title of several), where the last project from ideas went, in
+    /// its own folder; the New project dialog when that name won't do.
+    SaveIdeaNewProject,
     CancelSaveIdea,
-    /// Asks for the new project's name, then promotes these ideas.
-    Promote(Vec<Id>),
-    EditPromoteName(String),
-    /// The Promote dialog's step: choosing where (true) or naming.
-    PromoteChoose(bool),
-    PromoteParent(PathBuf),
+    /// Asks for the new project's name and folder, then makes it from these ideas.
+    NewProjectFromIdeas(Vec<Id>),
+    EditFromIdeasName(String),
+    FromIdeasParent(PathBuf),
     /// Step 2's new folder (`None`: none).
-    PromoteNewFolder(Option<String>),
-    PromoteFilter(String),
+    FromIdeasNewFolder(Option<String>),
+    FromIdeasFilter(String),
     /// Collapses or expands a folder of the project tree.
     ToggleProjectFolder(PathBuf),
     /// Collapses (true) or expands every folder of the project tree.
     CollapseProjectFolders(bool),
     /// `true`: in the dialog's folder (Create in folder).
-    ConfirmPromote,
-    CancelPromote,
+    ConfirmFromIdeas,
+    CancelFromIdeas,
     Restore(Id, IdeaLoc),
     SetStar(Id, bool),
     DeleteDiscarded(Id),
@@ -883,7 +881,7 @@ pub enum Msg {
 pub enum AddIdea {
     Inbox,
     Keep,
-    Promote,
+    NewProject,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -1074,9 +1072,9 @@ pub enum DraftSave {
 #[derive(Clone, Debug, PartialEq)]
 pub enum LibOp {
     NewIdea(NewIdea),
-    /// Keep a new idea and promote it to a project in `folder`.
+    /// Keep a new idea and make a project from it in `folder`.
     /// The idea, then a project named so in this folder.
-    NewIdeaPromote(NewIdea, PathBuf, String),
+    NewIdeaNewProject(NewIdea, PathBuf, String),
     ImportFiles(Vec<PathBuf>),
     /// Import images into the input store (for the New idea draft).
     ImportImages(Vec<PathBuf>),
@@ -1093,7 +1091,7 @@ pub enum LibOp {
     DeleteDiscardedProject(Id),
     /// Keep the ideas (if still in the inbox) and make one project from them.
     /// The ideas into a new project named so in this folder.
-    Promote(Vec<Id>, PathBuf, String),
+    NewProjectFromIdeas(Vec<Id>, PathBuf, String),
     CreateFolder(Tree, PathBuf),
     CreateProject(PathBuf, String),
     Rename(Tree, PathBuf, String),
@@ -1205,7 +1203,7 @@ pub enum OpOk {
     /// An edited copy's image, and where it goes.
     Edited(Id, EditedTo),
     /// A new project from ideas: the Generate panel is seeded from them.
-    Promoted {
+    ProjectFromIdeas {
         project: Id,
         prompt: String,
         refs: Vec<ImageRef>,
@@ -2708,10 +2706,10 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
                 state.messages_error("The idea is empty");
                 return vec![];
             }
-            if how == AddIdea::Promote {
+            if how == AddIdea::NewProject {
                 // the draft stays until the project is named
-                let name = promote_name(state, [state.draft.title.as_str()]);
-                state.promote = Some(PromoteDialog::new(vec![], promote_parent(state), name));
+                let name = from_ideas_name(state, [state.draft.title.as_str()]);
+                state.from_ideas = Some(FromIdeasDialog::new(vec![], from_ideas_parent(state), name));
                 return vec![];
             }
             if how == AddIdea::Keep {
@@ -2800,7 +2798,7 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
                 .flat_map(|id| lib(state, LibOp::SaveToLibrary(id, title.clone(), folder.clone())))
                 .collect()
         }
-        Msg::SaveIdeaPromote => {
+        Msg::SaveIdeaNewProject => {
             let Some(d) = state.save_idea.clone() else { return vec![] };
             if let Some(e) = save_idea_problem(&d) {
                 state.messages_error(e);
@@ -2810,8 +2808,8 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
                 [] | [_] => vec![d.name.trim().to_string()],
                 ids => ids.iter().filter_map(|i| state.index.idea(i)).map(|e| e.idea.title.clone()).collect(),
             };
-            let name = promote_name(state, titles.iter().map(String::as_str));
-            let mut p = PromoteDialog::new(d.ideas.clone(), promote_parent(state), name);
+            let name = from_ideas_name(state, titles.iter().map(String::as_str));
+            let mut p = FromIdeasDialog::new(d.ideas.clone(), from_ideas_parent(state), name);
             let mut fx = vec![];
             if d.ideas.is_empty() {
                 // the draft: saved there as the project is made
@@ -2823,10 +2821,10 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
             } else {
                 fx = update(state, Msg::ConfirmSaveIdea);
             }
-            let ok = promote_problem(state, &p).is_none();
-            state.promote = Some(p);
+            let ok = from_ideas_problem(state, &p).is_none();
+            state.from_ideas = Some(p);
             if ok {
-                fx.extend(update(state, Msg::ConfirmPromote));
+                fx.extend(update(state, Msg::ConfirmFromIdeas));
             }
             fx
         }
@@ -2834,18 +2832,18 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
             state.save_idea = None;
             vec![]
         }
-        Msg::Promote(ids) => {
+        Msg::NewProjectFromIdeas(ids) => {
             if ids.is_empty() {
                 return vec![];
             }
             let titles: Vec<String> =
                 ids.iter().filter_map(|i| state.index.idea(i)).map(|e| e.idea.title.clone()).collect();
-            let name = promote_name(state, titles.iter().map(String::as_str));
-            state.promote = Some(PromoteDialog::new(ids, promote_parent(state), name));
+            let name = from_ideas_name(state, titles.iter().map(String::as_str));
+            state.from_ideas = Some(FromIdeasDialog::new(ids, from_ideas_parent(state), name));
             vec![]
         }
-        Msg::EditPromoteName(n) => {
-            if let Some(d) = &mut state.promote {
+        Msg::EditFromIdeasName(n) => {
+            if let Some(d) = &mut state.from_ideas {
                 if d.own_folder() {
                     d.new_folder = Some(n.trim().to_string());
                 }
@@ -2853,48 +2851,42 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
             }
             vec![]
         }
-        Msg::PromoteChoose(on) => {
-            if let Some(d) = &mut state.promote {
-                d.choosing = on;
-            }
-            vec![]
-        }
-        Msg::PromoteParent(p) => {
-            if let Some(d) = &mut state.promote {
+        Msg::FromIdeasParent(p) => {
+            if let Some(d) = &mut state.from_ideas {
                 d.parent = p;
             }
             vec![]
         }
-        Msg::PromoteNewFolder(f) => {
-            if let Some(d) = &mut state.promote {
+        Msg::FromIdeasNewFolder(f) => {
+            if let Some(d) = &mut state.from_ideas {
                 d.new_folder = f;
             }
             vec![]
         }
-        Msg::PromoteFilter(f) => {
-            if let Some(d) = &mut state.promote {
+        Msg::FromIdeasFilter(f) => {
+            if let Some(d) = &mut state.from_ideas {
                 d.filter = f;
             }
             vec![]
         }
-        Msg::ConfirmPromote => {
-            let Some(d) = state.promote.take() else { return vec![] };
+        Msg::ConfirmFromIdeas => {
+            let Some(d) = state.from_ideas.take() else { return vec![] };
             let name = d.name.trim().to_string();
-            let (parent, _) = promote_folder(state, &d);
-            if let Some(e) = promote_problem(state, &d) {
+            let (parent, _) = from_ideas_folder(state, &d);
+            if let Some(e) = from_ideas_problem(state, &d) {
                 state.messages_error(e);
-                state.promote = Some(d);
+                state.from_ideas = Some(d);
                 return vec![];
             }
             // the next one goes next to a project's own folder, not in it
-            state.promote_last = Some(if d.own_folder() { d.parent.clone() } else { parent.clone() });
+            state.from_ideas_last = Some(if d.own_folder() { d.parent.clone() } else { parent.clone() });
             if d.ideas.is_empty() {
-                return add_idea(state, AddIdea::Promote, parent, name, d.saved_in);
+                return add_idea(state, AddIdea::NewProject, parent, name, d.saved_in);
             }
-            lib(state, LibOp::Promote(d.ideas, parent, name))
+            lib(state, LibOp::NewProjectFromIdeas(d.ideas, parent, name))
         }
-        Msg::CancelPromote => {
-            state.promote = None;
+        Msg::CancelFromIdeas => {
+            state.from_ideas = None;
             vec![]
         }
         Msg::Restore(id, loc) => lib(state, LibOp::MoveIdea(id, loc)),
@@ -6479,9 +6471,9 @@ fn lib(state: &mut AppState, op: LibOp) -> Vec<Effect> {
 }
 
 /// The New idea form's draft as an idea: into the inbox, (Keep) named
-/// `name` into the library folder `parent`, or (Promote) the library and a
+/// `name` into the library folder `parent`, or (New project) the library and a
 /// new project `name` in `parent`.
-/// `saved_in`: promoting, the library folder the idea goes in (else the
+/// `saved_in`: New project, the library folder the idea goes in (else the
 /// top level).
 fn add_idea(
     state: &mut AppState,
@@ -6500,12 +6492,12 @@ fn add_idea(
     let loc = match how {
         AddIdea::Inbox => IdeaLoc::Unreviewed,
         AddIdea::Keep => IdeaLoc::Library(parent.clone()),
-        AddIdea::Promote => saved_in.map_or_else(IdeaLoc::top_library, IdeaLoc::Library),
+        AddIdea::NewProject => saved_in.map_or_else(IdeaLoc::top_library, IdeaLoc::Library),
     };
     let idea = NewIdea { title: d.title, text: d.text, tags, images: d.images, loc, ..NewIdea::text("", "") };
     state.busy += 1;
     let add = match how {
-        AddIdea::Promote => Effect::Lib(LibOp::NewIdeaPromote(idea, parent, name)),
+        AddIdea::NewProject => Effect::Lib(LibOp::NewIdeaNewProject(idea, parent, name)),
         _ => Effect::Lib(LibOp::NewIdea(idea)),
     };
     state.saving += 1;
@@ -6541,14 +6533,14 @@ pub fn save_idea_folder(state: &AppState, d: &SaveIdeaDialog) -> (PathBuf, bool)
     }
 }
 
-/// Why the Promote dialog can't create the project (in its folder when
+/// Why the New project from ideas dialog can't create the project (in its folder when
 /// `in_folder`): a bad or taken name, or a folder name a project has.
-pub fn promote_problem(state: &AppState, d: &PromoteDialog) -> Option<String> {
+pub fn from_ideas_problem(state: &AppState, d: &FromIdeasDialog) -> Option<String> {
     let name = d.name.trim();
     if let Err(e) = increart_core::library::validate_name(name) {
         return Some(e.to_string());
     }
-    let (at, exists) = promote_folder(state, d);
+    let (at, exists) = from_ideas_folder(state, d);
     if let Some(folder) = d.new_folder.as_deref().map(str::trim) {
         if let Err(e) = increart_core::library::validate_name(folder) {
             return Some(format!("new folder: {e}"));
@@ -6563,7 +6555,7 @@ pub fn promote_problem(state: &AppState, d: &PromoteDialog) -> Option<String> {
 /// Where the project goes: the dialog's folder, or its new folder in it
 /// (an existing one of that name, any case, is used); and whether that
 /// folder exists.
-pub fn promote_folder(state: &AppState, d: &PromoteDialog) -> (PathBuf, bool) {
+pub fn from_ideas_folder(state: &AppState, d: &FromIdeasDialog) -> (PathBuf, bool) {
     let Some(new) = &d.new_folder else {
         return (d.parent.clone(), true);
     };
@@ -6591,20 +6583,20 @@ fn set_collapsed(state: &mut AppState, change: impl FnOnce(&mut Vec<PathBuf>)) -
     save_config(state)
 }
 
-/// The Promote dialog's first folder: where the last promote went, if it's
+/// The New project from ideas dialog's first folder: where the last one went, if it's
 /// still there, else the top level.
-fn promote_parent(state: &AppState) -> PathBuf {
+fn from_ideas_parent(state: &AppState) -> PathBuf {
     state
-        .promote_last
+        .from_ideas_last
         .clone()
         .filter(|p| p.as_os_str().is_empty() || state.index.project_folders.contains(p))
         .unwrap_or_default()
 }
 
-/// The Promote dialog's first guess: the first idea title that makes a
+/// The New project from ideas dialog's first guess: the first idea title that makes a
 /// valid, free project name (numbered if taken), else empty.
-fn promote_name<'a>(state: &AppState, titles: impl IntoIterator<Item = &'a str>) -> String {
-    let at = promote_parent(state).join("_");
+fn from_ideas_name<'a>(state: &AppState, titles: impl IntoIterator<Item = &'a str>) -> String {
+    let at = from_ideas_parent(state).join("_");
     titles
         .into_iter()
         .map(str::trim)
@@ -8488,7 +8480,7 @@ fn op_done(state: &mut AppState, ok: OpOk) -> Vec<Effect> {
             }
             state.idea_dirty = Some(state.now);
         }
-        OpOk::Promoted { project, prompt, refs, idea } => {
+        OpOk::ProjectFromIdeas { project, prompt, refs, idea } => {
             let fx = leave_generate(state);
             state.project = Some(project);
             state.proj_folder = None;

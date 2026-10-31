@@ -86,7 +86,7 @@ size (regenerate it with `scripts/make-gui-gallery.sh`).
 | [70-contact-sheet](70-contact-sheet.png) | Review → a sweep's Contact sheet: a row per style with its counts and row buttons, a column per seed, `…` for an image still to come |
 | [71-job-info](71-job-info.png) | Projects → Jobs, a run clicked: its details with progress (waiting for a server / generating on …), prompt, the input images labelled `<image1>` / start image, the settings, and its Generation log (Copy, Show file) |
 | [72-review-sweep-button](72-review-sweep-button.png) | Review → Single on a sweep's image: **Sweep r02 contact sheet** in the top bar |
-| [73-promote](73-promote.png) | Promote into project: the new project's name, always asked (the first idea title as the guess) |
+| [73-new-project-from-ideas](73-new-project-from-ideas.png) | New project from ideas: the project folders on the left (New folder under them), the new project's name, always asked (the first idea title as the guess) |
 | [99a-home](99a-home.png) | Home, where the app opens: Start a new project… / Write an idea / Import images… / Open the drop folder, what's waiting, how it works in six cards (Collect, Sort the inbox, Input library, Projects, Review, Output library; each with its keys, a count and its button), the latest projects |
 | [99b-home-start-project](99b-home-start-project.png) | Home → Start a new project…: the name, and whether to add reference images (from the libraries, image files, or not now); the picker opens on its Generate form once it is made |
 
