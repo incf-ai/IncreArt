@@ -2421,14 +2421,16 @@ in the app's state folder (`$XDG_STATE_HOME/increart` when set, else
 - Left: the logs, newest first (size and age on hover). Right: the chosen
   log's last 1 MB as a terminal shows it (lines rewritten with `\r`, such
   as progress bars, as their last state; colour codes out), refreshed as it
-  grows; **follow** keeps to the end (untick to scroll back), **wrap**,
-  and a search that shows only the lines containing it. When the last 1 MB
+  grows; **follow** keeps to the end (scrolling back, by the wheel or the
+  bar, unticks it; ticked again, it's back at the end), **wrap** (the
+  last 3000 lines, wrapped to the width), and a search that shows only the
+  lines containing it. When the last 1 MB
   starts after the latest launch line, that line is pinned above it.
 - Footer left: **Open in editor** (`editor` in `config.rsn`, the file
   appended; else the desktop's default app for it, then gnome-text-editor,
   gedit, kate, mousepad, xed), **Show in folder**, **Copy** (the lines
-  shown). Footer right: **Save for a bug report…**, then Close. Esc or
-  Close closes.
+  shown). Footer right: **Save for a bug report…**, then Close at the
+  edge. Esc or Close closes.
 
 The app keeps a log of its own there too, `increart.log`, listed with the
 servers' in the viewer (titled **Logs**):

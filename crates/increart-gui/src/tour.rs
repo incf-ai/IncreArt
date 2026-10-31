@@ -96,6 +96,9 @@ const EXTRA_SCENES: &[&str] = &[
     "41-check-rubber-band",
     "46-check-ref-double-click",
     "48-check-copy-image",
+    // after 02: the wheel over a followed log unticks follow
+    "98h3-check-logs-scroll-unticks-follow",
+    "98h4-check-logs-wrapped-scroll-unticks-follow",
     "50-output-library-show-outputs-empty",
     "51-output-library-show-outputs-any-rating",
     "56-server-status",
@@ -179,6 +182,7 @@ const EXTRA_SCENES: &[&str] = &[
     "98f-show-outputs-reveal",
     "98g-presets-group",
     "98h-server-logs",
+    "98h2-server-logs-wrapped",
     // after 02, with a config whose first preset's server can't start (a
     // KoboldCpp binary that isn't there): the error under its row
     "98i-server-start-failed",
@@ -229,6 +233,8 @@ pub struct Tour {
     started: f64,
     /// Synthetic input for the next frame (click checks).
     inject: Vec<egui::Event>,
+    /// A log check: following before its wheel.
+    followed: bool,
     clicked: bool,
     /// A click check's before: the idea clicked, and a count.
     card_before: (Option<increart_core::Id>, usize),
@@ -265,6 +271,7 @@ impl Tour {
             settled: 0,
             started: 0.0,
             inject: vec![],
+            followed: false,
             clicked: false,
             card_before: (None, 0),
             before: vec![],
@@ -302,6 +309,13 @@ impl Tour {
             "56-server-status" => vec![Msg::ContinueWithoutServers, Msg::ServerStatus(true)],
             "57-no-server-warning" => vec![Msg::ServerStatus(false), Msg::QueueGenerate],
             "98h-server-logs" => vec![Msg::OpenLogs(None)],
+            "98h2-server-logs-wrapped" | "98h4-check-logs-wrapped-scroll-unticks-follow" => {
+                vec![Msg::Logs(Some(increart_gui_core::LogsView {
+                    wrap: true,
+                    ..increart_gui_core::LogsView::new(None)
+                }))]
+            }
+            "98h3-check-logs-scroll-unticks-follow" => vec![Msg::Logs(Some(increart_gui_core::LogsView::new(None)))],
             "98i-server-start-failed" => vec![Msg::OpenPresetNow(0)],
             "58-server-dialog-from-main" => vec![Msg::CloseNoServerWarning, Msg::OpenServerDialog],
             "59-continue-without-servers" => vec![Msg::AskContinueWithoutServers],
@@ -1943,6 +1957,30 @@ impl Tour {
                 (6, Some(p)) if !self.clicked => {
                     self.inject = vec![button(p, false)];
                     self.clicked = true;
+                }
+                _ => {}
+            }
+        }
+        if name.starts_with("98h3-") || name.starts_with("98h4-") {
+            // the wheel up over the log (the window's right part)
+            let over = ctx.content_rect().center() + egui::vec2(150.0, 0.0);
+            let follow = st.logs.as_ref().is_some_and(|l| l.follow);
+            match self.settled {
+                5 => {
+                    self.followed = follow;
+                    let wheel = egui::Event::MouseWheel {
+                        unit: egui::MouseWheelUnit::Point,
+                        delta: egui::vec2(0.0, 120.0),
+                        phase: egui::TouchPhase::Move,
+                        source: egui::MouseWheelSource::Unknown,
+                        modifiers: Default::default(),
+                    };
+                    self.inject = vec![egui::Event::PointerMoved(over), wheel];
+                }
+                15 => {
+                    let ok = self.followed && !follow;
+                    let state = format!("following before: {}, after: {follow}", self.followed);
+                    eprintln!("CHECK {name}: {} ({state})", if ok { "ok" } else { "FAILED" });
                 }
                 _ => {}
             }

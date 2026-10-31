@@ -35,6 +35,9 @@ pub struct Cache {
     /// how far the file was searched for it.
     launch: Option<String>,
     searched: u64,
+    /// Following: the text area's end as last measured (and whether it was
+    /// the wrapped one), kept to from the next frame.
+    kept: Option<(bool, f32)>,
 }
 
 impl Cache {
@@ -80,6 +83,39 @@ impl Cache {
             self.searched = find_launch(&path, self.searched, &mut self.launch);
         }
     }
+}
+
+/// Following: the offset to keep the text area at, its end as last
+/// measured (not yet measured: none, and it's measured this frame).
+fn kept_at(view: &LogsView, kept: Option<(bool, f32)>) -> Option<f32> {
+    kept.filter(|(wrap, _)| view.follow && *wrap == view.wrap).map(|(_, y)| y)
+}
+
+/// Following: measures where the text area `o` ends, to keep it there from
+/// the next frame; true when the user scrolled it back from `kept_at`
+/// (wheel, bar) this frame, which ends following. A shorter text (search)
+/// brings the end up to the offset, which is no scrolling back.
+fn measure_end<R>(
+    ctx: &egui::Context,
+    o: &egui::scroll_area::ScrollAreaOutput<R>,
+    view: &LogsView,
+    kept_at: Option<f32>,
+    kept: &mut Option<(bool, f32)>,
+) -> bool {
+    if !view.follow {
+        *kept = None;
+        return false;
+    }
+    let (end, at) = ((o.content_size.y - o.inner_rect.height()).max(0.0), o.state.clamped_offset().y);
+    if kept_at.is_some_and(|k| at < k - 1.0) && at < end - 1.0 {
+        *kept = None;
+        return true;
+    }
+    *kept = Some((view.wrap, end));
+    if at != end {
+        ctx.request_repaint();
+    }
+    false
 }
 
 /// The last [`TAIL`] bytes as lines, as a terminal shows them: a line
@@ -235,7 +271,7 @@ pub fn window(ctx: &egui::Context, st: &AppState, view: &LogsView, cache: &mut C
                     );
                     ui.checkbox(&mut v.wrap, "wrap");
                     ui.checkbox(&mut v.follow, "follow")
-                        .on_hover_text("keep to the end as the log grows (untick to scroll back)");
+                        .on_hover_text("keep to the end as the log grows (scrolling back unticks it)");
                     let shown = if view.search.is_empty() {
                         format!("{} lines", cache.lines.len())
                     } else {
@@ -255,19 +291,20 @@ pub fn window(ctx: &egui::Context, st: &AppState, view: &LogsView, cache: &mut C
                     ui.separator();
                 }
                 let body = body - (ui.cursor().top() - top);
-                if view.wrap {
+                let at = kept_at(view, cache.kept);
+                let scrolled_away = if view.wrap {
                     // wrapped: across is never scrolled
                     let area = ScrollArea::vertical()
                         .id_salt("log_wrapped")
                         .max_height(body - 28.0)
                         .auto_shrink([false, false]);
-                    // following: as far down as it goes (the offset is clamped)
-                    let area = if view.follow { area.vertical_scroll_offset(1e9) } else { area };
-                    area.show(ui, |ui| {
+                    let area = if let Some(y) = at { area.vertical_scroll_offset(y) } else { area };
+                    let o = area.show(ui, |ui| {
                         for l in &filtered[filtered.len().saturating_sub(WRAPPED)..] {
                             ui.add(egui::Label::new(mono(l)).wrap());
                         }
                     });
+                    measure_end(ui.ctx(), &o, view, at, &mut cache.kept)
                 } else {
                     let area =
                         ScrollArea::both().id_salt("log_text").max_height(body - 28.0).auto_shrink([false, false]);
@@ -278,15 +315,17 @@ pub fn window(ctx: &egui::Context, st: &AppState, view: &LogsView, cache: &mut C
                     let glyph = ui.fonts_mut(|f| f.glyph_width(&font, 'm'));
                     let longest = filtered.iter().map(|l| l.chars().count()).max().unwrap_or(0);
                     let width = longest as f32 * glyph + 8.0;
-                    // following: the end (show_rows turns the offset into a row number)
-                    let end = filtered.len() as f32 * (row + ui.spacing().item_spacing.y) - (body - 28.0);
-                    let area = if view.follow { area.vertical_scroll_offset(end.max(0.0)) } else { area };
-                    area.show_rows(ui, row, filtered.len(), |ui, rows| {
+                    let area = if let Some(y) = at { area.vertical_scroll_offset(y) } else { area };
+                    let o = area.show_rows(ui, row, filtered.len(), |ui, rows| {
                         ui.set_min_width(width);
                         for l in &filtered[rows] {
                             ui.add(egui::Label::new(mono(l)).extend());
                         }
                     });
+                    measure_end(ui.ctx(), &o, view, at, &mut cache.kept)
+                };
+                if scrolled_away {
+                    set(out, LogsView { follow: false, ..view.clone() });
                 }
             });
         });
@@ -307,11 +346,13 @@ pub fn window(ctx: &egui::Context, st: &AppState, view: &LogsView, cache: &mut C
                 }
             },
             |ui| {
+                // right to left: Close at the edge
+                let close = ui.button("Close   Esc").clicked();
                 let save = ui
                     .add_enabled(!st.saving_bug_report, egui::Button::new(ic(ph::BUG, "Save for a bug report…")))
                     .on_hover_text(BUG_REPORT_NOTE)
                     .on_disabled_hover_text("Saving…");
-                (save.clicked(), ui.button("Close   Esc").clicked())
+                (save.clicked(), close)
             },
         );
         let (save, close) = close;
