@@ -107,7 +107,7 @@ fn save_soon_after_opening() {
     let after: f64 = std::env::var("INCREART_SAVE_AFTER").ok().and_then(|s| s.parse().ok()).unwrap_or(3.0);
     let mut config = Config::default();
     config.normalize();
-    let mut r = Real { state: AppState::new(config, None), rt: Runtime::new(|| {}), t0: Instant::now() };
+    let mut r = Real { state: AppState::new(config, None), rt: Runtime::new(|| {}).unwrap(), t0: Instant::now() };
     r.send(Msg::SetLibraryPath(path.clone()));
     r.send(Msg::OpenLibrary);
     assert!(r.pump(Duration::from_secs(120), |s| s.library.is_some()), "{path} didn't open");

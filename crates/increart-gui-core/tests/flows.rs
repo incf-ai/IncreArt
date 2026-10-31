@@ -23,7 +23,7 @@ impl Harness {
         let root = tmp.path().join("lib");
         let mut config = Config::default();
         config.normalize();
-        let rt = Runtime::new(|| {});
+        let rt = Runtime::new(|| {}).unwrap();
         // started servers (stand-ins) log here, not in the real log folder
         rt.set_log_dir(tmp.path().join("logs"));
         rt.set_trash_dir(tmp.path().join("trash"));
@@ -5885,7 +5885,7 @@ fn prompt_enhance_shares_its_asks_among_its_servers() {
         image_size: 0,
         max_tokens: 10,
     };
-    let rt = Runtime::new(|| {});
+    let rt = Runtime::new(|| {}).unwrap();
     rt.run(Effect::PeAsk { servers: servers.clone(), jobs: (1..=4).map(job).collect() });
     let (mut on, mut answers, mut ready) = (vec![], vec![], 0);
     let deadline = std::time::Instant::now() + Duration::from_secs(20);
@@ -5956,7 +5956,7 @@ fn prompt_enhance_asks_stopped_are_never_answered() {
         image_size: 0,
         max_tokens: 10,
     };
-    let rt = Runtime::new(|| {});
+    let rt = Runtime::new(|| {}).unwrap();
     // until `want` is answered: what was started and answered
     let until = |want: u64| {
         let (mut on, mut answered) = (vec![], vec![]);

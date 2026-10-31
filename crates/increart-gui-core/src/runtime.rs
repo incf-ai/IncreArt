@@ -138,36 +138,33 @@ impl Runtime {
     }
 
     /// `wake` is called whenever a message is ready (e.g. request a repaint).
-    pub fn new(wake: impl Fn() + Send + Sync + 'static) -> Runtime {
+    pub fn new(wake: impl Fn() + Send + Sync + 'static) -> std::io::Result<Runtime> {
         let (tx, rx) = mpsc::channel();
         let (work, jobs) = mpsc::channel::<Effect>();
         let (engine_events, engine_updates) = mpsc::channel();
         let ctx = Ctx { tx, wake: Arc::new(wake), session: Arc::default(), paths: Arc::default(), engine_events };
         let queued = Arc::new(AtomicUsize::new(0));
         let (wctx, wqueued) = (ctx.clone(), queued.clone());
-        std::thread::Builder::new()
-            .name("library".into())
-            .spawn(move || {
-                for fx in jobs {
-                    // Opening goes through this queue so it can't overtake a
-                    // StopServers sent just before it.
-                    if let Effect::OpenServers { servers, shared, attempt } = fx {
-                        open_servers(&wctx, servers, shared, attempt);
-                    } else {
-                        let started = matches!(fx, Effect::StartEngine { .. });
-                        let msgs = work_on(&wctx, fx);
-                        for m in msgs {
-                            let _ = wctx.tx.send(m);
-                        }
-                        if started {
-                            list_loadable(&wctx);
-                        }
-                        (wctx.wake)();
+        std::thread::Builder::new().name("library".into()).spawn(move || {
+            for fx in jobs {
+                // Opening goes through this queue so it can't overtake a
+                // StopServers sent just before it.
+                if let Effect::OpenServers { servers, shared, attempt } = fx {
+                    open_servers(&wctx, servers, shared, attempt);
+                } else {
+                    let started = matches!(fx, Effect::StartEngine { .. });
+                    let msgs = work_on(&wctx, fx);
+                    for m in msgs {
+                        let _ = wctx.tx.send(m);
                     }
-                    wqueued.fetch_sub(1, Ordering::SeqCst);
+                    if started {
+                        list_loadable(&wctx);
+                    }
+                    (wctx.wake)();
                 }
-            })
-            .expect("spawn library worker");
+                wqueued.fetch_sub(1, Ordering::SeqCst);
+            }
+        })?;
         let (pe, cmds) = mpsc::channel();
         let dispatch = PeDispatch::new(PeCtx {
             tx: ctx.tx.clone(),
@@ -175,11 +172,8 @@ impl Runtime {
             cmds: pe.clone(),
             paths: ctx.paths.clone(),
         });
-        std::thread::Builder::new()
-            .name("prompt enhance".into())
-            .spawn(move || dispatch.run(cmds))
-            .expect("spawn PE dispatcher");
-        Runtime {
+        std::thread::Builder::new().name("prompt enhance".into()).spawn(move || dispatch.run(cmds))?;
+        Ok(Runtime {
             ctx,
             rx,
             work,
@@ -191,7 +185,7 @@ impl Runtime {
             convert_cancel: Cell::default(),
             archive_cancel: Cell::default(),
             watch: Cell::new(None),
-        }
+        })
     }
 
     /// Runs `f` on a thread of its own, saying so if it can't be started.
@@ -1382,7 +1376,12 @@ fn work_on(ctx: &Ctx, fx: Effect) -> Vec<Msg> {
                 ..Default::default()
             };
             let w = ctx.wake.clone();
-            let mut engine = Engine::start(lib.clone(), endpoints, opts, Some(Box::new(move || w())));
+            let mut engine = match Engine::start(lib.clone(), endpoints, opts, Some(Box::new(move || w()))) {
+                Ok(e) => e,
+                Err(e) => {
+                    return vec![Msg::Problem(format!("couldn't start generating: {e}")), Msg::RunsQueued(vec![])];
+                }
+            };
             for r in &pending {
                 engine.queue_run(r);
             }
@@ -1597,6 +1596,12 @@ fn archive_error(e: increart_core::Error) -> String {
     if increart_core::archive::is_cancelled(&e) { crate::update::ARCHIVE_STOPPED.into() } else { e.to_string() }
 }
 
+type Encoded<'a> = Vec<(&'a ImageRef, increart_core::Result<Option<increart_core::library::Converted>>)>;
+
+fn encode_part<'a>(conv: &increart_core::library::Conversion, part: &'a [ImageRef]) -> Encoded<'a> {
+    part.iter().map(|r| (r, conv.encode(r))).collect()
+}
+
 fn convert_store(lib: &Arc<Mutex<Library>>, ctx: &Ctx, to: StoreFormat, cancel: &AtomicBool) {
     let send = |m: Msg| {
         let _ = ctx.tx.send(m);
@@ -1619,12 +1624,23 @@ fn convert_store(lib: &Arc<Mutex<Library>>, ctx: &Ctx, to: StoreFormat, cancel: 
             cancelled = true;
             break;
         }
+        let conv = &conv;
         let encoded: Vec<_> = std::thread::scope(|s| {
             let parts: Vec<_> = batch
                 .chunks(batch.len().div_ceil(threads))
-                .map(|part| s.spawn(|| part.iter().map(|r| (r, conv.encode(r))).collect::<Vec<_>>()))
+                .map(|part| (part, std::thread::Builder::new().spawn_scoped(s, move || encode_part(conv, part))))
                 .collect();
-            parts.into_iter().flat_map(|h| h.join().expect("encoding thread")).collect()
+            parts
+                .into_iter()
+                .flat_map(|(part, h)| match h {
+                    Ok(h) => h.join().unwrap_or_else(|_| {
+                        let stopped = || increart_core::Error::Refused("its encoding thread stopped".into());
+                        part.iter().map(|r| (r, Err(stopped()))).collect()
+                    }),
+                    // no thread for it: encoded here
+                    Err(_) => encode_part(conv, part),
+                })
+                .collect()
         });
         let mut ready = vec![];
         for (r, res) in encoded {

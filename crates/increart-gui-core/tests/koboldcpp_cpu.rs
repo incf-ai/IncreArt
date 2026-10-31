@@ -205,7 +205,7 @@ fn images_cancel_and_prompt_enhance() {
 
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path().join("lib");
-    let rt = Runtime::new(|| {});
+    let rt = Runtime::new(|| {}).unwrap();
     rt.set_trash_dir(tmp.path().join("trash"));
     let mut app = App { state: AppState::new(config(&kcpp, &models, vision), None), rt, t0: Instant::now() };
 

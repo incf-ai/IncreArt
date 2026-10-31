@@ -58,13 +58,17 @@ pub fn start(root: PathBuf, tx: Sender<Msg>, wake: Arc<dyn Fn() + Send + Sync>) 
                 }
             }
         };
+    let (stop, stopped) = mpsc::channel();
+    let (rtx, rwake) = (tx.clone(), wake.clone());
+    let spawned = std::thread::Builder::new()
+        .name("library watch".into())
+        .spawn(move || run(&root, &rx, &stopped, &rtx, &*rwake));
+    let (watcher, status) = match spawned {
+        Ok(_) => (watcher, status),
+        Err(e) => (Box::new(NoWatcher) as Box<dyn Watcher + Send>, format!("not watching ({e}); use Refresh")),
+    };
     let _ = tx.send(Msg::WatchStatus(status));
     wake();
-    let (stop, stopped) = mpsc::channel();
-    std::thread::Builder::new()
-        .name("library watch".into())
-        .spawn(move || run(&root, &rx, &stopped, &tx, &*wake))
-        .expect("spawn library watch");
     LibraryWatch { _watcher: watcher, _stop: stop }
 }
 

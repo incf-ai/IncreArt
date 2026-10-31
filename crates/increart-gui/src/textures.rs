@@ -37,19 +37,20 @@ impl Textures {
         let jobs = Arc::new(Mutex::new(jobs));
         for i in 0..3 {
             let (jobs, done, ctx) = (jobs.clone(), done.clone(), ctx.clone());
-            std::thread::Builder::new()
-                .name(format!("textures {i}"))
-                .spawn(move || {
-                    loop {
-                        let Ok((key, root)) = jobs.lock_or_recover().recv() else { return };
-                        let img = load(&root, &key);
-                        if done.send((key, img)).is_err() {
-                            return;
-                        }
-                        ctx.request_repaint();
+            let spawned = std::thread::Builder::new().name(format!("textures {i}")).spawn(move || {
+                loop {
+                    let Ok((key, root)) = jobs.lock_or_recover().recv() else { return };
+                    let img = load(&root, &key);
+                    if done.send((key, img)).is_err() {
+                        return;
                     }
-                })
-                .expect("spawn texture loader");
+                    ctx.request_repaint();
+                }
+            });
+            // (the others load them; none, and images stay blank)
+            if let Err(e) = spawned {
+                increart_core::applog::line("error", &format!("can't start texture loader {i}: {e}"));
+            }
         }
         Textures { loaded: HashMap::new(), dims: HashMap::new(), pending: HashSet::new(), requests, results }
     }

@@ -230,7 +230,7 @@ fn open_kobold(
     use crate::kobold_image::Admin;
     let name = k.name.clone();
     let (client, binary, args, env, log) = match &k.run {
-        KoboldRun::Connect { url, password, .. } => (Client::kobold(url, password, None), None, vec![], vec![], None),
+        KoboldRun::Connect { url, password, .. } => (Client::kobold(url, password, None)?, None, vec![], vec![], None),
         KoboldRun::Start { binary, device, .. } => {
             let (dir, password) = admin_dir(log_dir.parent().unwrap_or(log_dir), &name)?;
             let args = k.start_args(&dir, &password);
@@ -245,7 +245,7 @@ fn open_kobold(
                 swap: k.swap && k.chat.as_ref().is_some_and(|c| !c.model.is_empty()),
             };
             let env = crate::pe::device_env(device);
-            (Client::kobold(&k.base_url(), "", Some(admin)), Some(binary.clone()), args, env, Some(log))
+            (Client::kobold(&k.base_url(), "", Some(admin))?, Some(binary.clone()), args, env, Some(log))
         }
     };
     let mut proc = ServerProcess {

@@ -217,7 +217,7 @@ fn two_gpus_two_servers_loras_across_folders() {
     let root = tmp.path().join("lib");
     let logs = tmp.path().join("logs");
     let _logs = KeepLogs(logs.clone(), root.clone());
-    let rt = Runtime::new(|| {});
+    let rt = Runtime::new(|| {}).unwrap();
     rt.set_trash_dir(tmp.path().join("trash"));
     // not the app's log folder
     rt.set_log_dir(logs);

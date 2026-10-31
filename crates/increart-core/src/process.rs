@@ -227,18 +227,19 @@ while kill -0 "$1" 2>/dev/null; do sleep 1 & wait $!; done"#;
         with_app(&mut cmd);
         let spawner = SPAWNER.get_or_init(|| {
             let (tx, rx) = mpsc::channel::<Job>();
-            std::thread::Builder::new()
-                .name("server-spawner".into())
-                .spawn(move || {
-                    for (mut cmd, back) in rx {
-                        let child = cmd.spawn();
-                        if let Ok(c) = &child {
-                            watch_group(c);
-                        }
-                        let _ = back.send(child);
+            let spawned = std::thread::Builder::new().name("server-spawner".into()).spawn(move || {
+                for (mut cmd, back) in rx {
+                    let child = cmd.spawn();
+                    if let Ok(c) = &child {
+                        watch_group(c);
                     }
-                })
-                .expect("can't start the server-spawner thread");
+                    let _ = back.send(child);
+                }
+            });
+            // (none: every spawn says the thread is gone)
+            if let Err(e) = spawned {
+                crate::applog::line("error", &format!("can't start the server-spawner thread: {e}"));
+            }
             tx
         });
         let (back, child) = mpsc::channel();

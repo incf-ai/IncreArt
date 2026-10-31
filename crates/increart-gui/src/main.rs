@@ -202,7 +202,7 @@ fn main() -> eframe::Result {
             add_icon_font(&cc.egui_ctx);
             #[cfg(unix)]
             close_on_signals(&cc.egui_ctx);
-            Ok(Box::new(app::App::new(cc, config, config_path, warnings, startup)))
+            Ok(Box::new(app::App::new(cc, config, config_path, warnings, startup)?))
         }),
     )
 }

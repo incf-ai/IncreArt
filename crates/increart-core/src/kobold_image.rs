@@ -237,7 +237,7 @@ fn file_name(p: &str) -> &str {
 impl KoboldImage {
     /// `base`: e.g. `http://127.0.0.1:5001`. `password`: KoboldCpp's
     /// `--password` (or its admin password), sent with every request.
-    pub fn new(base: &str, password: &str, admin: Option<Admin>) -> KoboldImage {
+    pub fn new(base: &str, password: &str, admin: Option<Admin>) -> std::io::Result<KoboldImage> {
         let inner = Arc::new(Inner {
             base: base.trim_end_matches('/').to_string(),
             agent: agent(None, Some(crate::config::timeouts().request())),
@@ -258,11 +258,8 @@ impl KoboldImage {
         }
         let (tx, rx) = mpsc::channel();
         let runner = inner.clone();
-        std::thread::Builder::new()
-            .name(format!("koboldcpp {base}"))
-            .spawn(move || run_jobs(&runner, &rx))
-            .expect("spawn koboldcpp runner");
-        KoboldImage { inner, queue: tx, next: AtomicU64::new(0) }
+        std::thread::Builder::new().name(format!("koboldcpp {base}")).spawn(move || run_jobs(&runner, &rx))?;
+        Ok(KoboldImage { inner, queue: tx, next: AtomicU64::new(0) })
     }
 
     /// `koboldcpp <version>`, once it has answered, for recipes.

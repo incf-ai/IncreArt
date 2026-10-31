@@ -101,7 +101,7 @@ fn start(s: &Setup, fakes: &[&Fake]) -> Engine {
         .enumerate()
         .map(|(i, f)| Endpoint { name: format!("gpu{i}"), device: format!("ROCm{i}"), client: Client::new(&f.url) })
         .collect();
-    Engine::start(s.lib.clone(), servers, opts(), None)
+    Engine::start(s.lib.clone(), servers, opts(), None).unwrap()
 }
 
 /// Events until `stop` returns true (panics after 20 s).
@@ -280,7 +280,8 @@ fn bad_request_fails_only_that_seed() {
         vec![Endpoint { name: "gpu0".into(), device: "ROCm0".into(), client: Client::new(&a.url) }],
         opts,
         None,
-    );
+    )
+    .unwrap();
     a.with(|st| st.submit_errors.push_back((422, serde_json::json!({"error": "width must be a multiple of 32"}))));
     engine.queue_run(&run);
     let events = collect(&engine, run_done(&run));
@@ -305,7 +306,8 @@ fn cancel_stops_a_run() {
         vec![Endpoint { name: "gpu0".into(), device: "ROCm0".into(), client: Client::new(&a.url) }],
         o,
         None,
-    );
+    )
+    .unwrap();
     engine.queue_run(&run);
     collect(&engine, |e, _| matches!(e, Event::Progress { .. }));
     engine.cancel_run(&run, Stop::Now);
@@ -331,7 +333,7 @@ fn stop_now_lets_go_of_jobs_their_server_never_ends() {
     let mut o = opts();
     o.warm_up = false;
     let ep = Endpoint { name: "gpu0".into(), device: "ROCm0".into(), client: Client::new(&a.url) };
-    let engine = Engine::start(s.lib.clone(), vec![ep], o, None);
+    let engine = Engine::start(s.lib.clone(), vec![ep], o, None).unwrap();
     engine.queue_run(&run);
     collect(&engine, |e, _| matches!(e, Event::Progress { .. }));
     let t = Instant::now();
@@ -355,7 +357,7 @@ fn finish_and_stop_then_stop_now_ends_a_job_that_never_finishes() {
     let mut o = opts();
     o.warm_up = false;
     let ep = Endpoint { name: "gpu0".into(), device: "ROCm0".into(), client: Client::new(&a.url) };
-    let engine = Engine::start(s.lib.clone(), vec![ep], o, None);
+    let engine = Engine::start(s.lib.clone(), vec![ep], o, None).unwrap();
     engine.queue_run(&run);
     collect(&engine, |e, _| matches!(e, Event::Progress { .. }));
     engine.cancel_run(&run, Stop::Finish);
@@ -455,7 +457,7 @@ fn a_refused_request_is_logged_with_the_servers_answer() {
     let mut o = opts();
     o.warm_up = false;
     let ep = Endpoint { name: "proxy".into(), device: String::new(), client: Client::new(&a.url) };
-    let engine = Engine::start(s.lib.clone(), vec![ep], o, None);
+    let engine = Engine::start(s.lib.clone(), vec![ep], o, None).unwrap();
     engine.queue_run(&run);
     collect(&engine, run_done(&run));
     let log = log_of(&s, &run);
@@ -479,7 +481,8 @@ fn finish_and_stop_keeps_the_images_being_generated() {
         vec![Endpoint { name: "gpu0".into(), device: "ROCm0".into(), client: Client::new(&a.url) }],
         o,
         None,
-    );
+    )
+    .unwrap();
     engine.queue_run(&run);
     // the fake generates both in-flight jobs at once
     collect(&engine, |e, _| matches!(e, Event::Progress { step: 3.., .. }));
@@ -509,7 +512,8 @@ fn finish_and_stop_cancels_the_waiting_job() {
         vec![Endpoint { name: "gpu0".into(), device: "ROCm0".into(), client: Client::new(&a.url) }],
         o,
         None,
-    );
+    )
+    .unwrap();
     engine.queue_run(&run);
     collect(&engine, |e, _| matches!(e, Event::Progress { step: 3.., .. }));
     engine.cancel_run(&run, Stop::Finish);
@@ -536,7 +540,7 @@ fn a_failing_server_hands_its_seeds_to_the_other() {
         .enumerate()
         .map(|(i, f)| Endpoint { name: format!("gpu{i}"), device: format!("ROCm{i}"), client: Client::new(&f.url) })
         .collect();
-    let engine = Engine::start(s.lib.clone(), servers, o, None);
+    let engine = Engine::start(s.lib.clone(), servers, o, None).unwrap();
     engine.queue_run(&run);
     // once server 0 has a job running, it goes down for good
     collect(&engine, |e, _| matches!(e, Event::Progress { server: 0, .. }));
@@ -629,9 +633,9 @@ fn model_dir(dir: &Path) -> String {
 }
 
 fn kobold_engine(s: &Setup, k: &FakeKobold, admin: Option<Admin>) -> Engine {
-    let client = Client::kobold(&k.url, "", admin);
+    let client = Client::kobold(&k.url, "", admin).unwrap();
     let ep = Endpoint { name: "kcpp".into(), device: "Vulkan1".into(), client };
-    Engine::start(s.lib.clone(), vec![ep], opts(), None)
+    Engine::start(s.lib.clone(), vec![ep], opts(), None).unwrap()
 }
 
 #[cfg(unix)]
@@ -667,10 +671,14 @@ fn an_int8_model_skips_koboldcpp_for_the_sd_server() {
     proxy.with(|st| st.model_files = Some(FILES.iter().map(|(_, id)| id.to_string()).collect()));
     let run = new_run(&s, "qwen-image-21", 2, false);
     let servers = vec![
-        Endpoint { name: "kobold".into(), device: "Vulkan1".into(), client: Client::kobold(&k.url, "", Some(admin)) },
+        Endpoint {
+            name: "kobold".into(),
+            device: "Vulkan1".into(),
+            client: Client::kobold(&k.url, "", Some(admin)).unwrap(),
+        },
         Endpoint { name: "proxy".into(), device: "ROCm0".into(), client: Client::new(&proxy.url) },
     ];
-    let engine = Engine::start(s.lib.clone(), servers, opts(), None);
+    let engine = Engine::start(s.lib.clone(), servers, opts(), None).unwrap();
     engine.queue_run(&run);
     let events = collect(&engine, run_done(&run));
     assert_eq!(outputs(&events).len(), 2);
@@ -797,8 +805,8 @@ fn koboldcpp_cancel_closes_the_generation() {
     // started elsewhere, running the run's model: used without admin
     let mut o = opts();
     o.warm_up = false;
-    let ep = Endpoint { name: "kcpp".into(), device: String::new(), client: Client::kobold(&k.url, "", None) };
-    let engine = Engine::start(s.lib.clone(), vec![ep], o, None);
+    let ep = Endpoint { name: "kcpp".into(), device: String::new(), client: Client::kobold(&k.url, "", None).unwrap() };
+    let engine = Engine::start(s.lib.clone(), vec![ep], o, None).unwrap();
     engine.queue_run(&run);
     collect(&engine, |e, _| matches!(e, Event::Progress { .. }));
     let t = Instant::now();
@@ -847,7 +855,7 @@ fn koboldcpp_failed_load_says_why() {
         let mut f = std::fs::OpenOptions::new().append(true).open(log).unwrap();
         std::io::Write::write_all(&mut f, b"Cannot find image model file: q.safetensors\n").unwrap();
     });
-    let client = Client::kobold(&k.url, "", Some(admin));
+    let client = Client::kobold(&k.url, "", Some(admin)).unwrap();
     let key = increart_core::sdserver::ModelKey::from(&model_sel());
     let err = client.load_model(&key).unwrap_err();
     writer.join().unwrap();

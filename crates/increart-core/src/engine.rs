@@ -211,7 +211,7 @@ impl Engine {
         servers: Vec<Endpoint>,
         opts: EngineOptions,
         notify: Option<Box<dyn Fn() + Send>>,
-    ) -> Engine {
+    ) -> std::io::Result<Engine> {
         let (tx, rx) = mpsc::channel();
         let (etx, events) = mpsc::channel();
         let skip_ram_check = Arc::new(AtomicBool::new(opts.skip_ram_check));
@@ -226,11 +226,11 @@ impl Engine {
                 let skip = skip_ram_check.clone();
                 std::thread::Builder::new()
                     .name(format!("sd-server {}", ep.name))
-                    .spawn(move || worker(i, client, crx, report, poll, skip))
-                    .expect("spawn worker");
-                ctx
+                    .spawn(move || worker(i, client, crx, report, poll, skip))?;
+                Ok(ctx)
             })
-            .collect();
+            // (failing, the workers started end: their senders are dropped)
+            .collect::<std::io::Result<_>>()?;
         let mut sched = Scheduler::new(servers.len());
         sched.max_in_flight = opts.max_in_flight;
         sched.backoff_base = opts.backoff_base;
@@ -255,8 +255,8 @@ impl Engine {
             events: etx,
             notify,
         };
-        let thread = std::thread::Builder::new().name("engine".into()).spawn(move || co.run(rx)).expect("spawn engine");
-        Engine { tx, events, skip_ram_check, thread: Some(thread) }
+        let thread = std::thread::Builder::new().name("engine".into()).spawn(move || co.run(rx))?;
+        Ok(Engine { tx, events, skip_ram_check, thread: Some(thread) })
     }
 
     /// Queues the pending seeds of a run (again after adding seeds: only
