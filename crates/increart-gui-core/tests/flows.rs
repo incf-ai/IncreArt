@@ -287,6 +287,74 @@ fn dropped_files_become_ideas() {
 }
 
 #[test]
+fn save_to_input_library_asks_the_name_and_folder() {
+    let mut h = Harness::new();
+    for (t, x) in [("Fox", "a red fox"), ("Owl", "an owl at night"), ("Sea", "waves")] {
+        h.send(Msg::Draft(IdeaDraft { title: t.into(), text: x.into(), tags: String::new(), images: vec![] }));
+        h.send(Msg::AddIdea(AddIdea::Inbox));
+        h.settle();
+    }
+    let id = |h: &Harness, t: &str| h.state.inbox_queue().iter().find(|e| e.idea.title == t).unwrap().idea.id.clone();
+    let fox = id(&h, "Fox");
+
+    // one idea: named after its title; Cancel leaves it in the inbox
+    h.send(Msg::SaveIdeas(vec![fox.clone()]));
+    assert_eq!(h.state.save_idea.as_ref().unwrap().name, "Fox");
+    h.send(Msg::CancelSaveIdea);
+    assert!(h.state.save_idea.is_none());
+    assert_eq!(h.state.inbox_queue().len(), 3);
+
+    // renamed, into a new folder
+    h.send(Msg::SaveIdeas(vec![fox.clone()]));
+    h.send(Msg::EditSaveIdeaName("  ".into()));
+    assert!(increart_gui_core::save_idea_problem(h.state.save_idea.as_ref().unwrap()).is_some(), "needs a name");
+    h.send(Msg::ConfirmSaveIdea);
+    assert!(h.state.save_idea.is_some(), "kept open");
+    h.send(Msg::EditSaveIdeaName("Red fox".into()));
+    h.send(Msg::SaveIdeaNewFolder(Some("Animals".into())));
+    h.send(Msg::ConfirmSaveIdea);
+    h.settle();
+    assert!(h.state.save_idea.is_none());
+    let e = h.state.idea(&fox).unwrap();
+    assert_eq!((e.idea.title.as_str(), &e.loc), ("Red fox", &IdeaLoc::Library("Animals".into())));
+    assert!(!e.idea.starred);
+    assert!(h.state.index.library_folders.contains(&std::path::PathBuf::from("Animals")));
+
+    // several: they keep their titles; the folder starts where the last went
+    let (owl, sea) = (id(&h, "Owl"), id(&h, "Sea"));
+    h.send(Msg::InboxPick(vec![owl.clone(), sea.clone()]));
+    h.send(Msg::SaveIdeas(h.state.inbox_picked.clone()));
+    let d = h.state.save_idea.as_ref().unwrap();
+    assert_eq!(d.folder, std::path::PathBuf::from("Animals"));
+    h.send(Msg::SaveIdeaNewFolder(Some("night".into())));
+    h.send(Msg::ConfirmSaveIdea);
+    h.settle();
+    assert!(h.state.inbox_queue().is_empty() && h.state.inbox_picked.is_empty());
+    for (i, t) in [(&owl, "Owl"), (&sea, "Sea")] {
+        let e = h.state.idea(i).unwrap();
+        assert_eq!((e.idea.title.as_str(), &e.loc), (t, &IdeaLoc::Library("Animals/night".into())));
+    }
+
+    // the New idea form's Add & save asks too; the draft waits for it
+    h.send(Msg::Draft(IdeaDraft { title: "Moth".into(), text: "a moth".into(), ..Default::default() }));
+    h.send(Msg::AddIdea(AddIdea::Keep));
+    let d = h.state.save_idea.as_ref().unwrap();
+    assert!(d.ideas.is_empty());
+    assert_eq!((d.name.as_str(), &d.folder), ("Moth", &std::path::PathBuf::from("Animals/night")));
+    h.send(Msg::CancelSaveIdea);
+    assert_eq!(h.state.draft.title, "Moth", "Cancel keeps the draft");
+    h.send(Msg::AddIdea(AddIdea::Keep));
+    h.send(Msg::EditSaveIdeaName("Luna moth".into()));
+    h.send(Msg::SaveIdeaFolder("Animals".into()));
+    h.send(Msg::SaveIdeaNewFolder(Some("insects".into())));
+    h.send(Msg::ConfirmSaveIdea);
+    h.settle();
+    assert_eq!(h.state.draft, IdeaDraft::default(), "draft cleared");
+    let e = h.state.index.ideas.iter().find(|e| e.idea.title == "Luna moth").unwrap();
+    assert_eq!(e.loc, IdeaLoc::Library("Animals/insects".into()));
+}
+
+#[test]
 fn idea_picks_tile_and_triage_together() {
     let mut h = Harness::new();
     let dir = h._tmp.path().join("drop");
@@ -1985,6 +2053,7 @@ fn library_filters_and_output_sources() {
     for (t, x, star) in [("Fox", "a fox", true), ("Hut", "alpine hut", false)] {
         h.send(Msg::Draft(IdeaDraft { title: t.into(), text: x.into(), ..Default::default() }));
         h.send(Msg::AddIdea(AddIdea::Keep));
+        h.send(Msg::ConfirmSaveIdea);
         h.settle();
         if star {
             let id = h.state.library_ideas().iter().find(|e| e.idea.title == t).unwrap().idea.id.clone();
@@ -2357,6 +2426,8 @@ fn input_library_and_inbox_folder_views_and_selection_keys() {
     for (t, add) in [("Fox", AddIdea::Keep), ("Fern", AddIdea::Keep), ("Lighthouse", AddIdea::Inbox)] {
         h.send(Msg::Draft(IdeaDraft { title: t.into(), text: t.to_lowercase(), ..Default::default() }));
         h.send(Msg::AddIdea(add));
+        // Add & save asks for the name and folder: as they are
+        h.send(Msg::ConfirmSaveIdea);
         h.settle();
     }
     let shown =

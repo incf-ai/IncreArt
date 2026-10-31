@@ -13,5 +13,5 @@ pub use runtime::Runtime;
 pub use state::*;
 pub use update::{
     AddIdea, BLANK_RETRIES, DraftSave, Effect, LibOp, Msg, OpOk, PeUse, Queued, Restore, SelectHow, TileTarget,
-    kobold_binary, promote_folder, promote_problem, suggest_message, update,
+    kobold_binary, promote_folder, promote_problem, save_idea_folder, save_idea_problem, suggest_message, update,
 };

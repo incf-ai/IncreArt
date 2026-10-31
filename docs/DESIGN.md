@@ -52,8 +52,10 @@ ideas ──► INPUT QUEUE ──review──► INPUT LIBRARY ──promote (P
  folder)                                                    (Review tab)            (all projects)
 ```
 
-- Both queues use the same verdict keys (`1`/`2`/`3` or `G`/`N`/`B`, arrows,
-  `Ctrl+Z`) and the same mechanism: an item's folder is its verdict. (`Space`
+- Both queues use the same mechanism: an item's folder is its verdict. Review
+  rates with `1`/`2`/`3` (or `G`/`N`/`B`); the Idea inbox has two verdicts,
+  save to input library (`1`/`2`/`S`) and discard (`3`/`B`); both take arrows
+  and `Ctrl+Z`. (`Space`
   differs: it promotes an idea in the Idea inbox and toggles grid / single in
   Review.) (On the
   input side the folder records keep vs. discard; the star is a flag in
@@ -2182,11 +2184,11 @@ out as one image.
 
 - **Ideas**: the Idea inbox Grid picks ideas the same way (Ctrl+click,
   Shift+click, a box, Ctrl+A, Esc; numbered in pick order). While any are
-  picked, a bar shows **N picked · Tile… · Promote… · Keep ★ · Keep ·
-  Discard · Clear**, 1/2/3 keep or discard them all, P promotes them and T
+  picked, a bar shows **N picked · Tile… · Promote… · Save to input library… ·
+  Discard · Clear**, 1/2/S save them all (one dialog, below) and 3/B discard them, P promotes them and T
   tiles them (without picks the keys act on the cursor's idea, as before).
   The Input library's selection gains Shift+click (a range) and the box;
-  with several selected the same bar (no Keep / Discard) is shown above the
+  with several selected the same bar (no Save / Discard) is shown above the
   grid and T tiles them. A picked or selected card's right-click starts
   with what to do with them all; every card with images has **Tile its
   images…**. Tiling ideas tiles all their images, in pick order (the
@@ -2527,24 +2529,35 @@ the keys and mouse buttons go through that view's own history instead.
     size (the editor when there's no image), and a pencil button on the
     image (on hover, or when selected) opens the editor. Hovered or
     selected, the image also shows two buttons along its bottom, as on
-    project tiles: here **Keep** and **Discard** (`2`/`3`); in the Input
+    project tiles: here **Save** and **Discard** (`S`/`3`); in the Input
     library **Promote** and **Add as refs** (Promote alone for a text-only
     idea); none in Discarded. They act on that card only; on a small card
     (zoomed out) they're icons, the name on hover (`widgets::cover_buttons`).
     The side panel showing the current idea keeps its buttons pinned to its
-    bottom (here **Keep ★** / **Keep** / **Discard**, then **Promote**,
+    bottom (here **Save to input library…** / **Discard**, then **Promote**,
     **Edit…**, **Copy text**, **Open folder**) and its header at the top;
     the details scroll between. Keys as in the
     table above, plus `Home`/`End` = the first / last idea, `Enter`/`T` = open the **Edit idea** window (title, tags,
     text, variants, images, and a finished PE rewrite's diff with Accept /
     Reject). Right-click a card, in groups: promote (`P`), edit (`Enter`),
-    rewrite with PE (in the Edit window, so Use changes its text) · keep in
-    input library ★ / keep in input library / discard (`1`/`2`/`3`) · copy
+    rewrite with PE (in the Edit window, so Use changes its text) · save to
+    input library / discard (`S`/`3`) · copy
     text, copy image and describe image with PE (its first image) · open
     folder in file manager. (Planned: accept all ready rewrites.)
+  - **Save to input library** (the card's Save, the side panel's button,
+    the menus, `1`/`2`/`S`; the New idea form's **Add & save to input
+    library…**, for the draft) always asks first, in a modal: the **Name**
+    (the idea's title to start with; renames it; several picked ideas keep
+    theirs and the field is hidden) and the **Folder**, a filterable tree of
+    the input library's folders with **New folder in “…”** (an existing one
+    of that name, any case, is used). It starts in the folder the last save
+    went to (this session). The path it will go to is shown under the tree;
+    **Save** (`Enter`) moves the ideas there unstarred, making the folder;
+    **Cancel** (`Esc`) leaves them in the inbox (the draft in the form).
+    Discard doesn't ask.
   - **New idea** (`Ctrl+N` from anywhere): title, text, tags, images (drop /
     paste / browse), **Rewrite with PE**. **Add to inbox** (review it later),
-    **Add & keep** (straight into the input library, into a chosen folder),
+    **Add & save to input library…** (asks the name and folder, as below),
     **Add & promote** (keep it and start a project). The draft is kept while
     switching tabs.
   - **Folder**: the file-manager view (see Projects → Folder) rooted at the

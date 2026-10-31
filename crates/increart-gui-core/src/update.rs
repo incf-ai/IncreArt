@@ -208,6 +208,15 @@ pub enum Msg {
     /// Review the idea under the inbox cursor (keys / buttons).
     ReviewCurrentIdea(Verdict),
     ReviewIdea(Id, Verdict),
+    /// Save to input library: asks for the name (one idea) and folder.
+    SaveIdeas(Vec<Id>),
+    EditSaveIdeaName(String),
+    SaveIdeaFolder(PathBuf),
+    /// A new folder in the chosen one to save into (`None`: none).
+    SaveIdeaNewFolder(Option<String>),
+    SaveIdeaFilter(String),
+    ConfirmSaveIdea,
+    CancelSaveIdea,
     /// Asks for the new project's name, then promotes these ideas.
     Promote(Vec<Id>),
     EditPromoteName(String),
@@ -776,7 +785,7 @@ pub enum Msg {
     TileIdeas(Vec<Id>),
     /// The Idea inbox Grid's picks.
     InboxPick(Vec<Id>),
-    /// Keep (Good, Neutral) or Discard the Idea inbox's picks.
+    /// Save (Good, Neutral) or Discard the Idea inbox's picks.
     ReviewPickedIdeas(Verdict),
     /// The Input library's selection (Shift+click's range, the rubber band).
     LibSelectSet(Vec<Id>),
@@ -1036,6 +1045,9 @@ pub enum LibOp {
     /// Import images into the input store as Generate references.
     ImportRefs(Vec<PathBuf>),
     ReviewIdea(Id, Verdict),
+    /// An inbox idea to the input library: retitled (when given), into this
+    /// folder (made if missing).
+    SaveToLibrary(Id, Option<String>, PathBuf),
     MoveIdea(Id, IdeaLoc),
     SetStar(Id, bool),
     DeleteDiscarded(Id),
@@ -2657,6 +2669,12 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
                 state.promote = Some(PromoteDialog::new(vec![], promote_parent(state), name));
                 return vec![];
             }
+            if how == AddIdea::Keep {
+                // the draft stays until it's named and has a folder
+                let name = state.draft.title.clone();
+                state.save_idea = Some(SaveIdeaDialog::new(state, vec![], name));
+                return vec![];
+            }
             add_idea(state, how, PathBuf::new(), String::new())
         }
         Msg::DropFiles(paths) => {
@@ -2682,6 +2700,65 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
             update(state, Msg::ReviewIdea(e, v))
         }
         Msg::ReviewIdea(id, v) => lib(state, LibOp::ReviewIdea(id, v)),
+        Msg::SaveIdeas(ids) => {
+            if ids.is_empty() {
+                return vec![];
+            }
+            let name = match &ids[..] {
+                [one] => state.index.idea(one).map(|e| e.idea.title.clone()).unwrap_or_default(),
+                _ => String::new(),
+            };
+            state.save_idea = Some(SaveIdeaDialog::new(state, ids, name));
+            vec![]
+        }
+        Msg::EditSaveIdeaName(n) => {
+            if let Some(d) = &mut state.save_idea {
+                d.name = n;
+            }
+            vec![]
+        }
+        Msg::SaveIdeaFolder(f) => {
+            if let Some(d) = &mut state.save_idea {
+                d.folder = f;
+            }
+            vec![]
+        }
+        Msg::SaveIdeaNewFolder(f) => {
+            if let Some(d) = &mut state.save_idea {
+                d.new_folder = f;
+            }
+            vec![]
+        }
+        Msg::SaveIdeaFilter(f) => {
+            if let Some(d) = &mut state.save_idea {
+                d.filter = f;
+            }
+            vec![]
+        }
+        Msg::ConfirmSaveIdea => {
+            let Some(d) = state.save_idea.take() else { return vec![] };
+            if let Some(e) = save_idea_problem(&d) {
+                state.messages_error(e);
+                state.save_idea = Some(d);
+                return vec![];
+            }
+            let (folder, _) = save_idea_folder(state, &d);
+            state.save_idea_last = Some(folder.clone());
+            if d.ideas.is_empty() {
+                return add_idea(state, AddIdea::Keep, folder, d.name.trim().to_string());
+            }
+            // the picks they were go with them
+            state.inbox_picked.retain(|p| !d.ideas.contains(p));
+            let title = (d.ideas.len() == 1).then(|| d.name.trim().to_string());
+            d.ideas
+                .into_iter()
+                .flat_map(|id| lib(state, LibOp::SaveToLibrary(id, title.clone(), folder.clone())))
+                .collect()
+        }
+        Msg::CancelSaveIdea => {
+            state.save_idea = None;
+            vec![]
+        }
         Msg::Promote(ids) => {
             if ids.is_empty() {
                 return vec![];
@@ -6085,7 +6162,7 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
                     _ if smart => "Smart folders are read-only: copy their images into a collection",
                     (FvPlace::Collections, _) => "Only collections and their images can be copied or cut",
                     (FvPlace::InputLibrary, _) => "Only folders and ideas can be copied or cut",
-                    (FvPlace::Inbox, _) => "Inbox ideas are kept (into the library) or discarded from the Grid",
+                    (FvPlace::Inbox, _) => "Inbox ideas are saved to the input library or discarded from the Grid",
                     (_, true) => "Only folders, projects and image links can be cut",
                     (_, false) => {
                         "Only folders and projects can be copied (cut + paste moves image links between review folders)"
@@ -6230,16 +6307,21 @@ fn lib(state: &mut AppState, op: LibOp) -> Vec<Effect> {
     vec![Effect::Lib(op)]
 }
 
-/// The New idea form's draft as an idea: into the inbox, the library, or
-/// (Promote) the library and a new project `name` in `parent`.
+/// The New idea form's draft as an idea: into the inbox, (Keep) named
+/// `name` into the library folder `parent`, or (Promote) the library and a
+/// new project `name` in `parent`.
 fn add_idea(state: &mut AppState, how: AddIdea, parent: PathBuf, name: String) -> Vec<Effect> {
-    let d = std::mem::take(&mut state.draft);
+    let mut d = std::mem::take(&mut state.draft);
+    if how == AddIdea::Keep {
+        d.title = name.clone();
+    }
     state.idea_dirty = None;
     let text_for_history = (d.text.clone(), d.title.clone());
     let tags = d.tag_list();
     let loc = match how {
         AddIdea::Inbox => IdeaLoc::Unreviewed,
-        AddIdea::Keep | AddIdea::Promote => IdeaLoc::top_library(),
+        AddIdea::Keep => IdeaLoc::Library(parent.clone()),
+        AddIdea::Promote => IdeaLoc::top_library(),
     };
     let idea = NewIdea { title: d.title, text: d.text, tags, images: d.images, loc, ..NewIdea::text("", "") };
     state.busy += 1;
@@ -6252,6 +6334,32 @@ fn add_idea(state: &mut AppState, how: AddIdea, parent: PathBuf, name: String) -
     let (t, x) = (text_for_history.0, text_for_history.1);
     fx.extend(record(state, HistoryKey::NewIdea, HistoryKind::Saved, t, x));
     fx
+}
+
+/// Why Save to input library can't save: an empty name (one idea or the
+/// draft), or a
+/// bad new folder name.
+pub fn save_idea_problem(d: &SaveIdeaDialog) -> Option<String> {
+    if d.ideas.len() <= 1 && d.name.trim().is_empty() {
+        return Some("the idea needs a name".into());
+    }
+    let folder = d.new_folder.as_deref().map(str::trim)?;
+    increart_core::library::validate_name(folder).err().map(|e| format!("new folder: {e}"))
+}
+
+/// Where Save to input library puts the ideas: the dialog's folder, or its
+/// new folder in it (an existing one of that name, any case, is used); and
+/// whether that folder exists.
+pub fn save_idea_folder(state: &AppState, d: &SaveIdeaDialog) -> (PathBuf, bool) {
+    let Some(new) = &d.new_folder else {
+        return (d.folder.clone(), true);
+    };
+    let at = d.folder.join(new.trim());
+    let same = |f: &&PathBuf| f.to_string_lossy().to_lowercase() == at.to_string_lossy().to_lowercase();
+    match state.index.library_folders.iter().find(same) {
+        Some(f) => (f.clone(), true),
+        None => (at, false),
+    }
 }
 
 /// Why the Promote dialog can't create the project (in its folder when
