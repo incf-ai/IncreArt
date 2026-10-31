@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use crate::error::Result;
 use crate::fsutil;
 use crate::link;
-use crate::model::{GenerateDraft, Idea, IdeaDraftFile, ImageRef, OutputName, Project, Run, Store};
+use crate::model::{DiscardedProject, GenerateDraft, Idea, IdeaDraftFile, ImageRef, OutputName, Project, Run, Store};
 use crate::rsnfmt;
 
 pub const IDEA_FILE: &str = "idea.rsn";
@@ -28,6 +28,9 @@ pub const DISCARDED_IDEAS: &str = "input/discarded";
 /// lists unless asked for.
 pub const EDITED_IDEAS: &str = "input/edited";
 pub const PROJECTS: &str = "projects";
+/// Discarded projects, each with a [`DISCARDED_FILE`]; restorable.
+pub const DISCARDED_PROJECTS: &str = "discarded_projects";
+pub const DISCARDED_FILE: &str = "discarded.rsn";
 pub const COLLECTIONS: &str = "collections";
 
 /// Where an idea lives (the folder is the verdict).
@@ -107,6 +110,13 @@ pub struct ProjectEntry {
     pub draft: Option<GenerateDraft>,
 }
 
+/// A project in `discarded_projects/`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct DiscardedEntry {
+    pub entry: ProjectEntry,
+    pub discarded: DiscardedProject,
+}
+
 impl ProjectEntry {
     /// The project's name: its directory name.
     pub fn name(&self) -> String {
@@ -165,6 +175,9 @@ pub struct Index {
     pub projects: Vec<ProjectEntry>,
     /// Folders of the project tree, relative to `projects/`.
     pub project_folders: Vec<PathBuf>,
+    /// Discarded projects (`discarded_projects/`), newest first; not in
+    /// `projects`, so nothing generates, reviews or shows them elsewhere.
+    pub discarded_projects: Vec<DiscardedEntry>,
     /// Folders of the input library, relative to `input/library/`.
     pub library_folders: Vec<PathBuf>,
     /// Collection folders, relative to `collections/`.
@@ -231,6 +244,7 @@ pub fn scan(root: &Path) -> Result<Index> {
     }
     scan_library(root, Path::new(""), &mut ix)?;
     scan_projects(root, Path::new(""), &mut ix)?;
+    scan_discarded_projects(root, &mut ix)?;
     scan_collections(root, &mut ix)?;
     let idea_draft = root.join(IDEA_DRAFT);
     if idea_draft.is_file() {
@@ -295,6 +309,25 @@ fn scan_projects(root: &Path, folder: &Path, ix: &mut Index) -> Result<()> {
             scan_projects(root, &sub, ix)?;
         }
     }
+    Ok(())
+}
+
+fn scan_discarded_projects(root: &Path, ix: &mut Index) -> Result<()> {
+    for dir in fsutil::subdirs(&root.join(DISCARDED_PROJECTS))? {
+        if !dir.join(PROJECT_FILE).exists() {
+            continue;
+        }
+        // read as a project, then kept apart
+        let mut one = Index::default();
+        read_project(root, &dir, &mut one)?;
+        ix.problems.append(&mut one.problems);
+        let Some(entry) = one.projects.pop() else { continue };
+        let discarded = rsnfmt::read::<DiscardedProject>(&dir.join(DISCARDED_FILE)).unwrap_or_else(|_| {
+            DiscardedProject { name: entry.name(), from: PathBuf::new(), discarded: entry.project.created }
+        });
+        ix.discarded_projects.push(DiscardedEntry { entry, discarded });
+    }
+    ix.discarded_projects.sort_by_key(|d| std::cmp::Reverse(d.discarded.discarded));
     Ok(())
 }
 

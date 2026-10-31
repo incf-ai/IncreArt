@@ -31,6 +31,7 @@ const LAYOUT: &[&str] = &[
     DISCARDED_IDEAS,
     EDITED_IDEAS,
     PROJECTS,
+    DISCARDED_PROJECTS,
     COLLECTIONS,
     "thumbs/input",
     "thumbs/output",
@@ -1320,6 +1321,21 @@ impl Library {
                 fs::remove_file(&abs).at(&abs)?;
                 Ok(vec![])
             }
+            // projects go to Discarded (restorable), then their folders to
+            // the trash
+            (Tree::Projects, _) => {
+                let mut projects = vec![abs.clone()];
+                if kind == Node::Folder {
+                    projects = fsutil::walk(&abs)?.into_iter().filter(|d| d.join(PROJECT_FILE).is_file()).collect();
+                }
+                for p in &projects {
+                    self.discard_project(p)?;
+                }
+                if kind == Node::Folder {
+                    self.dispose(&abs)?;
+                }
+                Ok(vec![])
+            }
             _ => {
                 self.dispose(&abs)?;
                 Ok(vec![])
@@ -1374,6 +1390,61 @@ impl Library {
             fs::create_dir_all(dir.join(sub)).at(dir.join(sub))?;
         }
         rsnfmt::write(&dir.join(PROJECT_FILE), project)
+    }
+
+    /// Moves a project (its directory, absolute) to `discarded_projects/`,
+    /// noting where it was.
+    fn discard_project(&self, dir: &Path) -> Result<PathBuf> {
+        let projects = self.root.join(PROJECTS);
+        let rel =
+            dir.strip_prefix(&projects).map_err(|_| Error::Refused(format!("{} is not a project", dir.display())))?;
+        let name = rel.file_name().unwrap_or_default().to_string_lossy().into_owned();
+        let from = rel.parent().unwrap_or(Path::new("")).to_path_buf();
+        let base = self.root.join(DISCARDED_PROJECTS);
+        fs::create_dir_all(&base).at(&base)?;
+        let to = base.join(free_name_in(&base, &name)?);
+        link::move_with_links(&self.root, dir, &to)?;
+        rsnfmt::write(&to.join(DISCARDED_FILE), &DiscardedProject { name, from, discarded: self.now() })?;
+        Ok(self.rel(&to))
+    }
+
+    /// A discarded project's directory (absolute).
+    fn find_discarded_project(&self, id: &Id) -> Result<PathBuf> {
+        for p in fsutil::subdirs(&self.root.join(DISCARDED_PROJECTS))? {
+            let file = p.join(PROJECT_FILE);
+            if file.is_file() && rsnfmt::read::<Project>(&file).is_ok_and(|pr| &pr.id == id) {
+                return Ok(p);
+            }
+        }
+        Err(Error::NotFound(format!("discarded project {id}")))
+    }
+
+    /// Puts a discarded project back where it was (the top level if that
+    /// folder is gone), under its name (numbered if taken). Returns its path
+    /// relative to `projects/`.
+    pub fn restore_project(&self, id: &Id) -> Result<PathBuf> {
+        let dir = self.find_discarded_project(id)?;
+        let note = rsnfmt::read::<DiscardedProject>(&dir.join(DISCARDED_FILE)).ok();
+        let name = note.as_ref().map(|n| n.name.clone());
+        let name = name.unwrap_or_else(|| dir.file_name().unwrap_or_default().to_string_lossy().into_owned());
+        let from = note.map(|n| n.from).unwrap_or_default();
+        let projects = self.root.join(PROJECTS);
+        let parent = if projects.join(&from).is_dir() { from } else { PathBuf::new() };
+        let name = free_name_in(&projects.join(&parent), &name)?;
+        let to = projects.join(&parent).join(&name);
+        link::move_with_links(&self.root, &dir, &to)?;
+        let note = to.join(DISCARDED_FILE);
+        if note.exists() {
+            fs::remove_file(&note).at(&note)?;
+        }
+        Ok(parent.join(name))
+    }
+
+    /// Deletes a discarded project for good (its folder goes to the trash;
+    /// the store images stay until Clean up).
+    pub fn delete_discarded_project(&self, id: &Id) -> Result<()> {
+        let dir = self.find_discarded_project(id)?;
+        self.dispose(&dir)
     }
 
     /// A project's directory (absolute), wherever it has been moved.
@@ -1896,12 +1967,13 @@ impl Library {
         fs::remove_file(&old).at(&old)
     }
 
-    /// Every link into the stores (review folders, collections, idea
-    /// folders), by the image it refers to.
+    /// Every link into the stores (review folders, discarded projects' too,
+    /// collections, idea folders), by the image it refers to.
     fn links_by_image(&self) -> Result<HashMap<ImageRef, Vec<PathBuf>>> {
         let ix = scan::scan(&self.root)?;
         let mut out: HashMap<ImageRef, Vec<PathBuf>> = HashMap::new();
-        for o in ix.projects.iter().flat_map(|p| &p.outputs) {
+        let discarded = ix.discarded_projects.iter().map(|d| &d.entry);
+        for o in ix.projects.iter().chain(discarded).flat_map(|p| &p.outputs) {
             out.entry(o.image.clone()).or_default().push(o.path.clone());
         }
         for c in &ix.collection_links {
@@ -1933,7 +2005,13 @@ impl Library {
         let ix = self.scan()?;
         let mut marked: HashSet<ImageRef> = HashSet::new();
         let mut todo: Vec<ImageRef> = Vec::new();
-        for (dir, store) in [("input", Store::Input), (PROJECTS, Store::Output), (COLLECTIONS, Store::Output)] {
+        let dirs = [
+            ("input", Store::Input),
+            (PROJECTS, Store::Output),
+            (DISCARDED_PROJECTS, Store::Output),
+            (COLLECTIONS, Store::Output),
+        ];
+        for (dir, store) in dirs {
             for p in fsutil::walk(&self.root.join(dir))? {
                 if p.starts_with(self.root.join(INBOX_DROP)) || p.is_dir() && !fsutil::is_symlink(&p) {
                     continue;
@@ -1955,7 +2033,8 @@ impl Library {
         if let Some(d) = &ix.idea_draft {
             todo.extend(d.images.iter().cloned().map(ImageRef::input));
         }
-        for p in &ix.projects {
+        // discarded projects keep theirs, to be restored
+        for p in ix.projects.iter().chain(ix.discarded_projects.iter().map(|d| &d.entry)) {
             todo.extend(p.project.cover.iter().cloned());
             todo.extend(p.draft.iter().flat_map(|d| d.refs.iter().cloned()));
             for r in &p.runs {

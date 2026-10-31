@@ -240,6 +240,12 @@ pub enum Msg {
     Restore(Id, IdeaLoc),
     SetStar(Id, bool),
     DeleteDiscarded(Id),
+    /// A discarded project back where it was (Projects → Discarded).
+    RestoreProject(Id),
+    /// A discarded project for good (asks first in the GUI).
+    DeleteDiscardedProject(Id),
+    /// Every discarded project for good (asks first in the GUI).
+    EmptyDiscardedProjects,
     // ---- input library
     LibFolder(Option<PathBuf>),
     /// The idea in the Input library's side panel (`None` closes it).
@@ -1072,6 +1078,8 @@ pub enum LibOp {
     MoveIdea(Id, IdeaLoc),
     SetStar(Id, bool),
     DeleteDiscarded(Id),
+    RestoreProject(Id),
+    DeleteDiscardedProject(Id),
     /// Keep the ideas (if still in the inbox) and make one project from them.
     /// The ideas into a new project named so in this folder.
     Promote(Vec<Id>, PathBuf, String),
@@ -2849,6 +2857,12 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
         Msg::Restore(id, loc) => lib(state, LibOp::MoveIdea(id, loc)),
         Msg::SetStar(id, on) => lib(state, LibOp::SetStar(id, on)),
         Msg::DeleteDiscarded(id) => lib(state, LibOp::DeleteDiscarded(id)),
+        Msg::RestoreProject(id) => lib(state, LibOp::RestoreProject(id)),
+        Msg::DeleteDiscardedProject(id) => lib(state, LibOp::DeleteDiscardedProject(id)),
+        Msg::EmptyDiscardedProjects => {
+            let ids: Vec<Id> = state.index.discarded_projects.iter().map(|d| d.entry.project.id.clone()).collect();
+            ids.into_iter().flat_map(|id| lib(state, LibOp::DeleteDiscardedProject(id))).collect()
+        }
 
         // ------------------------------------------------ input library
         Msg::LibFolder(f) => {
@@ -6318,7 +6332,7 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
                 )
             } else {
                 format!(
-                    "Delete {} item(s)? Folders and projects go to the trash with everything in them; image links go to the trash too, the images stay in the store until Clean up.",
+                    "Delete {} item(s)? Projects go to Discarded (restore them from Projects → Discarded); folders and image links go to the trash, the images stay in the store until Clean up.",
                     targets.len()
                 )
             };

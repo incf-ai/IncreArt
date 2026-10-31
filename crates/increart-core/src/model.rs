@@ -729,6 +729,19 @@ pub fn default_strength() -> f32 {
     0.75
 }
 
+/// `discarded.rsn` in a discarded project's folder: where it was, to restore
+/// it there.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename = "Discarded")]
+pub struct DiscardedProject {
+    /// Its name when discarded (its folder here may be numbered).
+    pub name: String,
+    /// The folder it was in, relative to `projects/`.
+    #[serde(default)]
+    pub from: PathBuf,
+    pub discarded: Timestamp,
+}
+
 /// `input/draft.rsn`: the New idea form, autosaved until the idea is added.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename = "IdeaDraft")]

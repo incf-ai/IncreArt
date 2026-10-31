@@ -1621,6 +1621,8 @@ pub fn lib_op(lib: &mut Library, op: LibOp) -> Result<OpOk, String> {
         LibOp::MoveIdea(id, loc) => lib.move_idea(&id, &loc).map(|_| OpOk::Done).map_err(err),
         LibOp::SetStar(id, on) => lib.update_idea(&id, |i| i.starred = on).map(|_| OpOk::Done).map_err(err),
         LibOp::DeleteDiscarded(id) => lib.delete_discarded_idea(&id).map(|_| OpOk::Done).map_err(err),
+        LibOp::RestoreProject(id) => lib.restore_project(&id).map(|_| OpOk::Done).map_err(err),
+        LibOp::DeleteDiscardedProject(id) => lib.delete_discarded_project(&id).map(|_| OpOk::Done).map_err(err),
         LibOp::Promote(ids, folder, name) => promote(lib, &ids, &folder, &name),
         LibOp::CreateFolder(tree, parent) => {
             lib.create_folder(tree, &parent, None).map(|p| OpOk::Created(tree, p)).map_err(err)

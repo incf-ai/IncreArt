@@ -343,12 +343,31 @@ fn whole_library_through_the_api() {
     let report = common::verify(&root);
     assert!(report.trim_end().ends_with("problems: none"), "{report}");
 
-    // ---- delete + clean up
+    // ---- discard (restorable), delete for good + clean up
+    let copy_id = copy.project.id.clone();
     lib.delete_node(Tree::Projects, Path::new("fox")).unwrap();
+    assert!(root.join("discarded_projects/fox/project.rsn").exists());
+    lib.delete_discarded_project(&copy_id).unwrap();
     assert!(tmp.path().join("trash/fox").join("project.rsn").exists());
     assert!(lib.unreferenced().unwrap().is_empty());
+    // a discarded project keeps its images through Clean up, and comes back
+    // where it was, its links working
+    lib.delete_node(Tree::Projects, Path::new("fox 2")).unwrap();
+    let ix = lib.scan().unwrap();
+    assert!(ix.project(&project).is_none());
+    let d = &ix.discarded_projects[0];
+    assert_eq!((d.discarded.name.as_str(), d.discarded.from.as_path()), ("fox 2", Path::new("")));
+    let left = lib.unreferenced().unwrap();
+    assert!(left.is_empty(), "kept for a restore: {left:?}");
+    assert_eq!(lib.restore_project(&project).unwrap(), Path::new("fox 2"));
+    let ix = lib.scan().unwrap();
+    assert!(ix.discarded_projects.is_empty() && !root.join("projects/fox 2/discarded.rsn").exists());
+    for o in &ix.project(&project).unwrap().outputs {
+        resolves(&lib, &o.path, Store::Output);
+    }
     lib.delete_discarded_idea(&junk).unwrap();
     lib.delete_node(Tree::Projects, Path::new("fox 2")).unwrap();
+    lib.delete_discarded_project(&project).unwrap();
     let mut gone = lib.unreferenced().unwrap();
     gone.sort();
     let mut expect = vec![

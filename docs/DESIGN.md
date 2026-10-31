@@ -1408,11 +1408,12 @@ WebP is chosen or WebP files exist, so an older IncreArt, which can't read
 them, refuses to open it instead of seeing missing images. Converting back
 to PNG returns it to format 1.
 
-**Clean up.** Deleting a project or a discarded idea only removes links, so
-store images can become unreferenced. A **Clean up library** command (never
-automatic) marks every image still referenced (links, `idea.rsn` images,
-`run.rsn` refs, recipes' `refs` / `init` / `parent`, `FromOutput` sources)
-and moves the rest to the system trash. An input image used as a ref by any
+**Clean up.** Deleting a discarded project or idea for good only removes
+links, so store images can become unreferenced. A **Clean up library**
+command (never automatic) marks every image still referenced (links, those
+of discarded projects too, `idea.rsn` images, `run.rsn` refs (discarded
+projects' too, so a restore finds them), recipes' `refs` / `init` /
+`parent`, `FromOutput` sources) and moves the rest to the system trash. An input image used as a ref by any
 kept output therefore survives even after its idea is gone.
 
 ## Scheduling (same as Yue2, plus model switching)
@@ -2523,10 +2524,13 @@ real directories under `projects/`, so it looks the same in a file manager.
     templates — but **not** its images; copying a folder copies its subtree
     the same way. A pasted name that clashes gets a number suffix. Pasting a
     folder into itself or a descendant is refused.
-  - **Delete…**: confirmation showing the folders, projects and images
-    inside and how many pending seeds will be cancelled, then the whole
-    directory goes to the system trash. That only removes links; the images
-    stay in `output_images/` until **Clean up library**.
+  - **Discard…** (a project) / **Delete…** (a folder): confirmation
+    showing the folders, projects and images inside and how many pending
+    seeds won't be generated. Each project moves to `discarded_projects/`
+    (numbered if the name is taken there) with a `discarded.rsn` noting its
+    name, the folder it was in and when; it leaves the tree, the queue,
+    Review and the Output library, and shows under **Projects → Discarded**.
+    A folder itself goes to the system trash once its projects are out.
   - **Drag and drop** moves, like cut + paste: drop on a folder to move into
     it, on a project to move beside it, or on "All projects" / the empty
     area for the top level. The target is outlined blue, or red when the drop
@@ -2581,7 +2585,7 @@ drop and shortcuts (see Project folders). The differences:
 ## GUI
 
 Top-level tabs, in pipeline order after **Home**: **Idea inbox** · **Input library** ·
-**Projects** (Grid · Folder · Generate · Jobs; shows the project count, and
+**Projects** (Grid · Folder · Generate · Jobs · Discarded; shows the project count, and
 ✦ while generating) ·
 **Review** (the output queue) · **Output library**. Review is top-level, like
 the Idea inbox, because it is the busiest screen during batches and works
@@ -2852,6 +2856,15 @@ the keys and mouse buttons go through that view's own history instead.
 - **Messages** (status bar, after the library path): the latest one, with
   "(+N more)" when there are others and ✕ to dismiss it. Clicking it opens
   a popover with every message, newest first, each with ✕, and **Clear all**.
+- **Discarded** (Projects' last tab, with its count): discarded projects,
+  newest first, as tiles (cover, name, rating counts, "from projects/…",
+  when). Hovered, a tile shows **Restore** and **Delete** on its cover;
+  right-click: Restore, Open in file manager, Delete permanently…
+  **Restore** puts the project back in the folder it was in (the top level
+  if that folder is gone), under its name (numbered if taken); its pending
+  seeds generate again. **Delete permanently** (asks first) sends its folder
+  to the system trash; the images stay until Clean up. **Empty
+  discarded…** (asks first) does it for all of them.
 - **Jobs**: per-run progress and per-server state (loading / draining /
   generating), with a live preview frame from `jobs/{id}`. Under **Runs**,
   the order toggle and **Finish & stop all** / **Stop all now** stay put

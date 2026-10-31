@@ -79,6 +79,7 @@ pub fn view(ui: &mut egui::Ui, st: &AppState, tex: &mut Textures, out: &mut Vec<
                 (ProjectsTab::Folder, ic(ph::FOLDER, "Folder")),
                 (ProjectsTab::Generate, ic(ph::MAGIC_WAND, "Generate")),
                 (ProjectsTab::Jobs, ic(ph::QUEUE, &format!("Jobs ({})", st.active_runs.len()))),
+                (ProjectsTab::Discarded, ic(ph::TRASH, &format!("Discarded ({})", st.index.discarded_projects.len()))),
             ] {
                 if ui.selectable_label(st.projects_tab == t, label).clicked() {
                     out.push(Msg::ProjectsTab(t));
@@ -101,6 +102,93 @@ pub fn view(ui: &mut egui::Ui, st: &AppState, tex: &mut Textures, out: &mut Vec<
         ProjectsTab::Folder => crate::folderview::view(ui, st, tex, out),
         ProjectsTab::Generate => generate(ui, st, tex, out),
         ProjectsTab::Jobs => jobs(ui, st, out),
+        ProjectsTab::Discarded => discarded(ui, st, tex, out),
+    });
+}
+
+/// Projects → Discarded: discarded projects, newest first, each with where
+/// it was; Restore, Delete permanently, and Empty discarded.
+fn discarded(ui: &mut egui::Ui, st: &AppState, tex: &mut Textures, out: &mut Vec<Msg>) {
+    let Some(root) = st.library.clone() else { return };
+    let ds = &st.index.discarded_projects;
+    if ds.is_empty() {
+        ui.weak("No discarded projects. A project's Discard… (right-click it) puts it here, to restore later.");
+        return;
+    }
+    ui.horizontal(|ui| {
+        ui.weak("Restore puts a project back in its folder (the top level if that's gone); its pending seeds generate again.");
+        crate::widgets::right_group(ui, "empty_discarded", |ui| {
+            if ui.button(ic(ph::TRASH, "Empty discarded…")).clicked() {
+                let images: usize = ds.iter().map(|d| d.entry.outputs.len()).sum();
+                let text = format!(
+                    "Delete the {} discarded project(s) permanently? Their folders go to the trash with {images} image link(s); the images stay in the store until Clean up.",
+                    ds.len()
+                );
+                out.push(Msg::Ask(Confirm::new(text, "Delete", Msg::EmptyDiscardedProjects)));
+            }
+        });
+    });
+    ScrollArea::vertical().auto_shrink([false, true]).show(ui, |ui| {
+        ui.horizontal_wrapped(|ui| {
+            for d in ds {
+                let p = &d.entry;
+                let id = &p.project.id;
+                let [g, n, b, u] = counts(p);
+                let cov = cover(p).and_then(|c| tex.thumb(&root, &c));
+                let from = Path::new("projects").join(&d.discarded.from);
+                let r = card(ui, false, 200.0, 290.0, |ui| {
+                    let r = thumb(ui, cov.as_ref(), 200.0, false, None);
+                    if cov.is_none() {
+                        scattered_inputs(ui, r.rect, id, &root, tex, p);
+                    }
+                    ui.label(RichText::new(short(&d.discarded.name, 26)).strong());
+                    ui.horizontal(|ui| {
+                        ui.colored_label(GOOD, g.to_string());
+                        ui.colored_label(NEUTRAL, n.to_string());
+                        ui.colored_label(BAD, b.to_string());
+                        ui.colored_label(ACCENT, format!("{u} new"));
+                    });
+                    ui.weak(format!("from {}", from.display()));
+                    ui.weak(format!("discarded {}", crate::widgets::when(d.discarded.discarded)));
+                });
+                let restore = || Msg::RestoreProject(id.clone());
+                let delete = || {
+                    let text = format!(
+                        "Delete project {} permanently? Its folder goes to the trash with {} image link(s); the images stay in the store until Clean up.",
+                        d.discarded.name,
+                        p.outputs.len()
+                    );
+                    Msg::Ask(Confirm::new(text, "Delete", Msg::DeleteDiscardedProject(id.clone())))
+                };
+                if ui.rect_contains_pointer(r.rect) {
+                    let cover = egui::Rect::from_min_size(r.rect.min + egui::vec2(7.0, 7.0), egui::vec2(200.0, 200.0));
+                    let buttons = [
+                        (ph::ARROW_COUNTER_CLOCKWISE, "Restore", "back to its folder"),
+                        (ph::TRASH, "Delete", "permanently (asks first)"),
+                    ];
+                    match crate::widgets::cover_buttons(ui, cover, &buttons) {
+                        Some(0) => out.push(restore()),
+                        Some(_) => out.push(delete()),
+                        None => {}
+                    }
+                }
+                r.context_menu(|ui| {
+                    if ui.button(ic(ph::ARROW_COUNTER_CLOCKWISE, "Restore")).clicked() {
+                        out.push(restore());
+                        ui.close();
+                    }
+                    if ui.button(ic(ph::FOLDER_OPEN, "Open in file manager")).clicked() {
+                        out.push(Msg::ShowInFileManager(p.dir.clone()));
+                        ui.close();
+                    }
+                    ui.separator();
+                    if ui.button(ic(ph::TRASH, "Delete permanently…")).clicked() {
+                        out.push(delete());
+                        ui.close();
+                    }
+                });
+            }
+        });
     });
 }
 
@@ -115,7 +203,7 @@ fn key_hints(ui: &mut egui::Ui, tab: ProjectsTab) {
         ("Ctrl+A", "select all"),
         ("Ctrl+C X V", "copy / cut / paste"),
         ("F2", "rename"),
-        ("Delete", "to the trash"),
+        ("Delete", "discard (projects) / trash"),
         ("Ctrl+H", "show .rsn files"),
         ("Ctrl+L", "type a path"),
         ("Esc", "clear the selection"),
@@ -332,13 +420,13 @@ fn project_menu(ui: &mut egui::Ui, st: &AppState, p: &increart_core::scan::Proje
         out.push(Msg::ShowInFileManager(p.dir.clone()));
         ui.close();
     }
-    if ui.button(ic(ph::TRASH, "Delete… (to the trash)")).clicked() {
+    if ui.button(ic(ph::TRASH, "Discard…")).clicked() {
         let text = format!(
-            "Delete project {}? {}. It goes to the trash; the images stay in the store until Clean up.",
+            "Discard project {}? {}. Restore it from Projects → Discarded.",
             p.name(),
             st.delete_summary(Tree::Projects, &rel)
         );
-        out.push(Msg::Ask(Confirm::new(text, "Delete", Msg::DeleteNode(Tree::Projects, rel))));
+        out.push(Msg::Ask(Confirm::new(text, "Discard", Msg::DeleteNode(Tree::Projects, rel))));
         ui.close();
     }
 }

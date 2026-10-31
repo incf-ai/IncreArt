@@ -510,6 +510,58 @@ fn trees_create_rename_move_delete() {
 }
 
 #[test]
+fn discarded_projects_restore_and_delete_for_good() {
+    use increart_core::Tree;
+    let mut h = Harness::new();
+    h.send(Msg::NewFolder(Tree::Projects, PathBuf::new()));
+    h.settle();
+    h.send(Msg::EditRename("clients".into()));
+    h.send(Msg::CommitRename);
+    h.settle();
+    // "new project" and "new project 2"
+    for _ in 0..2 {
+        h.send(Msg::NewProject("clients".into()));
+        h.send(Msg::CommitRename);
+        h.settle();
+        h.send(Msg::CancelRename);
+    }
+    let names = |h: &Harness| h.state.index.projects.iter().map(|p| p.name()).collect::<Vec<_>>();
+    assert_eq!(names(&h).len(), 2);
+    let id = |h: &Harness, n: &str| {
+        let d = h.state.index.discarded_projects.iter().find(|d| d.discarded.name == n).unwrap();
+        d.entry.project.id.clone()
+    };
+
+    // one project: to Discarded, from its folder
+    h.send(Msg::DeleteNode(Tree::Projects, "clients/new project".into()));
+    h.settle();
+    assert_eq!(names(&h), ["new project 2"]);
+    let d = &h.state.index.discarded_projects[0];
+    assert_eq!((d.discarded.name.as_str(), d.discarded.from.as_path()), ("new project", Path::new("clients")));
+    h.send(Msg::RestoreProject(id(&h, "new project")));
+    h.settle();
+    assert!(h.state.index.discarded_projects.is_empty());
+    assert!(h.state.index.projects.iter().any(|p| p.dir == Path::new("projects/clients/new project")));
+
+    // a folder: its projects to Discarded, the folder to the trash; restored
+    // with the folder gone, to the top level
+    h.send(Msg::DeleteNode(Tree::Projects, "clients".into()));
+    h.settle();
+    assert!(h.state.index.projects.is_empty() && h.state.index.project_folders.is_empty());
+    assert_eq!(h.state.index.discarded_projects.len(), 2);
+    h.send(Msg::RestoreProject(id(&h, "new project 2")));
+    h.settle();
+    assert_eq!(h.state.index.projects[0].dir, Path::new("projects/new project 2"));
+
+    // for good
+    h.send(Msg::EmptyDiscardedProjects);
+    h.settle();
+    assert!(h.state.index.discarded_projects.is_empty());
+    assert_eq!(names(&h), ["new project 2"]);
+    assert!(h.errors().is_empty(), "{:?}", h.errors());
+}
+
+#[test]
 fn library_settings_convert_the_stores() {
     use increart_core::model::StoreFormat;
     use increart_gui_core::state::SettingsTab;

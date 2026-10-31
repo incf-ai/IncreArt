@@ -758,6 +758,8 @@ pub enum ProjectsTab {
     Folder,
     Generate,
     Jobs,
+    /// Discarded projects: restore or delete for good.
+    Discarded,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -4495,9 +4497,12 @@ impl AppState {
                     .map(|r| r.live_seeds().count() as u64)
                     .sum::<u64>()
                     .saturating_sub(images as u64);
-                let mut s = format!("{folders} folder(s), {} project(s), {images} image link(s)", ps.len());
+                let mut s = format!(
+                    "{folders} folder(s); {} project(s) with {images} image link(s) will be discarded (restorable)",
+                    ps.len()
+                );
                 if pending > 0 {
-                    s.push_str(&format!("; {pending} pending seed(s) will not be generated"));
+                    s.push_str(&format!("; {pending} pending seed(s) won't be generated unless restored"));
                 }
                 s
             }
