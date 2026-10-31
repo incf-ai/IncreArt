@@ -68,13 +68,14 @@ pub struct Tier {
     tiled_vae: u32,
 }
 
-fn parse(gb: u32, file_name: &'static str, text: &'static str) -> Tier {
-    let v: Value = serde_json::from_str(text).expect("shipped template is JSON");
+/// `None` if the template isn't JSON or the tier wasn't measured (neither
+/// happens: `the_templates_as_tiers` reads every one).
+fn parse(gb: u32, file_name: &'static str, text: &'static str) -> Option<Tier> {
+    let v: Value = serde_json::from_str(text).ok()?;
     let s = |k: &str| v[k].as_str().unwrap_or_default().to_string();
     let n = |k: &str| v[k].as_i64().unwrap_or(0);
-    let (_, per_image_s, peak_vram_gib, pinned_ram_gib) =
-        *MEASURED.iter().find(|m| m.0 == gb).expect("measured every tier");
-    Tier {
+    let (_, per_image_s, peak_vram_gib, pinned_ram_gib) = *MEASURED.iter().find(|m| m.0 == gb)?;
+    Some(Tier {
         gb,
         file_name,
         text,
@@ -94,12 +95,12 @@ fn parse(gb: u32, file_name: &'static str, text: &'static str) -> Tier {
         offload: v["sdoffloadcpu"].as_bool().unwrap_or(false),
         flash_attention: v["sdflashattention"].as_bool().unwrap_or(false),
         tiled_vae: n("sdtiledvae").max(0) as u32,
-    }
+    })
 }
 
 /// Every tier, smallest card first.
 pub fn tiers() -> Vec<Tier> {
-    TEMPLATES.iter().map(|(gb, f, t)| parse(*gb, f, t)).collect()
+    TEMPLATES.iter().filter_map(|(gb, f, t)| parse(*gb, f, t)).collect()
 }
 
 /// The biggest tier a card with `vram_gib` takes (cards report a little
@@ -531,7 +532,9 @@ pub fn plan(
         cards.push((g.clone(), t));
     }
     // the image model must be the same everywhere: the smallest tier's
-    let quant_tier = cards.iter().map(|(_, t)| t).min_by_key(|t| t.gb).unwrap().clone();
+    let Some(quant_tier) = cards.iter().map(|(_, t)| t).min_by_key(|t| t.gb).cloned() else {
+        return Err("no GPU to plan for".into());
+    };
     // the chat model's settings: the tier of the card it shares
     let first = &cards.iter().find(|(g, _)| pe_with.contains(&g.number)).unwrap_or(&cards[0]).1.clone();
     let local = |url: &str| format!("{MODEL_SUBDIR}/{}", file_of(url));
@@ -707,7 +710,7 @@ fn why(g: &Gpu, t: &Tier, auto: Option<&Tier>, chosen: bool, with_chat: bool) ->
 /// The chat model and its projector the wizard downloads, if they're in
 /// one of `model_dirs` (under `koboldcpp/`).
 pub fn chat_files(model_dirs: &[String]) -> Option<(String, String)> {
-    let t = tiers().remove(0);
+    let t = tiers().into_iter().next()?;
     model_dirs.iter().find_map(|d| {
         let at = |url: &str| Path::new(d).join(MODEL_SUBDIR).join(file_of(url));
         let (model, mmproj) = (at(&t.chat_url), at(&t.mmproj_url));
@@ -849,8 +852,8 @@ pub fn download(
         done += n as u64;
         progress(done, total);
     }
-    if total.is_some_and(|t| t != done) {
-        return Err(format!("{url}: got {done} of {} bytes", total.unwrap()));
+    if let Some(t) = total.filter(|t| *t != done) {
+        return Err(format!("{url}: got {done} of {t} bytes"));
     }
     out.sync_all().map_err(|e| e.to_string())?;
     std::fs::rename(&part, dest).map_err(|e| format!("{}: {e}", dest.display()))

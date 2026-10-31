@@ -51,7 +51,8 @@ fn avif(img: &RgbaImage, quality: u8, out: &mut Vec<u8>) -> Result<(), String> {
 
 #[cfg(not(feature = "avif"))]
 fn avif(_: &RgbaImage, _: u8, _: &mut Vec<u8>) -> Result<(), String> {
-    unreachable!("TileFormat::usable() has no AVIF without the avif feature")
+    // (TileFormat::usable() offers no AVIF without the avif feature)
+    Err("this build can't write AVIF".into())
 }
 
 #[cfg(test)]

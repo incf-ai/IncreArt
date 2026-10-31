@@ -12,7 +12,7 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
-use crate::error::{IoContext, Result};
+use crate::error::{Error, IoContext, Result};
 use crate::fsutil;
 use crate::id::{Id, Timestamp};
 use crate::model::GenerateDraft;
@@ -115,7 +115,11 @@ pub fn trim(entries: &mut Vec<HistoryEntry>) {
 }
 
 fn write_all(path: &Path, entries: &[HistoryEntry]) -> Result<()> {
-    let text: String = entries.iter().map(|e| serde_json::to_string(e).expect("serializable") + "\n").collect();
+    let mut text = String::new();
+    for e in entries {
+        text += &serde_json::to_string(e).map_err(|e| Error::encode(path.display(), e))?;
+        text.push('\n');
+    }
     fsutil::write_atomic(path, text.as_bytes())
 }
 
@@ -151,7 +155,8 @@ pub fn record(path: &Path, entry: &HistoryEntry, replace_last: bool) -> Result<(
         fs::create_dir_all(dir).at(dir)?;
     }
     let mut f = OpenOptions::new().create(true).append(true).open(path).at(path)?;
-    writeln!(f, "{}", serde_json::to_string(entry).expect("serializable")).at(path)?;
+    let line = serde_json::to_string(entry).map_err(|e| Error::encode(path.display(), e))?;
+    writeln!(f, "{line}").at(path)?;
     drop(f);
     if fs::read_to_string(path).map(|s| s.lines().count()).unwrap_or(0) >= COMPACT_AT {
         let mut all = read(path);

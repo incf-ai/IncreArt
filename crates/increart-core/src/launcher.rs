@@ -286,7 +286,9 @@ fn wait_up(
         if client.capabilities().is_ok() {
             return Ok(proc);
         }
-        if let Some(status) = proc.child.as_mut().unwrap().try_wait()? {
+        if let Some(child) = proc.child.as_mut()
+            && let Some(status) = child.try_wait()?
+        {
             proc.child = None;
             return Err(LaunchError::Exited { name, status: status.to_string(), tail: tail(&log, start), log });
         }

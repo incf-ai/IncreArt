@@ -1453,7 +1453,8 @@ fn work_on(ctx: &Ctx, fx: Effect) -> Vec<Msg> {
         | Effect::UnpackArchive { .. }
         | Effect::CancelArchive
         | Effect::CheckUsage => {
-            unreachable!("handled on their own threads")
+            // (handled on their own threads, never sent here)
+            vec![Msg::Problem(format!("internal: {fx:?} reached the library worker"))]
         }
     }
 }

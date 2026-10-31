@@ -31,6 +31,10 @@ pub enum Error {
     /// or the folder it should be under.
     #[error("{}: {what}", path.display())]
     Path { path: PathBuf, what: &'static str },
+    /// Something that couldn't be written out: pixels as PNG or WebP, or a
+    /// value as RSN or JSON.
+    #[error("{what}: couldn't encode: {msg}")]
+    Encode { what: String, msg: String },
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
@@ -53,6 +57,10 @@ impl Error {
 
     pub fn image(path: impl AsRef<Path>, source: image::ImageError) -> Self {
         Error::Image { path: path.as_ref().to_path_buf(), source }
+    }
+
+    pub fn encode(what: impl ToString, msg: impl ToString) -> Self {
+        Error::Encode { what: what.to_string(), msg: msg.to_string() }
     }
 }
 

@@ -89,7 +89,8 @@ fn plan(root: &Path) -> Result<Vec<(String, Item, u64)>> {
         if parts.len() == 1 && first == "library.rsn" {
             let mut m: LibraryMeta = rsnfmt::read(&p)?;
             m.link_mode = None;
-            records.push((name, Item::Meta(rsnfmt::to_string(&m).into_bytes()), meta.len()));
+            let text = rsnfmt::to_string(&m).map_err(|e| Error::encode(&name, e))?;
+            records.push((name, Item::Meta(text.into_bytes()), meta.len()));
             continue;
         }
         let is_image = StoreFormat::of_name(&parts[parts.len() - 1]).is_some();

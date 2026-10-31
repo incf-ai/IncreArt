@@ -623,7 +623,9 @@ pub fn open(server: &PeServer, log_dir: &Path, wait: Duration, cancel: &AtomicBo
         if client.ready() {
             return Ok(proc);
         }
-        if let Ok(Some(status)) = proc.child.as_mut().unwrap().try_wait() {
+        if let Some(child) = proc.child.as_mut()
+            && let Ok(Some(status)) = child.try_wait()
+        {
             proc.child = None;
             return Err(format!("{}: KoboldCpp exited ({status}) while starting; log {}", server.name, log.display()));
         }

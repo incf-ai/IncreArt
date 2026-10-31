@@ -11,10 +11,11 @@ use serde::{Serialize, Serializer};
 use crate::error::{Error, IoContext, Result};
 use crate::fsutil;
 
-pub fn to_string<T: Serialize>(value: &T) -> String {
+/// `value` as RSN (an error only from a type's own `Serialize`).
+pub fn to_string<T: Serialize>(value: &T) -> Result<String, String> {
     let mut config = rsn::ser::Config::new();
     config.writer = rsn::writer::Config::Pretty { indentation: "    ".into(), newline: "\n".into() };
-    config.serialize(value).expect("serializing to a String can't fail")
+    config.serialize(value).map_err(|e| e.to_string())
 }
 
 pub fn from_str<T: DeserializeOwned>(text: &str) -> Result<T, rsn::de::Error> {
@@ -34,7 +35,8 @@ fn lf(text: &str) -> Cow<'_, str> {
 
 /// Writes `value` atomically (temporary file + rename).
 pub fn write<T: Serialize>(path: &Path, value: &T) -> Result<()> {
-    fsutil::write_atomic(path, format!("{}\n", to_string(value)).as_bytes())
+    let text = to_string(value).map_err(|e| Error::encode(path.display(), e))?;
+    fsutil::write_atomic(path, format!("{text}\n").as_bytes())
 }
 
 /// `line:col: error` for an RSN parse error.

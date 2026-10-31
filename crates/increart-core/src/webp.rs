@@ -39,7 +39,7 @@ pub fn encode(px: &Pixels, chunks: &[Chunk]) -> Option<Vec<u8>> {
     } else {
         webp::Encoder::from_rgb(&px.data, px.width, px.height)
     };
-    let mut cfg = webp::WebPConfig::new().expect("libwebp config");
+    let mut cfg = webp::WebPConfig::new().ok()?;
     cfg.lossless = 1;
     // method 4 at quality 75: about 2 % larger than the slowest setting,
     // 30 times faster (~0.2 s for a 1152×512 image)

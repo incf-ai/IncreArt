@@ -578,10 +578,10 @@ impl Scheduler {
             .filter(|(_, r)| r.model == model && !r.pending.is_empty())
             .min_by_key(|(i, r)| self.due(*i, r))
             .map(|(i, _)| i)?;
+        let r = &mut self.runs[pos];
+        let (rev, seed) = r.pending.pop_front()?;
         let ticket = self.next_ticket;
         self.next_ticket += 1;
-        let r = &mut self.runs[pos];
-        let (rev, seed) = r.pending.pop_front().unwrap();
         r.dispatched += 1;
         r.last = Some(ticket);
         r.in_flight += 1;

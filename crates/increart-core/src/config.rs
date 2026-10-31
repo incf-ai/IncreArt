@@ -1198,7 +1198,7 @@ mod tests {
         let mut c: Config = rsnfmt::from_str("Config { projects_by_name: true, folders_by_newest: true }").unwrap();
         c.normalize();
         assert_eq!((c.project_order, c.folder_order.0), (TreeOrder::Name, TreeOrder::Created));
-        let text = rsnfmt::to_string(&c);
+        let text = rsnfmt::to_string(&c).unwrap();
         assert!(!text.contains("_by_"), "{text}");
         assert_eq!(rsnfmt::from_str::<Config>(&text).unwrap(), c);
         assert_eq!(Config::default().folder_order.0, TreeOrder::Name, "folders A–Z by default");
@@ -1214,7 +1214,7 @@ mod tests {
         let mut c: Config = rsnfmt::from_str("Config { review_oldest_first: true }").unwrap();
         c.normalize();
         assert_eq!(c.review_order, ReviewOrder::OldestToReview);
-        assert!(!rsnfmt::to_string(&c).contains("oldest"));
+        assert!(!rsnfmt::to_string(&c).unwrap().contains("oldest"));
     }
 
     #[test]
@@ -1248,7 +1248,7 @@ mod tests {
         assert_eq!(c.pe.system_prompt(crate::pe::REWRITE), "mine", "the used one's prompts are everyone's");
         assert_eq!(c.chat_servers().len(), 2, "one per process");
         // written the new way, and read back the same
-        let out = rsnfmt::to_string(&c);
+        let out = rsnfmt::to_string(&c).unwrap();
         assert!(out.contains("Chat(") && !out.contains("servers: []") && !out.contains("server:"), "{out}");
         assert_eq!(rsnfmt::from_str::<Config>(&out).unwrap(), c);
         assert!(c.clone().normalize().is_empty(), "moved once");
@@ -1343,7 +1343,7 @@ mod tests {
             },
             ..Default::default()
         };
-        let back: Config = rsnfmt::from_str(&rsnfmt::to_string(&c)).unwrap();
+        let back: Config = rsnfmt::from_str(&rsnfmt::to_string(&c).unwrap()).unwrap();
         assert_eq!(back.tile, c.tile);
     }
 
@@ -1352,7 +1352,7 @@ mod tests {
         let mut c: Config = rsnfmt::from_str(r#"Config { recent_libraries: ["/b", "/a"], library: "/a" }"#).unwrap();
         c.normalize();
         assert_eq!(c.recent_libraries, ["/a", "/b"], "the old last library goes first, once");
-        assert!(!rsnfmt::to_string(&c).contains("library:"), "the old field is not written back");
+        assert!(!rsnfmt::to_string(&c).unwrap().contains("library:"), "the old field is not written back");
         for i in 0..MAX_RECENT_LIBRARIES + 2 {
             c.add_recent_library(format!("/{i}"));
         }
@@ -1379,7 +1379,7 @@ mod tests {
         c.forget_recent_library(i);
         c.offer_example_library("/v3/Example library".into());
         assert!(!c.recent_libraries.iter().any(|r| r.contains("Example")), "removed: not offered again");
-        let back: Config = rsnfmt::from_str(&rsnfmt::to_string(&c)).unwrap();
+        let back: Config = rsnfmt::from_str(&rsnfmt::to_string(&c).unwrap()).unwrap();
         assert!(back.example_library_removed);
     }
 
@@ -1404,7 +1404,7 @@ mod tests {
         );
         assert!(p.servers[0].is_started() && !p.servers[1].is_started());
         assert_eq!(p.chat_server().unwrap().base_url(), "http://127.0.0.1:5001", "its chat server too");
-        let back: Config = rsnfmt::from_str(&rsnfmt::to_string(&c)).unwrap();
+        let back: Config = rsnfmt::from_str(&rsnfmt::to_string(&c).unwrap()).unwrap();
         assert_eq!(back.server_presets, c.server_presets);
     }
 
@@ -1478,7 +1478,7 @@ mod tests {
         assert_eq!(both.servers[1].device(), "ROCm1");
         assert_eq!(c.preset("Remote").unwrap().servers[0].base_url(), "http://10.0.0.2:1234");
         assert_eq!(c.sdserver.args, ["--fa", "--conditioning-cache-size", "32"], "defaults for missing fields");
-        let again: Config = rsnfmt::from_str(&rsnfmt::to_string(&c)).unwrap();
+        let again: Config = rsnfmt::from_str(&rsnfmt::to_string(&c).unwrap()).unwrap();
         assert_eq!(again, c);
     }
 
@@ -1533,7 +1533,7 @@ mod tests {
     fn a_presets_loras_saved_and_read() {
         let mut c = Config { recipes: builtin_recipes(), ..Default::default() };
         c.recipes[0].loras = vec![PresetLora { file: "loras/style.safetensors".into(), weight: 0.8 }];
-        let text = rsnfmt::to_string(&c);
+        let text = rsnfmt::to_string(&c).unwrap();
         assert!(text.contains("Lora"), "{text}");
         assert_eq!(rsnfmt::from_str::<Config>(&text).unwrap().recipes, c.recipes);
         // the weight defaults to 1

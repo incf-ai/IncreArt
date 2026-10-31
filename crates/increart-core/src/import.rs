@@ -176,7 +176,7 @@ fn format_name(f: ImageFormat) -> String {
 }
 
 /// Encodes canonical pixels as PNG and adds `chunks` before `IDAT`.
-pub fn encode_png(pixels: &Pixels, chunks: &[Chunk]) -> Vec<u8> {
+pub fn encode_png(pixels: &Pixels, chunks: &[Chunk]) -> Result<Vec<u8>, String> {
     let mut out = Vec::new();
     let enc = image::codecs::png::PngEncoder::new_with_quality(
         &mut out,
@@ -185,13 +185,13 @@ pub fn encode_png(pixels: &Pixels, chunks: &[Chunk]) -> Vec<u8> {
     );
     let color = if pixels.has_alpha() { image::ExtendedColorType::Rgba8 } else { image::ExtendedColorType::Rgb8 };
     image::ImageEncoder::write_image(enc, &pixels.data, pixels.width, pixels.height, color)
-        .expect("encoding canonical pixels to memory can't fail");
-    png::set_chunks(&out, chunks).expect("freshly encoded PNG is well formed")
+        .map_err(|e| e.to_string())?;
+    png::set_chunks(&out, chunks)
 }
 
 /// Canonical pixels as PNG, quickly and without chunks (for servers, which
 /// don't read WebP).
-pub fn encode_png_fast(pixels: &Pixels) -> Vec<u8> {
+pub fn encode_png_fast(pixels: &Pixels) -> Result<Vec<u8>, String> {
     let mut out = Vec::new();
     let enc = image::codecs::png::PngEncoder::new_with_quality(
         &mut out,
@@ -200,8 +200,8 @@ pub fn encode_png_fast(pixels: &Pixels) -> Vec<u8> {
     );
     let color = if pixels.has_alpha() { image::ExtendedColorType::Rgba8 } else { image::ExtendedColorType::Rgb8 };
     image::ImageEncoder::write_image(enc, &pixels.data, pixels.width, pixels.height, color)
-        .expect("encoding canonical pixels to memory can't fail");
-    out
+        .map_err(|e| e.to_string())?;
+    Ok(out)
 }
 
 /// Decodes a store file (PNG or WebP) or server output to canonical pixels.

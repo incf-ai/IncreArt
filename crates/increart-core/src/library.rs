@@ -392,7 +392,8 @@ impl Library {
             if recipe.inputs.is_empty() && recipe.image_refs().next().is_some() {
                 recipe.inputs = self.input_images(&recipe);
                 if !recipe.inputs.is_empty() {
-                    chunks.push(Chunk::itxt(png::KEY_RECIPE, &rsnfmt::to_string(&recipe)));
+                    let text = rsnfmt::to_string(&recipe).map_err(|e| Error::encode(path.display(), e))?;
+                    chunks.push(Chunk::itxt(png::KEY_RECIPE, &text));
                 }
             }
         }
@@ -518,14 +519,14 @@ impl Library {
     /// Writes a new store file with an exclusive create, moving on to the next
     /// number if the ID is taken (in either format). `make` builds the bytes
     /// for the given ID and says their format.
-    fn write_store(&mut self, store: Store, make: impl Fn(&Id) -> (StoreFormat, Vec<u8>)) -> Result<Id> {
+    fn write_store(&mut self, store: Store, make: impl Fn(&Id) -> Result<(StoreFormat, Vec<u8>)>) -> Result<Id> {
         loop {
             let id = self.ids.allocate(store_kind(store), self.now());
             let r = ImageRef { id: id.clone(), store };
             if StoreFormat::ALL.iter().any(|f| fsutil::exists(&self.root.join(r.rel_path_as(*f)))) {
                 continue;
             }
-            let (format, bytes) = make(&id);
+            let (format, bytes) = make(&id)?;
             let path = self.root.join(r.rel_path_as(format));
             match OpenOptions::new().write(true).create_new(true).open(&path) {
                 Ok(mut f) => {
@@ -700,7 +701,7 @@ impl Library {
         }
         let mut source = prepared.source;
         source.imported = Some(self.now());
-        let json = serde_json::to_string_pretty(&source).expect("serializable");
+        let json = serde_json::to_string_pretty(&source).map_err(|e| Error::encode(&label, e))?;
         let hash = prepared.pixel_hash.clone();
         let format = self.meta.store_format;
         let id = self.write_store(Store::Input, |id| {
@@ -714,7 +715,7 @@ impl Library {
             if let Some(exif) = &prepared.exif {
                 chunks.push(Chunk::exif(exif.clone()));
             }
-            container::encode(format, &prepared.pixels, &chunks)
+            container::encode(format, &prepared.pixels, &chunks).map_err(|e| Error::encode(&label, e))
         })?;
         self.pixels.input.insert(prepared.pixel_hash, id.clone());
         if prepared.pixels.is_transparent() {
@@ -1577,7 +1578,7 @@ impl Library {
         if recipe.inputs.is_empty() {
             recipe.inputs = self.input_images(&recipe);
         }
-        let recipe_text = rsnfmt::to_string(&recipe);
+        let recipe_text = rsnfmt::to_string(&recipe).map_err(|e| Error::encode(&label, e))?;
         // Fail on a malformed file before taking an ID.
         let server_meta = container::metadata(png_bytes).map_err(|e| Error::format(&label, e))?;
         let format = self.meta.store_format;
@@ -1592,7 +1593,7 @@ impl Library {
             if format == StoreFormat::Png && container::format_of(png_bytes) == Some(StoreFormat::Png) {
                 // the server's PNG as it is, chunks added (parsed above)
                 if let Ok(bytes) = png::set_chunks(png_bytes, &chunks) {
-                    return (StoreFormat::Png, bytes);
+                    return Ok((StoreFormat::Png, bytes));
                 }
             }
             // its chunks (`parameters`) and ours on the same pixels
@@ -1600,7 +1601,7 @@ impl Library {
             let mut all: Vec<Chunk> =
                 server_meta.iter().filter(|c| !c.as_text().is_some_and(|(k, _)| keys.contains(&k))).cloned().collect();
             all.extend(chunks);
-            container::encode(format, &pixels, &all)
+            container::encode(format, &pixels, &all).map_err(|e| Error::encode(&label, e))
         })?;
         self.pixels.output.entry(hash).or_insert_with(|| id.clone());
         if pixels.is_transparent() {

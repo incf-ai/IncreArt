@@ -6413,11 +6413,11 @@ fn timeouts_are_set_at_least_a_second_and_saved() {
     let same = s.config.timeouts;
     assert!(update(&mut s, Msg::SetTimeouts(same)).is_empty(), "unchanged: not saved");
     // in config.rsn only when not the defaults
-    let text = increart_core::rsnfmt::to_string(&s.config);
+    let text = increart_core::rsnfmt::to_string(&s.config).unwrap();
     assert!(text.contains("server_start: 900"), "{text}");
     let back: increart_core::config::Config = increart_core::rsnfmt::from_str(&text).unwrap();
     assert_eq!(back.timeouts, s.config.timeouts);
-    let text = increart_core::rsnfmt::to_string(&increart_core::config::Config::default());
+    let text = increart_core::rsnfmt::to_string(&increart_core::config::Config::default()).unwrap();
     assert!(!text.contains("timeouts"));
 }
 

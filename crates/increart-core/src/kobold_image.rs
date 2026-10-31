@@ -674,7 +674,9 @@ impl Inner {
     /// Asks KoboldCpp to restart with `file` (from its admin dir) and waits
     /// for it to answer again.
     fn reload(&self, file: &str) -> ApiResult<()> {
-        let admin = self.admin.as_ref().expect("reload needs admin");
+        let Some(admin) = self.admin.as_ref() else {
+            return Err(ApiError::InvalidModelConfig("reloading KoboldCpp needs its admin password".into()));
+        };
         let r = self.post("/api/admin/reload_config", &json!({ "filename": file }), &admin.password)?;
         if r.get("success").and_then(Value::as_bool) != Some(true) {
             return Err(ApiError::InvalidModelConfig(format!(
