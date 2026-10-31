@@ -109,6 +109,9 @@ const EXTRA_SCENES: &[&str] = &[
     "59-continue-without-servers",
     // after 02
     "60-server-settings",
+    // after 02: a connected-to server's Test, nothing answering there
+    "60b-server-test-button",
+    "60c-server-test",
     "61-duplicate-project",
     "62-rename",
     "63-projects-search",
@@ -323,6 +326,12 @@ impl Tour {
             "58-server-dialog-from-main" => vec![Msg::CloseNoServerWarning, Msg::OpenServerDialog],
             "59-continue-without-servers" => vec![Msg::AskContinueWithoutServers],
             "60-server-settings" => vec![Msg::CancelEdit, Msg::ServerSettings(true)],
+            "60b-server-test-button" => vec![Msg::CancelOpening, Msg::EditPreset(1)],
+            "60c-server-test" => vec![Msg::TestServer(increart_core::config::ServerConfig::Connect {
+                name: "box".into(),
+                url: "http://127.0.0.1:9".into(),
+                device: String::new(),
+            })],
             "63-projects-search" => vec![
                 Msg::CancelDuplicate,
                 Msg::CancelRename,

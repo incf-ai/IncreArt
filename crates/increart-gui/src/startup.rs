@@ -1842,13 +1842,89 @@ fn presets_table(ui: &mut egui::Ui, k: &mut KoboldWizard, plan: Option<&tiers::P
     }
 }
 
+/// A server's **Test**: each step with what came back, Copy, Stop / Close.
+pub fn server_test_window(ctx: &egui::Context, t: &increart_gui_core::state::ServerTest, out: &mut Vec<Msg>) {
+    use increart_core::servertest::{Outcome, as_text};
+    let m = egui::Modal::new(egui::Id::unique("server_test")).show(ctx, |ui| {
+        ui.set_width(640.0);
+        ui.heading(ic(ph::STETHOSCOPE, &format!("Test of {}", t.name)));
+        ui.add_space(6.0);
+        egui::ScrollArea::vertical().max_height(ctx.content_rect().height() * 0.7).show(ui, |ui| {
+            for s in &t.steps {
+                ui.horizontal_top(|ui| {
+                    match s.outcome {
+                        Outcome::Running => {
+                            ui.add(egui::Spinner::new());
+                        }
+                        Outcome::Ok => {
+                            ui.colored_label(GOOD, ph::CHECK_CIRCLE);
+                        }
+                        Outcome::Warning => {
+                            ui.colored_label(NEUTRAL, ph::WARNING);
+                        }
+                        Outcome::Failed => {
+                            ui.colored_label(BAD, ph::X_CIRCLE);
+                        }
+                        Outcome::Skipped => {
+                            ui.weak(ph::MINUS_CIRCLE);
+                        }
+                    }
+                    ui.vertical(|ui| {
+                        ui.label(RichText::new(&s.title).strong());
+                        if !s.detail.is_empty() {
+                            ui.add(egui::Label::new(&s.detail).wrap());
+                        }
+                    });
+                });
+                ui.add_space(4.0);
+            }
+        });
+        if !t.done && t.steps.is_empty() {
+            ui.add(egui::Spinner::new());
+        }
+        ui.add_space(6.0);
+        let (traffic, (close, stop)) = dialog_footer(
+            ui,
+            |ui| {
+                if ui.button(ic(ph::COPY, "Copy")).on_hover_text("the steps as text, to send").clicked() {
+                    ui.ctx().copy_text(as_text(&t.name, &t.steps));
+                }
+                increart_core::traffic::enabled() && ui.button(ic(ph::SCROLL, "Traffic log…")).clicked()
+            },
+            |ui| {
+                let close = ui.button(ic(ph::X, "Close")).clicked();
+                let stop = !t.done
+                    && ui.button(ic(ph::STOP, "Stop")).on_hover_text("cancels its job on the server, if any").clicked();
+                (close, stop)
+            },
+        );
+        if traffic {
+            let file = Some(increart_core::traffic::FILE.to_string());
+            out.push(Msg::Logs(Some(increart_gui_core::state::LogsView::new(file))));
+        }
+        if stop {
+            out.push(Msg::StopServerTest);
+        }
+        if close {
+            out.push(Msg::CloseServerTest);
+        }
+    });
+    if m.should_close() {
+        out.push(Msg::CloseServerTest);
+    }
+}
+
 /// The editor (✎ / New preset): name, servers, Save / Save and open / Open
 /// without saving / Cancel. Esc cancels; a click outside doesn't.
 fn editor_window(ctx: &egui::Context, st: &AppState, d: &ServerDialog, editing: Editing, out: &mut Vec<Msg>) {
     egui::Modal::new(egui::Id::unique("preset_editor")).show(ctx, |ui| {
         ui.set_width(620.0);
         editor(ui, st, d, editing, out);
-        if st.confirm.is_none() && st.pe.editor.is_none() && ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+        if st.confirm.is_none()
+            && st.pe.editor.is_none()
+            && st.server_test.is_none()
+            && ui.input(|i| i.key_pressed(egui::Key::Escape))
+        {
             out.push(Msg::CancelEdit);
         }
     });
@@ -1876,7 +1952,8 @@ fn editor(ui: &mut egui::Ui, st: &AppState, d: &ServerDialog, editing: Editing, 
         let remove = egui::Frame::group(ui.style())
             .show(ui, |ui| {
                 ui.set_width(ui.available_width());
-                let (_, remove) = egui::Sides::new().show(
+                let testable = increart_core::servertest::client_for(&edited).is_some();
+                let (_, (remove, test)) = egui::Sides::new().show(
                     ui,
                     |ui| match &mut edited {
                         ServerConfig::Start { name, port, device, .. } => {
@@ -1905,8 +1982,23 @@ fn editor(ui: &mut egui::Ui, st: &AppState, d: &ServerDialog, editing: Editing, 
                             ui.add(egui::TextEdit::singleline(&mut k.name).desired_width(90.0).hint_text("name"));
                         }
                     },
-                    |ui| ui.small_button(ph::X).on_hover_text("Remove").clicked(),
+                    |ui| {
+                        let remove = ui.small_button(ph::X).on_hover_text("Remove").clicked();
+                        let test = testable
+                            && ui
+                                .small_button(ic(ph::STETHOSCOPE, "Test"))
+                                .on_hover_text(
+                                    "Make the calls IncreArt makes to it, one by one, and say what came back: \
+                                     it answers, its model list, its status, then it loads a model preset, \
+                                     makes one small image and cancels a job",
+                                )
+                                .clicked();
+                        (remove, test)
+                    },
                 );
+                if test {
+                    out.push(Msg::TestServer(edited.clone()));
+                }
                 if let ServerConfig::Kobold(k) = &mut edited {
                     kobold_fields(ui, st, i, k, has_chat_entry, out);
                 }

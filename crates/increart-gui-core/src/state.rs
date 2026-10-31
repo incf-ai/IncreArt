@@ -2391,6 +2391,16 @@ pub enum PeFile {
     Config,
 }
 
+/// A server's **Test** (DESIGN.md, Testing a server): its steps so far.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ServerTest {
+    /// Numbers tests; steps from an older one are ignored.
+    pub run: u32,
+    pub name: String,
+    pub steps: Vec<increart_core::servertest::Step>,
+    pub done: bool,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct ServerStatus {
     /// What it was opened as.
@@ -2671,6 +2681,10 @@ pub struct AppState {
     /// The shared sd-server settings `servers` were opened with.
     pub servers_opened_with: Option<increart_core::config::SdServerConfig>,
     pub engine_running: bool,
+    /// The Test window of a server the app connects to.
+    pub server_test: Option<ServerTest>,
+    /// Tests started, numbering them.
+    pub server_tests: u32,
     /// Numbers server-opening attempts; reports from older ones are ignored.
     pub open_attempt: u32,
     /// Servers still opening after **Continue in background**.
@@ -3025,6 +3039,8 @@ impl AppState {
             server_models: BTreeMap::new(),
             servers_opened_with: None,
             engine_running: false,
+            server_test: None,
+            server_tests: 0,
             open_attempt: 0,
             background: None,
             start_log: vec![],

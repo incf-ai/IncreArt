@@ -145,6 +145,15 @@ pub enum Msg {
     SetSkipRamCheck(bool),
     /// Settings: the image servers' traffic is logged, or isn't.
     SetLogTraffic(bool),
+    /// **Test** on a server the app connects to: opens the Test window.
+    TestServer(ServerConfig),
+    /// A test's step (by test number and index) started or ended.
+    ServerTestStep(u32, usize, increart_core::servertest::Step),
+    ServerTestDone(u32),
+    /// Stops the test, keeping its window.
+    StopServerTest,
+    /// Closes the Test window, stopping the test.
+    CloseServerTest,
     /// The Settings window.
     Settings(bool),
     SetNotifications(increart_core::notify::Notifications),
@@ -912,6 +921,16 @@ pub enum Effect {
     SetSkipRamCheck(bool),
     /// The image servers' traffic log goes on or off.
     SetLogTraffic(bool),
+    /// Test `server` (with `models` to load one of; not loading or making
+    /// an image when `generate` says why), answered with `ServerTestStep`s
+    /// and `ServerTestDone`.
+    TestServer {
+        run: u32,
+        server: ServerConfig,
+        models: Vec<(String, increart_core::sdserver::ModelKey)>,
+        generate: Result<(), String>,
+    },
+    StopServerTest,
     /// Stop the engine and the servers the app started.
     StopServers,
     /// Stop the engine only, keeping the servers (switching libraries).
@@ -2454,6 +2473,64 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
             fx.push(Effect::SetLogTraffic(on));
             fx
         }
+        Msg::TestServer(server) => {
+            state.server_tests += 1;
+            let run = state.server_tests;
+            let running = state.server_test.as_ref().is_some_and(|t| !t.done);
+            let url = server.base_url();
+            let in_use: Vec<&str> = state
+                .servers
+                .iter()
+                .filter(|s| s.config.as_ref().is_some_and(|c| c.base_url() == url))
+                .map(|s| s.name.as_str())
+                .collect();
+            let generate = if state.engine_running && !in_use.is_empty() {
+                Err(format!("not while the open servers use it ({}): close them first", in_use.join(", ")))
+            } else {
+                Ok(())
+            };
+            let models = state
+                .config
+                .recipes
+                .iter()
+                .map(|r| {
+                    let key = increart_core::sdserver::ModelKey { recipe: r.recipe.clone(), models: r.files.clone() };
+                    (r.name.clone(), key)
+                })
+                .collect();
+            state.server_test =
+                Some(crate::state::ServerTest { run, name: server.name().to_string(), steps: vec![], done: false });
+            let mut fx = vec![];
+            if running {
+                fx.push(Effect::StopServerTest);
+            }
+            fx.push(Effect::TestServer { run, server, models, generate });
+            fx
+        }
+        Msg::ServerTestStep(run, i, step) => {
+            if let Some(t) = state.server_test.as_mut().filter(|t| t.run == run) {
+                if i < t.steps.len() {
+                    t.steps[i] = step;
+                } else {
+                    t.steps.push(step);
+                }
+            }
+            vec![]
+        }
+        Msg::ServerTestDone(run) => {
+            if let Some(t) = state.server_test.as_mut().filter(|t| t.run == run) {
+                t.done = true;
+            }
+            vec![]
+        }
+        Msg::StopServerTest => match &state.server_test {
+            Some(t) if !t.done => vec![Effect::StopServerTest],
+            _ => vec![],
+        },
+        Msg::CloseServerTest => match state.server_test.take() {
+            Some(t) if !t.done => vec![Effect::StopServerTest],
+            _ => vec![],
+        },
         Msg::Settings(open) => {
             state.settings_open = open && state.phase == Phase::Main;
             if state.settings_open && state.settings_tab == crate::state::SettingsTab::Library {

@@ -50,6 +50,8 @@ struct Shared {
     convert_cancel: Arc<std::sync::atomic::AtomicBool>,
     archive_cancel: Arc<std::sync::atomic::AtomicBool>,
     download_cancel: Arc<std::sync::atomic::AtomicBool>,
+    /// Set to stop the server test going on.
+    server_test_cancel: Arc<std::sync::atomic::AtomicBool>,
     /// PE asks stopped: dropped if queued (or when they come), cut short
     /// if being answered.
     pe_stopped: std::collections::HashSet<u64>,
@@ -206,6 +208,28 @@ impl Runtime {
             }
             Effect::CancelDownload => {
                 self.shared.lock().unwrap().download_cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+            }
+            Effect::TestServer { run, server, models, generate } => {
+                let (tx, wake) = (self.tx.clone(), self.wake.clone());
+                let cancel = Arc::new(std::sync::atomic::AtomicBool::new(false));
+                self.shared.lock().unwrap().server_test_cancel = cancel.clone();
+                std::thread::Builder::new()
+                    .name("server test".into())
+                    .spawn(move || {
+                        use increart_core::servertest;
+                        if let Some(client) = servertest::client_for(&server) {
+                            servertest::run(&client, &models, generate, &cancel, &mut |i, step| {
+                                let _ = tx.send(Msg::ServerTestStep(run, i, step));
+                                wake();
+                            });
+                        }
+                        let _ = tx.send(Msg::ServerTestDone(run));
+                        wake();
+                    })
+                    .expect("spawn server test");
+            }
+            Effect::StopServerTest => {
+                self.shared.lock().unwrap().server_test_cancel.store(true, std::sync::atomic::Ordering::Relaxed);
             }
             Effect::FolderPreviews { root, dir, names } => {
                 let (tx, wake) = (self.tx.clone(), self.wake.clone());
@@ -1345,6 +1369,8 @@ fn work_on(shared: &Arc<Mutex<Shared>>, wake: &Wake, fx: Effect) -> Vec<Msg> {
         | Effect::KoboldVersion(_)
         | Effect::DownloadModels { .. }
         | Effect::CancelDownload
+        | Effect::TestServer { .. }
+        | Effect::StopServerTest
         | Effect::PlaySound { .. }
         | Effect::OpenServers { .. }
         | Effect::Pick { .. }

@@ -6296,6 +6296,44 @@ fn the_traffic_log_setting_is_saved_and_applied() {
 }
 
 #[test]
+fn a_server_test_shows_its_steps_and_stops() {
+    use increart_core::servertest::{Outcome, Step};
+    let mut s = dialog_state(vec![], None);
+    let proxy =
+        ServerConfig::Connect { name: "proxy".into(), url: "http://127.0.0.1:7800/".into(), device: String::new() };
+    let fx = update(&mut s, Msg::TestServer(proxy.clone()));
+    let [Effect::TestServer { run, generate: Ok(()), .. }] = fx.as_slice() else { panic!("{fx:?}") };
+    let run = *run;
+    let step = |outcome| Step { title: "Answers".into(), outcome, detail: String::new() };
+    update(&mut s, Msg::ServerTestStep(run, 0, step(Outcome::Running)));
+    update(&mut s, Msg::ServerTestStep(run, 0, step(Outcome::Ok)));
+    // an older test's step is dropped
+    update(&mut s, Msg::ServerTestStep(run - 1, 1, step(Outcome::Failed)));
+    assert_eq!(s.server_test.as_ref().unwrap().steps, [step(Outcome::Ok)]);
+    assert_eq!(update(&mut s, Msg::StopServerTest), [Effect::StopServerTest]);
+    update(&mut s, Msg::ServerTestDone(run));
+    assert!(update(&mut s, Msg::StopServerTest).is_empty());
+    assert!(update(&mut s, Msg::CloseServerTest).is_empty());
+    assert!(s.server_test.is_none());
+    // one the engine uses doesn't load or make an image
+    s.engine_running = true;
+    s.servers = vec![ServerStatus {
+        config: Some(proxy.clone()),
+        name: "proxy".into(),
+        device: String::new(),
+        state: "ready".into(),
+        model: None,
+        idle_since: None,
+        worked: false,
+    }];
+    let fx = update(&mut s, Msg::TestServer(proxy));
+    let [Effect::TestServer { run: next, generate: Err(why), .. }] = fx.as_slice() else { panic!("{fx:?}") };
+    assert!(*next > run && why.contains("proxy"), "{why}");
+    // closing one still going stops it
+    assert_eq!(update(&mut s, Msg::CloseServerTest), [Effect::StopServerTest]);
+}
+
+#[test]
 fn a_server_problem_links_the_servers_log() {
     let mut s = dialog_state(vec![], None);
     let status = |name: &str, config: Option<ServerConfig>| ServerStatus {

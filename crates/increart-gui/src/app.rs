@@ -1144,6 +1144,10 @@ impl eframe::App for App {
         if let Some(c) = &self.st.confirm {
             confirm_window(&ctx, c, &mut out);
         }
+        // over the preset editor
+        if let Some(t) = &self.st.server_test {
+            crate::startup::server_test_window(&ctx, t, &mut out);
+        }
         // over whichever window it was opened from
         if let Some(v) = &self.st.logs {
             crate::logs::window(&ctx, &self.st, v, &mut self.logs, &mut out);

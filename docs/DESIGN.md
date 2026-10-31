@@ -1485,7 +1485,12 @@ its details window, and for every run at once in the Jobs header:
   once in the messages and in its runs' logs, with each server's reason
   ("no server can load krea2, so its runs wait (kobold: …; proxy: …)").
   A list that fails (not a 404: no list there) leaves the one before; it
-  had made the server one that may have anything.
+  had made the server one that may have anything. A KoboldCpp started
+  elsewhere, matched by its running file's name alone, goes after a
+  server whose list has the files: it takes the model only once none
+  that lists them is left (a load there failed). Its file of that name may
+  be another one (a user's connected KoboldCpp took the runs of an
+  sd-server proxy's model and never finished them).
 - **A failing server is said**: one not answering its probe, failing to
   list its files, to load (not refusing: an error, a 5xx), to take a seed
   or to say how its jobs are is said once in the messages (and the logs
@@ -2421,6 +2426,20 @@ in the app's state folder (`$XDG_STATE_HOME/increart` when set, else
   next different answer says "(after N answers as the one before)". For
   finding what a server, such as a proxy in front of sd-server, does
   wrong: a user's proxy answered nothing and IncreArt said nothing either.
+  The Logs window has the same checkbox.
+- **Testing a server**: a server the app connects to (sd-server at, and a
+  KoboldCpp connected to) has **Test** in the preset editor. It makes the
+  engine's calls one by one through the same client, each a step with
+  what came back: it answers (capabilities), its model list (and which
+  model presets it can load, and why not the others), its status, then it
+  loads a model preset (the answer must name it), makes a small image
+  (the warm-up's: a PNG must come back) and cancels a job (it must end
+  cancelled). A step that fails skips the rest, saying why; one that works
+  but not as IncreArt needs (no list: any model may go to it) is a
+  warning. With the engine using that server it stops after the status.
+  **Stop** cancels its job on the server; **Copy** gives the steps as text,
+  to send to whoever runs the server; **Traffic log…** opens the traffic
+  log when it's on.
 
 - Each start first adds a line of the app's own to the log:
   `--- IncreArt, <date time>: <command line>` (the environment it set

@@ -42,6 +42,7 @@ pub mod rsnfmt;
 pub mod scan;
 pub mod scheduler;
 pub mod sdserver;
+pub mod servertest;
 pub mod thumbs;
 pub mod tiers;
 pub mod traffic;
