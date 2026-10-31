@@ -247,6 +247,10 @@ fn images_cancel_and_prompt_enhance() {
         assert!(!described.trim().is_empty());
     }
     app.send(Msg::PeShutdown);
+    // Off once its stop returns (the port goes before KoboldCpp's
+    // launcher exits)
+    let off = app.pump(Duration::from_secs(60), |s| s.pe.status == state::PeStatus::Off);
+    assert!(off, "PE still {:?} after stopping", app.state.pe.status);
     let freed = app.pump(Duration::from_secs(60), |_| !listening(CHAT_PORT));
     assert!(freed, "the chat KoboldCpp still listening on {CHAT_PORT}");
     app.log("chat server stopped");
