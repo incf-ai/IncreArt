@@ -29,7 +29,7 @@ const CARD_TEXT_H: f32 = 92.0;
 /// ✎ Edit.
 #[derive(Clone, Copy, PartialEq)]
 enum CardButtons {
-    /// The Idea inbox: Keep and Discard (2 and 3).
+    /// The Idea inbox: Save to input library… and Discard.
     Triage,
     /// The Input library: Promote, and Add as refs when it has images.
     Library,
@@ -74,12 +74,14 @@ fn idea_card(
                     ui,
                     cover,
                     &[
-                        (ph::CHECK, "Keep", "into the input library (2 / N)"),
+                        (ph::BOOKMARK_SIMPLE, "Save", "to the input library (1 / 2 / S)"),
                         (ph::TRASH, "Discard", "can be restored from Discarded (3 / B)"),
                     ],
                 );
-                if let Some(i) = picked {
-                    out.push(Msg::ReviewIdea(id.clone(), if i == 0 { Verdict::Neutral } else { Verdict::Bad }));
+                match picked {
+                    Some(0) => out.push(Msg::SaveIdeas(vec![id.clone()])),
+                    Some(_) => out.push(Msg::ReviewIdea(id.clone(), Verdict::Bad)),
+                    None => {}
                 }
             }
             CardButtons::Library => {
@@ -496,7 +498,7 @@ fn new_idea(ui: &mut egui::Ui, st: &AppState, tex: &mut Textures, out: &mut Vec<
             if ui.button(ic(ph::TRAY, "Add to inbox")).clicked() {
                 out.push(Msg::AddIdea(AddIdea::Inbox));
             }
-            if ui.button(ic(ph::BOOKMARK_SIMPLE, "Add & keep")).clicked() {
+            if ui.button(ic(ph::BOOKMARK_SIMPLE, "Add & save to input library…")).clicked() {
                 out.push(Msg::AddIdea(AddIdea::Keep));
             }
             if ui.button(ic(ph::ROCKET_LAUNCH, "Add & promote into project")).clicked() {
@@ -515,17 +517,17 @@ fn inbox_grid(ui: &mut egui::Ui, st: &AppState, tex: &mut Textures, out: &mut Ve
     let ideas = st.inbox_queue();
     let current = ideas.get(st.inbox_cursor).map(|e| e.idea.id.clone());
     let picks = &st.inbox_picked;
-    if !ui.ctx().egui_wants_keyboard_input() && st.preview.is_none() && st.tile.is_none() {
+    let modal = st.preview.is_some() || st.tile.is_some() || st.save_idea.is_some() || st.promote.is_some();
+    if !ui.ctx().egui_wants_keyboard_input() && !modal {
         ui.input(|i| {
-            for (keys, v) in [
-                ([Key::Num1, Key::G], Verdict::Good),
-                ([Key::Num2, Key::N], Verdict::Neutral),
-                ([Key::Num3, Key::B], Verdict::Bad),
-            ] {
-                if keys.iter().any(|k| i.key_pressed(*k)) {
-                    // with picks, they all go
-                    out.push(if picks.is_empty() { Msg::ReviewCurrentIdea(v) } else { Msg::ReviewPickedIdeas(v) });
-                }
+            // with picks, they all go
+            if [Key::Num1, Key::Num2, Key::S].iter().any(|k| i.key_pressed(*k)) {
+                let ids = if picks.is_empty() { current.clone().into_iter().collect() } else { picks.clone() };
+                out.push(Msg::SaveIdeas(ids));
+            }
+            if [Key::Num3, Key::B].iter().any(|k| i.key_pressed(*k)) {
+                let v = Verdict::Bad;
+                out.push(if picks.is_empty() { Msg::ReviewCurrentIdea(v) } else { Msg::ReviewPickedIdeas(v) });
             }
             if i.modifiers.command && i.key_pressed(Key::A) {
                 out.push(Msg::InboxPick(ideas.iter().map(|e| e.idea.id.clone()).collect()));
@@ -679,15 +681,13 @@ fn inbox_grid(ui: &mut egui::Ui, st: &AppState, tex: &mut Textures, out: &mut Ve
                         }
                         rewrite_item(ui, st, id, out);
                         ui.separator();
-                        for (label, key, v) in [
-                            (ic(ph::STAR, "Keep in input library ★"), "1", Verdict::Good),
-                            (ic(ph::CHECK, "Keep in input library"), "2", Verdict::Neutral),
-                            (ic(ph::TRASH, "Discard"), "3", Verdict::Bad),
-                        ] {
-                            if item(ui, label, key) {
-                                out.push(Msg::ReviewIdea(id.clone(), v));
-                                ui.close();
-                            }
+                        if item(ui, ic(ph::BOOKMARK_SIMPLE, "Save to input library…"), "S") {
+                            out.push(Msg::SaveIdeas(vec![id.clone()]));
+                            ui.close();
+                        }
+                        if item(ui, ic(ph::TRASH, "Discard"), "3") {
+                            out.push(Msg::ReviewIdea(id.clone(), Verdict::Bad));
+                            ui.close();
                         }
                         ui.separator();
                         copy_items(ui, root, e, out);
@@ -770,7 +770,7 @@ fn pick_click(
 }
 
 /// What to do with the picked ideas (`picks`): tile their images, promote,
-/// add as refs; in the Idea inbox (`inbox`) keep or discard them all too.
+/// add as refs; in the Idea inbox (`inbox`) save or discard them all too.
 fn picks_menu(ui: &mut egui::Ui, st: &AppState, picks: &[increart_core::Id], inbox: bool, out: &mut Vec<Msg>) {
     let n = picks.len();
     let images: Vec<ImageRef> = picks
@@ -797,20 +797,18 @@ fn picks_menu(ui: &mut egui::Ui, st: &AppState, picks: &[increart_core::Id], inb
         ui.close();
     }
     if inbox {
-        for (label, v) in [
-            (ic(ph::STAR, "Keep them ★"), Verdict::Good),
-            (ic(ph::CHECK, "Keep them"), Verdict::Neutral),
-            (ic(ph::TRASH, "Discard them"), Verdict::Bad),
-        ] {
-            if ui.button(label).clicked() {
-                out.push(Msg::ReviewPickedIdeas(v));
-                ui.close();
-            }
+        if ui.button(ic(ph::BOOKMARK_SIMPLE, "Save them to input library…")).clicked() {
+            out.push(Msg::SaveIdeas(picks.to_vec()));
+            ui.close();
+        }
+        if ui.button(ic(ph::TRASH, "Discard them")).clicked() {
+            out.push(Msg::ReviewPickedIdeas(Verdict::Bad));
+            ui.close();
         }
     }
 }
 
-/// "3 picked · Tile… · Promote… · Keep · Discard · Clear", over an idea
+/// "3 picked · Tile… · Promote… · Save to input library · Discard · Clear", over an idea
 /// grid while anything is picked.
 fn picks_bar(ui: &mut egui::Ui, st: &AppState, picks: &[increart_core::Id], inbox: bool, out: &mut Vec<Msg>) {
     if picks.is_empty() {
@@ -830,14 +828,11 @@ fn picks_bar(ui: &mut egui::Ui, st: &AppState, picks: &[increart_core::Id], inbo
             out.push(Msg::Promote(picks.to_vec()));
         }
         if inbox {
-            for (label, v, key) in [
-                (ic(ph::STAR, "Keep ★"), Verdict::Good, "1"),
-                (ic(ph::CHECK, "Keep"), Verdict::Neutral, "2"),
-                (ic(ph::TRASH, "Discard"), Verdict::Bad, "3"),
-            ] {
-                if ui.button(label).on_hover_text(key).clicked() {
-                    out.push(Msg::ReviewPickedIdeas(v));
-                }
+            if ui.button(ic(ph::BOOKMARK_SIMPLE, "Save to input library…")).on_hover_text("1 / 2 / S").clicked() {
+                out.push(Msg::SaveIdeas(picks.to_vec()));
+            }
+            if ui.button(ic(ph::TRASH, "Discard")).on_hover_text("3 / B").clicked() {
+                out.push(Msg::ReviewPickedIdeas(Verdict::Bad));
             }
         }
         let clear = if inbox { Msg::InboxPick(vec![]) } else { Msg::LibClearSelection };
@@ -858,8 +853,7 @@ fn inbox_side(ui: &mut egui::Ui, st: &AppState, out: &mut Vec<Msg>) {
             .default_open(true)
             .show(ui, |ui| {
                 for (k, what) in [
-                    ("1 / G", "keep ★ (shortlist)"),
-                    ("2 / N", "keep"),
+                    ("1 / 2 / S", "save…"),
                     ("3 / B", "discard"),
                     ("P / Space", "promote"),
                     ("Enter / T", "edit"),
@@ -876,7 +870,7 @@ fn inbox_side(ui: &mut egui::Ui, st: &AppState, out: &mut Vec<Msg>) {
                         ui.weak(what);
                     });
                 }
-                let note = "Kept ideas go to the input library; discarded ones can be restored.";
+                let note = "Saved ideas go to the input library; discarded ones can be restored.";
                 ui.add(egui::Label::new(RichText::new(note).weak()).wrap());
             });
     });
@@ -1172,7 +1166,7 @@ pub fn input_library(ui: &mut egui::Ui, st: &AppState, tex: &mut Textures, out: 
             ui.weak(if filtered {
                 "No ideas match the filters."
             } else {
-                "No kept ideas here. Keep ideas in the Idea inbox (1 / 2)."
+                "No ideas here. Save ideas to it from the Idea inbox (1 / 2 / S)."
             });
             return;
         }
@@ -1374,14 +1368,11 @@ fn library_actions(ui: &mut egui::Ui, e: &IdeaEntry, out: &mut Vec<Msg>) {
 fn inbox_actions(ui: &mut egui::Ui, e: &IdeaEntry, out: &mut Vec<Msg>) {
     let id = e.idea.id.clone();
     ui.horizontal_wrapped(|ui| {
-        for (label, tip, v) in [
-            (ic(ph::STAR, "Keep ★"), "into the input library, starred (1 / G)", Verdict::Good),
-            (ic(ph::CHECK, "Keep"), "into the input library (2 / N)", Verdict::Neutral),
-            (ic(ph::TRASH, "Discard"), "can be restored from Discarded (3 / B)", Verdict::Bad),
-        ] {
-            if ui.button(label).on_hover_text(tip).clicked() {
-                out.push(Msg::ReviewIdea(id.clone(), v));
-            }
+        if ui.button(ic(ph::BOOKMARK_SIMPLE, "Save to input library…")).on_hover_text("1 / 2 / S").clicked() {
+            out.push(Msg::SaveIdeas(vec![id.clone()]));
+        }
+        if ui.button(ic(ph::TRASH, "Discard")).on_hover_text("can be restored from Discarded (3 / B)").clicked() {
+            out.push(Msg::ReviewIdea(id.clone(), Verdict::Bad));
         }
     });
     ui.horizontal_wrapped(|ui| {
@@ -1773,5 +1764,137 @@ pub fn global_keys(ctx: &egui::Context, out: &mut Vec<Msg>) {
     if ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, Key::N)) {
         out.push(Msg::Tab(Tab::IdeaInbox));
         out.push(Msg::InboxTab(InboxTab::NewIdea));
+    }
+}
+
+/// Save to input library, from the Idea inbox or the New idea form: the
+/// idea's name (one idea or the draft; several keep their titles), then the
+/// library folder from a tree,
+/// optionally a new folder in it.
+pub fn save_window(ctx: &egui::Context, st: &AppState, out: &mut Vec<Msg>) {
+    let Some(d) = &st.save_idea else { return };
+    let m = egui::Modal::new(egui::Id::unique("save_idea")).show(ctx, |ui| {
+        ui.set_width(480.0);
+        ui.heading(ic(ph::BOOKMARK_SIMPLE, "Save to input library"));
+        // the dialog as edited this frame
+        let mut d = d.clone();
+        // Enter in the filter or the new folder's name only leaves the field
+        let mut field_enter = false;
+        if d.ideas.len() <= 1 {
+            ui.label("Name");
+            let mut name = d.name.clone();
+            let r = ui.add(egui::TextEdit::singleline(&mut name).desired_width(f32::INFINITY).hint_text("idea name"));
+            crate::widgets::focus_until_done(&r);
+            if name != d.name {
+                out.push(Msg::EditSaveIdeaName(name.clone()));
+                d.name = name;
+            }
+            let old = match d.ideas.first() {
+                Some(id) => st.idea(id).map(|e| e.idea.title.trim().to_string()).unwrap_or_default(),
+                None => st.draft.title.trim().to_string(),
+            };
+            if !old.is_empty() && old != d.name.trim() {
+                ui.weak(format!("was “{old}”"));
+            }
+        } else {
+            ui.weak(format!("The {} ideas keep their names.", d.ideas.len()));
+        }
+        ui.add_space(4.0);
+        ui.label("Folder");
+        let mut filter = d.filter.clone();
+        ui.horizontal(|ui| {
+            ui.label(ph::MAGNIFYING_GLASS);
+            let r = ui
+                .add(egui::TextEdit::singleline(&mut filter).hint_text("filter folders").desired_width(f32::INFINITY));
+            field_enter |= r.lost_focus();
+        });
+        if filter != d.filter {
+            out.push(Msg::SaveIdeaFilter(filter.clone()));
+        }
+        let words: Vec<String> = filter.to_lowercase().split_whitespace().map(String::from).collect();
+        let folders = &st.index.library_folders;
+        // shown: matches and their ancestors (the selected folder always)
+        let matches = |f: &Path| words.iter().all(|w| f.to_string_lossy().to_lowercase().contains(w));
+        let shown =
+            |f: &Path| words.is_empty() || f == d.folder || folders.iter().any(|g| g.starts_with(f) && matches(g));
+        let row = |ui: &mut egui::Ui, path: &Path, label: &str, depth: usize, out: &mut Vec<Msg>| {
+            ui.horizontal(|ui| {
+                ui.add_space(depth as f32 * 16.0);
+                let selected = d.folder == path;
+                let icon = if selected { ph::FOLDER_OPEN } else { ph::FOLDER };
+                if ui.selectable_label(selected, ic(icon, label)).clicked() {
+                    out.push(Msg::SaveIdeaFolder(path.to_path_buf()));
+                }
+            });
+        };
+        egui::Frame::group(ui.style()).show(ui, |ui| {
+            ScrollArea::vertical().max_height(240.0).auto_shrink([false, true]).show(ui, |ui| {
+                row(ui, Path::new(""), "input library", 0, out);
+                let mut sorted: Vec<&std::path::PathBuf> = folders.iter().filter(|f| shown(f)).collect();
+                sorted.sort_by_key(|f| f.to_string_lossy().to_lowercase());
+                for f in sorted {
+                    let label = f.file_name().unwrap_or_default().to_string_lossy();
+                    row(ui, f, &label, f.components().count(), out);
+                }
+                if !words.is_empty() && !folders.iter().any(|g| matches(g)) {
+                    ui.weak("No folder matches.");
+                }
+            });
+        });
+        let here = match d.folder.file_name() {
+            Some(n) => n.to_string_lossy().into_owned(),
+            None => "input library".to_string(),
+        };
+        match d.new_folder.clone() {
+            None => {
+                if ui.button(ic(ph::FOLDER_PLUS, &format!("New folder in “{here}”"))).clicked() {
+                    out.push(Msg::SaveIdeaNewFolder(Some(String::new())));
+                }
+            }
+            Some(new) => {
+                ui.horizontal(|ui| {
+                    ui.label(ic(ph::FOLDER_PLUS, &format!("New folder in “{here}”")));
+                    let mut name = new.clone();
+                    let r = ui.add(egui::TextEdit::singleline(&mut name).hint_text("folder name").desired_width(200.0));
+                    if new.is_empty() && ui.memory(|m| m.focused().is_none()) {
+                        r.request_focus();
+                    }
+                    field_enter |= r.lost_focus();
+                    if name != new {
+                        out.push(Msg::SaveIdeaNewFolder(Some(name.clone())));
+                    }
+                    if ui.small_button(ph::X).on_hover_text("no new folder").clicked() {
+                        out.push(Msg::SaveIdeaNewFolder(None));
+                    }
+                    d.new_folder = Some(name);
+                });
+            }
+        }
+        let problem = increart_gui_core::save_idea_problem(&d);
+        if let Some(e) = &problem {
+            ui.colored_label(crate::widgets::BAD, e);
+        }
+        let (at, exists) = increart_gui_core::save_idea_folder(st, &d);
+        ui.horizontal_wrapped(|ui| {
+            ui.weak("→");
+            ui.label(RichText::new(Path::new("input/library").join(&at).display().to_string()).monospace());
+            if !exists {
+                ui.weak("(new folder)");
+            }
+        });
+        ui.add_space(4.0);
+        let enter = ui.input(|i| i.key_pressed(egui::Key::Enter));
+        crate::widgets::dialog_buttons(ui, |ui| {
+            let save = egui::Button::new(RichText::new(ic(ph::CHECK, "Save   Enter")).strong());
+            if ui.add_enabled(problem.is_none(), save).clicked() || enter && !field_enter && problem.is_none() {
+                out.push(Msg::ConfirmSaveIdea);
+            }
+            if ui.button("Cancel   Esc").clicked() {
+                out.push(Msg::CancelSaveIdea);
+            }
+        });
+    });
+    if m.should_close() {
+        out.push(Msg::CancelSaveIdea);
     }
 }

@@ -136,9 +136,9 @@ fn steps(ui: &mut egui::Ui, st: &AppState, out: &mut Vec<Msg>) {
         Step {
             icon: ph::TRAY,
             title: "Sort the inbox",
-            text: "Go through the inbox and keep or discard each idea. Kept ideas move to the Input library; \
-                   discarded ones wait under Discarded, where they can be restored.",
-            keys: "1 / G keep and star · 2 / N keep · 3 / B discard · Ctrl+Z undo",
+            text: "Go through the inbox and save or discard each idea. Saving asks its name and the Input \
+                   library folder it goes to; discarded ones wait under Discarded, where they can be restored.",
+            keys: "1 / 2 / S save… · 3 / B discard · Ctrl+Z undo",
             count: format!("{} to sort", st.unreviewed_ideas().len()),
             button: open_tab(Tab::IdeaInbox),
             open: vec![Msg::Tab(Tab::IdeaInbox), Msg::InboxTab(InboxTab::Grid)],

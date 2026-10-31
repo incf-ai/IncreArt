@@ -1579,7 +1579,13 @@ fn verdict_of(link: &Path) -> Option<Verdict> {
 
 pub fn lib_op(lib: &mut Library, op: LibOp) -> Result<OpOk, String> {
     match op {
-        LibOp::NewIdea(n) => lib.new_idea(n).map(OpOk::Idea).map_err(err),
+        LibOp::NewIdea(n) => {
+            // Add & save to input library may name a new folder
+            if let IdeaLoc::Library(folder) = &n.loc {
+                lib.make_library_folder(folder).map_err(err)?;
+            }
+            lib.new_idea(n).map(OpOk::Idea).map_err(err)
+        }
         LibOp::NewIdeaPromote(n, folder, name) => {
             let id = lib.new_idea(n).map_err(err)?;
             promote(lib, &[id], &folder, &name)
@@ -1609,6 +1615,9 @@ pub fn lib_op(lib: &mut Library, op: LibOp) -> Result<OpOk, String> {
             ids.map(OpOk::ImportedRefs).map_err(err)
         }
         LibOp::ReviewIdea(id, v) => lib.review_idea(&id, v).map(|_| OpOk::Done).map_err(err),
+        LibOp::SaveToLibrary(id, title, folder) => {
+            lib.save_to_library(&id, title.as_deref(), &folder).map(|_| OpOk::Done).map_err(err)
+        }
         LibOp::MoveIdea(id, loc) => lib.move_idea(&id, &loc).map(|_| OpOk::Done).map_err(err),
         LibOp::SetStar(id, on) => lib.update_idea(&id, |i| i.starred = on).map(|_| OpOk::Done).map_err(err),
         LibOp::DeleteDiscarded(id) => lib.delete_discarded_idea(&id).map(|_| OpOk::Done).map_err(err),

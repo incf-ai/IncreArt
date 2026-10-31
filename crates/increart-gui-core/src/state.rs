@@ -1640,6 +1640,36 @@ impl PromoteDialog {
     }
 }
 
+/// Save to input library, from the Idea inbox or the New idea form: the
+/// idea's name (one idea or the draft; several keep their titles) and the
+/// library folder it goes to.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SaveIdeaDialog {
+    /// The ideas; empty: the New idea form's draft (Add & save).
+    pub ideas: Vec<Id>,
+    /// Starts as the idea's title.
+    pub name: String,
+    /// Relative to `input/library/` (empty: the top level).
+    pub folder: PathBuf,
+    /// A new folder to make in `folder` and save into (an existing one of
+    /// that name, any case, is used).
+    pub new_folder: Option<String>,
+    /// The folder tree's filter.
+    pub filter: String,
+}
+
+impl SaveIdeaDialog {
+    /// Starting in the folder the last save went to, if it's still there.
+    pub fn new(state: &AppState, ideas: Vec<Id>, name: String) -> SaveIdeaDialog {
+        let folder = state
+            .save_idea_last
+            .clone()
+            .filter(|f| f.as_os_str().is_empty() || state.index.library_folders.contains(f))
+            .unwrap_or_default();
+        SaveIdeaDialog { ideas, name, folder, new_folder: None, filter: String::new() }
+    }
+}
+
 /// Naming the copy a project's Duplicate makes.
 #[derive(Clone, Debug, PartialEq)]
 pub struct DuplicateDialog {
@@ -2843,6 +2873,11 @@ pub struct AppState {
     /// Where the last promote put its project (this session), the next
     /// one's first guess.
     pub promote_last: Option<PathBuf>,
+    /// Saving inbox ideas to the input library.
+    pub save_idea: Option<SaveIdeaDialog>,
+    /// Where the last Save to input library went (this session), the next
+    /// one's first folder.
+    pub save_idea_last: Option<PathBuf>,
     /// The prompt presets (shared by every library).
     pub prompt_presets: PromptPresets,
     /// The `prompt-presets` folder they are saved in (`None`: not saved,
@@ -3094,6 +3129,8 @@ impl AppState {
             title_edit: None,
             promote: None,
             promote_last: None,
+            save_idea: None,
+            save_idea_last: None,
             job_info: None,
             job_log: vec![],
             server_jobs: HashMap::new(),

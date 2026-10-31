@@ -900,6 +900,40 @@ impl Library {
         self.move_idea(id, &to)
     }
 
+    /// Saves an inbox idea to the input library: retitled (when `title` is
+    /// given), unstarred, into `folder` (relative to `input/library/`; its
+    /// missing folders are made).
+    pub fn save_to_library(&self, id: &Id, title: Option<&str>, folder: &Path) -> Result<PathBuf> {
+        self.make_library_folder(folder)?;
+        let title = title.map(str::trim);
+        if let Some(t) = title
+            && t.is_empty()
+        {
+            return Err(Error::InvalidName { name: t.into(), reason: "empty" });
+        }
+        self.update_idea(id, |i| {
+            i.starred = false;
+            if let Some(t) = title {
+                i.title = t.to_string();
+            }
+        })?;
+        self.move_idea(id, &IdeaLoc::Library(folder.to_path_buf()))
+    }
+
+    /// Makes `folder` of the input library (relative to `input/library/`)
+    /// and its missing parents, checking each name.
+    pub fn make_library_folder(&self, folder: &Path) -> Result<()> {
+        let mut dir = self.root.join(INPUT_LIBRARY);
+        for c in folder.components() {
+            validate_name(&c.as_os_str().to_string_lossy())?;
+            dir.push(c);
+        }
+        if !dir.is_dir() {
+            fs::create_dir_all(&dir).at(&dir)?;
+        }
+        Ok(())
+    }
+
     /// Deletes a discarded idea for good (its folder goes to the trash; the
     /// store images stay until Clean up).
     pub fn delete_discarded_idea(&self, id: &Id) -> Result<()> {

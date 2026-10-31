@@ -33,7 +33,9 @@ const SCENES: &[&str] = &[
     "54b-server-wizard-sd-server",
     "03-idea-inbox-grid",
     "03b-idea-inbox-picked",
+    "03c-idea-inbox-save-dialog",
     "04-idea-inbox-new-idea",
+    "04b-idea-inbox-new-idea-save-dialog",
     "05-input-library",
     "05b-input-library-tile",
     "06-projects-grid",
@@ -190,7 +192,7 @@ const EXTRA_SCENES: &[&str] = &[
     "98i-server-start-failed",
     // checks, not screenshots: the selected idea card's own buttons
     "98j-check-library-card-refs",
-    "98k-check-inbox-card-keep",
+    "98k-check-inbox-card-save",
     "99-quit-with-unsaved-draft",
     // the README's shots, on the demo library (scripts/demo-library.json),
     // after 02-server-dialog and 03-idea-inbox-grid
@@ -725,8 +727,13 @@ impl Tour {
                 }
                 v
             }
-            "98k-check-inbox-card-keep" => {
-                vec![Msg::ContinueWithoutServers, Msg::Tab(Tab::IdeaInbox), Msg::InboxTab(InboxTab::Grid)]
+            "98k-check-inbox-card-save" => {
+                vec![
+                    Msg::CancelSaveIdea,
+                    Msg::ContinueWithoutServers,
+                    Msg::Tab(Tab::IdeaInbox),
+                    Msg::InboxTab(InboxTab::Grid),
+                ]
             }
             "97i-check-output-double-click" => vec![
                 Msg::ContinueWithoutServers,
@@ -964,6 +971,7 @@ impl Tour {
                 ]
             }
             "04-idea-inbox-new-idea" => vec![
+                Msg::CancelSaveIdea,
                 Msg::InboxTab(InboxTab::NewIdea),
                 Msg::Draft(IdeaDraft {
                     title: "Otter tea party".into(),
@@ -976,8 +984,14 @@ impl Tour {
                 let picks = st.inbox_queue().iter().take(3).map(|e| e.idea.id.clone()).collect();
                 vec![Msg::InboxPick(picks)]
             }
+            "03c-idea-inbox-save-dialog" => {
+                let first = st.inbox_queue().first().map(|e| e.idea.id.clone());
+                vec![Msg::InboxPick(vec![]), Msg::SaveIdeas(first.into_iter().collect())]
+            }
+            "04b-idea-inbox-new-idea-save-dialog" => vec![Msg::AddIdea(increart_gui_core::AddIdea::Keep)],
             "05-input-library" => {
                 vec![
+                    Msg::CancelSaveIdea,
                     Msg::InboxPick(vec![]),
                     Msg::ContinueWithoutServers,
                     Msg::Tab(Tab::InputLibrary),
@@ -1681,7 +1695,7 @@ impl Tour {
     }
 
     /// Click a button on the selected idea card (the library's Add as refs,
-    /// the inbox's Keep), then check it did what it says.
+    /// the inbox's Save to input library), then check it did what it says.
     fn card_click_check(&mut self, name: &str, ctx: &egui::Context, st: &AppState) {
         let library = name == "98j-check-library-card-refs";
         match self.settled {
@@ -1691,7 +1705,7 @@ impl Tour {
                     self.clicked = true;
                     return;
                 };
-                // Add as refs is the second of two; Keep the first
+                // Add as refs is the second of two; Save the first
                 let pos = crate::widgets::cover_button_rect(cover, 2, usize::from(library)).center();
                 self.card_before = if library {
                     (st.lib_selected.iter().next().cloned(), st.generate.refs().len())
@@ -1714,11 +1728,9 @@ impl Tour {
                     let now = st.generate.refs().len();
                     (images > 0 && now == n + images, format!("refs {n} → {now}, its images {images}"))
                 } else {
-                    let kept = id
-                        .as_ref()
-                        .and_then(|id| st.idea(id))
-                        .is_some_and(|e| matches!(e.loc, increart_core::IdeaLoc::Library(_)));
-                    (kept && st.inbox_queue().len() + 1 == n, format!("inbox {n} → {}", st.inbox_queue().len()))
+                    // Save asks for the name and folder first
+                    let asked = st.save_idea.as_ref().map(|d| d.ideas.clone());
+                    (id.is_some() && asked == id.clone().map(|i| vec![i]), format!("save dialog for {asked:?}"))
                 };
                 eprintln!("CHECK {name}: {} ({what})", if ok { "ok" } else { "FAILED" });
             }
@@ -1802,7 +1814,7 @@ impl Tour {
             // rewrite, compared with the current prompt
             out.push(Msg::HistorySelect(2));
         }
-        if name == "98j-check-library-card-refs" || name == "98k-check-inbox-card-keep" {
+        if name == "98j-check-library-card-refs" || name == "98k-check-inbox-card-save" {
             self.card_click_check(name, ctx, st);
         }
         if name == "25-check-grid-click" && self.settled == 5 && !self.clicked {

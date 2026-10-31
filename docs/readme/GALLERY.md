@@ -12,7 +12,7 @@ simulated. Retaken by `scripts/make-readme-gallery.sh`; don't edit by hand.
 
 ![Home](gallery/home.webp)
 
-**Idea inbox.** Ideas come in as text, images or both: typed in, imported, or saved into the drop folder from a browser. Keep, discard or promote each one.
+**Idea inbox.** Ideas come in as text, images or both: typed in, imported, or saved into the drop folder from a browser. Save each one to the input library, discard it or promote it.
 
 ![Idea inbox](gallery/idea-inbox.webp)
 
