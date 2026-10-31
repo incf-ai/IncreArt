@@ -61,7 +61,8 @@ impl Harness {
             if msgs.is_empty() {
                 // a library still opening sends nothing until it's open
                 let opening = matches!(&self.state.phase, Phase::Library(d) if d.busy);
-                if idle && self.state.busy == 0 && self.state.saving == 0 && !opening && self.state.archiving.is_none() {
+                if idle && self.state.busy == 0 && self.state.saving == 0 && !opening && self.state.archiving.is_none()
+                {
                     return;
                 }
                 assert!(

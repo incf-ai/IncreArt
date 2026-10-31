@@ -103,6 +103,8 @@ const EXTRA_SCENES: &[&str] = &[
     // after 02: the wheel over a followed log unticks follow
     "98h3-check-logs-scroll-unticks-follow",
     "98h4-check-logs-wrapped-scroll-unticks-follow",
+    // after 02: Ctrl+F, a word, Enter: found and gone to
+    "98h7-check-logs-find",
     "50-output-library-show-outputs-empty",
     "51-output-library-show-outputs-any-rating",
     "56-server-status",
@@ -187,6 +189,10 @@ const EXTRA_SCENES: &[&str] = &[
     "98g-presets-group",
     "98h-server-logs",
     "98h2-server-logs-wrapped",
+    // a KoboldCpp's (or a PE server's) log: its model load folded; then
+    // only its warnings and errors
+    "98h5-server-logs-folded",
+    "98h6-server-logs-errors-only",
     // after 02, with a config whose first preset's server can't start (a
     // KoboldCpp binary that isn't there): the error under its row
     "98i-server-start-failed",
@@ -314,13 +320,35 @@ impl Tour {
             "56-server-status" => vec![Msg::ContinueWithoutServers, Msg::ServerStatus(true)],
             "57-no-server-warning" => vec![Msg::ServerStatus(false), Msg::QueueGenerate],
             "98h-server-logs" => vec![Msg::OpenLogs(None)],
+            // the checks: every launch, more than fits (the latest may not)
             "98h2-server-logs-wrapped" | "98h4-check-logs-wrapped-scroll-unticks-follow" => {
                 vec![Msg::Logs(Some(increart_gui_core::LogsView {
                     wrap: true,
+                    launch: if name.starts_with("98h4-") {
+                        increart_gui_core::LaunchShown::All
+                    } else {
+                        increart_gui_core::LaunchShown::Latest
+                    },
                     ..increart_gui_core::LogsView::new(None)
                 }))]
             }
-            "98h3-check-logs-scroll-unticks-follow" => vec![Msg::Logs(Some(increart_gui_core::LogsView::new(None)))],
+            "98h3-check-logs-scroll-unticks-follow" | "98h7-check-logs-find" => {
+                vec![Msg::Logs(Some(increart_gui_core::LogsView {
+                    launch: increart_gui_core::LaunchShown::All,
+                    ..increart_gui_core::LogsView::new(None)
+                }))]
+            }
+            "98h5-server-logs-folded" | "98h6-server-logs-errors-only" => {
+                let mut names: Vec<String> = std::fs::read_dir(increart_gui_core::runtime::log_dir())
+                    .map(|rd| rd.flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect())
+                    .unwrap_or_default();
+                names.sort();
+                let file = names.into_iter().find(|n| n.starts_with("koboldcpp-") || n.starts_with("pe-"));
+                vec![Msg::Logs(Some(increart_gui_core::LogsView {
+                    trouble: name == "98h6-server-logs-errors-only",
+                    ..increart_gui_core::LogsView::new(file)
+                }))]
+            }
             "98i-server-start-failed" => vec![Msg::OpenPresetNow(0)],
             "58-server-dialog-from-main" => vec![Msg::CloseNoServerWarning, Msg::OpenServerDialog],
             "59-continue-without-servers" => vec![Msg::AskContinueWithoutServers],
@@ -1981,6 +2009,31 @@ impl Tour {
                 (6, Some(p)) if !self.clicked => {
                     self.inject = vec![button(p, false)];
                     self.clicked = true;
+                }
+                _ => {}
+            }
+        }
+        if name == "98h7-check-logs-find" {
+            let key = |key, pressed, modifiers| egui::Event::Key {
+                key,
+                physical_key: None,
+                pressed,
+                repeat: false,
+                modifiers,
+            };
+            let (ctrl, none) = (egui::Modifiers::COMMAND, egui::Modifiers::default());
+            match self.settled {
+                5 => self.inject = vec![key(egui::Key::F, true, ctrl), key(egui::Key::F, false, ctrl)],
+                7 => self.inject = vec![egui::Event::Text("listening".into())],
+                9 => self.inject = vec![key(egui::Key::Enter, true, none), key(egui::Key::Enter, false, none)],
+                15 => {
+                    let l = st.logs.as_ref();
+                    let (search, follow) = (l.map(|l| l.search.as_str()), l.is_some_and(|l| l.follow));
+                    let ok = search == Some("listening") && !follow;
+                    eprintln!(
+                        "CHECK {name}: {} (search {search:?}, following {follow})",
+                        if ok { "ok" } else { "FAILED" }
+                    );
                 }
                 _ => {}
             }

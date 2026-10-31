@@ -1213,21 +1213,48 @@ impl Confirm {
     }
 }
 
-/// The log viewer: the started servers' logs (DESIGN.md, Server logs).
+/// The log viewer: the app's log and the started servers' (DESIGN.md,
+/// Server logs).
 #[derive(Clone, Debug, PartialEq)]
 pub struct LogsView {
     /// The log shown: its file name in the log folder.
     pub file: Option<String>,
-    /// Only the lines containing this (any case).
+    /// Found in the lines shown (any case): marked, Enter going from one to
+    /// the next.
     pub search: String,
+    /// Only the lines with `search` in them.
+    pub only_found: bool,
     pub wrap: bool,
     /// Keep to the end as the log grows.
     pub follow: bool,
+    pub launch: LaunchShown,
+    /// Only warnings and errors (and the app's lines), with the lines
+    /// around them.
+    pub trouble: bool,
+}
+
+/// Which of a log's launches the log viewer shows.
+#[derive(Clone, Debug, PartialEq, Default)]
+pub enum LaunchShown {
+    /// From the last launch line on.
+    #[default]
+    Latest,
+    /// The launch with this launch line.
+    Of(String),
+    All,
 }
 
 impl LogsView {
     pub fn new(file: Option<String>) -> Self {
-        LogsView { file, search: String::new(), wrap: false, follow: true }
+        LogsView {
+            file,
+            search: String::new(),
+            only_found: false,
+            wrap: false,
+            follow: true,
+            launch: LaunchShown::Latest,
+            trouble: false,
+        }
     }
 }
 

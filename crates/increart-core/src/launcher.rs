@@ -195,11 +195,8 @@ pub fn open_cancellable(
     let log = log_path(log_dir, server);
     let mut out = OpenOptions::new().create(true).append(true).open(&log)?;
     let mut cmd = Command::new(shared.binary.trim());
-    cmd.args(command_args(server, shared))
-        .envs(command_env(server))
-        .stdin(Stdio::null())
-        .stdout(out.try_clone()?)
-        .stderr(out.try_clone()?);
+    cmd.args(command_args(server, shared)).envs(command_env(server)).stdin(Stdio::null());
+    let pipe = crate::process::output_to(&mut cmd, &out, !shared.leave_running)?;
     crate::process::background(&mut cmd, false);
     out.write_all(crate::process::log_header(&cmd).as_bytes())?;
     let start = out.metadata()?.len();
@@ -210,6 +207,9 @@ pub fn open_cancellable(
         let _ = writeln!(out, "--- IncreArt: {why}");
         LaunchError::Spawn { name: name.clone(), why }
     })?;
+    if let Some(pipe) = pipe {
+        crate::process::stamp_into(pipe, out.try_clone()?);
+    }
     proc.child = Some(child);
     proc.log = Some(log.clone());
     wait_up(proc, log, start, wait, cancel)
@@ -339,6 +339,7 @@ pub fn latest_line(log: &Path, start: u64) -> Option<String> {
 /// "[I] loading tensors completed --- model_loader.cpp:1405" → "loading
 /// tensors completed"; "|####   | 294/396 - 4.38GB/s" → "294/396 · 4.38GB/s".
 fn tidy_line(line: &str) -> String {
+    let line = crate::logview::unstamped(line);
     let line = line.split(" --- ").next().unwrap_or(line);
     let line = ["[I] ", "[W] ", "[E] ", "[D] "].iter().find_map(|p| line.strip_prefix(p)).unwrap_or(line);
     let line = match line.strip_prefix('|').and_then(|l| l.split_once('|')) {
@@ -348,14 +349,15 @@ fn tidy_line(line: &str) -> String {
     line.chars().take(120).collect()
 }
 
-/// The last 2 KB written to `log` since byte `start`.
+/// The last 2 KB written to `log` since byte `start`, without the times
+/// before its lines.
 fn tail(log: &Path, start: u64) -> String {
     let Ok(mut f) = fs::File::open(log) else { return String::new() };
     let len = f.metadata().map(|m| m.len()).unwrap_or(0);
     let from = start.max(len.saturating_sub(2048));
     let mut s = String::new();
     let _ = f.seek(SeekFrom::Start(from)).and_then(|_| f.read_to_string(&mut s));
-    s
+    s.split_inclusive('\n').map(crate::logview::unstamped).collect()
 }
 
 /// `sd-server --list-devices`, one line per device as printed.

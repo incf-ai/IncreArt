@@ -1493,7 +1493,8 @@ its details window, and for every run at once in the Jobs header:
   seed sent, its job ID, generating, done or failed with the server's
   answer, cancels, and a server's failures. The job details window shows
   it (**Generation log**, live while open, with **Copy** and **Show
-  file**), and its progress says "waiting for a server" until a server
+  file**; wrapped, the time dimmed, errors red and warnings amber, paths
+  as file names unless **full paths** is ticked), and its progress says "waiting for a server" until a server
   has one of the run's seeds, "generating on <server>" then.
 - **One load at a time on this machine**: servers on `localhost` /
   `127.0.0.1` load models one after another (a server waiting shows
@@ -2394,6 +2395,10 @@ in the app's state folder (`$XDG_STATE_HOME/increart` when set, else
 `sd-server-<name>.log`, `koboldcpp-<name>.log` (KoboldCpp image servers),
 `pe-<name>.log`. Servers it only connects to have none.
 
+- What a server writes (its output and errors, one stream) is timed as it
+  comes: each line starts `HH:MM:SS.mmm `. A server left running when the
+  app quits (`leave_running`) writes to the file itself, untimed.
+
 - Each start first adds a line of the app's own to the log:
   `--- IncreArt, <date time>: <command line>` (the environment it set
   first, such as `CUDA_VISIBLE_DEVICES=1`; passwords as `***`). A server
@@ -2420,14 +2425,34 @@ in the app's state folder (`$XDG_STATE_HOME/increart` when set, else
 - **Logs…** (the startup Servers screen's footer, the top bar's Servers
   window) opens the log viewer, a modal; a started server's row there has a
   log button that opens it on that server's log.
-- Left: the logs, newest first (size and age on hover). Right: the chosen
-  log's last 1 MB as a terminal shows it (lines rewritten with `\r`, such
-  as progress bars, as their last state; colour codes out), refreshed as it
-  grows; **follow** keeps to the end (scrolling back, by the wheel or the
-  bar, unticks it; ticked again, it's back at the end), **wrap** (the
-  last 3000 lines, wrapped to the width), and a search that shows only the
-  lines containing it. When the last 1 MB
-  starts after the latest launch line, that line is pinned above it.
+- Left: the logs by kind (App · Image servers · Prompt enhancer · Other),
+  newest first in each, named for what they are ("KoboldCpp kcpp-gpu1",
+  not the file name; it, the size and age on hover). A server in use has
+  its state beside it (ready green, failed or retrying red); a log with an
+  error since its latest launch is red with a ●.
+- Right: the chosen log's last 1 MB as a terminal shows it (lines
+  rewritten with `\r`, such as progress bars, as their last state; colour
+  codes out), refreshed as it grows; **follow** keeps to the end
+  (scrolling back, by the wheel or the bar, unticks it; ticked again, it's
+  back at the end), **wrap** (the last 3000 lines, wrapped to the width).
+  When the last 1 MB starts after the latest launch line, that line is
+  pinned above it.
+- Launches: the latest launch's lines to start with (chosen from the
+  list, it's always that); the menu picks an earlier one by its time, or
+  **all**. A KoboldCpp's reloads are part of their launch.
+- Easier to read: times dimmed; launch lines bright; errors red (sd.cpp's
+  `[E]`, "error", "failed", "out of memory", "panicked", a traceback… not
+  "no error"), warnings amber; sd.cpp's ` --- file.cpp:N` endings
+  dimmed. Runs of 8 or more lines of one kind (`print_info: …`,
+  `load: …`, progress bars) fold into one "▸ print_info: 66 lines"
+  (clicked, they show; again, they fold), unless a warning or error is
+  among them; a line repeated is shown once with ×N.
+- **errors only**: the warnings and errors (and the launch lines), each
+  with the 2 lines around it, ⋯ between.
+- Find (Ctrl+F, or the box): matches marked, the one gone to in amber,
+  "N of M"; typed, it goes to the latest; Enter or F3 the next, Shift for
+  the one before (or ↑ ↓), which unticks follow. **only these lines**
+  shows only the lines containing it.
 - Footer left: **Open in editor** (`editor` in `config.rsn`, the file
   appended; else the desktop's default app for it, then gnome-text-editor,
   gedit, kate, mousepad, xed), **Show in folder**, **Copy** (the lines
