@@ -392,7 +392,14 @@ fn engine_run(cx: &mut Ctx, stop_one: bool) -> Verdict {
                 cx.log(format!("problem: {p}"));
                 problems.push(p);
             }
-            Event::Log { line, .. } => cx.log(format!("engine: {line}")),
+            Event::Log { line, .. } => {
+                // "[server] seed N: sent": where it went (Progress comes only
+                // with steps polled, which a quick job may not have)
+                if let Some((s, seed)) = sent_to(&line, &names) {
+                    seed_server.insert(seed, s);
+                }
+                cx.log(format!("engine: {line}"));
+            }
             Event::RunDone { .. } => break Ok(()),
         }
     };
@@ -415,5 +422,26 @@ fn engine_run(cx: &mut Ctx, stop_one: bool) -> Verdict {
             warn(format!("all {seeds} made ({spread}); the engine said: {}", problems[0]))
         }
         Ok(()) => pass(format!("all {seeds} made ({spread})")),
+    }
+}
+
+/// The server a run log line says a seed was sent to, and the seed.
+fn sent_to(line: &str, names: &[String]) -> Option<(usize, u64)> {
+    let (s, name) = names.iter().enumerate().find(|(_, n)| line.contains(&format!("[{n}] seed ")))?;
+    let rest = line.split(&format!("[{name}] seed ")).nth(1)?;
+    let (seed, text) = rest.split_once(':')?;
+    (text.trim() == "sent").then_some(())?;
+    Some((s, seed.trim().parse().ok()?))
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn a_sent_seed_is_found_in_the_run_log() {
+        let names = vec!["sd-rocm0".to_string(), "sd-rocm1".to_string()];
+        let at = "2026-10-31 16:43:56.368";
+        assert_eq!(super::sent_to(&format!("{at} [sd-rocm1] seed 100: sent"), &names), Some((1, 100)));
+        assert_eq!(super::sent_to(&format!("{at} [sd-rocm0] seed 7: done in 2.1 s"), &names), None);
+        assert_eq!(super::sent_to(&format!("{at} [sd-rocm0] warm-up image done"), &names), None);
     }
 }

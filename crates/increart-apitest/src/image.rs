@@ -38,8 +38,13 @@ pub fn capabilities(cx: &mut Ctx, t: Target) -> Verdict {
             let modes = v.get("supported_modes").cloned().unwrap_or_default();
             cx.log(format!("capabilities: {}", increart_core::traffic::redacted(&v)));
             let img_gen = modes.as_array().is_none_or(|m| m.iter().any(|x| x == "img_gen"));
+            // sd-server's modes come with the model it loads: none before one
+            let state = v.pointer("/runtime/state").and_then(|s| s.as_str()).unwrap_or("");
+            let empty = matches!(state, "" | "empty") && v.pointer("/runtime/recipe").is_none_or(|r| r.is_null());
             if img_gen {
                 pass(format!("{what} at {}, modes {modes}", client.base_url()))
+            } else if empty {
+                pass(format!("{what} at {}, nothing loaded yet (its modes come with a model)", client.base_url()))
             } else {
                 warn(format!("{what}: supported_modes {modes} has no img_gen"))
             }
@@ -132,7 +137,11 @@ pub fn list(cx: &mut Ctx, t: Target) -> Verdict {
             let text = format!(
                 "model presets it can load: {}{}",
                 if can.is_empty() { "none".into() } else { can.join(", ") },
-                if cannot.is_empty() { String::new() } else { format!("; not {}", cannot.len()) }
+                if cannot.is_empty() {
+                    String::new()
+                } else {
+                    format!("; {} it can't (the log says why)", cannot.len())
+                }
             );
             if can.is_empty() { warn(text) } else { pass(text) }
         }

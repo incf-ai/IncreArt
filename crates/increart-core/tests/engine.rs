@@ -823,6 +823,39 @@ fn koboldcpp_loads_the_model_and_generates() {
     assert_eq!((recipe.sdcpp.as_str(), recipe.device.as_str()), ("koboldcpp 1.123.1", "Vulkan1"));
 }
 
+/// As run on two GPUs: a KoboldCpp stops mid-run. Its seeds went with it
+/// (the one generating, the ones sent after); they go to the other, not
+/// failed (they failed for good: "KoboldCpp: connection closed").
+#[test]
+#[cfg(unix)]
+fn a_koboldcpp_stopping_sends_its_seeds_to_another() {
+    let s = setup();
+    let (tmp1, tmp2) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let (k1, k2) = (FakeKobold::start(""), FakeKobold::start(""));
+    let (a1, a2) = (admin(&k1, tmp1.path()), admin(&k2, tmp2.path()));
+    k1.with(|st| st.gen_ms = 400);
+    k2.with(|st| st.gen_ms = 400);
+    let mut cut = common::cut::Cut::start(&k1.url);
+    let run = new_run(&s, "qwen-image-21", 6, false);
+    let servers = vec![
+        Endpoint { name: "k1".into(), device: "Vulkan2".into(), client: Client::kobold(&cut.url, "", Some(a1)) },
+        Endpoint { name: "k2".into(), device: "Vulkan1".into(), client: Client::kobold(&k2.url, "", Some(a2)) },
+    ];
+    let engine = Engine::start(s.lib.clone(), servers, opts(), None);
+    engine.queue_run(&run);
+    // k1 generating a seed of the run (not its warm-up)
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while k1.generations().is_empty() || k1.with(|st| st.step) == 0 {
+        assert!(Instant::now() < deadline, "k1 never generated");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    cut.cut();
+    let events = collect(&engine, run_done(&run));
+    let failed: Vec<_> = events.iter().filter(|e| matches!(e, Event::SeedFailed { .. })).collect();
+    assert!(failed.is_empty(), "{failed:?}");
+    assert_eq!(outputs(&events).iter().map(|(seed, _)| *seed).collect::<Vec<_>>(), [0, 1, 2, 3, 4, 5]);
+}
+
 #[test]
 #[cfg(unix)]
 fn koboldcpp_applies_the_runs_loras() {
