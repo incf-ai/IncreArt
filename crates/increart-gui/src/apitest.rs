@@ -1,20 +1,28 @@
-//! **Validate servers…** (DESIGN.md, Validating servers): the suite's
-//! cases as a tree, each checked to run and with its outcome; the log of
-//! the one picked on the right; Run, Stop, Copy report.
+//! **Validate servers…** (DESIGN.md, Validating servers). Its basic view:
+//! a preset's validation, what it checks, its steps as they run, and a
+//! summary at the end (what went wrong, Open the preset). Its advanced
+//! view: the suite's cases as a tree, each checked to run and with its
+//! outcome; the log of the one picked on the right; Run, Stop, Copy report.
 
 use eframe::egui::{self, RichText};
-use increart_core::apitest::{Cost, Outcome};
+use increart_core::apitest::{Case, Cost, Outcome};
 use increart_gui_core::{ApiRun, ApiTest, AppState, Msg};
 
-use crate::widgets::{BAD, GOOD, NEUTRAL, dialog_footer, ic, ph};
+use crate::widgets::{ACCENT, BAD, GOOD, NEUTRAL, dialog_footer, ic, ph};
 
 pub fn window(ctx: &egui::Context, st: &AppState, t: &ApiTest, out: &mut Vec<Msg>) {
     let screen = ctx.content_rect();
+    let advanced = st.api_test_advanced;
     let m = egui::Modal::new(egui::Id::unique("api_test")).show(ctx, |ui| {
-        let width = (screen.width() * 0.9).min(1200.0);
-        let height = (screen.height() * 0.7).min(760.0);
+        let width = (screen.width() * 0.9).min(if advanced { 1200.0 } else { 760.0 });
+        let height = (screen.height() * 0.7).min(if advanced { 760.0 } else { 520.0 });
         ui.set_width(width);
-        ui.heading(ic(ph::STETHOSCOPE, "Validate servers"));
+        if !advanced {
+            ui.heading(ic(ph::STETHOSCOPE, "Validate servers"));
+            basic(ui, st, t, height, out);
+            return;
+        }
+        ui.heading(ic(ph::STETHOSCOPE, "Validate servers: advanced"));
         ui.add(
             egui::Label::new(
                 RichText::new(
@@ -264,6 +272,7 @@ fn detail_body(ui: &mut egui::Ui, t: &ApiTest) {
                         let text = format!("{}: {} ({:.1} s)", o.label(), c.summary, c.secs);
                         ui.add(egui::Label::new(RichText::new(text).strong()).wrap());
                     });
+                    try_line(ui, Some(o), &c.summary);
                 }
                 (false, None) => {
                     let why = c.case.not_applicable.as_deref().map(|w| format!("n/a here: {w}"));
@@ -283,6 +292,16 @@ fn detail_body(ui: &mut egui::Ui, t: &ApiTest) {
         }
         None => {
             ui.label(RichText::new("The run").strong());
+            if let Some((counts, ..)) = t.done.as_ref().filter(|_| !t.running) {
+                let color = if counts.fail > 0 {
+                    BAD
+                } else if counts.warn > 0 {
+                    NEUTRAL
+                } else {
+                    GOOD
+                };
+                ui.label(RichText::new(format!("Last run: {}", counts.line())).color(color));
+            }
             if t.log.is_empty() && !t.running {
                 ui.weak("Check the cases to run on the left (a branch's box checks all in it), then Run. Click a case to see its log and the requests it made.");
             }
@@ -302,6 +321,368 @@ fn lines<'a>(ui: &mut egui::Ui, text: impl Iterator<Item = &'a str>) {
     ui.add(egui::Label::new(RichText::new(text.join("\n")).monospace()).wrap());
 }
 
+/// The basic view: the preset shown, validated step by step.
+fn basic(ui: &mut egui::Ui, st: &AppState, t: &ApiTest, height: f32, out: &mut Vec<Msg>) {
+    let preset = t.preset.as_deref();
+    if !t.cases.is_empty() && !t.running {
+        ui.horizontal(|ui| {
+            ui.label("Server preset");
+            let mut chosen = None;
+            egui::ComboBox::from_id_salt("api_basic_preset").selected_text(preset.unwrap_or("choose one")).show_ui(
+                ui,
+                |ui| {
+                    for p in t.presets() {
+                        if ui.selectable_label(preset == Some(p), p).clicked() {
+                            chosen = Some(p.to_string());
+                        }
+                    }
+                },
+            );
+            if let Some(p) = chosen.filter(|p| Some(p.as_str()) != preset) {
+                out.push(Msg::ApiTestPreset(Some(p)));
+            }
+            if let Some(p) = preset {
+                status_line(ui, st, p);
+            }
+        });
+        ui.add_space(6.0);
+    }
+    egui::ScrollArea::vertical().id_salt("api_basic").max_height(height).auto_shrink([false, true]).show(ui, |ui| {
+        ui.set_min_height(height * 0.6);
+        if t.listing {
+            ui.horizontal(|ui| {
+                ui.add(egui::Spinner::new());
+                ui.label("Getting ready…");
+            });
+        } else if t.running {
+            running(ui, st, t, preset.unwrap_or("the preset"));
+        } else if t.finished() {
+            summary(ui, st, t, preset.unwrap_or("The preset"));
+        } else {
+            if let Some(e) = &t.error {
+                ui.add(egui::Label::new(RichText::new(e).color(BAD)).wrap());
+                ui.add_space(6.0);
+            }
+            ready(ui, t, preset);
+        }
+    });
+    ui.add_space(6.0);
+    basic_footer(ui, t, out);
+}
+
+/// What the preset's marks says: validated when, or not.
+fn status_line(ui: &mut egui::Ui, st: &AppState, preset: &str) {
+    use increart_core::validation::Status;
+    let Some(p) = st.config.preset(preset) else { return };
+    let (icon, text, color) = match st.validations.status(&st.config, p) {
+        Status::Passed(s) => (ph::SEAL_CHECK, format!("validated on {}", s.day()), GOOD),
+        Status::Failed(s) => (ph::SEAL_WARNING, format!("validation failed on {}", s.day()), BAD),
+        Status::Changed(s) => {
+            (ph::SEAL_QUESTION, format!("not validated since its settings changed ({})", s.day()), NEUTRAL)
+        }
+        Status::Never => (ph::SEAL_QUESTION, "not validated yet".to_string(), NEUTRAL),
+    };
+    ui.label(RichText::new(ic(icon, &text)).color(color));
+}
+
+/// Before a run: what validating does, and its steps.
+fn ready(ui: &mut egui::Ui, t: &ApiTest, preset: Option<&str>) {
+    let Some(preset) = preset else {
+        ui.label("Choose the server preset to validate above.");
+        return;
+    };
+    ui.add(
+        egui::Label::new(format!(
+            "Checks that IncreArt can use {preset}'s servers, as it will when you open the preset: each server \
+             answers, lists its models and makes a small image, then a short run goes through them all. It takes \
+             a few minutes; the first image takes the longest. Servers the preset starts are started for the \
+             check and stopped after."
+        ))
+        .wrap(),
+    );
+    ui.add_space(8.0);
+    ui.label(RichText::new("What it checks").strong());
+    steps(ui, t, &t.basic_cases());
+    ui.add_space(8.0);
+    ui.weak(
+        "Press Start validation below. When it's done, a summary says whether the servers work, and what to do if not.",
+    );
+}
+
+/// During a run: how far it is, its steps.
+fn running(ui: &mut egui::Ui, st: &AppState, t: &ApiTest, preset: &str) {
+    let ran: Vec<usize> = t.ran.iter().copied().filter(|&i| t.cases[i].case.not_applicable.is_none()).collect();
+    let done = ran.iter().filter(|&&i| t.cases[i].outcome.is_some()).count();
+    let title =
+        if t.stopping { format!("Stopping the validation of {preset}…") } else { format!("Validating {preset}…") };
+    ui.label(RichText::new(title).strong().size(17.0));
+    ui.add_space(4.0);
+    let secs = (st.now - t.started).max(0.0);
+    ui.add(egui::ProgressBar::new(if ran.is_empty() { 0.0 } else { done as f32 / ran.len() as f32 }).text(format!(
+        "step {} of {} · {}",
+        (done + 1).min(ran.len()),
+        ran.len(),
+        duration(secs)
+    )));
+    ui.add_space(6.0);
+    steps(ui, t, &ran);
+    ui.add_space(6.0);
+    ui.weak("The first image can take a minute or two while the model loads. You can stop at any time.");
+}
+
+/// After a run: whether it works, what went wrong, what to do.
+fn summary(ui: &mut egui::Ui, st: &AppState, t: &ApiTest, preset: &str) {
+    let ran: Vec<usize> = t.ran.iter().copied().filter(|&i| t.cases[i].case.not_applicable.is_none()).collect();
+    let is = |i: usize, o: &[Outcome]| t.cases[i].outcome.is_some_and(|x| o.contains(&x));
+    let failed: Vec<usize> = ran.iter().copied().filter(|&i| is(i, &[Outcome::Fail])).collect();
+    let skipped: Vec<usize> =
+        ran.iter().copied().filter(|&i| is(i, &[Outcome::Skipped]) || t.cases[i].outcome.is_none()).collect();
+    let warned: Vec<usize> = ran.iter().copied().filter(|&i| is(i, &[Outcome::Warn])).collect();
+    let took = t.ended.map(|e| duration((e - t.started).max(0.0))).unwrap_or_default();
+    let (icon, color, title, text) = if t.stopped {
+        (
+            ph::STOP_CIRCLE,
+            NEUTRAL,
+            "Stopped before it finished".to_string(),
+            format!("{preset} isn't validated: Run again to finish the checks."),
+        )
+    } else if !failed.is_empty() || t.error.is_some() {
+        let n = failed.len().max(1);
+        (
+            ph::X_CIRCLE,
+            BAD,
+            format!("{n} problem{} found", if n == 1 { "" } else { "s" }),
+            format!(
+                "IncreArt may not be able to generate with {preset} until {} fixed. What went wrong is below. Copy \
+                 report gives every request and answer, to send to whoever runs the servers (or to paste to an \
+                 LLM); Advanced view shows each check's log.",
+                if n == 1 { "it's" } else { "they're" }
+            ),
+        )
+    } else if !warned.is_empty() {
+        (
+            ph::CHECK_CIRCLE,
+            GOOD,
+            format!("{preset} works with IncreArt"),
+            format!(
+                "Every check passed, {} with something worth knowing (below). You can open the preset.",
+                if warned.len() == 1 { "one".to_string() } else { warned.len().to_string() }
+            ),
+        )
+    } else {
+        (
+            ph::CHECK_CIRCLE,
+            GOOD,
+            format!("{preset} works with IncreArt"),
+            "Every check passed. You can open the preset.".into(),
+        )
+    };
+    ui.horizontal(|ui| {
+        ui.label(RichText::new(icon).color(color).size(30.0));
+        ui.vertical(|ui| {
+            ui.label(RichText::new(title).strong().size(19.0).color(color));
+            ui.weak(format!("{} checks in {took}", ran.len()));
+        });
+    });
+    ui.add_space(4.0);
+    ui.add(egui::Label::new(text).wrap());
+    if let Some(e) = &t.error {
+        ui.add_space(4.0);
+        ui.add(egui::Label::new(RichText::new(e).color(BAD)).wrap());
+    }
+    // whether the Servers screen now marks it validated
+    let basic = t.basic_cases();
+    if !t.stopped && !basic.is_empty() && basic.iter().all(|i| t.ran.contains(i)) {
+        use increart_core::validation::Status;
+        let marked = st.config.preset(preset).map(|p| st.validations.status(&st.config, p));
+        ui.add_space(4.0);
+        match marked {
+            Some(Status::Passed(_)) => {
+                ui.label(RichText::new(ic(ph::SEAL_CHECK, "Marked validated on the Servers screen.")).color(GOOD));
+            }
+            Some(Status::Failed(_)) => {
+                ui.label(
+                    RichText::new(ic(ph::SEAL_WARNING, "Marked validation failed on the Servers screen.")).color(BAD),
+                );
+            }
+            _ => {}
+        }
+    }
+    let problems = |ui: &mut egui::Ui, heading: &str, ix: &[usize]| {
+        if ix.is_empty() {
+            return;
+        }
+        ui.add_space(8.0);
+        ui.label(RichText::new(heading).strong());
+        for &i in ix {
+            let c = &t.cases[i];
+            ui.horizontal_top(|ui| {
+                mark(ui, false, c.outcome.or(Some(Outcome::Skipped)));
+                ui.vertical(|ui| {
+                    ui.label(step_name(&c.case));
+                    let why = if c.summary.is_empty() { "not run" } else { c.summary.as_str() };
+                    ui.add(egui::Label::new(RichText::new(why).weak()).wrap());
+                    try_line(ui, c.outcome, &c.summary);
+                });
+            });
+        }
+    };
+    problems(ui, "What went wrong", &failed);
+    if !t.stopped {
+        problems(ui, "Not checked (what they need went wrong first)", &skipped);
+    }
+    problems(ui, "Worth knowing", &warned);
+    ui.add_space(8.0);
+    egui::CollapsingHeader::new(RichText::new("Every check").strong())
+        .id_salt(("api_basic_every", t.run))
+        .default_open(failed.is_empty() && warned.is_empty())
+        .show(ui, |ui| steps(ui, t, &ran));
+}
+
+/// What to try for a failure or warning, if it's a common one.
+fn try_line(ui: &mut egui::Ui, outcome: Option<Outcome>, summary: &str) {
+    if let Some(h) = outcome.and_then(|o| increart_core::apitest::hint(o, summary)) {
+        ui.add(egui::Label::new(RichText::new(ic(ph::LIGHTBULB, &format!("Try: {h}"))).color(ACCENT)).wrap());
+    }
+}
+
+/// The cases as steps: their mark, name and (once run) what came back.
+fn steps(ui: &mut egui::Ui, t: &ApiTest, ix: &[usize]) {
+    for &i in ix {
+        let c = &t.cases[i];
+        ui.horizontal(|ui| {
+            mark(ui, c.running, c.outcome);
+            let name = RichText::new(step_name(&c.case));
+            ui.label(if c.running { name.strong() } else { name });
+            if c.outcome.is_some() && !c.summary.is_empty() {
+                ui.add(egui::Label::new(RichText::new(&c.summary).weak()).truncate()).on_hover_text(&c.summary);
+            }
+        });
+    }
+}
+
+/// A case as said to someone who doesn't know the suite.
+fn step_name(c: &Case) -> String {
+    let key = c.id.rsplit('/').next().unwrap_or(&c.id);
+    let what = match key {
+        "together.open" => return "Start or connect to the servers".into(),
+        "together.routing" => return "Each model preset has a server to run on".into(),
+        "together.end-to-end" => return "A short run through all of them, as the app uses them".into(),
+        "connect.capabilities" => "answers".to_string(),
+        "models.list" => "lists its models".into(),
+        "generate.txt2img" => "makes a small image".into(),
+        "prompt-enhance.answers" => "answers a prompt-enhance question".into(),
+        _ => c.title.clone(),
+    };
+    match &c.server {
+        Some(s) => format!("{s}: {what}"),
+        None => what,
+    }
+}
+
+/// `secs` as "42 s" or "3 min 5 s".
+fn duration(secs: f64) -> String {
+    let s = secs.round() as u64;
+    if s < 60 { format!("{s} s") } else { format!("{} min {} s", s / 60, s % 60) }
+}
+
+fn basic_footer(ui: &mut egui::Ui, t: &ApiTest, out: &mut Vec<Msg>) {
+    let preset = t.preset.clone();
+    let idle = !t.running && !t.listing;
+    let finished = t.finished();
+    let report = t.done.as_ref().and_then(|(_, r, _)| r.clone());
+    let zip = t.done.as_ref().and_then(|(_, _, z)| z.clone());
+    let failed = finished
+        && (t.stopped
+            || t.error.is_some()
+            || t.ran.iter().any(|&i| {
+                t.cases[i].case.not_applicable.is_none()
+                    && !matches!(t.cases[i].outcome, Some(Outcome::Pass | Outcome::Warn))
+            }));
+    let (left, right) = dialog_footer(
+        ui,
+        |ui| {
+            let mut out = vec![];
+            if ui
+                .add_enabled(idle, egui::Button::new(ic(ph::SLIDERS_HORIZONTAL, "Advanced view…")))
+                .on_hover_text(
+                    "every case of the suite as a tree, each one's log and the requests it made; run any of them",
+                )
+                .clicked()
+            {
+                out.push(Msg::ApiTestAdvanced(true));
+            }
+            if finished {
+                if ui
+                    .add_enabled(report.is_some(), egui::Button::new(ic(ph::COPY, "Copy report")))
+                    .on_hover_text("every check, what it expects, its log and the requests it made: to send, or to paste to an LLM")
+                    .clicked()
+                    && let Some(r) = &report
+                {
+                    match std::fs::read_to_string(r.join("report.md")) {
+                        Ok(text) => ui.ctx().copy_text(text),
+                        Err(e) => ui.ctx().copy_text(format!("{}: {e}", r.join("report.md").display())),
+                    }
+                }
+                if ui
+                    .add_enabled(zip.is_some(), egui::Button::new(ic(ph::FILE_ZIP, "Show report zip")))
+                    .on_hover_text("the report, the requests and the started servers' logs, zipped: to attach")
+                    .clicked()
+                    && let Some(z) = &zip
+                {
+                    out.push(Msg::ShowInFileManager(z.clone()));
+                }
+            }
+            out
+        },
+        |ui| {
+            let mut out = vec![];
+            if t.running {
+                let text = if t.stopping { "Stopping…" } else { "Stop" };
+                let stop = ui
+                    .add_enabled(!t.stopping, egui::Button::new(ic(ph::STOP, text)))
+                    .on_hover_text("ends the check going on, then stops the servers it started");
+                if stop.clicked() {
+                    out.push(Msg::ApiTestStop);
+                }
+                return out;
+            }
+            if ui
+                .add_enabled(idle, egui::Button::new(ic(ph::X, "Close")))
+                .on_hover_text("back to the Servers screen")
+                .clicked()
+            {
+                out.push(Msg::ApiTest(false));
+            }
+            let Some(p) = preset.filter(|_| idle && !t.cases.is_empty()) else { return out };
+            if finished {
+                if ui.button(ic(ph::ARROW_CLOCKWISE, "Run again")).clicked() {
+                    out.push(Msg::ValidateBasic(p.clone()));
+                }
+                let mut label =
+                    RichText::new(ic(ph::PLAY, if failed { "Open anyway" } else { "Open the preset" })).strong();
+                if !failed {
+                    label = label.color(ACCENT);
+                }
+                if ui.button(label).on_hover_text(format!("closes this and opens {p}")).clicked() {
+                    out.push(Msg::ApiTestContinue);
+                }
+            } else {
+                if ui.button("Skip and open").on_hover_text(format!("opens {p} without validating it")).clicked() {
+                    out.push(Msg::ApiTestContinue);
+                }
+                let start = RichText::new(ic(ph::PLAY, "Start validation")).strong().color(ACCENT);
+                if ui.add_enabled(!t.basic_cases().is_empty(), egui::Button::new(start)).clicked() {
+                    out.push(Msg::ValidateBasic(p));
+                }
+            }
+            out
+        },
+    );
+    out.extend(left);
+    out.extend(right);
+}
+
 fn footer(ui: &mut egui::Ui, st: &AppState, t: &ApiTest, out: &mut Vec<Msg>) {
     let checked = t.cases.iter().filter(|c| c.checked).count();
     let failed = t.ids(ApiRun::Failed).len();
@@ -312,6 +693,13 @@ fn footer(ui: &mut egui::Ui, st: &AppState, t: &ApiTest, out: &mut Vec<Msg>) {
         ui,
         |ui| {
             let mut out = vec![];
+            if ui
+                .add_enabled(idle, egui::Button::new(ic(ph::LIST_CHECKS, "Basic view")))
+                .on_hover_text("a preset's validation step by step, and a summary at the end")
+                .clicked()
+            {
+                out.push(Msg::ApiTestAdvanced(false));
+            }
             // of the preset shown: a hidden one's servers aren't started unseen
             let every = t.shown_cases();
             if ui.button("Check all").clicked() {
