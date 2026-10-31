@@ -360,7 +360,7 @@ Continue without servers asks first
 
 ## 60-server-settings
 
-Server settings modal: KoboldCpp (binary, its version), sd-server (binary, devices), both (models folder, leave running)
+Server settings modal: KoboldCpp (binary, its version), sd-server (binary, devices), both (models folder, leave running, wait for free RAM, log server traffic), timeouts
 
 ![60-server-settings](60-server-settings.png)
 

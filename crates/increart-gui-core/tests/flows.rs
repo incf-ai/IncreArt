@@ -6283,6 +6283,19 @@ fn skipping_the_ram_check_is_saved_and_reaches_the_engine() {
 }
 
 #[test]
+fn the_traffic_log_setting_is_saved_and_applied() {
+    let mut s = dialog_state(vec![], None);
+    assert!(!s.config.log_traffic);
+    let fx = update(&mut s, Msg::SetLogTraffic(true));
+    assert!(s.config.log_traffic);
+    assert!(fx.iter().any(|f| matches!(f, Effect::SetLogTraffic(true))));
+    assert!(fx.iter().any(|f| matches!(f, Effect::SaveConfig(..))), "{fx:?}");
+    assert!(update(&mut s, Msg::SetLogTraffic(true)).is_empty());
+    let text = increart_core::rsnfmt::to_string(&s.config);
+    assert!(text.contains("log_traffic: true"), "{text}");
+}
+
+#[test]
 fn a_server_problem_links_the_servers_log() {
     let mut s = dialog_state(vec![], None);
     let status = |name: &str, config: Option<ServerConfig>| ServerStatus {

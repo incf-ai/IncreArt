@@ -176,6 +176,11 @@ fn main() -> eframe::Result {
             (c, w)
         }
     };
+    // the servers' traffic log, when on (the setting, or INCREART_TRAFFIC_LOG)
+    if std::env::var_os("INCREART_TOUR").is_none() {
+        increart_core::traffic::start(&increart_gui_core::runtime::log_dir());
+        increart_core::traffic::set_on(config.log_traffic);
+    }
     // a release zip's example library: in the startup list until removed
     // from it
     if let Some(lib) = increart_core::config::bundled_example_library() {

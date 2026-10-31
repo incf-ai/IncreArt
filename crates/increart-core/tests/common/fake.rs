@@ -47,6 +47,12 @@ pub struct State {
     pub model_files: Option<Vec<String>>,
     /// A cancel is taken but the job generates on, never ending.
     pub ignore_cancel: bool,
+    /// `model-files` answers 500 (the rest answers).
+    pub list_down: bool,
+    /// Jobs stay as they are (queued stays queued), never ending.
+    pub frozen: bool,
+    /// `models/load` answers this as the status, whatever was asked.
+    pub load_answer: Option<Value>,
 }
 
 pub struct Fake {
@@ -171,6 +177,7 @@ fn handle(s: &mut State, method: &Method, path: &str, body: Value) -> (u16, Valu
     match (method, rest) {
         (Method::Get, "capabilities") => (200, json!({"supported_modes": ["img_gen"], "runtime": model_status(s)})),
         (Method::Get, "models/status") => (200, model_status(s)),
+        (Method::Get, "model-files") if s.list_down => (500, json!({"error": "server_error"})),
         (Method::Get, "model-files") => match &s.model_files {
             Some(ids) => (200, json!({"files": ids.iter().map(|id| json!({"id": id})).collect::<Vec<_>>()})),
             None => (404, json!({"error": "not found"})),
@@ -183,6 +190,9 @@ fn handle(s: &mut State, method: &Method, path: &str, body: Value) -> (u16, Valu
             if s.unloadable.as_deref() == Some(&recipe) {
                 s.loaded = None;
                 return err(422, "model_load_failed", "Model initialization failed");
+            }
+            if let Some(answer) = &s.load_answer {
+                return (200, answer.clone());
             }
             let models = serde_json::from_value(body["models"].clone()).unwrap_or_default();
             s.loaded = Some((recipe, models));
@@ -215,6 +225,7 @@ fn handle(s: &mut State, method: &Method, path: &str, body: Value) -> (u16, Valu
             let Some(j) = s.jobs.get_mut(id) else { return (404, json!({"error": "job not found"})) };
             let seed = j.body["seed"].as_u64().unwrap_or(0);
             match j.status {
+                _ if s.frozen => {}
                 "queued" if !busy => j.status = "generating",
                 "generating" if j.cancel_requested => j.status = "cancelled",
                 "generating" => {

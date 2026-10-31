@@ -1064,6 +1064,19 @@ fn settings(ui: &mut egui::Ui, st: &AppState, d: &ServerDialog, out: &mut Vec<Ms
     {
         out.push(Msg::SetSkipRamCheck(!check));
     }
+    let mut log = st.config.log_traffic;
+    let path = increart_gui_core::runtime::log_dir().join(increart_core::traffic::FILE);
+    let forced = increart_core::traffic::enabled() && !log;
+    let tip = format!(
+        "Every request to the image servers (sd-server, KoboldCpp) and their answers, for finding what a server \
+         does wrong, in {} (Logs). Images show as their length; a poll answered as the last time is counted, not \
+         written again{}",
+        path.display(),
+        if forced { ". On now: INCREART_TRAFFIC_LOG is set" } else { "" }
+    );
+    if ui.checkbox(&mut log, "Log server traffic").on_hover_text(tip).changed() {
+        out.push(Msg::SetLogTraffic(log));
+    }
     ui.add_space(12.0);
     ui.label(RichText::new(ic(ph::TIMER, "Timeouts")).strong());
     crate::settings::timeouts(ui, st, out);

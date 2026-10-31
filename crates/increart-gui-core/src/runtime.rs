@@ -1259,6 +1259,10 @@ fn work_on(shared: &Arc<Mutex<Shared>>, wake: &Wake, fx: Effect) -> Vec<Msg> {
             }
             vec![]
         }
+        Effect::SetLogTraffic(on) => {
+            increart_core::traffic::set_on(on);
+            vec![]
+        }
         Effect::StartEngine { shared: cfg, order, skip_ram_check } => {
             let Some(lib) = library(shared) else { return vec![] };
             // Runs with seeds left, found before taking any other lock (the

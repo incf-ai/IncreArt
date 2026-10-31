@@ -63,6 +63,10 @@ pub struct Config {
     /// offloads its weights otherwise waits until they fit, 8 GiB to spare).
     #[serde(skip_serializing_if = "is_default")]
     pub skip_ram_check: bool,
+    /// Every request to the image servers and their answers go to
+    /// `server-traffic.log` (see [`crate::traffic`]).
+    #[serde(skip_serializing_if = "is_default")]
+    pub log_traffic: bool,
     /// Sounds when a GPU is idle or the review queue is long.
     #[serde(skip_serializing_if = "is_default")]
     pub notifications: crate::notify::Notifications,

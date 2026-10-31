@@ -143,6 +143,8 @@ pub enum Msg {
     ServerStatus(bool),
     /// Settings: loads wait for free RAM, or don't.
     SetSkipRamCheck(bool),
+    /// Settings: the image servers' traffic is logged, or isn't.
+    SetLogTraffic(bool),
     /// The Settings window.
     Settings(bool),
     SetNotifications(increart_core::notify::Notifications),
@@ -908,6 +910,8 @@ pub enum Effect {
     SetJobOrder(Order),
     /// Loads stop (or start again) waiting for free RAM.
     SetSkipRamCheck(bool),
+    /// The image servers' traffic log goes on or off.
+    SetLogTraffic(bool),
     /// Stop the engine and the servers the app started.
     StopServers,
     /// Stop the engine only, keeping the servers (switching libraries).
@@ -2439,6 +2443,15 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
             state.config.skip_ram_check = skip;
             let mut fx = save_config(state);
             fx.push(Effect::SetSkipRamCheck(skip));
+            fx
+        }
+        Msg::SetLogTraffic(on) => {
+            if state.config.log_traffic == on {
+                return vec![];
+            }
+            state.config.log_traffic = on;
+            let mut fx = save_config(state);
+            fx.push(Effect::SetLogTraffic(on));
             fx
         }
         Msg::Settings(open) => {

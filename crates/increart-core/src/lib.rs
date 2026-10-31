@@ -44,6 +44,7 @@ pub mod scheduler;
 pub mod sdserver;
 pub mod thumbs;
 pub mod tiers;
+pub mod traffic;
 pub mod webp;
 
 pub use error::{Error, Result};

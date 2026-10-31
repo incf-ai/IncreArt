@@ -73,7 +73,7 @@ size (regenerate it with `scripts/make-gui-gallery.sh`).
 | [57-no-server-warning](57-no-server-warning.png) | First Queue of a session with no server: Set up servers… / Queue anyway / Cancel |
 | [58-server-dialog-from-main](58-server-dialog-from-main.png) | The server dialog reopened from the main window: Close goes back |
 | [59-continue-without-servers](59-continue-without-servers.png) | Continue without servers asks first |
-| [60-server-settings](60-server-settings.png) | Server settings modal: KoboldCpp (binary, its version), sd-server (binary, devices), both (models folder, leave running) |
+| [60-server-settings](60-server-settings.png) | Server settings modal: KoboldCpp (binary, its version), sd-server (binary, devices), both (models folder, leave running, wait for free RAM, log server traffic), timeouts |
 | [61-duplicate-project](61-duplicate-project.png) | A project's right-click Duplicate: name the copy first ("stickers copy") |
 | [63-projects-search](63-projects-search.png) | Projects side panel: New project / New folder on top, search ("fox": matching projects and the folders holding them) |
 | [62-rename](62-rename.png) | Rename modal (folders, projects, collections; also right after New folder / New project) |

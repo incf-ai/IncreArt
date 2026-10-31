@@ -1484,6 +1484,21 @@ its details window, and for every run at once in the Jobs header:
   stuck the run for every server). A model no server can take is said
   once in the messages and in its runs' logs, with each server's reason
   ("no server can load krea2, so its runs wait (kobold: …; proxy: …)").
+  A list that fails (not a 404: no list there) leaves the one before; it
+  had made the server one that may have anything.
+- **A failing server is said**: one not answering its probe, failing to
+  list its files, to load (not refusing: an error, a 5xx), to take a seed
+  or to say how its jobs are is said once in the messages (and the logs
+  of its runs there) until it answers again; the engine retries
+  meanwhile, as before, when that was silent. A load answered with
+  another model than asked says both ("asked to load {recipe, models},
+  it answered {state, recipe, models}"): the answer must name the recipe
+  and the files as asked.
+- **Jobs that don't move**: when none of a server's jobs has changed
+  (status, place in its queue, step) for 10 minutes, or 3 times its
+  longest job yet if more (previews off, a job's steps aren't seen), that
+  is said once, each job with its ID and status; Stop now lets the runs
+  go.
 - **Generation log**: each run's `generation.log` (next to its `run.rsn`)
   has a timestamped line, tagged with the server, for everything the
   engine does for it: queued, which server loads its model (and why not
@@ -2395,6 +2410,17 @@ in the app's state folder (`$XDG_STATE_HOME/increart` when set, else
 `~/Library/Application Support/increart` on macOS):
 `sd-server-<name>.log`, `koboldcpp-<name>.log` (KoboldCpp image servers),
 `pe-<name>.log`. Servers it only connects to have none.
+
+- **Server traffic** (Server settings: **Log server traffic**, or
+  `INCREART_TRAFFIC_LOG=1` for one start): `server-traffic.log` there
+  gets every request to the image servers, sd-server's API and
+  KoboldCpp's alike, connected-to ones included: time, method, URL,
+  status and time taken, the body sent and the answer (base64 data as its
+  length, a body cut after 4000 characters, `server-traffic-previous.log`
+  past 8 MB). A GET answered as the last time isn't written again; the
+  next different answer says "(after N answers as the one before)". For
+  finding what a server, such as a proxy in front of sd-server, does
+  wrong: a user's proxy answered nothing and IncreArt said nothing either.
 
 - Each start first adds a line of the app's own to the log:
   `--- IncreArt, <date time>: <command line>` (the environment it set

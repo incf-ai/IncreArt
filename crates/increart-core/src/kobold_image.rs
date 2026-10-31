@@ -462,26 +462,36 @@ impl Inner {
         if self.password.is_empty() { rq } else { rq.header("Authorization", format!("Bearer {}", self.password)) }
     }
 
-    fn read(resp: Result<ureq::http::Response<ureq::Body>, ureq::Error>) -> ApiResult<Value> {
-        let mut resp = resp.map_err(|e| ApiError::Transport(e.to_string()))?;
-        let status = resp.status().as_u16();
-        let body = resp.body_mut().read_to_string().map_err(|e| ApiError::Transport(e.to_string()))?;
+    /// The answer to a request (sent at `since`), written to the
+    /// [traffic log](crate::traffic).
+    fn read(
+        resp: Result<ureq::http::Response<ureq::Body>, ureq::Error>,
+        (url, body, since): (&str, Option<&Value>, Instant),
+    ) -> ApiResult<Value> {
+        let answer = resp.map_err(|e| e.to_string()).and_then(|mut r| {
+            let status = r.status().as_u16();
+            Ok((status, r.body_mut().read_to_string().map_err(|e| e.to_string())?))
+        });
+        crate::traffic::exchange(if body.is_some() { "POST" } else { "GET" }, url, body, &answer, since.elapsed());
+        let (status, text) = answer.map_err(ApiError::Transport)?;
         if !(200..300).contains(&status) {
-            return Err(crate::sdserver::classify(status, &body, false));
+            return Err(crate::sdserver::classify(status, &text, false));
         }
-        serde_json::from_str(&body).map_err(|e| ApiError::Transport(format!("unexpected response ({e}): {body:.200}")))
+        serde_json::from_str(&text).map_err(|e| ApiError::Transport(format!("unexpected response ({e}): {text:.200}")))
     }
 
     fn get(&self, path: &str) -> ApiResult<Value> {
-        Self::read(self.auth(self.agent.get(format!("{}{path}", self.base))).call())
+        let (url, t) = (format!("{}{path}", self.base), Instant::now());
+        Self::read(self.auth(self.agent.get(&url)).call(), (&url, None, t))
     }
 
     fn post(&self, path: &str, body: &Value, password: &str) -> ApiResult<Value> {
-        let mut rq = self.agent.post(format!("{}{path}", self.base));
+        let (url, t) = (format!("{}{path}", self.base), Instant::now());
+        let mut rq = self.agent.post(&url);
         if !password.is_empty() {
             rq = rq.header("Authorization", format!("Bearer {password}"));
         }
-        Self::read(rq.send_json(body))
+        Self::read(rq.send_json(body), (&url, Some(body), t))
     }
 
     /// The image model file KoboldCpp runs (None: no image model).
@@ -954,15 +964,16 @@ fn generate(inner: &Inner, id: &str, path: &str, body: &Value) -> Result<String,
         data.len()
     );
     stream.write_all(head.as_bytes()).and_then(|_| stream.write_all(&data)).map_err(|e| e.to_string())?;
-    let reader = Cancellable { stream, inner, id, deadline: Instant::now() + GENERATE_TIMEOUT };
-    let (status, reply) = read_response(reader).map_err(|e| format!("KoboldCpp: {e}"))?;
+    let since = Instant::now();
+    let reader = Cancellable { stream, inner, id, deadline: since + GENERATE_TIMEOUT };
+    let read = read_response(reader).map(|(status, reply)| (status, String::from_utf8_lossy(&reply).into_owned()));
+    let answer = read.map_err(|e| e.to_string());
+    crate::traffic::exchange("POST", &format!("{}{path}", inner.base), Some(body), &answer, since.elapsed());
+    let (status, reply) = answer.map_err(|e| format!("KoboldCpp: {e}"))?;
     if !(200..300).contains(&status) {
-        return Err(format!(
-            "HTTP {status}: {}",
-            String::from_utf8_lossy(&reply).chars().take(300).collect::<String>()
-        ));
+        return Err(format!("HTTP {status}: {}", reply.chars().take(300).collect::<String>()));
     }
-    let v: Value = serde_json::from_slice(&reply).map_err(|e| format!("unexpected response: {e}"))?;
+    let v: Value = serde_json::from_str(&reply).map_err(|e| format!("unexpected response: {e}"))?;
     match v.get("images").and_then(|i| i.get(0)).and_then(Value::as_str) {
         Some(img) if !img.is_empty() => Ok(img.to_string()),
         // what KoboldCpp answers with no image model, or when generating failed
