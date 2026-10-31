@@ -8,10 +8,10 @@ set -euo pipefail
 cd "$(dirname "$0")/../docs/gui"
 export LC_ALL=C
 
-# | [03-idea-inbox-grid](03-idea-inbox-grid.png) | caption |
-ls -- *.png | awk '
+# | [03-idea-inbox-grid](03-idea-inbox-grid.webp) | caption |
+ls -- *.webp | awk '
     FNR == NR {
-        if (match($0, /^\|[ \t]*\[[^]]+\]\([^)]+\.png\)[ \t]*\|/) && $0 ~ /\|[ \t]*$/) {
+        if (match($0, /^\|[ \t]*\[[^]]+\]\([^)]+\.webp\)[ \t]*\|/) && $0 ~ /\|[ \t]*$/) {
             link = substr($0, 1, RLENGTH)
             cap = substr($0, RLENGTH + 1)
             sub(/^.*\]\(/, "", link); sub(/\).*$/, "", link)
@@ -27,7 +27,7 @@ ls -- *.png | awk '
         print "`scripts/make-gui-gallery.sh` from the captions in the"
         print "[screens table](README.md); don'"'"'t edit by hand.\n"
         for (i = 1; i <= n; i++) {
-            stem = shots[i]; sub(/\.png$/, "", stem)
+            stem = shots[i]; sub(/\.webp$/, "", stem)
             print "## " stem "\n"
             if (shots[i] in caps) print caps[shots[i]] "\n"; else missing[++m] = shots[i]
             print "![" stem "](" shots[i] ")" (i < n ? "\n" : "")

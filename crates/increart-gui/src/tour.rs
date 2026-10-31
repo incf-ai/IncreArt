@@ -243,6 +243,11 @@ const EXTRA_SCENES: &[&str] = &[
     "G11-export",
     // last: its status message would show in the shots after it
     "G12-crop-mark",
+    // the README gallery's Validate servers, after 02-server-dialog, on a
+    // config whose preset's sd-servers are the suite's fake: its basic view
+    // opened, then the preset's basic validation and its summary
+    "V1-check-validate-servers-open",
+    "V2-validate-servers",
 ];
 
 /// The tour library's fox-cafe project (clients/acme/fox-cafe).
@@ -1609,6 +1614,8 @@ impl Tour {
             ],
             "G01-server-wizard" => self.msgs("54-server-wizard", st),
             "G02a-home" => self.msgs("99a-home", st),
+            "V1-check-validate-servers-open" => self.msgs("60e-validate-servers", st),
+            "V2-validate-servers" => self.msgs("60e2-validate-servers-summary", st),
             "G02-idea-inbox" => {
                 let mut v = vec![Msg::ContinueWithoutServers];
                 // the default card and tile sizes, whatever the config has
@@ -1844,7 +1851,11 @@ impl Tour {
                 Msg::CancelNewProject,
             ]);
             out.extend(self.msgs(name, st));
-            if name.starts_with("54") || name.starts_with(['R', 'G']) || name == "02c-koboldcpp-entry" {
+            if name.starts_with("54")
+                || name.starts_with(['R', 'G', 'V'])
+                || name.starts_with("60e")
+                || name == "02c-koboldcpp-entry"
+            {
                 // the virtual display's pointer sits mid-window: no tooltip over it
                 self.inject = vec![egui::Event::PointerGone];
             }

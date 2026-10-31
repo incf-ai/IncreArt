@@ -11,7 +11,29 @@ ls -lt ~/.local/state/increart/logs/       # Linux; Windows %LOCALAPPDATA%\incre
 # sd-server-<name>.log, koboldcpp-<name>.log, pe-<name>.log
 ```
 
-In the app: **Servers…** → **Logs…**.
+In the app: **Servers…** → **Logs…**. It opens a log on its latest launch
+(earlier ones from a menu), with each line's time, long runs of one kind
+folded, warnings amber and errors red; **errors only** keeps those and the
+lines around them, and Ctrl+F finds a word
+([screenshot](../gui/98h5-server-logs-folded.webp)). A run's own log, what
+the engine did with it (which server loaded its model and why not the
+others, the load, each image), is `runs/<run-id>/generation.log` in its
+project, and in **Projects → Jobs** when you click the run.
+
+To find what a server does wrong:
+
+- **Validate servers…** on the Servers screen runs the calls the app makes,
+  case by case, and says what failed, often with a **Try:** line on what to
+  check ([screenshot](../gui/60e4-validate-servers-failed.webp)). Copy report
+  gives every request and answer.
+- **Test** beside a connected-to server in the preset editor runs the
+  engine's calls to it one by one.
+- **Log server traffic** in Server settings (or `INCREART_TRAFFIC_LOG=1`)
+  writes every request to the image servers and their answers to
+  `server-traffic.log`.
+
+To report a bug, **Save for a bug report…** in the Logs window zips the
+config and the end of each log, passwords masked.
 
 ## Build and launch
 
@@ -27,7 +49,7 @@ In the app: **Servers…** → **Logs…**.
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| `settings not loaded ({error}); using defaults` | `config.rsn` doesn't parse | restore your backup; fix syntax; check which file with `echo $INCREART_CONFIG` (guide 1.5). Don't change settings in the app before fixing: a save writes the defaults over the file |
+| `settings not loaded ({error}); using defaults`, then `the unreadable settings are kept in {file}` | `config.rsn` doesn't parse | fix the syntax in the kept copy (`config.rsn.unreadable`) and put it back while the app is closed; check which file with `echo $INCREART_CONFIG` (guide 1.5). The app saves the defaults over `config.rsn` |
 | `resolution "{name}": {w} × {h} is not a multiple of 32, using …` | size not a multiple of 32 | informational; snapped on load |
 | `Prompt enhance servers moved into the server presets: …` | old-style `pe: Pe { servers }` config | automatic; the old file is kept as `config.rsn.before-chat-presets` |
 | hand-written comments vanished | the GUI rewrites the whole file | expected |

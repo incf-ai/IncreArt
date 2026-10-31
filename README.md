@@ -62,8 +62,8 @@ to use. **Set up KoboldCpp for your GPUs…** in the server dialog is the
 easiest start.
 
 Then it opens on **Home**, which explains the workflow step by step (save
-images into the inbox's drop folder, keep or discard them into the input
-library, start projects, review the results) and has buttons to start a new
+images into the inbox's drop folder, save each to the input library or
+discard it, start projects, review the results) and has buttons to start a new
 project, write an idea or import images.
 
 If a server misbehaves (a proxy in front of sd-server, a remote box),
