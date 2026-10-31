@@ -1,3 +1,4 @@
+use std::ffi::OsStr;
 use std::io;
 use std::path::{Path, PathBuf};
 
@@ -26,6 +27,10 @@ pub enum Error {
     /// into itself, nesting a project in a project).
     #[error("{0}")]
     Refused(String),
+    /// A path without the part an operation needs: a file name, a parent,
+    /// or the folder it should be under.
+    #[error("{}: {what}", path.display())]
+    Path { path: PathBuf, what: &'static str },
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
@@ -48,5 +53,30 @@ impl Error {
 
     pub fn image(path: impl AsRef<Path>, source: image::ImageError) -> Self {
         Error::Image { path: path.as_ref().to_path_buf(), source }
+    }
+}
+
+/// A path's parts, as errors naming the path when it hasn't them.
+pub trait PathParts {
+    /// The last part (none: the path is empty, a root, or ends in `..`).
+    fn name(&self) -> Result<&OsStr>;
+    /// The path without its last part.
+    fn parent_dir(&self) -> Result<&Path>;
+    /// The path from `base`, which it must start with.
+    fn relative_to(&self, base: &Path) -> Result<&Path>;
+}
+
+impl PathParts for Path {
+    fn name(&self) -> Result<&OsStr> {
+        self.file_name().ok_or_else(|| Error::Path { path: self.to_path_buf(), what: "has no file name" })
+    }
+
+    fn parent_dir(&self) -> Result<&Path> {
+        self.parent().ok_or_else(|| Error::Path { path: self.to_path_buf(), what: "has no parent folder" })
+    }
+
+    fn relative_to(&self, base: &Path) -> Result<&Path> {
+        self.strip_prefix(base)
+            .map_err(|_| Error::Path { path: self.to_path_buf(), what: "is outside the folder walked" })
     }
 }

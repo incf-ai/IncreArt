@@ -4,7 +4,7 @@ use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-use crate::error::{IoContext, Result};
+use crate::error::{IoContext, PathParts, Result};
 
 static FSYNC: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
 
@@ -151,7 +151,7 @@ pub fn exists(path: &Path) -> bool {
 pub fn copy_tree(from: &Path, to: &Path) -> Result<()> {
     fs::create_dir_all(to).at(to)?;
     for p in walk(from)? {
-        let rel = p.strip_prefix(from).unwrap();
+        let rel = p.relative_to(from)?;
         if rel == Path::new(crate::library::LOCK_FILE) {
             continue;
         }

@@ -268,7 +268,7 @@ pub fn projects(ui: &mut egui::Ui, st: &AppState, out: &mut Vec<Msg>) {
         // newest first or by name (folders stay by name)
         st.sort_projects(&mut ps);
         for p in ps {
-            let rel = p.dir.strip_prefix("projects").unwrap().to_path_buf();
+            let Ok(rel) = p.dir.strip_prefix("projects").map(Path::to_path_buf) else { continue };
             ui.horizontal(|ui| {
                 ui.add_space(14.0 * depth);
                 let [_, _, _, unreviewed] = counts(p);

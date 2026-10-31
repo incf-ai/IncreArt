@@ -946,7 +946,8 @@ fn task_files(task_dir: &Path) -> Result<Vec<(String, PathBuf)>> {
         let Ok(rel) = p.strip_prefix(task_dir) else { continue };
         let depth = rel.components().count();
         if p.extension().is_some_and(|e| e == "rsn") && !fsutil::hidden(&p) && depth <= 2 && p.is_file() {
-            let group = if depth == 2 { rel.parent().unwrap().to_string_lossy().into_owned() } else { String::new() };
+            // (none at the top: its parent is empty)
+            let group = rel.parent().map(|g| g.to_string_lossy().into_owned()).unwrap_or_default();
             out.push((group, p));
         }
     }
