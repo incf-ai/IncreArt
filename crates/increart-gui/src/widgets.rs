@@ -155,9 +155,11 @@ pub fn drag_overlay(ctx: &egui::Context) {
 
 /// Focuses an inline text field until it loses focus. It must not grab it
 /// back in the frame it lets go (Enter, a click elsewhere), or `lost_focus`
-/// never fires and the edit can't be committed.
+/// never fires and the edit can't be committed. Nor while it's disabled
+/// (the library wizard's path while opening): it drops the focus each
+/// frame, and the outline flashed with every repaint.
 pub fn focus_until_done(resp: &egui::Response) {
-    if !resp.has_focus() && !resp.lost_focus() {
+    if resp.enabled() && !resp.has_focus() && !resp.lost_focus() {
         resp.request_focus();
     }
 }
