@@ -1128,7 +1128,7 @@ fn work_on(shared: &Arc<Mutex<Shared>>, wake: &Wake, fx: Effect) -> Vec<Msg> {
     match fx {
         Effect::SaveConfig(config, path) => match config.save(&path) {
             Ok(()) => vec![],
-            Err(e) => vec![Msg::OpDone(Err(format!("saving settings: {e}")), None)],
+            Err(e) => vec![Msg::Problem(format!("saving settings: {e}"))],
         },
         Effect::OpenLibrary { path, create } => {
             let opened = if create { Library::create(&path, None) } else { Library::open(&path) };
@@ -1233,7 +1233,7 @@ fn work_on(shared: &Arc<Mutex<Shared>>, wake: &Wake, fx: Effect) -> Vec<Msg> {
         }
         Effect::SavePresets(presets, path) => match presets.save_dir(&path) {
             Ok(()) => vec![],
-            Err(e) => vec![Msg::OpDone(Err(format!("saving prompt presets: {e}")), None)],
+            Err(e) => vec![Msg::Problem(format!("saving prompt presets: {e}"))],
         },
         Effect::StopServers => {
             let mut s = shared.lock().unwrap();
