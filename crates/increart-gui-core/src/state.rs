@@ -1675,6 +1675,17 @@ impl CollectDialog {
     }
 }
 
+/// A project's Move…: the project (relative to `projects/`), the folder it
+/// goes to (to start with, the one it is in), a new folder to make there
+/// and put it in, and the folder filter.
+#[derive(Clone, Debug, PartialEq)]
+pub struct MoveProjectDialog {
+    pub path: PathBuf,
+    pub parent: PathBuf,
+    pub new_folder: Option<String>,
+    pub filter: String,
+}
+
 /// New project with these as a sweep (DESIGN.md, Image sweeps): the
 /// picked images, the project's name, and the folder it goes in (relative
 /// to `projects/`).
@@ -3181,6 +3192,8 @@ pub struct AppState {
     pub sweep_project: Option<SweepProjectDialog>,
     /// Home's Start a new project dialog.
     pub start_project: Option<StartProjectDialog>,
+    /// A project's Move… dialog.
+    pub move_project: Option<MoveProjectDialog>,
     /// Naming a project's plain Duplicate.
     pub duplicate: Option<DuplicateDialog>,
     /// Naming the project for New project from ideas.
@@ -3483,6 +3496,7 @@ impl AppState {
             new_project: None,
             sweep_project: None,
             start_project: None,
+            move_project: None,
             sweep_order_ask: None,
             sweep_order_asked: false,
             duplicate: None,

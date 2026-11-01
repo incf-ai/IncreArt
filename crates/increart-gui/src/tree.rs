@@ -312,10 +312,8 @@ pub fn projects(ui: &mut egui::Ui, st: &AppState, out: &mut Vec<Msg>) {
                         out.push(Msg::DuplicateProject(rel.clone()));
                         ui.close();
                     }
-                    if rel.parent().is_some_and(|x| !x.as_os_str().is_empty())
-                        && ui.button(ic(ph::ARROW_UP, "Move to the top level")).clicked()
-                    {
-                        out.push(Msg::MoveNode(Tree::Projects, rel.clone(), PathBuf::new()));
+                    if ui.button(ic(ph::FOLDER_SIMPLE_DASHED, "Move…")).on_hover_text("to another folder").clicked() {
+                        out.push(Msg::MoveProject(rel.clone()));
                         ui.close();
                     }
                     if ui.button(ic(ph::FOLDER_OPEN, "Open in file manager")).clicked() {

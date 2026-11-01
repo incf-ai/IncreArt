@@ -762,6 +762,45 @@ fn review_tree_sorts_and_hides_reviewed() {
     assert_eq!(tree(&h).1, ["Alpha", "Beta"]);
 }
 
+#[test]
+fn move_project_asks_where() {
+    let mut h = Harness::new();
+    h.send(Msg::Draft(IdeaDraft { title: "Zeta".into(), text: "x".into(), ..Default::default() }));
+    h.send(Msg::AddIdea(AddIdea::NewProject));
+    h.send(Msg::FromIdeasParent(PathBuf::new()));
+    h.send(Msg::FromIdeasNewFolder(Some("A".into())));
+    h.send(Msg::ConfirmFromIdeas);
+    h.settle();
+    let id = h.state.project.clone().unwrap();
+    let dir = |h: &Harness| h.state.index.projects.iter().find(|p| p.project.id == id).unwrap().dir.clone();
+    assert_eq!(dir(&h), Path::new("projects/A/Zeta"));
+    // starts on the folder it's in: nothing to do there
+    h.send(Msg::MoveProject(PathBuf::from("A/Zeta")));
+    let d = h.state.move_project.clone().unwrap();
+    assert_eq!(d.parent, Path::new("A"));
+    h.send(Msg::ConfirmMoveProject);
+    assert!(h.state.move_project.is_some(), "refused: it's there already");
+    h.state.messages.clear();
+    // to a new folder at the top level, made first
+    h.send(Msg::EditMoveProject(MoveProjectDialog { parent: PathBuf::new(), new_folder: Some("B".into()), ..d }));
+    h.send(Msg::ConfirmMoveProject);
+    h.settle();
+    assert_eq!(h.errors(), Vec::<&str>::new());
+    assert!(h.state.move_project.is_none());
+    assert_eq!(dir(&h), Path::new("projects/B/Zeta"));
+    assert_eq!(h.state.project.as_ref(), Some(&id), "still the open project");
+    // and back to the top level
+    h.send(Msg::MoveProject(PathBuf::from("B/Zeta")));
+    let d = h.state.move_project.clone().unwrap();
+    h.send(Msg::EditMoveProject(MoveProjectDialog { parent: PathBuf::new(), ..d }));
+    h.send(Msg::ConfirmMoveProject);
+    h.settle();
+    assert_eq!(dir(&h), Path::new("projects/Zeta"));
+    h.send(Msg::MoveProject(PathBuf::from("Zeta")));
+    h.send(Msg::CancelMoveProject);
+    assert!(h.state.move_project.is_none());
+}
+
 /// Writes outputs without the lock: only for setting up `review_and_undo`.
 struct Library_ {
     root: PathBuf,

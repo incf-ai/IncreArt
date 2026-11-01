@@ -961,6 +961,92 @@ pub fn new_project_window(ctx: &egui::Context, st: &AppState, tex: &mut Textures
     }
 }
 
+/// A project's Move…: the project folders on the left (a filter, the
+/// tree, New folder under it; to start with, the folder it is in), where it
+/// goes on the right, Move.
+pub fn move_project_window(ctx: &egui::Context, st: &AppState, out: &mut Vec<Msg>) {
+    let Some(d) = &st.move_project else { return };
+    let m = egui::Modal::new(egui::Id::unique("move_project")).show(ctx, |ui| {
+        ui.set_width(640.0);
+        let name = d.path.file_name().unwrap_or_default().to_string_lossy().to_string();
+        ui.heading(ic(ph::FOLDER_SIMPLE_DASHED, &format!("Move {name}")));
+        ui.add_space(4.0);
+        // the dialog as edited this frame
+        let mut d = d.clone();
+        // Enter in the filter or the new folder's name only leaves the field
+        let mut field_enter = false;
+        ui.horizontal_top(|ui| {
+            ui.vertical(|ui| {
+                ui.set_width(300.0);
+                let picker = folder_pick::Picker {
+                    id: "move_project",
+                    folders: &st.index.project_folders,
+                    root: (ph::FOLDERS, "projects"),
+                    selected: &d.parent,
+                    filter: &d.filter,
+                    new_folder: d.new_folder.as_deref(),
+                    new_name: "new folder",
+                };
+                let picked = folder_pick::show(ui, &picker, 280.0);
+                field_enter |= picked.field_enter;
+                let before = d.clone();
+                if let Some(f) = picked.filter {
+                    d.filter = f;
+                }
+                if let Some(f) = picked.select {
+                    d.parent = f;
+                }
+                if let Some(f) = picked.new_folder {
+                    d.new_folder = f;
+                }
+                if d != before {
+                    out.push(Msg::EditMoveProject(d.clone()));
+                }
+            });
+            folder_pick::column_line(ui, 340.0);
+            ui.vertical(|ui| {
+                ui.label(RichText::new("From").strong());
+                let from = Path::new("projects").join(&d.path);
+                ui.label(RichText::new(from.display().to_string()).monospace());
+                ui.add_space(8.0);
+                ui.label(RichText::new("To").strong());
+                let (at, exists) = increart_gui_core::project_folder(st, &d.parent, d.new_folder.as_deref());
+                ui.horizontal_wrapped(|ui| {
+                    let path = Path::new("projects").join(&at).join(&name);
+                    ui.label(RichText::new(path.display().to_string()).monospace());
+                    if !exists {
+                        ui.weak("(new folder)");
+                    }
+                });
+                if exists && st.project_name_taken(&at.join("_"), &name) && d.path.parent() != Some(at.as_path()) {
+                    ui.weak("A project of that name is there: this one gets a number.");
+                }
+                ui.add_space(4.0);
+                ui.weak("Its runs, images and links move with it.");
+                if let Some(e) = increart_gui_core::move_project_problem(st, &d) {
+                    ui.add_space(4.0);
+                    ui.colored_label(BAD, e);
+                }
+            });
+        });
+        ui.add_space(4.0);
+        let problem = increart_gui_core::move_project_problem(st, &d);
+        let enter = ui.input(|i| i.key_pressed(egui::Key::Enter));
+        dialog_buttons(ui, |ui| {
+            let go = egui::Button::new(RichText::new(ic(ph::CHECK, "Move   Enter")).strong());
+            if ui.add_enabled(problem.is_none(), go).clicked() || enter && !field_enter && problem.is_none() {
+                out.push(Msg::ConfirmMoveProject);
+            }
+            if ui.button("Cancel   Esc").clicked() {
+                out.push(Msg::CancelMoveProject);
+            }
+        });
+    });
+    if m.should_close() {
+        out.push(Msg::CancelMoveProject);
+    }
+}
+
 /// New project with these as a sweep: the picked images, the project's
 /// name and where it goes (DESIGN.md, Image sweeps).
 pub fn sweep_project_window(ctx: &egui::Context, st: &AppState, tex: &mut Textures, out: &mut Vec<Msg>) {

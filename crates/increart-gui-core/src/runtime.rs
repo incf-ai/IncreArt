@@ -1951,6 +1951,10 @@ pub fn lib_op(lib: &mut Library, op: LibOp) -> Result<OpOk, String> {
         }
         LibOp::Rename(tree, path, name) => lib.rename_node(tree, &path, &name).map(|_| OpOk::Done).map_err(err),
         LibOp::MoveNode(tree, path, parent) => lib.move_node(tree, &path, &parent).map(|_| OpOk::Done).map_err(err),
+        LibOp::MoveProject { path, to } => {
+            make_folder(lib, &to)?;
+            lib.move_node(Tree::Projects, &path, &to).map(|_| OpOk::Done).map_err(err)
+        }
         LibOp::DeleteNode(tree, path) => lib.delete_node(tree, &path).map(|_| OpOk::Done).map_err(err),
         LibOp::CreateSweep { project, runs, model_dirs, queued, .. } => {
             let name = runs.first().map(|(_, t, _)| t.name.clone()).unwrap_or_default();

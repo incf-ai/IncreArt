@@ -759,6 +759,11 @@ pub enum Msg {
     StartProject(bool),
     EditStartProject(StartProjectDialog),
     ConfirmStartProject,
+    /// A project's Move… (relative to `projects/`): asks where.
+    MoveProject(PathBuf),
+    EditMoveProject(MoveProjectDialog),
+    ConfirmMoveProject,
+    CancelMoveProject,
     /// The New project / Duplicate dialog's name, Create, Cancel.
     EditNewProjectName(String),
     /// The folder New project from this image / Duplicate project with
@@ -1190,6 +1195,11 @@ pub enum LibOp {
     CreateProject(PathBuf, String),
     Rename(Tree, PathBuf, String),
     MoveNode(Tree, PathBuf, PathBuf),
+    /// A project to a folder, a new one made first.
+    MoveProject {
+        path: PathBuf,
+        to: PathBuf,
+    },
     DeleteNode(Tree, PathBuf),
     CreateRun {
         project: Id,
@@ -4997,6 +5007,34 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
             form.label = "r00".into();
             lib(state, LibOp::PrepareProject { parent: PathBuf::new(), name, copy_of: None, form, then: d.refs })
         }
+        Msg::MoveProject(path) => {
+            if state.library.is_none() {
+                return vec![];
+            }
+            let parent = path.parent().map(PathBuf::from).unwrap_or_default();
+            state.move_project = Some(MoveProjectDialog { path, parent, new_folder: None, filter: String::new() });
+            vec![]
+        }
+        Msg::EditMoveProject(d) => {
+            if state.move_project.is_some() {
+                state.move_project = Some(d);
+            }
+            vec![]
+        }
+        Msg::ConfirmMoveProject => {
+            let Some(d) = state.move_project.take() else { return vec![] };
+            if let Some(e) = move_project_problem(state, &d) {
+                state.messages_error(e);
+                state.move_project = Some(d);
+                return vec![];
+            }
+            let (to, _) = project_folder(state, &d.parent, d.new_folder.as_deref());
+            lib(state, LibOp::MoveProject { path: d.path, to })
+        }
+        Msg::CancelMoveProject => {
+            state.move_project = None;
+            vec![]
+        }
         Msg::CancelNewProject => {
             state.new_project = None;
             vec![]
@@ -7222,6 +7260,22 @@ pub fn new_project_problem(state: &AppState, d: &NewProjectDialog) -> Option<Str
         }
     }
     None
+}
+
+/// Why a project's Move… can't move it: it's in that folder already, or a
+/// bad new folder, or a new folder a project's name has. A taken name is
+/// fine: the project gets a number.
+pub fn move_project_problem(state: &AppState, d: &MoveProjectDialog) -> Option<String> {
+    let (at, exists) = project_folder(state, &d.parent, d.new_folder.as_deref());
+    if let Some(folder) = d.new_folder.as_deref().map(str::trim) {
+        if let Err(e) = increart_core::library::validate_name(folder) {
+            return Some(format!("new folder: {e}"));
+        }
+        if !exists && state.project_name_taken(&at, folder) {
+            return Some(format!("a project is named {folder} there"));
+        }
+    }
+    (d.path.parent().unwrap_or(std::path::Path::new("")) == at).then(|| "it's in this folder already".to_string())
 }
 
 /// Where the project goes: the dialog's folder, or its new folder in it
