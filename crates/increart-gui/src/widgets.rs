@@ -11,6 +11,10 @@ pub use egui_phosphor::regular as ph;
 /// relative to the library root.
 pub struct Dragged(pub Vec<PathBuf>);
 
+/// Drag and drop payload: output images from a grid, to add to a
+/// collection.
+pub struct DraggedImages(pub Vec<increart_core::ImageRef>);
+
 /// Megapixels, e.g. "1.05 MP".
 pub fn mp(w: u32, h: u32) -> String {
     format!("{:.2} MP", w as f64 * h as f64 / 1e6)
@@ -135,17 +139,53 @@ pub fn drop_target(ui: &egui::Ui, resp: &egui::Response, dest: &Path, out: &mut 
     true
 }
 
+/// Makes a grid image draggable (with `key` for the tour to find it);
+/// `images` is called when a drag starts. Returns the response with drag
+/// sensing added (use it for clicks too).
+pub fn image_drag_source(
+    resp: &egui::Response,
+    key: &Path,
+    images: impl FnOnce() -> Vec<increart_core::ImageRef>,
+) -> egui::Response {
+    let r = resp.interact(Sense::drag());
+    r.ctx.data_mut(|d| d.insert_temp(dnd_rect_id(false, key), r.rect));
+    if r.drag_started() {
+        egui::DragAndDrop::set_payload(&r.ctx, DraggedImages(images()));
+    }
+    r
+}
+
+/// Makes `resp` a drop target for grid images: outlined while they hover
+/// it, `AddToCollection(folder)` on release. True if something was
+/// dropped.
+pub fn collection_drop_target(ui: &egui::Ui, resp: &egui::Response, folder: &Path, out: &mut Vec<Msg>) -> bool {
+    ui.ctx().data_mut(|d| d.insert_temp(dnd_rect_id(true, &Path::new("collections").join(folder)), resp.rect));
+    if resp.dnd_hover_payload::<DraggedImages>().is_some() {
+        ui.painter().rect_stroke(resp.rect.expand(1.0), 3.0, Stroke::new(2.0, ACCENT), egui::StrokeKind::Outside);
+    }
+    let Some(d) = resp.dnd_release_payload::<DraggedImages>() else { return false };
+    out.push(Msg::AddToCollection(folder.to_path_buf(), d.0.clone()));
+    true
+}
+
 /// While dragging: what will happen, next to the pointer.
 pub fn drag_overlay(ctx: &egui::Context) {
-    let Some(d) = egui::DragAndDrop::payload::<Dragged>(ctx) else { return };
-    let Some(pos) = ctx.pointer_latest_pos() else { return };
-    let what = match d.0.as_slice() {
-        [one] => one.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(),
-        many => format!("{} items", many.len()),
+    let text = if let Some(d) = egui::DragAndDrop::payload::<DraggedImages>(ctx) {
+        match d.0.len() {
+            1 => "Add 1 image to a collection".to_string(),
+            n => format!("Add {n} images to a collection"),
+        }
+    } else {
+        let Some(d) = egui::DragAndDrop::payload::<Dragged>(ctx) else { return };
+        let what = match d.0.as_slice() {
+            [one] => one.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(),
+            many => format!("{} items", many.len()),
+        };
+        let verb = if ctx.input(|i| i.modifiers.command) { "Copy" } else { "Move" };
+        format!("{verb} {what}   (Ctrl: copy)")
     };
-    let verb = if ctx.input(|i| i.modifiers.command) { "Copy" } else { "Move" };
+    let Some(pos) = ctx.pointer_latest_pos() else { return };
     let p = ctx.layer_painter(egui::LayerId::new(egui::Order::Tooltip, egui::Id::unique("drag_overlay")));
-    let text = format!("{verb} {what}   (Ctrl: copy)");
     let galley = p.layout_no_wrap(text, FontId::proportional(13.0), Color32::WHITE);
     let rect = Rect::from_min_size(pos + Vec2::new(14.0, 10.0), galley.size()).expand(5.0);
     p.rect_filled(rect, 4.0, Color32::from_black_alpha(220));

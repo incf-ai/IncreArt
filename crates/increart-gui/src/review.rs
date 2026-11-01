@@ -1933,6 +1933,7 @@ fn sources_panel(ui: &mut egui::Ui, st: &AppState, out: &mut Vec<Msg>) {
             if r.clicked() {
                 out.push(Msg::OutputSource(src));
             }
+            crate::widgets::collection_drop_target(ui, &r, &f, out);
             r.context_menu(|ui| {
                 if ui.button(ic(ph::FOLDER_PLUS, "New collection inside")).clicked() {
                     out.push(Msg::NewCollection(f.clone(), vec![]));
@@ -2235,6 +2236,12 @@ fn image_grid(
                     .unwrap_or_else(|| "double-click: full size".into());
                 let selected = crate::tiles::cursor(st, st.output_selected.as_ref() == Some(&o.image));
                 let r = thumb(ui, t.as_ref(), size, selected, Some(verdict_color(o.verdict))).on_hover_text(tip);
+                // dragged onto a collection in the side panel: the picks
+                // when it's one of them, else just this one
+                let r = crate::widgets::image_drag_source(&r, &o.path, || match st.picked.contains(&o.image) {
+                    true => st.picked.clone(),
+                    false => vec![o.image.clone()],
+                });
                 if st.output_selected.as_ref() == Some(&o.image) {
                     crate::widgets::reveal_cursor(ui, "output", o.image.clone(), &r);
                 }
