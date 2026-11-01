@@ -759,7 +759,8 @@ pub enum Msg {
     StartProject(bool),
     EditStartProject(StartProjectDialog),
     ConfirmStartProject,
-    /// A project's Move… (relative to `projects/`): asks where.
+    /// A project's or project folder's Move… (relative to `projects/`):
+    /// asks where.
     MoveProject(PathBuf),
     EditMoveProject(MoveProjectDialog),
     ConfirmMoveProject,
@@ -1195,7 +1196,7 @@ pub enum LibOp {
     CreateProject(PathBuf, String),
     Rename(Tree, PathBuf, String),
     MoveNode(Tree, PathBuf, PathBuf),
-    /// A project to a folder, a new one made first.
+    /// A project or project folder to a folder, a new one made first.
     MoveProject {
         path: PathBuf,
         to: PathBuf,
@@ -7262,11 +7263,14 @@ pub fn new_project_problem(state: &AppState, d: &NewProjectDialog) -> Option<Str
     None
 }
 
-/// Why a project's Move… can't move it: it's in that folder already, or a
-/// bad new folder, or a new folder a project's name has. A taken name is
-/// fine: the project gets a number.
+/// Why Move… can't move a project or folder: it's in that folder already,
+/// a folder into itself, a bad new folder, or a new folder a project's name
+/// has. A taken name is fine: it gets a number.
 pub fn move_project_problem(state: &AppState, d: &MoveProjectDialog) -> Option<String> {
     let (at, exists) = project_folder(state, &d.parent, d.new_folder.as_deref());
+    if at.starts_with(&d.path) {
+        return Some("can't move a folder into itself".to_string());
+    }
     if let Some(folder) = d.new_folder.as_deref().map(str::trim) {
         if let Err(e) = increart_core::library::validate_name(folder) {
             return Some(format!("new folder: {e}"));

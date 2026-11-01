@@ -99,10 +99,15 @@ fn folder_menu(ui: &mut egui::Ui, st: &AppState, tree: Tree, path: &Path, out: &
             out.push(Msg::StartRename(tree, path.to_path_buf()));
             ui.close();
         }
-        if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty())
+        // a project folder asks where; the other trees' to the top level
+        if tree == Tree::Projects {
+            if ui.button(ic(ph::FOLDER_SIMPLE_DASHED, "Move…")).on_hover_text("to another folder").clicked() {
+                out.push(Msg::MoveProject(path.to_path_buf()));
+                ui.close();
+            }
+        } else if path.parent().is_some_and(|p| !p.as_os_str().is_empty())
             && ui.button(ic(ph::ARROW_UP, "Move to the top level")).clicked()
         {
-            let _ = parent;
             out.push(Msg::MoveNode(tree, path.to_path_buf(), PathBuf::new()));
             ui.close();
         }

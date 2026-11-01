@@ -961,15 +961,17 @@ pub fn new_project_window(ctx: &egui::Context, st: &AppState, tex: &mut Textures
     }
 }
 
-/// A project's Move…: the project folders on the left (a filter, the
-/// tree, New folder under it; to start with, the folder it is in), where it
-/// goes on the right, Move.
+/// A project's or project folder's Move…: the project folders on the left
+/// (a filter, the tree, New folder under it; to start with, the folder it
+/// is in), where it goes on the right, Move.
 pub fn move_project_window(ctx: &egui::Context, st: &AppState, out: &mut Vec<Msg>) {
     let Some(d) = &st.move_project else { return };
     let m = egui::Modal::new(egui::Id::unique("move_project")).show(ctx, |ui| {
         ui.set_width(640.0);
         let name = d.path.file_name().unwrap_or_default().to_string_lossy().to_string();
-        ui.heading(ic(ph::FOLDER_SIMPLE_DASHED, &format!("Move {name}")));
+        let folder = st.index.project_folders.contains(&d.path);
+        let what = if folder { "folder" } else { "project" };
+        ui.heading(ic(ph::FOLDER_SIMPLE_DASHED, &format!("Move {what} {name}")));
         ui.add_space(4.0);
         // the dialog as edited this frame
         let mut d = d.clone();
@@ -1019,10 +1021,14 @@ pub fn move_project_window(ctx: &egui::Context, st: &AppState, out: &mut Vec<Msg
                     }
                 });
                 if exists && st.project_name_taken(&at.join("_"), &name) && d.path.parent() != Some(at.as_path()) {
-                    ui.weak("A project of that name is there: this one gets a number.");
+                    ui.weak(format!("A project or folder of that name is there: this {what} gets a number."));
                 }
                 ui.add_space(4.0);
-                ui.weak("Its runs, images and links move with it.");
+                ui.weak(if folder {
+                    "Its folders and projects move with it, their runs, images and links too."
+                } else {
+                    "Its runs, images and links move with it."
+                });
                 if let Some(e) = increart_gui_core::move_project_problem(st, &d) {
                     ui.add_space(4.0);
                     ui.colored_label(BAD, e);

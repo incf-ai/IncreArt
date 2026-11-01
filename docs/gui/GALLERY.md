@@ -450,7 +450,7 @@ Rename modal (folders, projects, collections; also right after New folder / New 
 
 ## 62b-move-project
 
-A project's right-click Move…: the project folders on the left (a filter, the tree, New folder under it), starting on the folder it is in; from and to on the right
+A project's (or project folder's) right-click Move…: the project folders on the left (a filter, the tree, New folder under it), starting on the folder it is in; from and to on the right
 
 ![62b-move-project](62b-move-project.webp)
 

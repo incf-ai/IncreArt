@@ -1675,9 +1675,9 @@ impl CollectDialog {
     }
 }
 
-/// A project's Move…: the project (relative to `projects/`), the folder it
-/// goes to (to start with, the one it is in), a new folder to make there
-/// and put it in, and the folder filter.
+/// A project's or project folder's Move…: what moves (relative to
+/// `projects/`), the folder it goes to (to start with, the one it is in), a
+/// new folder to make there and put it in, and the folder filter.
 #[derive(Clone, Debug, PartialEq)]
 pub struct MoveProjectDialog {
     pub path: PathBuf,
@@ -3192,7 +3192,7 @@ pub struct AppState {
     pub sweep_project: Option<SweepProjectDialog>,
     /// Home's Start a new project dialog.
     pub start_project: Option<StartProjectDialog>,
-    /// A project's Move… dialog.
+    /// A project's or project folder's Move… dialog.
     pub move_project: Option<MoveProjectDialog>,
     /// Naming a project's plain Duplicate.
     pub duplicate: Option<DuplicateDialog>,

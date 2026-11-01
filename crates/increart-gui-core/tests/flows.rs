@@ -799,6 +799,28 @@ fn move_project_asks_where() {
     h.send(Msg::MoveProject(PathBuf::from("Zeta")));
     h.send(Msg::CancelMoveProject);
     assert!(h.state.move_project.is_none());
+
+    // a folder: not into itself, nor one in it
+    h.send(Msg::MoveProject(PathBuf::from("Zeta")));
+    let d = h.state.move_project.clone().unwrap();
+    h.send(Msg::EditMoveProject(MoveProjectDialog { parent: PathBuf::from("B"), ..d }));
+    h.send(Msg::ConfirmMoveProject);
+    h.settle();
+    assert_eq!(dir(&h), Path::new("projects/B/Zeta"));
+    h.send(Msg::MoveProject(PathBuf::from("B")));
+    let d = h.state.move_project.clone().unwrap();
+    assert_eq!(d.parent, Path::new(""));
+    for (parent, new_folder) in [("B", None), ("", Some("B")), ("B", Some("C"))] {
+        let d = MoveProjectDialog { parent: parent.into(), new_folder: new_folder.map(String::from), ..d.clone() };
+        assert!(move_project_problem(&h.state, &d).is_some(), "{parent} {new_folder:?}");
+    }
+    // into another, its projects with it
+    h.send(Msg::EditMoveProject(MoveProjectDialog { parent: PathBuf::from("A"), ..d }));
+    h.send(Msg::ConfirmMoveProject);
+    h.settle();
+    assert_eq!(h.errors(), Vec::<&str>::new());
+    assert_eq!(dir(&h), Path::new("projects/A/B/Zeta"));
+    assert!(h.state.index.project_folders.contains(&PathBuf::from("A/B")));
 }
 
 /// Writes outputs without the lock: only for setting up `review_and_undo`.
