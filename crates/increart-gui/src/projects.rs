@@ -61,13 +61,21 @@ pub fn view(ui: &mut egui::Ui, st: &AppState, tex: &mut Textures, out: &mut Vec<
             }
         });
         ui.horizontal(|ui| {
-            // at the top level; a folder's right-click menu makes them in it
+            // a project at the top level (a folder's right-click menu makes
+            // one in it); a folder in the one selected, beside the selected
+            // project, else at the top level
             let tip = "at the top level (right-click a folder to make one in it)";
             if ui.button(ic(ph::ROCKET_LAUNCH, "New project")).on_hover_text(tip).clicked() {
                 out.push(Msg::NewProject(PathBuf::new()));
             }
+            let here = st.tree_parent();
+            let tip = if here.as_os_str().is_empty() {
+                "at the top level".to_string()
+            } else {
+                format!("in {}", here.display())
+            };
             if ui.button(ic(ph::FOLDER_PLUS, "New folder")).on_hover_text(tip).clicked() {
-                out.push(Msg::NewFolder(Tree::Projects, PathBuf::new()));
+                out.push(Msg::NewFolder(Tree::Projects, here));
             }
         });
         ui.separator();

@@ -8184,12 +8184,7 @@ fn use_image(state: &mut AppState, image: ImageRef, target: UseTarget) -> Vec<Ef
 /// project (numbered if taken), in the folder selected in the Projects
 /// tree, beside the selected project, else at the top level.
 fn sweep_project_dialog(state: &AppState, images: Vec<ImageRef>) -> SweepProjectDialog {
-    let rel = |dir: &std::path::Path| dir.strip_prefix("projects").map(PathBuf::from).unwrap_or_default();
-    let parent = match (&state.proj_folder, state.project_entry()) {
-        (Some(folder), _) => folder.clone(),
-        (None, Some(p)) => rel(&p.dir).parent().map(PathBuf::from).unwrap_or_default(),
-        (None, None) => PathBuf::new(),
-    };
+    let parent = state.tree_parent();
     let mut projects: Vec<String> = images
         .iter()
         .filter_map(|i| state.output_link(i))
