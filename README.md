@@ -74,7 +74,7 @@ project, write an idea or import images.
 If a server misbehaves (a proxy in front of sd-server, a remote box),
 **Validate servers…** on that screen tests every call the app makes, case
 by case, and gives a report to send, or to hand to an LLM. The same suite
-runs from a terminal as `increart-apitest`, which comes in the zip
+runs from a terminal as `increart-apitest`, in the zip's `tools` folder
 ([how it works](docs/DESIGN.md#validating-servers)). Each preset is marked
 validated or not; the first time you open one that isn't, the app offers
 a basic validation (a few minutes: each server answers and makes a small

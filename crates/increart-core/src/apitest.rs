@@ -4,11 +4,11 @@
 //! reads. A `stop` line on its stdin stops the run (cancelling its jobs on
 //! the servers), on Windows too.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-/// The program, beside the app's in a release.
+/// The program, in `tools/` beside the app in a release.
 pub const BINARY: &str = "increart-apitest";
 
 /// What a case costs the server.
@@ -158,16 +158,28 @@ impl Counts {
     }
 }
 
-/// `increart-apitest` beside this program (a release has both), else
-/// its bare name: then it's looked for on PATH.
+/// `increart-apitest` in `tools/` beside this program (a release keeps it
+/// there, out of the way of the app), or beside it (a build's
+/// `target/release`), else its bare name: then it's looked for on PATH.
 pub fn binary() -> PathBuf {
-    let name = format!("{BINARY}{}", std::env::consts::EXE_SUFFIX);
     std::env::current_exe()
         .ok()
-        .and_then(|exe| exe.parent().map(|d| d.join(&name)))
-        .filter(|p| p.is_file())
-        .unwrap_or_else(|| PathBuf::from(name))
+        .and_then(|exe| exe.parent().and_then(binary_in))
+        .unwrap_or_else(|| PathBuf::from(binary_name()))
 }
+
+/// `increart-apitest` in `dir`'s `tools/`, or in `dir` itself.
+fn binary_in(dir: &Path) -> Option<PathBuf> {
+    let name = binary_name();
+    [dir.join(TOOLS).join(&name), dir.join(&name)].into_iter().find(|p| p.is_file())
+}
+
+fn binary_name() -> String {
+    format!("{BINARY}{}", std::env::consts::EXE_SUFFIX)
+}
+
+/// The folder beside the app that a release keeps its tools in.
+pub const TOOLS: &str = "tools";
 
 /// Whether `pattern` (`*` for any text) picks the case `id`.
 pub fn matches(pattern: &str, id: &str) -> bool {
@@ -318,6 +330,19 @@ pub fn hint(outcome: Outcome, summary: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_suite_is_found_in_tools_first_then_beside_the_app() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(binary_in(dir.path()), None);
+        let beside = dir.path().join(binary_name());
+        std::fs::write(&beside, "").unwrap();
+        assert_eq!(binary_in(dir.path()), Some(beside));
+        std::fs::create_dir(dir.path().join(TOOLS)).unwrap();
+        let tools = dir.path().join(TOOLS).join(binary_name());
+        std::fs::write(&tools, "").unwrap();
+        assert_eq!(binary_in(dir.path()), Some(tools));
+    }
 
     #[test]
     fn hints_name_the_common_causes() {

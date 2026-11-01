@@ -121,7 +121,7 @@ pub fn log_dir() -> PathBuf {
         .join("logs")
 }
 
-/// The server validation suite (beside the app), without a console.
+/// The server validation suite (in `tools/` beside the app), without a console.
 fn apitest_command() -> std::process::Command {
     let mut cmd = std::process::Command::new(increart_core::apitest::binary());
     increart_core::process::background(&mut cmd, false);

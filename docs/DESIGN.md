@@ -2447,8 +2447,8 @@ in the app's state folder (`$XDG_STATE_HOME/increart` when set, else
   to send to whoever runs the server; **Traffic log…** opens the traffic
   log. A test's traffic is always logged, the log setting on or not, each
   line tagged `[test <server>]`.
-- **Validating servers** (`increart-apitest`, beside the app in each
-  release; see below).
+- **Validating servers** (`increart-apitest`, in `tools/` beside the app in
+  each release; see below).
 
 ### Validating servers
 

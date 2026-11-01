@@ -2909,7 +2909,7 @@ pub struct AppState {
     /// The stamps file ([`increart_core::validation::path`]); None (as in
     /// tests): nothing read or noted, and opening a preset doesn't ask.
     pub validations_path: Option<PathBuf>,
-    /// `increart-apitest` is there to run (beside the app, or on PATH).
+    /// `increart-apitest` is there to run (in `tools/` beside the app, beside it, or on PATH).
     pub suite_found: bool,
     /// Numbers server-opening attempts; reports from older ones are ignored.
     pub open_attempt: u32,

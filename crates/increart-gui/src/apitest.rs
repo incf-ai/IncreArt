@@ -766,7 +766,7 @@ fn footer(ui: &mut egui::Ui, st: &AppState, t: &ApiTest, out: &mut Vec<Msg>) {
             }
             if ui
                 .button(ic(ph::TERMINAL, "Copy command"))
-                .on_hover_text("the same run from a terminal (increart-apitest, beside the app)")
+                .on_hover_text("the same run from a terminal (increart-apitest, in tools/ beside the app)")
                 .clicked()
             {
                 ui.ctx().copy_text(command_line(st, t));

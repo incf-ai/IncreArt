@@ -1,7 +1,8 @@
 # On a version tag (v*, or v*-rc<n> for a pre-release that tries the
 # pipeline out), builds IncreArt for Linux, Windows and macOS and
 # publishes one portable zip per platform to that tag's release. Each zip
-# holds the app, the README and licence, and the example library
+# holds the app, the README and licence, tools/increart-apitest (the server
+# validation suite) and the example library
 # (example-library/; see scripts/update-example-library.sh), which the app
 # offers in its startup list on first run.
 name: Release
@@ -79,8 +80,11 @@ jobs:
           name="increart-${TAG}-${{ matrix.platform }}"
           mkdir -p "stage/$name"
           ext=${{ runner.os == 'Windows' && '.exe' || '' }}
-          # the app and its server validation suite (Validate servers…)
-          cp "target/release/increart$ext" "target/release/increart-apitest$ext" README.md LICENSE "stage/$name/"
+          # the app, and in tools/ its server validation suite (Validate
+          # servers…), so the app is the one program at the top
+          mkdir -p "stage/$name/tools"
+          cp "target/release/increart$ext" README.md LICENSE "stage/$name/"
+          cp "target/release/increart-apitest$ext" "stage/$name/tools/"
           mv "dl/Example library" "stage/$name/"
           # zip keeps the executable bit
           if [[ $RUNNER_OS == Windows ]]; then (cd stage && 7z a -tzip "../$name.zip" "$name" > /dev/null)
@@ -97,9 +101,9 @@ jobs:
           else unzip -q "${{ steps.package.outputs.zip }}" -d smoke; fi
           dir="smoke/${{ steps.package.outputs.name }}"
           "$dir/increart" --version
-          "$dir/increart-apitest" --version
+          "$dir/tools/increart-apitest" --version
           # the suite lists its cases for a server, without asking it anything
-          "$dir/increart-apitest" list --url http://127.0.0.1:9 --kind sd-server | grep -q 'url/sd-server/connect.capabilities'
+          "$dir/tools/increart-apitest" list --url http://127.0.0.1:9 --kind sd-server | grep -q 'url/sd-server/connect.capabilities'
           report=$("$dir/increart" --check-library "$dir/Example library") || { echo "$report"; exit 1; }
           echo "$report"
           if grep -q 'seeds to generate' <<<"$report"; then echo "the example library has runs to generate" >&2; exit 1; fi
