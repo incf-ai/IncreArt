@@ -3012,6 +3012,10 @@ pub struct AppState {
     /// `parked_folder_views`, so each keeps its own location and history.
     pub folder_view: FolderView,
     pub parked_folder_views: Vec<FolderView>,
+    /// The Output library source its folder view last went to: the Folder
+    /// tab goes to the selected source when it's another one, and else
+    /// stays where it was left.
+    pub fv_source: Option<OutputSource>,
     pub fv_clipboard: Option<FvClipboard>,
     pub lib_tab: LibTab,
     pub lib_filter: LibFilter,
@@ -3339,6 +3343,7 @@ impl AppState {
             queueing: vec![],
             folder_view: FolderView::new(FvPlace::Projects),
             parked_folder_views: FvPlace::ALL[1..].iter().map(|p| FolderView::new(*p)).collect(),
+            fv_source: None,
             fv_clipboard: None,
             lib_tab: LibTab::Grid,
             lib_filter: LibFilter::default(),
