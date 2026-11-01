@@ -844,45 +844,111 @@ fn swept_modal(
     }
 }
 
-/// Names the project "New project from this image" or "Duplicate project
-/// with this image" makes.
+/// New project from this image / Duplicate project with this image: the
+/// project folders on the left (a filter, the tree, New folder under it;
+/// to start with, the folder the image's project is in), the image, the
+/// name and where it goes on the right, Create.
 pub fn new_project_window(ctx: &egui::Context, st: &AppState, tex: &mut Textures, out: &mut Vec<Msg>) {
+    // the name takes the focus as the dialog opens: once, not back from a
+    // field clicked since
+    let opening = folder_pick::opening(ctx, "new_project", st.new_project.is_some());
     let (Some(d), Some(root)) = (&st.new_project, &st.library) else { return };
-    let duplicate = d.target == increart_gui_core::UseTarget::DuplicateProject;
+    let duplicate = d.target == UseTarget::DuplicateProject;
     let source = st.output_link(&d.image).and_then(|o| st.project_of_link(o));
     let m = egui::Modal::new(egui::Id::unique("new_project_name")).show(ctx, |ui| {
-        ui.set_width(440.0);
+        ui.set_width(760.0);
         let title = if duplicate { "Duplicate project with this image" } else { "New project from this image" };
         ui.heading(ic(if duplicate { ph::COPY } else { ph::ROCKET_LAUNCH }, title));
-        ui.horizontal(|ui| {
-            let t = tex.thumb(root, &d.image);
-            thumb(ui, t.as_ref(), 72.0, false, None);
+        ui.add_space(4.0);
+        // the dialog as edited this frame
+        let mut d = d.clone();
+        // Enter in the filter or the new folder's name only leaves the field
+        let mut field_enter = false;
+        ui.horizontal_top(|ui| {
             ui.vertical(|ui| {
-                if let Some(p) = source {
-                    let parent = p.dir.parent().map(|x| x.display().to_string()).unwrap_or_default();
-                    ui.weak(if duplicate {
-                        format!("A copy of {} (settings, sources, draft; no images), in {parent}/", p.name())
-                    } else {
-                        format!("A new project next to {}, in {parent}/", p.name())
-                    });
+                ui.set_width(300.0);
+                let picker = folder_pick::Picker {
+                    id: "new_project",
+                    folders: &st.index.project_folders,
+                    root: (ph::FOLDERS, "projects"),
+                    selected: &d.parent,
+                    filter: &d.filter,
+                    new_folder: d.new_folder.as_deref(),
+                    new_name: d.name.trim(),
+                };
+                let picked = folder_pick::show(ui, &picker, 280.0);
+                field_enter |= picked.field_enter;
+                if let Some(f) = picked.filter {
+                    out.push(Msg::NewProjectFilter(f));
                 }
-                ui.label("Name");
+                if let Some(f) = picked.select {
+                    out.push(Msg::NewProjectParent(f.clone()));
+                    d.parent = f;
+                }
+                if let Some(f) = picked.new_folder {
+                    out.push(Msg::NewProjectNewFolder(f.clone()));
+                    d.new_folder = f;
+                }
+            });
+            folder_pick::column_line(ui, 340.0);
+            ui.vertical(|ui| {
+                ui.horizontal_top(|ui| {
+                    let t = tex.thumb(root, &d.image);
+                    thumb(ui, t.as_ref(), 72.0, false, None);
+                    if let Some(p) = source {
+                        // in a column, so it wraps
+                        ui.vertical(|ui| {
+                            ui.weak(if duplicate {
+                                format!("A copy of {} (settings, sources, draft; no images), with this image", p.name())
+                            } else {
+                                format!(
+                                    "A new project from this image of {}: its prompt, the image a reference",
+                                    p.name()
+                                )
+                            });
+                        });
+                    }
+                });
+                ui.add_space(4.0);
+                ui.label(RichText::new("Project name").strong());
                 let mut name = d.name.clone();
-                let r = ui.add(egui::TextEdit::singleline(&mut name).desired_width(300.0));
-                crate::widgets::focus_until_done(&r);
+                let r = ui
+                    .add(egui::TextEdit::singleline(&mut name).desired_width(f32::INFINITY).hint_text("project name"));
+                if opening {
+                    r.request_focus();
+                }
                 if name != d.name {
                     out.push(Msg::EditNewProjectName(name.clone()));
+                    d.name = name;
                 }
-                if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-                    out.push(Msg::ConfirmNewProject);
+                ui.add_space(8.0);
+                ui.label(RichText::new("Made in").strong());
+                let (at, exists) = increart_gui_core::project_folder(st, &d.parent, d.new_folder.as_deref());
+                let shown = if d.name.trim().is_empty() { "…" } else { d.name.trim() };
+                ui.horizontal_wrapped(|ui| {
+                    let path = Path::new("projects").join(&at).join(shown);
+                    ui.label(RichText::new(path.display().to_string()).monospace());
+                    if !exists {
+                        ui.weak("(new folder)");
+                    }
+                });
+                if exists && st.project_name_taken(&at.join("_"), d.name.trim()) {
+                    ui.weak("A project of that name is there: this one gets a number.");
                 }
-                if let Err(e) = increart_core::library::validate_name(name.trim()) {
-                    ui.colored_label(BAD, e.to_string());
+                if let Some(e) = increart_gui_core::new_project_problem(st, &d)
+                    && !d.name.trim().is_empty()
+                {
+                    ui.add_space(4.0);
+                    ui.colored_label(BAD, e);
                 }
             });
         });
+        ui.add_space(4.0);
+        let problem = increart_gui_core::new_project_problem(st, &d);
+        let enter = ui.input(|i| i.key_pressed(egui::Key::Enter));
         dialog_buttons(ui, |ui| {
-            if ui.button(RichText::new(ic(ph::CHECK, "Create   Enter")).strong()).clicked() {
+            let create = egui::Button::new(RichText::new(ic(ph::CHECK, "Create   Enter")).strong());
+            if ui.add_enabled(problem.is_none(), create).clicked() || enter && !field_enter && problem.is_none() {
                 out.push(Msg::ConfirmNewProject);
             }
             if ui.button("Cancel   Esc").clicked() {

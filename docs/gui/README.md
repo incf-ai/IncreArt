@@ -81,7 +81,7 @@ size (regenerate it with `scripts/make-gui-gallery.sh`).
 | [43-idea-inbox-folder](43-idea-inbox-folder.webp) | Idea inbox → Folder: `input/unreviewed/`, one folder per idea |
 | [44-projects-folder-compact](44-projects-folder-compact.webp) | Folder view, Compact mode: small thumbnails / icons and names in columns |
 | [45-reference-preview](45-reference-preview.webp) | Generate: double-click a reference (or the start image) to view it large |
-| [47-new-project-name](47-new-project-name.webp) | Review → D / N: the new project's name is asked first |
+| [47-new-project-name](47-new-project-name.webp) | Review → D / N: the new project's name and folder are asked first (the project folders on the left, starting on the image's project's folder; New folder under them) |
 | [49-output-library-show-outputs](49-output-library-show-outputs.webp) | Show outputs on a project with a filter on: the banner says how many it hides, with Reset filters |
 | [50-output-library-show-outputs-empty](50-output-library-show-outputs-empty.webp) | Show outputs on a project with nothing kept: the banner says so |
 | [51-output-library-show-outputs-any-rating](51-output-library-show-outputs-any-rating.webp) | The same with every rating ticked: All, and still nothing |

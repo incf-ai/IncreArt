@@ -1198,12 +1198,16 @@ its project. Clean up keeps any output another run refers to.
     form as a reference (disabled with no project selected).
   - `E` **Edit this image**: a fresh form in the image's own project with the
     image; with references the prompt starts as `<image1> ` for the change.
-  - `N` **New project from this image**: a project next to the image's,
-    named "<project> from s0003" (opened for rename), references, the image's
-    prompt prefilled.
+  - `N` **New project from this image**: a new project named
+    "<project> from s0003", references, the image's prompt prefilled.
   - `D` **Duplicate project with this image**: a copy of the image's project
     (settings, sources, draft; no images), the form started from the image's
     run (prompt, size, steps, CFG, transparency, refs) plus the image.
+  - Both ask first in a modal: the project folders on the left (a filter,
+    the tree, New folder under it), starting on the folder the image's
+    project is in; the image, the name and where it is made
+    (`projects/…/<name>`) on the right. A bad name, or a new folder a
+    project's name has, is refused; a taken name gets a number.
   - `R` to the input library as a ref (an image-only idea, pixels imported
     into the input store), `I` a new idea in the Idea inbox with its prompt.
     Lineage is kept via `source: FromOutput`.

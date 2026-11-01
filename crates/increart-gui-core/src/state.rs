@@ -1637,13 +1637,21 @@ pub struct Retag {
     pub prompt: String,
 }
 
-/// The name for the project "New project from this image" (`N`) or
-/// "Duplicate project with this image" (`D`) makes.
+/// The name and folder of the project "New project from this image" (`N`)
+/// or "Duplicate project with this image" (`D`) makes.
 #[derive(Clone, Debug, PartialEq)]
 pub struct NewProjectDialog {
     pub image: ImageRef,
     pub target: UseTarget,
     pub name: String,
+    /// Where it goes, relative to `projects/`: to start with, the folder the
+    /// image's project is in.
+    pub parent: PathBuf,
+    /// A new folder to make in `parent` (on Create) and put the project in;
+    /// an existing one of that name (any case) is used (`None`: in `parent`).
+    pub new_folder: Option<String>,
+    /// The folder filter.
+    pub filter: String,
 }
 
 /// One review action, undone at once: (link path now, verdict before) of
