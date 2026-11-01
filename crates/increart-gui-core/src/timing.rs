@@ -120,6 +120,91 @@ pub fn duration(s: f64) -> String {
     }
 }
 
+/// How many of a server's latest images its speed is of.
+pub const RECENT: usize = 20;
+
+/// One image a server made this session, for its speed.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Recent {
+    pub elapsed_s: f32,
+    /// Measured seconds per step; 0 when not.
+    pub step_s: f32,
+    pub steps: u32,
+}
+
+/// A server's speed over its latest images (the server list).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Speed {
+    pub images: usize,
+    pub per_image: f64,
+    pub step_s: f64,
+    pub step_measured: bool,
+}
+
+impl Speed {
+    /// `None` when there are none.
+    pub fn of(recent: &[Recent]) -> Option<Speed> {
+        if recent.is_empty() {
+            return None;
+        }
+        let per_image = recent.iter().map(|r| r.elapsed_s as f64).sum::<f64>() / recent.len() as f64;
+        let measured: Vec<f64> = recent.iter().filter(|r| r.step_s > 0.0).map(|r| r.step_s as f64).collect();
+        let (step_s, step_measured) = if measured.is_empty() {
+            let steps: u32 = recent.iter().map(|r| r.steps).sum();
+            (recent.iter().map(|r| r.elapsed_s as f64).sum::<f64>() / steps.max(1) as f64, false)
+        } else {
+            (measured.iter().sum::<f64>() / measured.len() as f64, true)
+        };
+        Some(Speed { images: recent.len(), per_image, step_s, step_measured })
+    }
+
+    /// Images an hour, generating one after another.
+    pub fn per_hour(&self) -> f64 {
+        if self.per_image > 0.0 { 3600.0 / self.per_image } else { 0.0 }
+    }
+
+    /// "1.74 s/it · 35.1 s/image · 103/h".
+    pub fn text(&self) -> String {
+        let step = format!("{}{:.2} s/it", if self.step_measured { "" } else { "≈" }, self.step_s);
+        format!("{step} · {}/image · {:.0}/h", duration(self.per_image), self.per_hour())
+    }
+}
+
+/// Time left for display, coarser the longer it is: "~4 min 12 s", "~38
+/// min", "~2 h 05 min"; from 10 minutes on, with when that is by the
+/// clock: "~38 min · ≈15:12", "≈Tue 09:40" when it isn't today.
+pub fn left_text(s: f64) -> String {
+    left_text_at(s, chrono::Local::now().naive_local())
+}
+
+pub fn left_text_at(s: f64, now: chrono::NaiveDateTime) -> String {
+    match clock_at(s, now) {
+        Some(clock) => format!("~{} left · {clock}", coarse(s)),
+        None => format!("~{} left", coarse(s)),
+    }
+}
+
+/// A time left, in whole minutes from 10 minutes to an hour.
+pub fn coarse(s: f64) -> String {
+    let s = s.max(0.0);
+    if (600.0..3600.0).contains(&s) { format!("{} min", (s / 60.0).round() as u64) } else { duration(s) }
+}
+
+/// When `s` seconds from now is by the clock, from 10 minutes on: "≈15:12",
+/// "≈Tue 09:40" when it isn't today.
+pub fn clock(s: f64) -> Option<String> {
+    clock_at(s, chrono::Local::now().naive_local())
+}
+
+pub fn clock_at(s: f64, now: chrono::NaiveDateTime) -> Option<String> {
+    if s < 600.0 {
+        return None;
+    }
+    let at = now + chrono::Duration::seconds(s.round() as i64);
+    let clock = if at.date() == now.date() { at.format("%H:%M") } else { at.format("%a %H:%M") };
+    Some(format!("≈{clock}"))
+}
+
 /// An image being sampled: when its first and latest steps were seen.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Sampling {
@@ -187,6 +272,28 @@ mod tests {
             image_text(&t(0, "ROCm0", 0, 34.2, 1.71), 20),
             "generated in 34.2 s · 1.71 s/it · waited 1.0 s · ROCm0"
         );
+    }
+
+    #[test]
+    fn a_servers_speed() {
+        assert_eq!(Speed::of(&[]), None);
+        let r = |e, s| Recent { elapsed_s: e, step_s: s, steps: 20 };
+        let s = Speed::of(&[r(36.0, 1.7), r(34.0, 1.5), r(35.0, 0.0)]).unwrap();
+        assert_eq!((s.images, s.per_image, s.step_measured), (3, 35.0, true));
+        assert!((s.step_s - 1.6).abs() < 1e-6);
+        assert_eq!(s.text(), "1.60 s/it · 35.0 s/image · 103/h");
+        let s = Speed::of(&[r(40.0, 0.0)]).unwrap();
+        assert_eq!(s.text(), "≈2.00 s/it · 40.0 s/image · 90/h");
+    }
+
+    #[test]
+    fn time_left_with_the_clock_from_ten_minutes() {
+        let now = chrono::NaiveDate::from_ymd_opt(2026, 11, 2).unwrap().and_hms_opt(14, 34, 0).unwrap();
+        assert_eq!(left_text_at(252.0, now), "~4 min 12 s left");
+        assert_eq!(left_text_at(38.0 * 60.0 + 20.0, now), "~38 min left · ≈15:12");
+        assert_eq!(left_text_at(7500.0, now), "~2 h 05 min left · ≈16:39");
+        // tomorrow: the day too (2026-11-03 is a Tuesday)
+        assert_eq!(left_text_at(20.0 * 3600.0, now), "~20 h 00 min left · ≈Tue 10:34");
     }
 
     #[test]

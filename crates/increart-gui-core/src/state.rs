@@ -2640,6 +2640,9 @@ pub struct Alerts {
     pub cleared: Vec<usize>,
     /// The runs each server has had jobs of since it was last idle.
     pub server_runs: HashMap<usize, BTreeSet<Id>>,
+    /// Each server's work since it was last idle: since when
+    /// (`AppState::now`), and images made (for "… in 41 min").
+    pub busy: HashMap<usize, (f64, u32)>,
     /// Runs stopped with Stop now: a server that clears from one of them
     /// was stopped by the user, who saw it, so there's no alert.
     pub stopped_now: BTreeSet<Id>,
@@ -2928,6 +2931,19 @@ pub struct AppState {
     pub progress: HashMap<(Id, u64), (u32, u32)>,
     /// When their steps were seen, for the live seconds per step.
     pub sampling_times: HashMap<(Id, u64), crate::timing::Sampling>,
+    /// Each server's latest images this session (by its name), for its
+    /// speed in the server list.
+    pub server_speeds: HashMap<String, std::collections::VecDeque<crate::timing::Recent>>,
+    /// Seconds per image from the library's timed images (rebuilt with
+    /// the index), for the forecast.
+    pub rates: crate::forecast::Rates,
+    /// When each run in the engine starts and finishes (DESIGN.md,
+    /// Timing), remade every second.
+    pub forecast: crate::forecast::Forecast,
+    /// How long each server took to load each model (the file at
+    /// `load_times_path`; None, as in tests: not saved).
+    pub load_times: increart_core::loadtimes::LoadTimes,
+    pub load_times_path: Option<PathBuf>,
     /// Review scope: `None` all projects (or `review_folder`), else one project.
     pub review_scope: Option<Id>,
     /// Review scope: every project under this folder (relative to `projects/`).
@@ -3290,6 +3306,11 @@ impl AppState {
             finishing: BTreeSet::new(),
             progress: HashMap::new(),
             sampling_times: HashMap::new(),
+            server_speeds: HashMap::new(),
+            rates: Default::default(),
+            forecast: Default::default(),
+            load_times: Default::default(),
+            load_times_path: None,
             review_scope: None,
             review_folder: None,
             review_sweep: None,
@@ -4886,6 +4907,39 @@ pub fn runs_progress(runs: &[&RunProgress], servers: usize) -> (u64, u64, f32, O
     (done, total, fraction, eta)
 }
 
+/// What a time per image is from ([`AppState::image_s_for`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Basis {
+    /// Images like it (model, size, steps, references, CFG) on these
+    /// servers' devices.
+    Like,
+    /// Other images, scaled by steps and pixels.
+    Scaled,
+    /// None timed: the rough formula for one R9700.
+    Rough,
+}
+
+impl Basis {
+    pub fn text(self) -> &'static str {
+        match self {
+            Basis::Like => "from images like these (model, size, steps, references, CFG) on these servers",
+            Basis::Scaled => "scaled by steps and pixels from other images timed on these servers",
+            Basis::Rough => "on one R9700, a rough estimate (no images like these timed yet)",
+        }
+    }
+}
+
+/// How long runs not queued yet would take ([`AppState::estimate_new`]).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct NewEstimate {
+    /// On the servers working, alone.
+    pub alone_s: f64,
+    /// Until they'd be done with the runs in the engine (sharing the
+    /// servers as the order has it); `None` with none there.
+    pub with_queue_s: Option<f64>,
+    pub servers: usize,
+}
+
 /// All runs in the engine together, for the status bar.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct JobSummary {
@@ -4893,6 +4947,10 @@ pub struct JobSummary {
     pub done: u64,
     pub total: u64,
     pub fraction: f32,
+    /// Roughly the time left, every run together ([`runs_progress`]).
+    pub eta_s: Option<f64>,
+    /// Images an hour, the servers working together at their latest speed.
+    pub per_hour: f64,
 }
 
 impl AppState {
@@ -4957,15 +5015,203 @@ impl AppState {
 
     pub fn job_summary(&self) -> JobSummary {
         let jobs = self.jobs();
-        let total: u64 = jobs.iter().map(|j| j.total).sum();
-        let weighted: f32 = jobs.iter().map(|j| j.fraction() * j.total as f32).sum();
-        JobSummary {
-            runs: jobs.len(),
-            done: jobs.iter().map(|j| j.done).sum(),
-            total,
-            fraction: if total == 0 { 0.0 } else { weighted / total as f32 },
-        }
+        let (done, total, fraction, eta_s) = runs_progress(&jobs.iter().collect::<Vec<_>>(), self.working_servers());
+        let eta_s = self.left_of(jobs.iter().map(|j| &j.run)).or(eta_s);
+        let per_hour = self
+            .servers
+            .iter()
+            .filter(|s| server_working(&s.state))
+            .filter_map(|s| self.server_speed(&s.name))
+            .map(|s| s.per_hour())
+            .fold(0.0, |a, b| a + b);
+        JobSummary { runs: jobs.len(), done, total, fraction, eta_s, per_hour }
     }
+
+    /// The servers that are working or about to (not connecting or
+    /// unreachable), at least 1: how many images are made at once.
+    pub fn working_servers(&self) -> usize {
+        self.servers.iter().filter(|s| server_working(&s.state)).count().max(1)
+    }
+
+    /// Seconds per image of this shape on each server (by its device): a
+    /// run's own images there, else images like it there, else the run's
+    /// own anywhere (or its live seconds per step), else the library's
+    /// nearest, else [`crate::forecast::Shape::rough_image_s`].
+    fn image_s_on(
+        &self,
+        shape: &crate::forecast::Shape,
+        run: Option<&increart_core::model::Run>,
+        live: Option<f64>,
+    ) -> Vec<f64> {
+        let mean = |v: Vec<f64>| (!v.is_empty()).then(|| v.iter().sum::<f64>() / v.len() as f64);
+        self.servers
+            .iter()
+            .map(|s| {
+                let own = run.and_then(|r| {
+                    mean(r.timings.iter().filter(|t| t.device == s.device).map(|t| t.elapsed_s as f64).collect())
+                });
+                let like = self.rates.image_s(shape, &s.device);
+                own.or(like.filter(|(_, exact)| *exact).map(|(e, _)| e))
+                    .or(live)
+                    .or(like.map(|(e, _)| e))
+                    .unwrap_or_else(|| shape.rough_image_s())
+            })
+            .collect()
+    }
+
+    /// The runs in the engine as the simulation takes them.
+    fn sim_runs(&self) -> Vec<crate::forecast::SimRun> {
+        let mut runs = vec![];
+        for j in self.jobs() {
+            let Some((_, run)) = self.index.run(&j.run) else { continue };
+            let group = match &run.sweep {
+                Some(s) => format!("{}/{}", j.project_id, s.name),
+                None => j.run.to_string(),
+            };
+            runs.push(crate::forecast::SimRun {
+                id: j.run.clone(),
+                group,
+                recipe: run.model.recipe.clone(),
+                seeds: (j.total.saturating_sub(j.done) as usize).saturating_sub(j.sampling.len()),
+                sampling: j.sampling.iter().map(|(_, s, n)| *s as f64 / (*n).max(1) as f64).collect(),
+                image_s: self.image_s_on(&crate::forecast::Shape::of(run), Some(run), j.image_s()),
+            });
+        }
+        runs
+    }
+
+    fn sim_servers(&self, runs: &[crate::forecast::SimRun]) -> Vec<crate::forecast::SimServer> {
+        let recipes: BTreeSet<&str> = runs.iter().map(|r| r.recipe.as_str()).collect();
+        self.servers
+            .iter()
+            .map(|s| crate::forecast::SimServer {
+                working: server_working(&s.state),
+                recipe: s.model.clone(),
+                load_s: recipes
+                    .iter()
+                    .filter_map(|r| Some((r.to_string(), self.load_times.get(&s.name, r)? as f64)))
+                    .collect(),
+            })
+            .collect()
+    }
+
+    /// The runs in the engine on a simulated clock (DESIGN.md, Timing).
+    pub fn make_plan(&self) -> Option<crate::forecast::Plan> {
+        let runs = self.sim_runs();
+        Some(crate::forecast::simulate(&runs, &self.sim_servers(&runs), self.config.job_order))
+    }
+
+    /// Seconds per image of this shape on the servers working (their mean;
+    /// else every server's, else any device's), and what that's from.
+    pub fn image_s_for(&self, shape: &crate::forecast::Shape) -> (f64, Basis) {
+        let mut devices: Vec<&str> =
+            self.servers.iter().filter(|s| server_working(&s.state)).map(|s| s.device.as_str()).collect();
+        if devices.is_empty() {
+            devices = self.servers.iter().map(|s| s.device.as_str()).collect();
+        }
+        if devices.is_empty() {
+            devices.push("");
+        }
+        let found: Vec<(f64, bool)> = devices.iter().filter_map(|d| self.rates.image_s(shape, d)).collect();
+        if found.len() < devices.len() || found.is_empty() {
+            return (shape.rough_image_s(), Basis::Rough);
+        }
+        let mean = found.iter().map(|(e, _)| e).sum::<f64>() / found.len() as f64;
+        (mean, if found.iter().all(|(_, exact)| *exact) { Basis::Like } else { Basis::Scaled })
+    }
+
+    /// How long runs not queued yet would take (the Generate form): each
+    /// (shape, seeds), a sweep's in one group. `None` with no server
+    /// working.
+    pub fn estimate_new(&self, new: &[(crate::forecast::Shape, u64)], sweep: bool) -> Option<NewEstimate> {
+        use crate::forecast::{SimRun, simulate};
+        let at = chrono::DateTime::from_timestamp(4_000_000_000, 0)?;
+        let runs: Vec<SimRun> = new
+            .iter()
+            .enumerate()
+            .map(|(i, (shape, seeds))| {
+                let id = Id::new(at, i as u32);
+                SimRun {
+                    group: if sweep { "new sweep".into() } else { id.to_string() },
+                    id,
+                    recipe: shape.recipe.clone(),
+                    seeds: *seeds as usize,
+                    sampling: vec![],
+                    image_s: self.image_s_on(shape, None, None),
+                }
+            })
+            .collect();
+        let servers = self.sim_servers(&runs);
+        if !servers.iter().any(|s| s.working) {
+            return None;
+        }
+        let ends = |plan: &crate::forecast::Plan| {
+            runs.iter().map(|r| plan.runs.get(&r.id).and_then(|p| p.1)).try_fold(0.0f64, |m, f| f.map(|f| m.max(f)))
+        };
+        let alone = ends(&simulate(&runs, &servers, self.config.job_order))?;
+        let mut all = self.sim_runs();
+        let queued = !all.is_empty();
+        all.extend(runs.iter().cloned());
+        let after = if queued { ends(&simulate(&all, &self.sim_servers(&all), self.config.job_order)) } else { None };
+        Some(NewEstimate { alone_s: alone, with_queue_s: after, servers: servers.iter().filter(|s| s.working).count() })
+    }
+
+    /// What the forecast is made of, hashed: the runs in the engine, their
+    /// seeds done and whether they've a live speed yet, the servers' states
+    /// and models, and the order.
+    pub fn plan_key(&self) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        for j in self.jobs() {
+            (j.run, j.done, j.total, j.step_s.is_some()).hash(&mut h);
+        }
+        for s in &self.servers {
+            (&s.state, &s.model).hash(&mut h);
+        }
+        format!("{:?}", self.config.job_order).hash(&mut h);
+        h.finish()
+    }
+
+    /// Seconds until a run in the engine is done, by the forecast.
+    pub fn run_left(&self, run: &Id) -> Option<f64> {
+        self.forecast.runs.get(run)?.1.map(|f| (f - self.now).max(0.0))
+    }
+
+    /// Seconds until a run in the engine starts generating, when it hasn't
+    /// yet.
+    pub fn run_starts_in(&self, run: &Id) -> Option<f64> {
+        let p = self.run_progress(run)?;
+        if p.done > 0 || !p.sampling.is_empty() {
+            return None;
+        }
+        self.forecast.runs.get(run)?.0.map(|s| (s - self.now).max(0.0))
+    }
+
+    /// Seconds until the last of these runs is done; `None` when one
+    /// isn't in the forecast.
+    pub fn left_of<'a>(&self, runs: impl IntoIterator<Item = &'a Id>) -> Option<f64> {
+        let left: Option<Vec<f64>> = runs.into_iter().map(|r| self.run_left(r)).collect();
+        left.filter(|l| !l.is_empty()).map(|l| l.into_iter().fold(0.0, f64::max))
+    }
+
+    /// [`runs_progress`] of these runs, with the forecast's time left when
+    /// it has one for each.
+    pub fn group_progress(&self, runs: &[&RunProgress]) -> (u64, u64, f32, Option<f64>) {
+        let (done, total, fraction, eta) = runs_progress(runs, self.working_servers());
+        (done, total, fraction, self.left_of(runs.iter().map(|r| &r.run)).or(eta))
+    }
+
+    /// A server's speed over its latest images this session.
+    pub fn server_speed(&self, name: &str) -> Option<crate::timing::Speed> {
+        let recent: Vec<_> = self.server_speeds.get(name)?.iter().copied().collect();
+        crate::timing::Speed::of(&recent)
+    }
+}
+
+/// Whether a server in this state makes images or is about to (ready,
+/// warming up, loading, draining).
+fn server_working(state: &str) -> bool {
+    !(state == "connecting" || state == "opening" || state.contains("unreachable") || state.contains("failed"))
 }
 
 /// Newest created first, last run first, or by name (any case); newest

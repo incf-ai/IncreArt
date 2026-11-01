@@ -2,6 +2,7 @@
 //! reducer (`Msg` → state + `Effect`s) and the [`Runtime`] that carries the
 //! effects out. The egui crate only draws state and sends messages.
 
+pub mod forecast;
 pub mod runtime;
 pub mod state;
 pub mod tile;

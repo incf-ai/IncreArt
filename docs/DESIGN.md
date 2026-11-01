@@ -1931,7 +1931,7 @@ by one **Queue**; nothing about generating or storing them is special.
 
 The **Queue** button ("Queue sweep: K runs × N seed(s)", or "Queue N
 seed(s)"), **Clear**, **Review N new**, the unsaved-changes note, the time
-estimate, why Queue refuses, and the no-servers note are a strip pinned
+estimate (see Timing), why Queue refuses, and the no-servers note are a strip pinned
 under the Generate form, so they stay in view however long the form (a
 sweep's tables) gets. **Review N new** opens Review on the open project's
 unreviewed images (every run and sweep, oldest first, as the project
@@ -3064,8 +3064,8 @@ the keys and mouse buttons go through that view's own history instead.
   (always shown, greyed out with nothing generating); the runs scroll
   under them, by project: a project is a box in the order its first run is
   in the queue, folded until opened (▸, for the session), its header the
-  name, "3 runs · 46 / 120 seeds · ~12 min left" (its runs' images left at
-  their time per image, as many at once as there are servers), and
+  name, "3 runs · 46 / 120 seeds · ~12 min left" (by the forecast, see
+  Timing), and
   **Finish & stop** / **Stop now** for all its runs (Stop now asks), then a
   bar over its seeds. Open, its runs in queue order: a run on its own as a
   block (label, prompt, a bar over its seeds that counts partly sampled
@@ -3287,13 +3287,70 @@ timing existed have none).
   also counts encoding and decoding), GPU time (summed), wall clock (first
   image started → last stored, so runs sharing the GPUs and pauses count),
   server queue wait, and per device. Below it, the project's totals.
-- **Live** (each run in Jobs, and "now" in its details): seconds per step of
-  the images sampling now (from the GUI's own clock as their steps arrive),
-  seconds per image, how many are done and in what time, and roughly the
-  time left: the images left (partly sampled ones by their steps) at the
-  run's seconds per image, as many at once as are sampling now.
+- **Per project** (project pane, **Timing**): per image, per step, GPU time,
+  each model's per image and step when it has several, and while it
+  generates its seeds and time left.
+- **Live** (each run in Jobs, and "now" in its details, also before its
+  first image): seconds per step of the images sampling now (from the GUI's
+  own clock as their steps arrive), seconds per image, how many are done
+  and in what time, "starts in ~12 min" while it waits its turn, and its
+  time left by the forecast. A sweep's runs show theirs ("starts in …" or
+  "~4 min") at the end of their line.
+- **All together**: the status bar's jobs summary ends with the time left
+  of every run in the engine; the jobs popover has under its title the
+  seeds, the time left and the images an hour of the servers working (the
+  sum of theirs). A group's (project, sweep, everything) time left is when
+  the last of its runs is done.
+- **Per server** (the server list, under its state): "1.74 s/it · 35.1
+  s/image · 103/h" over its latest 20 images this session (the engine's
+  `Output` event says which server made an image and how long it took).
+- **Queue cleared** (the bell, Notifications): what the GPU did since it
+  last began work, "GPU 0 finished its queue · 64 image(s) in 41 min"
+  (with **all GPUs**, since the first began).
 
-Durations read as "0.84 s", "34.2 s", "4 min 12 s", "2 h 05 min".
+**The forecast** (`forecast.rs`): when each run in the engine starts and is
+done. It runs the engine's own scheduler (`scheduler.rs`, a pure state
+machine) on a simulated clock: the runs in queue order with their seeds
+left, the order (Spread evenly, Sweep by sweep, One at a time), the servers
+working with their loaded models (by recipe), 2 jobs held per server and
+generated one after another, a seed being sampled now taking what's left
+of it, and a model switch its load. So a run waiting behind others, or for
+a model no server has, gets its real turn, and a slow server keeps the
+seeds it holds, as in the engine. Not simulated: which files a server can
+load (any server is taken to load any model), warm-ups, failures.
+
+- **Seconds per image**, per run and server (by its device): the run's own
+  images there; else images like it there (same model, size, steps,
+  references and CFG passes: CFG above 1 is two passes a step) from every
+  timed image in the library; else the run's own anywhere, or its live
+  seconds per step × steps; else the library's nearest, scaled by steps,
+  passes and megapixels (the model on that device, the model anywhere, the
+  device with any model, anything); else the rough formula for one R9700.
+- **Load times**: each load the engine does (its `ModelLoaded` event) is
+  kept in `load-times.json` in the app's state folder, by server and
+  recipe, as the mean with the last; a load not timed yet takes the
+  model's mean on the other servers, else the server's for other models,
+  else 60 s.
+- **When**: made again when what it's made of changes (a run's seeds done,
+  a run queued or stopped, a run's first live speed, a server's state or
+  model, the order), and every 30 s anyway; in between its times count
+  down. At most once a second (a queue of 2,500 seeds takes 2–25 ms).
+  Each time moves a third of the way to the new plan's, or all the way
+  when they differ by more than half, so it doesn't jump with each image.
+- **The Generate form**: beside **Queue**, "≈ 34 s per image" (the mean
+  over the servers working, its tooltip what it's from: images like these,
+  others scaled, or the R9700 formula), and under the strip, one line
+  always (the form keeps its height): "64 image(s) ≈ 37 min on 2 servers ·
+  with what's queued, done in ~1 h 10 min (≈16:05)", or "· done ≈15:12 if
+  queued now" with nothing queued: the form's runs (a sweep's each) on the
+  same simulation, alone and after the runs in the engine as the order
+  shares the servers. With no server working, the GPU time. The sweep
+  tables' totals and the resolutions table's time per image use the same
+  seconds per image ("≈ 2 h 10 min of GPU time").
+
+Durations read as "0.84 s", "34.2 s", "4 min 12 s", "2 h 05 min". Time left
+reads "~4 min 12 s left"; from 10 minutes on, in whole minutes and with when
+by the clock, "~38 min left · ≈15:12" ("≈Tue 09:40" when it isn't today).
 
 ### Timeouts
 
@@ -3354,7 +3411,8 @@ left for it in the pool), for **each GPU** or **only when all GPUs are done**
 dropped out (connecting, unreachable), doesn't count; nor does one whose runs
 were all stopped with **Stop now** (the user did it and saw it; the engine
 says which runs each server has jobs of). **Finish & stop** still sounds when
-the last images are done. It doesn't repeat, and
+the last images are done. Its text says what the GPU did ("GPU 0 finished
+its queue · 64 image(s) in 41 min", see Timing). It doesn't repeat, and
 a snoozed or held-back one is not played later; the bell shows it until the
 window gets the focus or a GPU gets work again.
 

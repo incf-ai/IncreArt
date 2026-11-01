@@ -686,10 +686,10 @@ fn setting_sweep(ui: &mut egui::Ui, st: &AppState, f: &mut GenerateForm) {
             ui.colored_label(BAD, e);
         }
         Ok(runs) => {
-            let secs: f32 = runs.iter().map(|(r, _)| crate::projects::estimate(r) * r.seeds as f32).sum();
+            let secs: f32 = runs.iter().map(|(r, _)| crate::projects::estimate(st, r) * r.seeds as f32).sum();
             let images = runs.len() as u64 * f.seeds;
             let line = format!(
-                "{} {} × {} seeds = {images} images ≈ {} on one R9700 · same seeds for every value",
+                "{} {} × {} seeds = {images} images ≈ {} of GPU time · same seeds for every value",
                 runs.len(),
                 if runs.len() == 1 { "value" } else { "values" },
                 f.seeds,
@@ -715,7 +715,7 @@ fn setting_sweep(ui: &mut egui::Ui, st: &AppState, f: &mut GenerateForm) {
 fn style_sweep(ui: &mut egui::Ui, st: &AppState, f: &mut GenerateForm, out: &mut Vec<Msg>) {
     use increart_core::prompts::{Removed, SweepSource, slot_names, sweep_presets};
     let list = &st.prompt_presets;
-    let per = crate::projects::estimate(f);
+    let per = crate::projects::estimate(st, f);
     let seeds = f.seeds;
     let refs = f.images.iter().filter(|i| i.reference).count();
     let prompt = f.prompt.clone();
@@ -834,7 +834,7 @@ fn style_sweep(ui: &mut egui::Ui, st: &AppState, f: &mut GenerateForm, out: &mut
             let images = names.len() as u64 * seeds;
             let secs = per * images as f32;
             let line = format!(
-                "{} styles × {} seeds = {images} images ≈ {} on one R9700 · same seeds in every style",
+                "{} styles × {} seeds = {images} images ≈ {} of GPU time · same seeds in every style",
                 names.len(),
                 seeds,
                 crate::projects::fmt_secs(secs)

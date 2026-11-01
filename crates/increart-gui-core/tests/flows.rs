@@ -1648,6 +1648,102 @@ fn job_progress() {
     let s = h.state.job_summary();
     assert_eq!((s.runs, s.done, s.total), (1, 0, 4));
     assert!((s.fraction - 0.125).abs() < 1e-6);
+
+    // an image done: its server's speed this session; one unreachable
+    // isn't working
+    let server = |name: &str, state: &str| ServerStatus {
+        config: None,
+        name: name.into(),
+        device: String::new(),
+        state: state.into(),
+        model: None,
+        idle_since: None,
+        worked: false,
+    };
+    h.state.servers = vec![server("gpu0", "ready"), server("gpu1", "unreachable, retrying")];
+    assert_eq!(h.state.working_servers(), 1);
+    h.send(Msg::Engine(increart_core::engine::Event::Output {
+        run: run.clone(),
+        rev: 0,
+        seed: 1,
+        image: increart_core::Id::new(increart_core::id::now(), 9),
+        link: PathBuf::from("r01_s1.png"),
+        server: 0,
+        elapsed_s: 40.0,
+        step_s: 0.0,
+    }));
+    let speed = h.state.server_speed("gpu0").unwrap();
+    assert_eq!(speed.text(), "≈2.00 s/it · 40.0 s/image · 90/h", "estimated: the run has 20 steps");
+    assert!(h.state.server_speed("gpu1").is_none());
+    assert_eq!(h.state.job_summary().per_hour, 90.0);
+}
+
+#[test]
+fn the_forecast_times_the_queue() {
+    let mut h = Harness::new();
+    h.send(Msg::NewProject(PathBuf::new()));
+    h.send(Msg::CommitRename);
+    h.settle();
+    let mut f = h.state.generate.clone();
+    f.prompt = "a fox".into();
+    f.seeds = 4;
+    f.steps = 20;
+    h.send(Msg::Generate(f));
+    h.send(Msg::QueueGenerate);
+    h.settle();
+    let run = h.state.project_entry().unwrap().runs[0].id.clone();
+    h.state.active_runs.insert(run.clone());
+    let recipe = h.state.index.run(&run).unwrap().1.model.recipe.clone();
+    h.state.servers = vec![ServerStatus {
+        config: None,
+        name: "gpu0".into(),
+        device: "ROCm0".into(),
+        state: "ready".into(),
+        model: Some(recipe),
+        idle_since: None,
+        worked: false,
+    }];
+    let progress = |step| {
+        Msg::Engine(increart_core::engine::Event::Progress {
+            run: run.clone(),
+            rev: 0,
+            seed: 0,
+            server: 0,
+            step,
+            total: 20,
+            preview: None,
+        })
+    };
+    // nothing timed yet: the rough estimate (a minute or so an image)
+    h.send(Msg::Tick(100.0));
+    h.send(progress(10));
+    h.send(Msg::Tick(101.0));
+    assert!(h.state.run_left(&run).is_some_and(|s| s > 100.0), "{:?}", h.state.run_left(&run));
+    // its live speed, at once: 1 s a step (20 s an image), seed 0 at 15
+    // of 20: 5 s for it, then 3 more at 20 s on the one server
+    h.send(Msg::Tick(105.0));
+    h.send(progress(15));
+    h.send(Msg::Tick(106.0));
+    assert_eq!(h.state.run_left(&run), Some(65.0));
+    assert_eq!(h.state.job_summary().eta_s, Some(65.0));
+    // it counts down while nothing changes
+    h.send(Msg::Tick(116.0));
+    assert_eq!(h.state.run_left(&run), Some(55.0));
+    let jobs = h.state.jobs();
+    assert_eq!(h.state.group_progress(&jobs.iter().collect::<Vec<_>>()).3, Some(55.0));
+
+    // the Generate form's: 2 more seeds alone, and with what's queued
+    // (spread: sharing the server with it, not behind it)
+    let shape = increart_gui_core::forecast::Shape::of_form(&h.state.generate, &h.state.config.recipes);
+    let per = h.state.image_s_for(&shape).0;
+    let e = h.state.estimate_new(&[(shape, 2)], false).unwrap();
+    assert_eq!((e.servers, e.alone_s), (1, 2.0 * per));
+    let with = e.with_queue_s.unwrap();
+    assert!(with > e.alone_s && with < 65.0 + 2.0 * per, "{with}");
+    // stopped: none
+    h.state.active_runs.clear();
+    h.send(Msg::Tick(117.0));
+    assert_eq!(h.state.run_left(&run), None);
 }
 
 #[test]
@@ -3784,6 +3880,47 @@ fn gpu_idle_alert_repeats_while_it_lasts() {
     update(&mut s, Msg::SetNotifications(n));
     assert_eq!(at(&mut s, 400.0), 0);
     assert!(s.alerts.idle_text.is_none());
+}
+
+#[test]
+fn queue_cleared_says_what_the_gpu_did() {
+    let mut s = dialog_state(vec![], None);
+    let mut n = s.config.notifications.clone();
+    n.queue_cleared.on = true;
+    n.player = "true {file}".into();
+    update(&mut s, Msg::SetNotifications(n));
+    s.servers = vec![ServerStatus {
+        config: None,
+        name: "a".into(),
+        device: String::new(),
+        state: "ready".into(),
+        model: None,
+        idle_since: None,
+        worked: false,
+    }];
+    s.engine_running = true;
+    update(&mut s, Msg::Tick(10.0));
+    idle_server(&mut s, 0, false);
+    for seed in 0..2 {
+        update(
+            &mut s,
+            Msg::Engine(increart_core::engine::Event::Output {
+                run: increart_core::Id::new(increart_core::id::now(), 1),
+                rev: 0,
+                seed,
+                image: increart_core::Id::new(increart_core::id::now(), 2),
+                link: PathBuf::new(),
+                server: 0,
+                elapsed_s: 30.0,
+                step_s: 1.5,
+            }),
+        );
+    }
+    update(&mut s, Msg::Tick(70.0));
+    idle_server(&mut s, 0, true);
+    update(&mut s, Msg::Tick(100.0));
+    assert_eq!(s.alerts.cleared_text.as_deref(), Some("a finished its queue · 2 image(s) in 1 min 30 s"));
+    assert!(s.alerts.busy.is_empty(), "its spell ended");
 }
 
 #[test]

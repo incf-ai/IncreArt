@@ -1558,6 +1558,22 @@ impl Tour {
                 let runs: Vec<_> = fox.map(|p| p.runs.iter().map(|r| r.id.clone()).collect()).unwrap_or_default();
                 let mut v = vec![Msg::Tab(Tab::Review), Msg::RunsQueued(runs.clone())];
                 if let Some(run) = runs.last() {
+                    // images each server made, for their speeds
+                    let t0 = increart_core::id::now();
+                    for (seed, server, elapsed_s, step_s) in
+                        [(0, 0, 34.8, 1.71), (1, 1, 36.1, 1.78), (2, 0, 34.2, 1.69)]
+                    {
+                        v.push(Msg::Engine(increart_core::engine::Event::Output {
+                            run: run.clone(),
+                            rev: 0,
+                            seed,
+                            image: increart_core::Id::new(t0, 900 + seed as u32),
+                            link: PathBuf::new(),
+                            server,
+                            elapsed_s,
+                            step_s,
+                        }));
+                    }
                     for (seed, step, server) in [(6, 14, 0), (7, 5, 1)] {
                         v.push(Msg::Engine(increart_core::engine::Event::Progress {
                             run: run.clone(),

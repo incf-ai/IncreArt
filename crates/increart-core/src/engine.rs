@@ -96,8 +96,10 @@ pub enum Event {
     Server { server: ServerIdx, state: String, model: Option<ModelKey>, idle: bool, runs: Vec<Id> },
     /// Sampling progress of a seed, with the latest preview PNG if any.
     Progress { run: Id, rev: u32, seed: u64, server: ServerIdx, step: u32, total: u32, preview: Option<Vec<u8>> },
-    /// An image was stored and linked into the project's `unreviewed/`.
-    Output { run: Id, rev: u32, seed: u64, image: Id, link: PathBuf },
+    /// An image was stored and linked into the project's `unreviewed/`, by
+    /// `server`, generating for `elapsed_s` at `step_s` seconds a step (0:
+    /// not timed).
+    Output { run: Id, rev: u32, seed: u64, image: Id, link: PathBuf, server: ServerIdx, elapsed_s: f32, step_s: f32 },
     /// A seed failed for good (recorded in `run.rsn`).
     SeedFailed { run: Id, rev: u32, seed: u64, error: String },
     /// No seeds of the run are left to generate.
@@ -106,6 +108,8 @@ pub enum Event {
     Problem(String),
     /// A line of a run's generation log (written to its [`RUN_LOG`] too).
     Log { run: Id, line: String },
+    /// A server loaded a model (asked to), in `took_s` seconds.
+    ModelLoaded { server: ServerIdx, recipe: String, took_s: f32 },
 }
 
 /// A server's last reported state, model, idleness and runs in flight.
@@ -706,6 +710,7 @@ impl Coordinator {
                     let result = match r {
                         Ok(st) if st.loaded().as_ref() == Some(&target) => {
                             self.answered(s);
+                            self.emit(Event::ModelLoaded { server: s, recipe: target.recipe.clone(), took_s: took });
                             LoadResult::Ok
                         }
                         Ok(st) => {
@@ -888,9 +893,11 @@ impl Coordinator {
         });
         match written {
             Ok((image, link)) => {
-                self.log_ticket(ticket, s, &format!("done in {:.1} s", job.elapsed_s().unwrap_or(0.0)));
+                let elapsed_s = job.elapsed_s().unwrap_or(0.0) as f32;
+                self.log_ticket(ticket, s, &format!("done in {elapsed_s:.1} s"));
                 self.sched.finished(ticket, Outcome::Done);
-                self.emit(Event::Output { run: seed.run.clone(), rev: seed.rev, seed: seed.seed, image, link });
+                let (run, rev, seed_n) = (seed.run.clone(), seed.rev, seed.seed);
+                self.emit(Event::Output { run, rev, seed: seed_n, image, link, server: s, elapsed_s, step_s });
                 self.check_done(&seed.run);
             }
             Err(e) => self.fail_seed(ticket, &format!("storing the result: {e}")),

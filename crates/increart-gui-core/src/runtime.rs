@@ -412,6 +412,10 @@ impl Runtime {
                 let _ = self.ctx.tx.send(Msg::Validations(increart_core::validation::Validations::load(&path)));
                 (self.ctx.wake)();
             }
+            Effect::SaveLoadTimes(path, times) => {
+                // not saved: the next estimate uses the default, no worse
+                let _ = times.save(&path);
+            }
             Effect::ValidationAsked(path, fingerprint) => {
                 // not noted: asked again next time, no worse
                 let _ = increart_core::validation::mark_asked(&path, &fingerprint);
@@ -1643,6 +1647,7 @@ fn work_on(ctx: &Ctx, fx: Effect) -> Vec<Msg> {
         | Effect::ApiTestRun { .. }
         | Effect::ApiTestStop
         | Effect::LoadValidations(_)
+        | Effect::SaveLoadTimes(..)
         | Effect::ValidationAsked(..)
         | Effect::PlaySound { .. }
         | Effect::OpenServers { .. }
