@@ -56,6 +56,13 @@ pub fn show(ui: &mut egui::Ui, p: &Picker, height: f32) -> Picked {
     let matches = |f: &Path| words.iter().all(|w| f.to_string_lossy().to_lowercase().contains(w));
     let shown =
         |f: &Path| words.is_empty() || f == p.selected || p.folders.iter().any(|g| g.starts_with(f) && matches(g));
+    // the first frame shown (none the frame before): the folder it starts
+    // on is scrolled to, down a list longer than the column
+    let pass = ui.ctx().cumulative_pass_nr();
+    let last = egui::Id::unique(("folder_pick_pass", p.id));
+    let before: Option<u64> = ui.ctx().data_mut(|d| d.get_temp(last));
+    ui.ctx().data_mut(|d| d.insert_temp(last, pass));
+    let opening = before.is_none_or(|was| was + 1 < pass);
     let mut row = |ui: &mut egui::Ui, path: &Path, label: &str, depth: usize| {
         ui.horizontal(|ui| {
             ui.add_space(depth as f32 * 16.0);
@@ -65,7 +72,11 @@ pub fn show(ui: &mut egui::Ui, p: &Picker, height: f32) -> Picked {
                 _ if selected => ph::FOLDER_OPEN,
                 _ => ph::FOLDER,
             };
-            if ui.selectable_label(selected, ic(icon, label)).clicked() {
+            let r = ui.selectable_label(selected, ic(icon, label));
+            if selected && opening {
+                r.scroll_to_me(Some(egui::Align::Center));
+            }
+            if r.clicked() {
                 out.select = Some(path.to_path_buf());
             }
         });
