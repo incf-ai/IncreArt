@@ -140,6 +140,7 @@ const EXTRA_SCENES: &[&str] = &[
     "60g-validate-first",
     "61-duplicate-project",
     "62-rename",
+    "62b-move-project",
     "63-projects-search",
     "64-prompt-presets",
     "65-prompt-presets-search",
@@ -992,6 +993,22 @@ impl Tour {
                 vec![Msg::ContinueWithoutServers, Msg::Tab(Tab::IdeaInbox), Msg::NewProjectFromIdeas(ideas)]
             }
             "62-rename" => vec![Msg::Tab(Tab::Projects), Msg::StartRename(Tree::Projects, PathBuf::from("stickers"))],
+            "62b-move-project" => {
+                // fox-cafe from clients/acme, experiments picked
+                let path = PathBuf::from("clients/acme/fox-cafe");
+                vec![
+                    Msg::CancelRename,
+                    Msg::ContinueWithoutServers,
+                    Msg::Tab(Tab::Projects),
+                    Msg::MoveProject(path.clone()),
+                    Msg::EditMoveProject(increart_gui_core::MoveProjectDialog {
+                        path,
+                        parent: PathBuf::from("experiments"),
+                        new_folder: None,
+                        filter: String::new(),
+                    }),
+                ]
+            }
             "61-duplicate-project" => vec![Msg::Tab(Tab::Projects), Msg::DuplicateProject(PathBuf::from("stickers"))],
             "55-library-open-wizard" => {
                 vec![Msg::LibraryWizard(Some((LibraryWizard::Open, self.library.clone())))]
@@ -1986,6 +2003,7 @@ impl Tour {
                 Msg::CancelNewProject,
                 Msg::CancelCollect,
                 Msg::CancelTags,
+                Msg::CancelMoveProject,
             ]);
             out.extend(self.msgs(name, st));
             if name.starts_with("54")

@@ -2761,6 +2761,14 @@ real directories under `projects/`, so it looks the same in a file manager.
     templates — but **not** its images; copying a folder copies its subtree
     the same way. A pasted name that clashes gets a number suffix. Pasting a
     folder into itself or a descendant is refused.
+  - **Move…** (a project or a folder): a modal with the project folders on
+    the left (a filter, the tree, New folder under it), starting on the
+    folder it is in, and From / To on the right. **Move** (or Enter) moves
+    it with what it holds (runs, images and links; a folder's folders and
+    projects); a new folder picked is made first. The folder it is in, and
+    a folder into itself or one under it, are refused (Move disabled); a
+    taken name gets a number. (Input library and collection folders keep
+    **Move to the top level**.)
   - **Discard…** (a project) / **Delete…** (a folder): confirmation
     showing the folders, projects and images inside and how many pending
     seeds won't be generated. Each project moves to `discarded_projects/`

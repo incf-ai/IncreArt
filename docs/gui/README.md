@@ -110,6 +110,7 @@ size (regenerate it with `scripts/make-gui-gallery.sh`).
 | [61-duplicate-project](61-duplicate-project.webp) | A project's right-click Duplicate: name the copy first ("stickers copy") |
 | [63-projects-search](63-projects-search.webp) | Projects side panel: New project / New folder on top, search ("fox": matching projects and the folders holding them) |
 | [62-rename](62-rename.webp) | Rename modal (folders, projects, collections; also right after New folder / New project) |
+| [62b-move-project](62b-move-project.webp) | A project's (or project folder's) right-click Move…: the project folders on the left (a filter, the tree, New folder under it), starting on the folder it is in; from and to on the right |
 | [64-prompt-presets](64-prompt-presets.webp) | Generate → Presets…: tasks on the left, Modify style's presets under their group headings; the prompt replaced by Solid colour background, its `{colour}` selected and flagged; the library menu at the top right |
 | [65-prompt-presets-search](65-prompt-presets-search.webp) | Presets search ("clay") across every task |
 | [66-preset-editor](66-preset-editor.webp) | Edit presets…: tasks, the task's presets, the selected preset's fields (Claymation) |
