@@ -11,7 +11,7 @@ use increart_core::config::ReviewOrder;
 use increart_core::scan::OutputLink;
 use increart_gui_core::{
     AppState, Confirm, GRID_CELL_MAX, GRID_CELL_MIN, InfoPanel, Msg, OutputPreset, OutputSource, OutputTab, Ratings,
-    ReviewRun, ReviewView, Smart, Tab, UseTarget, ZoomGrid, counts,
+    ReviewNode, ReviewRun, ReviewView, Smart, Tab, UseTarget, ZoomGrid, counts,
 };
 
 use crate::textures::Textures;
@@ -418,68 +418,79 @@ fn scope_panel(ui: &mut egui::Ui, st: &AppState, out: &mut Vec<Msg>) {
     /// `q`: the search (lowercase); a matching folder shows all it holds.
     fn rec(ui: &mut egui::Ui, st: &AppState, parent: &Path, q: &str, out: &mut Vec<Msg>) {
         let depth = parent.components().count() as f32 + 1.0;
-        let (folders, ps) = st.review_tree_children(parent);
-        for f in folders {
-            if !q.is_empty() && !folder_matches(st, f, q) {
-                continue;
-            }
-            let own = f.file_name().unwrap_or_default().to_string_lossy().to_lowercase().contains(q);
-            let n = st.unreviewed_under(f);
-            ui.horizontal(|ui| {
-                ui.add_space(12.0 * depth);
-                let name = f.file_name().unwrap_or_default().to_string_lossy();
-                let sel = st.review_folder.as_deref() == Some(f.as_path());
-                if ui.selectable_label(sel, ic(ph::FOLDER, &format!("{name} ({n})"))).clicked() {
-                    out.push(Msg::ReviewScopeFolder(f.clone()));
-                }
-            });
-            rec(ui, st, f, if own { "" } else { q }, out);
-        }
-        let ps = ps.into_iter().filter(|p| q.is_empty() || p.name().to_lowercase().contains(q));
-        for p in ps {
-            let u = counts(p)[3];
-            ui.horizontal(|ui| {
-                ui.add_space(12.0 * depth);
-                // the whole project; a run or sweep of it is selected below
-                let sel = st.review_scope.as_ref() == Some(&p.project.id)
-                    && st.review_sweep.is_none()
-                    && st.review_run.is_none();
-                let label = ic(ph::ROCKET_LAUNCH, &format!("{} ({u})", p.name()));
-                let text = if u == 0 { RichText::new(label).weak() } else { RichText::new(label) };
-                if ui.selectable_label(sel, text).clicked() {
-                    out.push(Msg::ReviewScope(Some(p.project.id.clone())));
-                }
-            });
-            let selected = st.review_scope.as_ref() == Some(&p.project.id);
-            if !selected && !st.review_all_runs {
-                continue;
-            }
-            for row in st.review_runs(p) {
-                let (sel, label, tip, u, msg) = match row {
-                    ReviewRun::Single(r) => {
-                        let label = if r.label.is_empty() { r.id.to_string() } else { r.label.clone() };
-                        let sel = selected && st.review_run.as_ref() == Some(&r.id);
-                        let u = st.run_unreviewed(p, &r.id);
-                        let msg = Msg::ReviewRun(p.project.id.clone(), r.id.clone());
-                        (sel, ic(ph::IMAGES, &format!("{label} ({u})")), "this run's images", u, msg)
+        for node in st.review_tree_nodes(parent) {
+            match node {
+                ReviewNode::Folder(f) => {
+                    if !q.is_empty() && !folder_matches(st, f, q) {
+                        continue;
                     }
-                    ReviewRun::Sweep(name) => {
-                        let sel = selected && st.review_sweep.as_deref() == Some(name);
-                        let u = st.sweep_unreviewed(p, name);
-                        let msg = Msg::ReviewSweep(p.project.id.clone(), name.to_string());
-                        (sel, ic(ph::TABLE, &format!("sweep {name} ({u})")), "this style sweep's contact sheet", u, msg)
-                    }
-                };
-                if u == 0 && !sel && !st.config.review_show_reviewed {
-                    continue;
+                    let own = f.file_name().unwrap_or_default().to_string_lossy().to_lowercase().contains(q);
+                    let n = st.unreviewed_under(f);
+                    ui.horizontal(|ui| {
+                        ui.add_space(12.0 * depth);
+                        let name = f.file_name().unwrap_or_default().to_string_lossy();
+                        let sel = st.review_folder.as_deref() == Some(f.as_path());
+                        if ui.selectable_label(sel, ic(ph::FOLDER, &format!("{name} ({n})"))).clicked() {
+                            out.push(Msg::ReviewScopeFolder(f.clone()));
+                        }
+                    });
+                    rec(ui, st, f, if own { "" } else { q }, out);
                 }
-                ui.horizontal(|ui| {
-                    ui.add_space(12.0 * depth + 18.0);
-                    let text = if u == 0 { RichText::new(label).weak() } else { RichText::new(label) };
-                    if ui.selectable_label(sel, text).on_hover_text(tip).clicked() {
-                        out.push(msg);
+                ReviewNode::Project(p) => {
+                    if !q.is_empty() && !p.name().to_lowercase().contains(q) {
+                        continue;
                     }
-                });
+                    let u = counts(p)[3];
+                    ui.horizontal(|ui| {
+                        ui.add_space(12.0 * depth);
+                        // the whole project; a run or sweep of it is selected below
+                        let sel = st.review_scope.as_ref() == Some(&p.project.id)
+                            && st.review_sweep.is_none()
+                            && st.review_run.is_none();
+                        let label = ic(ph::ROCKET_LAUNCH, &format!("{} ({u})", p.name()));
+                        let text = if u == 0 { RichText::new(label).weak() } else { RichText::new(label) };
+                        if ui.selectable_label(sel, text).clicked() {
+                            out.push(Msg::ReviewScope(Some(p.project.id.clone())));
+                        }
+                    });
+                    let selected = st.review_scope.as_ref() == Some(&p.project.id);
+                    if !selected && !st.review_all_runs {
+                        continue;
+                    }
+                    for row in st.review_runs(p) {
+                        let (sel, label, tip, u, msg) = match row {
+                            ReviewRun::Single(r) => {
+                                let label = if r.label.is_empty() { r.id.to_string() } else { r.label.clone() };
+                                let sel = selected && st.review_run.as_ref() == Some(&r.id);
+                                let u = st.run_unreviewed(p, &r.id);
+                                let msg = Msg::ReviewRun(p.project.id.clone(), r.id.clone());
+                                (sel, ic(ph::IMAGES, &format!("{label} ({u})")), "this run's images", u, msg)
+                            }
+                            ReviewRun::Sweep(name) => {
+                                let sel = selected && st.review_sweep.as_deref() == Some(name);
+                                let u = st.sweep_unreviewed(p, name);
+                                let msg = Msg::ReviewSweep(p.project.id.clone(), name.to_string());
+                                (
+                                    sel,
+                                    ic(ph::TABLE, &format!("sweep {name} ({u})")),
+                                    "this style sweep's contact sheet",
+                                    u,
+                                    msg,
+                                )
+                            }
+                        };
+                        if u == 0 && !sel && !st.config.review_show_reviewed {
+                            continue;
+                        }
+                        ui.horizontal(|ui| {
+                            ui.add_space(12.0 * depth + 18.0);
+                            let text = if u == 0 { RichText::new(label).weak() } else { RichText::new(label) };
+                            if ui.selectable_label(sel, text).on_hover_text(tip).clicked() {
+                                out.push(msg);
+                            }
+                        });
+                    }
+                }
             }
         }
     }
