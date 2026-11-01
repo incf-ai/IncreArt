@@ -84,8 +84,8 @@ ideas ──► INPUT QUEUE ──review──► INPUT LIBRARY ──new projec
   scope's project, opened in Generate as it is. Its ▾ opens it with that
   run's settings or that image's recipe & seed instead. The counterpart of
   **Review N new** on the Generate strip.
-- Review's scope tree has its own **Sort** (config `review_order`, A–Z by
-  default), independent of the Projects tab: Created, Last run and A–Z as
+- Review's scope tree has its own **Sort** (config `review_order`, Created,
+  newest first, by default), independent of the Projects tab: Created, Last run and A–Z as
   the project tree orders projects (folders follow the same choice, by the
   projects anywhere in them), or Oldest to review (the oldest projects with
   images to review first, a folder by the oldest such project in it, then

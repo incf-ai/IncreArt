@@ -1250,7 +1250,7 @@ mod tests {
         assert!(!text.contains("_by_"), "{text}");
         assert_eq!(rsnfmt::from_str::<Config>(&text).unwrap(), c);
         assert_eq!(Config::default().folder_order.0, TreeOrder::Name, "folders A–Z by default");
-        assert_eq!(Config::default().review_order, ReviewOrder::Name, "Review A–Z by default");
+        assert_eq!(Config::default().review_order, ReviewOrder::Created, "Review newest first by default");
         // Follow's pace: the time an image makes at the lag, quicker behind it
         let f = FollowPace::default();
         assert_eq!(f.secs(4, Some(20.0)), 20.0);
@@ -1879,9 +1879,9 @@ impl TreeOrder {
 /// review first.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ReviewOrder {
+    #[default]
     Created,
     LastRun,
-    #[default]
     Name,
     /// The oldest projects with images to review first (a folder by the
     /// oldest such project in it), then those with none.
