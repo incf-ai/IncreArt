@@ -1606,6 +1606,7 @@ fn work_on(ctx: &Ctx, fx: Effect) -> Vec<Msg> {
             vec![]
         }
         Effect::Lib(op) => {
+            let op = *op;
             let Some(lib) = ctx.library() else { return vec![Msg::OpDone(Err("no library open".into()), None)] };
             let queue_run = matches!(&op, LibOp::CreateRun { queue: true, .. });
             let op_queue = match &op {

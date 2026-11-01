@@ -1535,7 +1535,7 @@ mod tests {
         )
         .unwrap();
         c.normalize();
-        assert_eq!(c.programs.sd_server.binary, "/opt/sd-server", "the old field read");
+        assert_eq!(c.programs.sd_server.binary, full_path("/opt/sd-server"), "the old field read");
         let both = c.preset("Both GPUs").unwrap();
         assert_eq!(both.servers[0].base_url(), "http://127.0.0.1:1234");
         assert_eq!(both.servers[1].device(), "ROCm1");
@@ -1601,7 +1601,7 @@ mod tests {
         let c = read(new);
         assert_eq!(c, read(old), "the old form reads the same");
         assert_eq!(c.recipes[0].name, "m");
-        assert_eq!(c.programs.sd_server.binary, "/opt/sd-server");
+        assert_eq!(c.programs.sd_server.binary, full_path("/opt/sd-server"));
         let s = &c.server_presets[0].servers;
         let l = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
         assert_eq!(
@@ -1620,14 +1620,14 @@ mod tests {
             ServerConfig::Kobold(KoboldServer {
                 name: "k".into(),
                 run: KoboldRun::Start {
-                    binary: "/opt/kcpp".into(),
+                    binary: full_path("/opt/kcpp"),
                     config: String::new(),
                     host: "127.0.0.1".into(),
                     port: 5001,
                     device: PeDevice::Gpu { devices: vec![1, 2], runtime: GpuRuntime::Vulkan },
                     args: vec![],
                 },
-                chat: Some(KoboldChat { model: "/m/chat.gguf".into(), mmproj: String::new(), context: 8192 }),
+                chat: Some(KoboldChat { model: full_path("/m/chat.gguf"), mmproj: String::new(), context: 8192 }),
                 swap: true,
             }),
             "the shared binary filled in"
@@ -1635,7 +1635,10 @@ mod tests {
         let ServerConfig::Chat(PeServer { run: PeRun::KoboldCpp { binary, device, .. }, start, .. }) = &s[3] else {
             panic!("{:?}", s[3])
         };
-        assert_eq!((binary.as_str(), device, *start), ("/own/kcpp", &PeDevice::Cpu { threads: 8 }, PeStart::AtLaunch));
+        assert_eq!(
+            (binary, device, *start),
+            (&full_path("/own/kcpp"), &PeDevice::Cpu { threads: 8 }, PeStart::AtLaunch)
+        );
         assert!(matches!(
             &s[4],
             ServerConfig::Chat(PeServer { run: PeRun::Connect { .. }, start: PeStart::OnDemand, .. })
@@ -1645,6 +1648,8 @@ mod tests {
         let path = dir.path().join("config.rsn");
         c.save(&path).unwrap();
         let out = fs::read_to_string(&path).unwrap();
+        // full paths (on Windows with the drive), as RSN writes them
+        let quoted = |p: &str| rsnfmt::to_string(&full_path(p)).unwrap();
         for want in [
             "model_presets: [",
             "ModelPreset {",
@@ -1658,14 +1663,14 @@ mod tests {
             "when: AtOpen",
             "OpenAiChat {",
             "programs: Programs {",
-            r#"binary: "/own/kcpp""#,
+            &format!("binary: {}", quoted("/own/kcpp")),
         ] {
             assert!(out.contains(want), "{want} in {out}");
         }
         for old in ["recipes", "Start {", "Kobold(", "PeServer", "Some(", "127.0.0.1"] {
             assert!(!out.contains(old), "{old} in {out}");
         }
-        assert_eq!(out.matches(r#""/opt/kcpp""#).count(), 1, "the shared binary only in programs: {out}");
+        assert_eq!(out.matches(&quoted("/opt/kcpp")).count(), 1, "the shared binary only in programs: {out}");
         assert_eq!(Config::load(&path).unwrap().0, c, "read back the same");
     }
 
