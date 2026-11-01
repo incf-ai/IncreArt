@@ -1,9 +1,14 @@
 # IncreArt
 
+[![Chat: #increart on the KoboldAI Discord](https://img.shields.io/badge/chat-%23increart%20on%20Discord-5865F2?logo=discord&logoColor=white)](https://discord.gg/7D4jgg6J6Z)
+
 A desktop app for making images with **Qwen-Image 2.1** on your own GPUs,
 built around fast review. Collect ideas, turn them into projects, generate
 many seeds across every GPU you have, and sort the results with the keyboard.
 Every image keeps the recipe that made it.
+
+Questions, or something you made to share? Come say hi in
+**[#increart on the KoboldAI Discord](https://discord.gg/7D4jgg6J6Z)**.
 
 ![Review: a grid of generated images waiting for a verdict](docs/readme/review-grid.png)
 
@@ -120,6 +125,12 @@ each one with its source page. `increart-core`'s `demo_sources` example
 `scripts/demo-library.json` rebuild it from scratch, and
 `scripts/update-example-library.sh` puts it in `example-library/`, where the
 release workflow takes it from.
+
+## Getting help
+
+- **Questions and setup help:** [#increart on the KoboldAI Discord](https://discord.gg/7D4jgg6J6Z).
+- **Bugs and feature requests:** [issues](../../issues/new/choose), so they
+  aren't lost in chat.
 
 ## Documentation
 

@@ -3,3 +3,6 @@ contact_links:
   - name: Setup guides
     url: https://github.com/incf-ai/IncreArt/blob/main/docs/setup/README.md
     about: Installing KoboldCpp or sd-server, models, and first run.
+  - name: Ask on Discord
+    url: https://discord.gg/7D4jgg6J6Z
+    about: Questions and setup help in #increart on the KoboldAI Discord.

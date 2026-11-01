@@ -127,3 +127,5 @@ config and the end of each log, passwords masked.
 | `{url}: HTTP {status}: …` | server error | read the server's log |
 | PE can't describe images | KoboldCpp chat entry without `mmproj` (text only) | set the vision file (guide 5.2) |
 | asks are slow while images run | PE shares a GPU with an image server | give PE its own GPU or the CPU |
+
+Still stuck? Ask in [#increart on the KoboldAI Discord](https://discord.gg/7D4jgg6J6Z).

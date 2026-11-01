@@ -11,6 +11,9 @@ Thanks for wanting to help. IncreArt takes **issues, not pull requests**.
 - **Setup trouble.** If the [setup guides](docs/setup/README.md) didn't get
   you running, that's a bug in the guides. Report it as a bug.
 
+For questions, or quick help while you set up, ask in
+[#increart on the KoboldAI Discord](https://discord.gg/7D4jgg6J6Z).
+
 ## Why no pull requests
 
 IncreArt has one maintainer, and the design is kept deliberately coherent
