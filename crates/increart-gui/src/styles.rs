@@ -341,7 +341,7 @@ fn footer(ui: &mut egui::Ui, st: &AppState, rows: &[(usize, usize)], out: &mut V
         .count();
     let n = if f.sweep.random > 0 { fit.min(f.sweep.random) } else { fit };
     let images = n as u64 * f.seeds;
-    let secs = crate::projects::estimate(f) * images as f32;
+    let secs = crate::projects::estimate(st, f) * images as f32;
     let mut line = format!("{} ticked", ticked.len());
     if f.sweep.random > 0 {
         line.push_str(&format!(" · a random {n} of them"));

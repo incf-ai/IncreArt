@@ -29,6 +29,7 @@ pub mod kobold_image;
 pub mod launcher;
 pub mod library;
 pub mod link;
+pub mod loadtimes;
 pub mod logview;
 pub mod markup;
 pub mod model;

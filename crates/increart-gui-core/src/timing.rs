@@ -178,14 +178,31 @@ pub fn left_text(s: f64) -> String {
 }
 
 pub fn left_text_at(s: f64, now: chrono::NaiveDateTime) -> String {
+    match clock_at(s, now) {
+        Some(clock) => format!("~{} left · {clock}", coarse(s)),
+        None => format!("~{} left", coarse(s)),
+    }
+}
+
+/// A time left, in whole minutes from 10 minutes to an hour.
+pub fn coarse(s: f64) -> String {
     let s = s.max(0.0);
-    let d = if (600.0..3600.0).contains(&s) { format!("{} min", (s / 60.0).round() as u64) } else { duration(s) };
+    if (600.0..3600.0).contains(&s) { format!("{} min", (s / 60.0).round() as u64) } else { duration(s) }
+}
+
+/// When `s` seconds from now is by the clock, from 10 minutes on: "≈15:12",
+/// "≈Tue 09:40" when it isn't today.
+pub fn clock(s: f64) -> Option<String> {
+    clock_at(s, chrono::Local::now().naive_local())
+}
+
+pub fn clock_at(s: f64, now: chrono::NaiveDateTime) -> Option<String> {
     if s < 600.0 {
-        return format!("~{d} left");
+        return None;
     }
     let at = now + chrono::Duration::seconds(s.round() as i64);
     let clock = if at.date() == now.date() { at.format("%H:%M") } else { at.format("%a %H:%M") };
-    format!("~{d} left · ≈{clock}")
+    Some(format!("≈{clock}"))
 }
 
 /// An image being sampled: when its first and latest steps were seen.

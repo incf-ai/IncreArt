@@ -108,6 +108,8 @@ pub enum Event {
     Problem(String),
     /// A line of a run's generation log (written to its [`RUN_LOG`] too).
     Log { run: Id, line: String },
+    /// A server loaded a model (asked to), in `took_s` seconds.
+    ModelLoaded { server: ServerIdx, recipe: String, took_s: f32 },
 }
 
 /// A server's last reported state, model, idleness and runs in flight.
@@ -708,6 +710,7 @@ impl Coordinator {
                     let result = match r {
                         Ok(st) if st.loaded().as_ref() == Some(&target) => {
                             self.answered(s);
+                            self.emit(Event::ModelLoaded { server: s, recipe: target.recipe.clone(), took_s: took });
                             LoadResult::Ok
                         }
                         Ok(st) => {

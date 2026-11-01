@@ -996,6 +996,8 @@ pub enum Effect {
     ApiTestStop,
     /// Read the stamps file, answered with `Validations`.
     LoadValidations(PathBuf),
+    /// Write the model load times (DESIGN.md, Timing).
+    SaveLoadTimes(PathBuf, increart_core::loadtimes::LoadTimes),
     /// Note in the stamps file that opening these settings (a
     /// fingerprint) asked whether to validate them.
     ValidationAsked(PathBuf, String),
@@ -1947,6 +1949,7 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
             }
             state.index = index;
             state.rebuild_usage();
+            state.rates = crate::forecast::Rates::of(state.index.projects.iter().flat_map(|p| &p.runs));
             state.inbox_tab = if state.unreviewed_ideas().is_empty() { InboxTab::NewIdea } else { InboxTab::Grid };
             fx.extend(save_config(state));
             fx.push(Effect::WatchLibrary(root));
@@ -5591,6 +5594,20 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
             if state.idea_edit_dirty.is_some_and(|since| t - since >= AUTOSAVE_DELAY) {
                 fx.extend(flush_idea_edit(state));
             }
+            if state.active_runs.is_empty() {
+                state.forecast = Default::default();
+            } else if t - state.forecast.made >= 1.0 || t < state.forecast.made {
+                let key = state.plan_key();
+                // none yet (nothing timed): tried again each second
+                let stale = state.forecast.runs.is_empty() || t - state.forecast.made >= crate::forecast::REMAKE_S;
+                if key != state.forecast.key || stale {
+                    state.forecast = match state.make_plan() {
+                        Some(plan) => state.forecast.next(&plan, t),
+                        None => crate::forecast::Forecast { made: t, ..Default::default() },
+                    };
+                    state.forecast.key = key;
+                }
+            }
             if t - state.alerts.checked >= 1.0 || t < state.alerts.checked {
                 state.alerts.checked = t;
                 fx.extend(check_alerts(state));
@@ -7599,6 +7616,7 @@ fn follow_step(state: &mut AppState) {
 fn set_index(state: &mut AppState, ix: Index) {
     state.index = ix;
     state.rebuild_usage();
+    state.rates = crate::forecast::Rates::of(state.index.projects.iter().flat_map(|p| &p.runs));
     state.folder_view.listed = None;
     for v in &mut state.parked_folder_views {
         v.listed = None;
@@ -9042,6 +9060,7 @@ fn engine_event(state: &mut AppState, e: Event) -> Vec<Effect> {
                 let was_idle = st.idle_since.is_some();
                 st.idle_since = if idle { st.idle_since.or(Some(state.now)) } else { None };
                 if s == "ready" && !idle {
+                    state.alerts.busy.entry(server).or_insert((state.now, 0));
                     st.worked = true;
                     state.alerts.cleared_text = None;
                 } else if idle && !was_idle && std::mem::take(&mut st.worked) {
@@ -9054,6 +9073,7 @@ fn engine_event(state: &mut AppState, e: Event) -> Vec<Effect> {
                 } else if s == "connecting" || s.starts_with("unreachable") {
                     st.worked = false;
                     state.alerts.server_runs.remove(&server);
+                    state.alerts.busy.remove(&server);
                 }
                 st.state = s;
             }
@@ -9070,6 +9090,9 @@ fn engine_event(state: &mut AppState, e: Event) -> Vec<Effect> {
             vec![]
         }
         Event::Output { run, seed, server, elapsed_s, step_s, .. } => {
+            if let Some((_, n)) = state.alerts.busy.get_mut(&server) {
+                *n += 1;
+            }
             let steps = state.index.run(&run).map_or(0, |(_, r)| r.sample.steps);
             if let (Some(s), true) = (state.servers.get(server), elapsed_s > 0.0) {
                 let recent = state.server_speeds.entry(s.name.clone()).or_default();
@@ -9098,6 +9121,14 @@ fn engine_event(state: &mut AppState, e: Event) -> Vec<Effect> {
         Event::Problem(p) => {
             state.messages_server_error(p);
             vec![]
+        }
+        Event::ModelLoaded { server, recipe, took_s } => {
+            let Some(s) = state.servers.get(server) else { return vec![] };
+            state.load_times.record(&s.name, &recipe, took_s);
+            match &state.load_times_path {
+                Some(path) => vec![Effect::SaveLoadTimes(path.clone(), state.load_times.clone())],
+                None => vec![],
+            }
         }
         Event::Log { run, line } => {
             if state.job_info.as_ref() == Some(&run) {
@@ -9151,9 +9182,18 @@ fn check_alerts(state: &mut AppState) -> Vec<Effect> {
 
     // a GPU just finished its last job: once, at once
     let cleared = std::mem::take(&mut state.alerts.cleared);
+    // what they did: "· 64 images in 41 min" (all GPUs: since the first began)
+    let all_done = state.servers.iter().all(|s| !s.worked);
+    let did = |state: &AppState, servers: &[usize]| {
+        let spells: Vec<(f64, u32)> = servers.iter().filter_map(|i| state.alerts.busy.get(i).copied()).collect();
+        let since = spells.iter().map(|(t, _)| *t).fold(f64::INFINITY, f64::min);
+        let images: u32 = spells.iter().map(|(_, n)| n).sum();
+        (images > 0).then(|| format!(" · {images} image(s) in {}", crate::timing::duration((now - since).max(0.0))))
+    };
     if n.queue_cleared.on && state.engine_running && !cleared.is_empty() {
         let text = if n.queue_cleared_all {
-            state.servers.iter().all(|s| !s.worked).then(|| "All GPUs finished their queues".to_string())
+            let every: Vec<usize> = state.alerts.busy.keys().copied().collect();
+            all_done.then(|| format!("All GPUs finished their queues{}", did(state, &every).unwrap_or_default()))
         } else {
             let names: Vec<&str> = cleared
                 .iter()
@@ -9161,7 +9201,7 @@ fn check_alerts(state: &mut AppState) -> Vec<Effect> {
                 .map(|s| if s.device.is_empty() { s.name.as_str() } else { s.device.as_str() })
                 .collect();
             let its = if names.len() == 1 { "its queue" } else { "their queues" };
-            Some(format!("{} finished {its}", names.join(", ")))
+            Some(format!("{} finished {its}{}", names.join(", "), did(state, &cleared).unwrap_or_default()))
         };
         if let Some(text) = text {
             state.alerts.cleared_text = Some(text.clone());
@@ -9169,6 +9209,12 @@ fn check_alerts(state: &mut AppState) -> Vec<Effect> {
                 fx.extend(ring(state, n.queue_cleared.sound.clone(), text));
             }
         }
+    }
+    // their spells end (with all GPUs: once all are done, so it's every one's)
+    if all_done {
+        state.alerts.busy.clear();
+    } else if !n.queue_cleared_all {
+        cleared.iter().for_each(|i| _ = state.alerts.busy.remove(i));
     }
 
     // the review queue

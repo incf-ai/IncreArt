@@ -44,6 +44,10 @@ impl App {
         if let Some(p) = &st.validations_path {
             st.validations = increart_core::validation::Validations::load(p);
         }
+        st.load_times_path = increart_core::loadtimes::path();
+        if let Some(p) = &st.load_times_path {
+            st.load_times = increart_core::loadtimes::LoadTimes::load(p);
+        }
         st.suite_found = increart_core::apitest::binary().is_file();
         for w in warnings {
             st.messages_info(w);

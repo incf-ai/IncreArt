@@ -159,8 +159,7 @@ fn project_timing(st: &AppState, p: &ProjectEntry) -> Option<Vec<(&'static str, 
     }
     let runs: Vec<_> = st.jobs().into_iter().filter(|j| j.project_id == p.project.id).collect();
     if !runs.is_empty() {
-        let (done, total, _, eta) =
-            increart_gui_core::runs_progress(&runs.iter().collect::<Vec<_>>(), st.working_servers());
+        let (done, total, _, eta) = st.group_progress(&runs.iter().collect::<Vec<_>>());
         let mut now = format!("{done} / {total} seeds");
         if let Some(s) = eta.filter(|s| *s > 0.0) {
             now.push_str(&format!(" · {}", left_text(s)));

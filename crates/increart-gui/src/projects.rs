@@ -1350,7 +1350,7 @@ pub fn resolutions_window(ctx: &egui::Context, st: &AppState, out: &mut Vec<Msg>
                 ui.label(format!("{mp:.2}"));
                 let mut f = st.generate.clone();
                 (f.width, f.height) = (r.width, r.height);
-                ui.label(fmt_secs(estimate(&f)));
+                ui.label(fmt_secs(estimate(st, &f)));
                 ui.horizontal(|ui| {
                     for (icon, tip, what) in [
                         (ph::COPY, "duplicate", "dup"),
@@ -2069,13 +2069,15 @@ fn queue_strip(ui: &mut egui::Ui, st: &AppState, f: &increart_gui_core::Generate
                 None => format!("Queue {} seed(s)", f.seeds),
             };
             let queue = ui.button(RichText::new(ic(ph::PLAY, &label)).strong()).clicked();
-            ui.weak(format!("≈ {} per image", fmt_secs(estimate(f)))).on_hover_text("on one R9700, a rough estimate");
+            let (per, basis) = st.image_s_for(&increart_gui_core::forecast::Shape::of_form(f, &st.config.recipes));
+            ui.weak(format!("≈ {} per image", fmt_secs(per as f32))).on_hover_text(basis.text());
             queue
         },
     );
     if queue {
         out.push(Msg::QueueGenerate);
     }
+    queue_estimate(ui, st, f);
     if let Some(Err(e)) = &runs {
         ui.colored_label(crate::widgets::NEUTRAL, e);
     }
@@ -2180,12 +2182,73 @@ fn with_tag(
 /// Rough time per image (DESIGN.md, Measurements): ~1.57 s per step per
 /// model pass at 1024², CFG > 1 doubles the passes, attention grows with
 /// target × (target + ref) tokens.
-pub fn estimate(f: &increart_gui_core::GenerateForm) -> f32 {
-    let t = (f.width / 16 * f.height / 16) as f32;
-    let r = 4096.0 * f.refs().len() as f32;
-    let per_pass = 1.0e-4 * t + 6.9e-8 * t * (t + r);
-    let passes = if f.cfg > 1.0 { 2.0 } else { 1.0 };
-    per_pass * passes * f.steps as f32 + 3.0
+/// Seconds per image of what the form would make ([`AppState::image_s_for`]).
+pub fn estimate(st: &AppState, f: &increart_gui_core::GenerateForm) -> f32 {
+    st.image_s_for(&increart_gui_core::forecast::Shape::of_form(f, &st.config.recipes)).0 as f32
+}
+
+/// Under the Generate form, one line always (the form mustn't change
+/// height): how long its seeds would take on the servers working, and
+/// when they'd be done with the runs in the engine. Made again only when
+/// the form's runs or the forecast change.
+fn queue_estimate(ui: &mut egui::Ui, st: &AppState, f: &increart_gui_core::GenerateForm) {
+    use increart_gui_core::forecast::Shape;
+    use increart_gui_core::timing::{clock, coarse, duration};
+    use std::hash::{Hash, Hasher};
+    let shapes: Vec<(Shape, u64)> = if f.sweep.on {
+        match increart_gui_core::update::sweep_runs(st) {
+            Ok((runs, _)) => runs.iter().map(|(r, _)| (Shape::of_form(r, &st.config.recipes), r.seeds)).collect(),
+            Err(_) => vec![],
+        }
+    } else {
+        vec![(Shape::of_form(f, &st.config.recipes), f.seeds)]
+    };
+    let images: u64 = shapes.iter().map(|(_, n)| n).sum();
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    format!("{shapes:?}").hash(&mut h);
+    (st.forecast.made.to_bits(), st.forecast.key, st.working_servers(), st.servers.len()).hash(&mut h);
+    let id = egui::Id::unique("queue_estimate");
+    let key = h.finish();
+    let cached = ui.data(|d| d.get_temp::<(u64, Option<increart_gui_core::NewEstimate>)>(id));
+    let est = match cached {
+        Some((k, e)) if k == key => e,
+        _ => {
+            let e = st.estimate_new(&shapes, f.sweep.on);
+            ui.data_mut(|d| d.insert_temp(id, (key, e)));
+            e
+        }
+    };
+    let text = match est {
+        _ if images == 0 => String::new(),
+        Some(e) => {
+            let on = if e.servers == 1 { "1 server".to_string() } else { format!("{} servers", e.servers) };
+            let mut t = format!("{images} image(s) ≈ {} on {on}", coarse(e.alone_s));
+            match e.with_queue_s {
+                Some(after) => {
+                    t.push_str(&format!(" · with what's queued, done in ~{}", coarse(after)));
+                    if let Some(c) = clock(after) {
+                        t.push_str(&format!(" ({c})"));
+                    }
+                }
+                None => {
+                    if let Some(c) = clock(e.alone_s) {
+                        t.push_str(&format!(" · done {c} if queued now"));
+                    }
+                }
+            }
+            t
+        }
+        // no server working: one image after another
+        None => {
+            let per: f64 = shapes.iter().map(|(s, n)| st.image_s_for(s).0 * *n as f64).sum();
+            format!("{images} image(s) ≈ {} of GPU time", duration(per))
+        }
+    };
+    let r = ui.add(egui::Label::new(RichText::new(if text.is_empty() { " ".into() } else { text }).weak()).truncate());
+    r.on_hover_text(
+        "the engine's scheduler on a simulated clock, each image as long as images like it took on each server \
+         (model loads too, as long as they took)",
+    );
 }
 
 pub fn fmt_secs(s: f32) -> String {
@@ -2504,16 +2567,15 @@ pub fn stop_all_row(ui: &mut egui::Ui, st: &AppState, out: &mut Vec<Msg>) {
 /// with its seeds, time left and stop buttons, and under it a bar; open,
 /// its runs, a sweep's together under one more such header, a line each.
 pub fn run_list(ui: &mut egui::Ui, st: &AppState, out: &mut Vec<Msg>) {
-    use increart_gui_core::{RunItem, runs_progress};
+    use increart_gui_core::RunItem;
     let groups = st.run_groups();
     if groups.is_empty() {
         ui.weak("Nothing generating.");
         return;
     }
-    let servers = st.working_servers();
     for g in &groups {
         let runs = g.runs();
-        let p = runs_progress(&runs, servers);
+        let p = st.group_progress(&runs);
         egui::Frame::group(ui.style()).show(ui, |ui| {
             ui.set_width(ui.available_width());
             let id = egui::Id::unique(("jobs_project", &g.project));
@@ -2532,7 +2594,7 @@ pub fn run_list(ui: &mut egui::Ui, st: &AppState, out: &mut Vec<Msg>) {
                         let finishing = st.finishing.contains(&j.run);
                         // the whole block opens the details; its own buttons come first
                         let block = ui.scope_builder(egui::UiBuilder::new().sense(egui::Sense::click()), |ui| {
-                            job_block(ui, j, finishing, out);
+                            job_block(ui, st, j, finishing, out);
                         });
                         let r = block
                             .response
@@ -2544,7 +2606,7 @@ pub fn run_list(ui: &mut egui::Ui, st: &AppState, out: &mut Vec<Msg>) {
                     }
                     RunItem::Sweep { name, runs } => {
                         let runs: Vec<_> = runs.iter().collect();
-                        sweep_block(ui, st, &g.project, &g.name, name, &runs, servers, out);
+                        sweep_block(ui, st, &g.project, &g.name, name, &runs, out);
                     }
                 }
             }
@@ -2554,7 +2616,6 @@ pub fn run_list(ui: &mut egui::Ui, st: &AppState, out: &mut Vec<Msg>) {
 
 /// A sweep's runs in the engine: its header (what's sampling now among its
 /// seeds) and a bar; open, a line per run.
-#[allow(clippy::too_many_arguments)]
 fn sweep_block(
     ui: &mut egui::Ui,
     st: &AppState,
@@ -2562,10 +2623,9 @@ fn sweep_block(
     project_name: &str,
     name: &str,
     runs: &[&increart_gui_core::RunProgress],
-    servers: usize,
     out: &mut Vec<Msg>,
 ) {
-    let p = increart_gui_core::runs_progress(runs, servers);
+    let p = st.group_progress(runs);
     egui::Frame::group(ui.style()).show(ui, |ui| {
         ui.set_width(ui.available_width());
         let id = egui::Id::unique(("jobs_sweep", project, name));
@@ -2615,7 +2675,10 @@ fn run_line(ui: &mut egui::Ui, st: &AppState, r: &increart_gui_core::RunProgress
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 stop_buttons(ui, &r.run, finishing, r.sampling.len(), true, out);
                 // its time left, without the clock: the line is short
-                if let Some(s) = r.eta_s().filter(|s| *s > 0.0) {
+                if let Some(s) = st.run_starts_in(&r.run) {
+                    let text = format!("starts in ~{}", increart_gui_core::timing::duration(s));
+                    ui.weak(RichText::new(text).small());
+                } else if let Some(s) = st.run_left(&r.run).or(r.eta_s()).filter(|s| *s > 0.0) {
                     ui.weak(RichText::new(format!("~{}", increart_gui_core::timing::duration(s))).small());
                 }
                 ui.add(egui::Label::new(RichText::new(now.join(", ")).weak().small()).truncate());
@@ -2710,7 +2773,13 @@ fn group_stops(
     });
 }
 
-fn job_block(ui: &mut egui::Ui, j: &increart_gui_core::RunProgress, finishing: bool, out: &mut Vec<Msg>) {
+fn job_block(
+    ui: &mut egui::Ui,
+    st: &AppState,
+    j: &increart_gui_core::RunProgress,
+    finishing: bool,
+    out: &mut Vec<Msg>,
+) {
     {
         egui::Frame::group(ui.style()).show(ui, |ui| {
             ui.horizontal(|ui| {
@@ -2724,7 +2793,7 @@ fn job_block(ui: &mut egui::Ui, j: &increart_gui_core::RunProgress, finishing: b
             ui.weak(short(&j.prompt, 70));
             ui.add(egui::ProgressBar::new(j.fraction()).text(format!("{} / {} seeds", j.done, j.total)));
             sampling_bars(ui, j);
-            if let Some(text) = live_timing(j) {
+            if let Some(text) = live_timing(st, j) {
                 ui.weak(RichText::new(text).small());
             }
         });
@@ -2733,7 +2802,7 @@ fn job_block(ui: &mut egui::Ui, j: &increart_gui_core::RunProgress, finishing: b
 
 /// A running job's timing line: "1.71 s/it · 34.2 s/image · 4 done in
 /// 2 min 16 s · ~2 min 30 s left".
-fn live_timing(j: &increart_gui_core::RunProgress) -> Option<String> {
+fn live_timing(st: &AppState, j: &increart_gui_core::RunProgress) -> Option<String> {
     use increart_gui_core::timing::duration;
     let mut parts = vec![];
     match (j.step_s, &j.timing) {
@@ -2747,7 +2816,10 @@ fn live_timing(j: &increart_gui_core::RunProgress) -> Option<String> {
     if let Some(t) = &j.timing {
         parts.push(format!("{} done in {}", t.images, duration(t.wall_s)));
     }
-    if let Some(s) = j.eta_s().filter(|s| *s > 0.0) {
+    if let Some(s) = st.run_starts_in(&j.run) {
+        parts.push(format!("starts in ~{}", increart_gui_core::timing::duration(s)));
+    }
+    if let Some(s) = st.run_left(&j.run).or(j.eta_s()).filter(|s| *s > 0.0) {
         parts.push(increart_gui_core::timing::left_text(s));
     }
     (!parts.is_empty()).then(|| parts.join(" · "))
@@ -3006,7 +3078,7 @@ pub fn job_window(ctx: &egui::Context, st: &AppState, tex: &mut Textures, out: &
             match increart_gui_core::timing::Timing::of_run(run) {
                 Some(t) => {
                     let mut rows = timing_rows(&t);
-                    if let Some(text) = progress.as_ref().filter(|_| active).and_then(live_timing) {
+                    if let Some(text) = progress.as_ref().filter(|_| active).and_then(|j| live_timing(st, j)) {
                         rows.insert(0, ("now", text));
                     }
                     if let Some(all) =
@@ -3033,6 +3105,9 @@ pub fn job_window(ctx: &egui::Context, st: &AppState, tex: &mut Textures, out: &
                 }
                 None => {
                     ui.weak("No timed images yet (images are timed as they are made).");
+                    if let Some(text) = progress.as_ref().filter(|_| active).and_then(|j| live_timing(st, j)) {
+                        ui.label(format!("now: {text}"));
+                    }
                 }
             }
             if !run.failed.is_empty() {

@@ -1560,7 +1560,9 @@ impl Tour {
                 if let Some(run) = runs.last() {
                     // images each server made, for their speeds
                     let t0 = increart_core::id::now();
-                    for (seed, server, elapsed_s, step_s) in [(0, 0, 34.8, 1.71), (1, 1, 36.1, 1.78), (2, 0, 34.2, 1.69)] {
+                    for (seed, server, elapsed_s, step_s) in
+                        [(0, 0, 34.8, 1.71), (1, 1, 36.1, 1.78), (2, 0, 34.2, 1.69)]
+                    {
                         v.push(Msg::Engine(increart_core::engine::Event::Output {
                             run: run.clone(),
                             rev: 0,
