@@ -1575,9 +1575,14 @@ impl Tour {
                 v
             }
             "47-new-project-name" => {
-                let img = st.kept_outputs().first().map(|o| o.image.clone());
-                let mut v = vec![Msg::Tab(Tab::Review)];
-                v.extend(img.map(|i| Msg::UseImage(i, increart_gui_core::UseTarget::DuplicateProject)));
+                // one in a folder: the dialog starts there
+                let img = st
+                    .kept_outputs()
+                    .into_iter()
+                    .find(|o| st.project_of_link(o).is_some_and(|p| p.name() == "fox-cafe"))
+                    .map(|o| o.image.clone());
+                let mut v = vec![Msg::ContinueWithoutServers, Msg::Tab(Tab::Review)];
+                v.extend(img.map(|i| Msg::UseImage(i, increart_gui_core::UseTarget::NewProject)));
                 v
             }
             "38-scale-dialog" => {

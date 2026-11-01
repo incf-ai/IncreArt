@@ -1967,6 +1967,7 @@ pub fn lib_op(lib: &mut Library, op: LibOp) -> Result<OpOk, String> {
             lib.create_run(&project, run).map(|id| OpOk::Run(id, queued)).map_err(err)
         }
         LibOp::PrepareProject { parent, name, copy_of, form, then } => {
+            make_folder(lib, &parent)?;
             let path = match copy_of {
                 // the copy, renamed as asked (a taken name gets a number)
                 Some(src) => {
@@ -2106,13 +2107,20 @@ fn review_outputs(
 
 /// Keeps the ideas (inbox ones move to the top of the input library) and
 /// makes one project from them, named after the first idea's title.
-fn new_project_from_ideas(lib: &mut Library, ids: &[Id], folder: &Path, name: &str) -> Result<OpOk, String> {
-    // Create in folder: a new folder is made first
+/// A project folder a dialog picked as new: made (in a folder that is
+/// there).
+fn make_folder(lib: &Library, folder: &Path) -> Result<(), String> {
     if !lib.root().join("projects").join(folder).is_dir()
         && let (Some(parent), Some(last)) = (folder.parent(), folder.file_name())
     {
         lib.create_folder(Tree::Projects, parent, Some(&last.to_string_lossy())).map_err(err)?;
     }
+    Ok(())
+}
+
+fn new_project_from_ideas(lib: &mut Library, ids: &[Id], folder: &Path, name: &str) -> Result<OpOk, String> {
+    // Create in folder: a new folder is made first
+    make_folder(lib, folder)?;
     let mut ideas = vec![];
     for id in ids {
         if let (IdeaLoc::Unreviewed | IdeaLoc::Discarded, _) = lib.find_idea(id).map_err(err)? {

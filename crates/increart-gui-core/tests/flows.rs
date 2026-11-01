@@ -2031,6 +2031,26 @@ fn outputs_as_inputs() {
     assert_eq!(h.state.generate.refs(), std::slice::from_ref(&first));
     assert_eq!(h.state.generate.prompt, "x", "the image's prompt");
     assert!(h.state.renaming.is_none(), "named in the dialog");
+    let fox_dir = h.state.index.projects.iter().find(|p| p.project.id == fox).unwrap().dir.clone();
+    assert_eq!(p.dir.parent(), fox_dir.parent(), "in the image's project's folder by default");
+    // or in a folder picked: a new one is made
+    h.send(Msg::UseImage(first.clone(), UseTarget::NewProject));
+    let parent = h.state.new_project.as_ref().unwrap().parent.clone();
+    assert_eq!(Path::new("projects").join(&parent), fox_dir.parent().unwrap());
+    h.send(Msg::NewProjectNewFolder(Some("night".into())));
+    h.send(Msg::ConfirmNewProject);
+    h.settle();
+    assert_eq!(h.errors(), Vec::<&str>::new());
+    let p = h.state.project_entry().unwrap();
+    assert_eq!(p.dir, Path::new("projects").join(&parent).join("night").join("fox from s0000"));
+    assert!(h.state.index.project_folders.contains(&parent.join("night")));
+    // a project can't be the folder
+    h.send(Msg::UseImage(first.clone(), UseTarget::NewProject));
+    h.send(Msg::NewProjectNewFolder(Some("fox".into())));
+    h.send(Msg::ConfirmNewProject);
+    assert!(h.state.new_project.is_some(), "{:?}", h.errors());
+    h.state.messages.clear();
+    h.send(Msg::CancelNewProject);
 
     // D: a copy of the image's project, form from the image's run (which had
     // no images) with this one as <image1>, under the name typed (an invalid one is refused, the dialog stays)

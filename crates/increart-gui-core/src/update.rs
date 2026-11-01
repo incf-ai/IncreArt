@@ -761,6 +761,11 @@ pub enum Msg {
     ConfirmStartProject,
     /// The New project / Duplicate dialog's name, Create, Cancel.
     EditNewProjectName(String),
+    /// The folder New project from this image / Duplicate project with
+    /// this image puts the project in (relative to `projects/`).
+    NewProjectParent(PathBuf),
+    NewProjectNewFolder(Option<String>),
+    NewProjectFilter(String),
     ConfirmNewProject,
     CancelNewProject,
     /// New project with these as a sweep: opened on the picks (true) or
@@ -4928,15 +4933,34 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
             }
             vec![]
         }
+        Msg::NewProjectParent(f) => {
+            if let Some(d) = &mut state.new_project {
+                d.parent = f;
+            }
+            vec![]
+        }
+        Msg::NewProjectNewFolder(f) => {
+            if let Some(d) = &mut state.new_project {
+                d.new_folder = f;
+            }
+            vec![]
+        }
+        Msg::NewProjectFilter(f) => {
+            if let Some(d) = &mut state.new_project {
+                d.filter = f;
+            }
+            vec![]
+        }
         Msg::ConfirmNewProject => {
             let Some(d) = state.new_project.take() else { return vec![] };
             let name = d.name.trim().to_string();
-            if let Err(e) = increart_core::library::validate_name(&name) {
-                state.messages_error(e.to_string());
+            if let Some(e) = new_project_problem(state, &d) {
+                state.messages_error(e);
                 state.new_project = Some(d);
                 return vec![];
             }
-            prepare_project(state, d.image, d.target, name)
+            let (parent, _) = project_folder(state, &d.parent, d.new_folder.as_deref());
+            prepare_project(state, d.image, d.target, parent, name)
         }
         Msg::StartProject(true) => {
             if state.library.is_none() {
@@ -7181,14 +7205,39 @@ pub fn from_ideas_problem(state: &AppState, d: &FromIdeasDialog) -> Option<Strin
     state.project_name_taken(&at.join("_"), name).then(|| format!("{name} already exists there"))
 }
 
+/// Why New project from this image / Duplicate project with this image
+/// can't make the project: a bad name, a bad new folder, or a folder name a
+/// project has. A taken name is fine: the project gets a number.
+pub fn new_project_problem(state: &AppState, d: &NewProjectDialog) -> Option<String> {
+    if let Err(e) = increart_core::library::validate_name(d.name.trim()) {
+        return Some(e.to_string());
+    }
+    let (at, exists) = project_folder(state, &d.parent, d.new_folder.as_deref());
+    if let Some(folder) = d.new_folder.as_deref().map(str::trim) {
+        if let Err(e) = increart_core::library::validate_name(folder) {
+            return Some(format!("new folder: {e}"));
+        }
+        if !exists && state.project_name_taken(&at, folder) {
+            return Some(format!("a project is named {folder} there"));
+        }
+    }
+    None
+}
+
 /// Where the project goes: the dialog's folder, or its new folder in it
 /// (an existing one of that name, any case, is used); and whether that
 /// folder exists.
 pub fn from_ideas_folder(state: &AppState, d: &FromIdeasDialog) -> (PathBuf, bool) {
-    let Some(new) = &d.new_folder else {
-        return (d.parent.clone(), true);
+    project_folder(state, &d.parent, d.new_folder.as_deref())
+}
+
+/// Where a new project goes: `parent`, or `new_folder` in it (an existing
+/// one of that name, any case, is used); and whether that folder exists.
+pub fn project_folder(state: &AppState, parent: &std::path::Path, new_folder: Option<&str>) -> (PathBuf, bool) {
+    let Some(new) = new_folder else {
+        return (parent.to_path_buf(), true);
     };
-    let at = d.parent.join(new.trim());
+    let at = parent.join(new.trim());
     let same = |f: &&PathBuf| f.to_string_lossy().to_lowercase() == at.to_string_lossy().to_lowercase();
     match state.index.project_folders.iter().find(same) {
         Some(f) => (f.clone(), true),
@@ -7952,7 +8001,10 @@ fn use_image(state: &mut AppState, image: ImageRef, target: UseTarget) -> Vec<Ef
         UseTarget::NewProject | UseTarget::DuplicateProject => {
             let Some(p) = source else { return vec![] };
             let name = format!("{} from s{:04}", p.name(), link.name.seed);
-            state.new_project = Some(NewProjectDialog { image, target, name });
+            let rel = p.dir.strip_prefix("projects").unwrap_or(&p.dir);
+            let parent = rel.parent().map(PathBuf::from).unwrap_or_default();
+            state.new_project =
+                Some(NewProjectDialog { image, target, name, parent, new_folder: None, filter: String::new() });
             vec![]
         }
     }
@@ -8009,13 +8061,18 @@ fn sweep_project_form(state: &AppState, images: Vec<ImageRef>) -> GenerateForm {
 }
 
 /// Makes the project the New project / Duplicate dialog named.
-fn prepare_project(state: &mut AppState, image: ImageRef, target: UseTarget, name: String) -> Vec<Effect> {
+fn prepare_project(
+    state: &mut AppState,
+    image: ImageRef,
+    target: UseTarget,
+    parent: PathBuf,
+    name: String,
+) -> Vec<Effect> {
     let Some(link) = state.output_link(&image).cloned() else { return vec![] };
     let source = state.project_of_link(&link).cloned();
     let run = state.index.run(&link.name.run).map(|(_, r)| r.clone());
     let Some(p) = source else { return vec![] };
     let rel = p.dir.strip_prefix("projects").map(PathBuf::from).unwrap_or_default();
-    let parent = rel.parent().map(PathBuf::from).unwrap_or_default();
     let (form, copy_of) = if target == UseTarget::NewProject {
         let mut f = GenerateForm::new(&state.config);
         if let Some(r) = &run {

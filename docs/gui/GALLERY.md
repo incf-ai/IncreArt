@@ -282,7 +282,7 @@ Generate: double-click a reference (or the start image) to view it large
 
 ## 47-new-project-name
 
-Review → D / N: the new project's name is asked first
+Review → D / N: the new project's name and folder are asked first (the project folders on the left, starting on the image's project's folder; New folder under them)
 
 ![47-new-project-name](47-new-project-name.webp)
 
