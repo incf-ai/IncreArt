@@ -732,9 +732,9 @@ rewrites).
   stopped while starting is Off, not Failed). Asking with no chat server
   in use says to add one to a preset (Servers…); the Generate panel's
   prompt-enhance hints have a **Servers…** button for it.
-- `KoboldCpp` is started as `start` says (`--config` first, so the rest
+- `KoboldCpp` is started as `run: Launch` says (`--config` first, so the rest
   overrides it, then `--model --mmproj` when set, `--host --port
-  --skiplauncher --quiet --jinja`, the `device` and `context` flags, then
+  --skiplauncher --quiet --jinja`, the `gpu` and `context` flags, then
   `args`). `binary` is a file, or else a command line split on spaces (a
   Python install: `python3 …/koboldcpp.py`). It logs to
   `logs/pe-<name>.log`; one already answering on that port is used as is. It

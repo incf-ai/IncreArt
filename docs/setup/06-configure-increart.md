@@ -132,11 +132,13 @@ already running).
 | `KoboldCpp { name, run, images, chat, swap, when }` | KoboldCpp. `run: Launch { binary, config, host, port, gpu, args }` (`binary` default `programs.koboldcpp`; `config` a `.kcpps` to start from) or `Connect { url, password, gpu }`. `images` (default `true`) makes images; `chat: Chat { model, mmproj, context }` makes it a PE server too. With `images: false` it is a PE server only: it needs `chat` and `run: Launch`, and `when: OnDemand` (default, at the first ask) or `AtOpen` (when the preset opens) says when it starts. `swap: true` for 8–16 GB presets |
 | `OpenAiChat { name, url, when }` | a running OpenAI-compatible chat server, for PE |
 
-`gpu`: `Rocm(0)`, `Vulkan(1)`, `Cuda(0)`, `Metal([])`; a KoboldCpp may take
-several (`Vulkan([1, 2])`; `Vulkan([])` = every GPU). `Cpu(16)` runs a
-KoboldCpp on the CPU with 16 threads (`Cpu(0)`: its own count); an sd-server
-takes `Cpu(0)`. Omitted: `Auto`, the program's choice. A name sd-server's
-`--list-devices` gives that isn't one of these is written `Backend("…")`.
+`gpu`: `Rocm(0)`, `Vulkan(1)`, `Cuda(0)`, `Metal([])`; a KoboldCpp the app
+launches may take several (`Vulkan([1, 2])`; `Vulkan([])` = every GPU), and
+`Cpu(16)` runs it on the CPU with 16 threads (`Cpu(0)`: its own count). An
+sd-server, and any entry with `run: Connect`, names one device: `Cpu(0)`, not
+a thread count or a list. Omitted: `Auto`, the program's choice. A name
+sd-server's `--list-devices` gives that isn't one of these is written
+`Backend("…")`.
 
 Configs written before these names (`Start`, `Connect`, `Kobold(KoboldServer
 …)`, `Chat(PeServer …)`, `recipes`, `sdserver`, `koboldcpp` at the top) still
@@ -149,8 +151,9 @@ we could find). Comments are for reading here: the app drops them when it
 saves.
 
 **Before editing by hand, back the file up.** If it doesn't parse, the app
-starts with defaults ("settings not loaded (…); using defaults"), and the
-next save may overwrite your file.
+starts with defaults ("settings not loaded (…); using defaults"), keeps a
+copy of your file as `config.rsn.unreadable` (`.unreadable-2` and on if
+taken), and its next save writes the defaults over `config.rsn`.
 
 ```sh
 CFG="${XDG_CONFIG_HOME:-$HOME/.config}/increart/config.rsn"
@@ -253,6 +256,7 @@ INCREART_CONFIG="$CFG" ./target/release/increart --library last --servers last
 **Expected result:** the main window opens and the preset's servers start.
 If the preset name is wrong, or sd-server / the models folder is missing, the
 servers screen stays up with the reason. If the file doesn't parse, the status
-bar says `settings not loaded (…); using defaults`: restore `$CFG.bak` and fix
+bar says `settings not loaded (…); using defaults`: close the app, restore
+`$CFG.bak` (or the kept `config.rsn.unreadable`) and fix
 the syntax (unbalanced braces, missing commas between fields, an enum variant
 spelled differently from the tables above).
