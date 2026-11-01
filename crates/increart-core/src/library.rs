@@ -1874,16 +1874,22 @@ impl Library {
     /// (`.webp` like the store file; unchanged if it is already there).
     /// Returns the link path.
     pub fn add_to_collection(&self, folder: &Path, image: &Id) -> Result<PathBuf> {
+        self.collect(folder, image).map(|(at, _)| at)
+    }
+
+    /// [`Self::add_to_collection`], and whether the link is new (false: the
+    /// image was in the collection already).
+    pub fn collect(&self, folder: &Path, image: &Id) -> Result<(PathBuf, bool)> {
         let r = ImageRef::output(image.clone());
         self.require_image(&r)?;
         let dir = self.folder(Tree::Collections, folder)?;
         let at = |f: StoreFormat| dir.join(format!("{image}.{}", f.ext()));
         if let Some(there) = StoreFormat::ALL.into_iter().map(at).find(|p| fsutil::exists(p)) {
-            return Ok(self.rel(&there));
+            return Ok((self.rel(&there), false));
         }
         let at = at(self.format_of(&r));
         link::create(self.link_mode(), &self.image_path(&r), &at)?;
-        Ok(self.rel(&at))
+        Ok((self.rel(&at), true))
     }
 }
 

@@ -183,7 +183,7 @@ pub fn menu(ui: &mut egui::Ui, st: &AppState, image: &ImageRef, out: &mut Vec<Ms
     if sweep_project_button(ui, st, out) {
         ui.close();
     }
-    crate::review::collection_menu(ui, st, &st.picked, out);
+    crate::review::add_to_collection(ui, st, &st.picked, out);
     if ui.button(ic(ph::EXPORT, &format!("Export the {n} picked…"))).clicked() {
         out.push(Msg::OpenExport(st.picked.clone(), format!("{n} images")));
         ui.close();

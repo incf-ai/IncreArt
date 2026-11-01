@@ -1635,6 +1635,38 @@ pub struct NewProjectDialog {
     pub name: String,
 }
 
+/// One review action, undone at once: (link path now, verdict before) of
+/// each image rated, and the collection links it made (relative to the
+/// library root).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ReviewUndo {
+    pub links: Vec<(PathBuf, Option<Verdict>)>,
+    pub collected: Vec<PathBuf>,
+}
+
+/// Review's Add to collection… modal (DESIGN.md, Review): the images, the
+/// collection picked (relative to `collections/`; a new one goes in it), the
+/// rating that goes with it (`None`: not rated).
+#[derive(Clone, Debug, PartialEq)]
+pub struct CollectDialog {
+    pub images: Vec<ImageRef>,
+    pub filter: String,
+    pub folder: Option<PathBuf>,
+    pub verdict: Option<Verdict>,
+    /// New collection…: its name, while it's typed.
+    pub new_name: Option<String>,
+}
+
+impl CollectDialog {
+    /// The collection it adds to: the new one's path, else the one picked.
+    pub fn target(&self) -> Option<PathBuf> {
+        match &self.new_name {
+            Some(n) => Some(self.folder.clone().unwrap_or_default().join(n.trim())),
+            None => self.folder.clone(),
+        }
+    }
+}
+
 /// New project with these as a sweep (DESIGN.md, Image sweeps): the
 /// picked images, the project's name, and the folder it goes in (relative
 /// to `projects/`).
@@ -3181,9 +3213,13 @@ pub struct AppState {
     pub imports: Option<Vec<(Id, SourceInfo)>>,
     /// Review: checkerboard behind transparent images (else a flat colour).
     pub checkerboard: bool,
-    /// (link path now, verdict before) of review actions, for `Ctrl+Z`:
-    /// one entry per action (rating the picked rates them all at once).
-    pub review_undo: Vec<Vec<(PathBuf, Option<Verdict>)>>,
+    /// Review actions, for `Ctrl+Z`: one entry per action (rating the
+    /// picked rates them all at once).
+    pub review_undo: Vec<ReviewUndo>,
+    /// Review's Add to collection… modal.
+    pub collect: Option<CollectDialog>,
+    /// The modal's last collection and rating, picked again when it opens.
+    pub collect_last: (Option<PathBuf>, Option<Verdict>),
     /// Output links sent to be rated, until the index shows them moved (or
     /// no library op is in flight): they leave Review's queue at once, so a
     /// quick next rating goes to the next image, not to this one by the
@@ -3458,6 +3494,8 @@ impl AppState {
             imports: None,
             checkerboard: true,
             review_undo: vec![],
+            collect: None,
+            collect_last: (None, Some(Verdict::Good)),
             reviewing: HashSet::new(),
             renaming: None,
             busy: 0,

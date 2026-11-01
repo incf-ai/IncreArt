@@ -835,6 +835,14 @@ pub enum Msg {
     AddToCollection(PathBuf, Vec<ImageRef>),
     /// A new collection (opened for rename) holding these images.
     NewCollection(PathBuf, Vec<ImageRef>),
+    /// Review's Add to collection… modal on these images.
+    Collect(Vec<ImageRef>),
+    /// The modal as edited (filter, collection, rating, new name).
+    EditCollect(crate::state::CollectDialog),
+    CancelCollect,
+    /// Adds the images to the collection (a new one made first) and rates
+    /// them as the modal says.
+    ConfirmCollect,
     SetCover(Id, Option<ImageRef>),
     /// Opens the title dialog for an output image (with its title), or
     /// closes it.
@@ -1251,6 +1259,18 @@ pub enum LibOp {
     ImportInboxDrop,
     AddToCollection(PathBuf, Vec<ImageRef>),
     NewCollection(PathBuf, Vec<ImageRef>),
+    /// Adds the images to the collection `folder` (or to a new one named
+    /// `new` in it), then rates `links` as `ReviewOutputs` does, both undone
+    /// together.
+    CollectAndReview {
+        folder: PathBuf,
+        new: Option<String>,
+        images: Vec<ImageRef>,
+        links: Vec<(PathBuf, Option<Verdict>)>,
+    },
+    /// Takes back a review action: its collection links removed, its
+    /// ratings back as they were.
+    UndoReview(crate::state::ReviewUndo),
     SetCover(Id, Option<ImageRef>),
     /// project, output image, title ("" removes it)
     SetTitle(Id, Id, String),
@@ -1308,10 +1328,11 @@ pub enum OpOk {
         form: Box<GenerateForm>,
         then: StartRefs,
     },
-    /// (link path now, verdict before) of each rated link; `error`: why
-    /// the rest weren't.
+    /// (link path now, verdict before) of each rated link, the collection
+    /// links made; `error`: why the rest weren't.
     Reviewed {
         done: Vec<(PathBuf, Option<Verdict>)>,
+        collected: Vec<PathBuf>,
         undo: bool,
         error: Option<String>,
     },
@@ -4956,6 +4977,57 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
             state.new_project = None;
             vec![]
         }
+        Msg::Collect(images) => {
+            if images.is_empty() || state.library.is_none() {
+                return vec![];
+            }
+            // the last collection, if it's still there
+            let (folder, verdict) = state.collect_last.clone();
+            let folder = folder.filter(|f| state.index.collection_folders.contains(f));
+            state.collect =
+                Some(crate::state::CollectDialog { images, filter: String::new(), folder, verdict, new_name: None });
+            vec![]
+        }
+        Msg::EditCollect(d) => {
+            if state.collect.is_some() {
+                state.collect = Some(d);
+            }
+            vec![]
+        }
+        Msg::CancelCollect => {
+            state.collect = None;
+            vec![]
+        }
+        Msg::ConfirmCollect => {
+            let Some(d) = state.collect.take() else { return vec![] };
+            let Some(target) = d.target() else {
+                state.collect = Some(d);
+                return vec![];
+            };
+            if let Some(n) = &d.new_name
+                && collection_name_problem(state, d.folder.as_deref().unwrap_or(std::path::Path::new("")), n).is_some()
+            {
+                state.collect = Some(d);
+                return vec![];
+            }
+            state.collect_last = (Some(target.clone()), d.verdict);
+            let links: Vec<(PathBuf, Option<Verdict>)> = match d.verdict {
+                Some(v) => {
+                    d.images.iter().filter_map(|i| state.output_link(i)).map(|o| (o.path.clone(), Some(v))).collect()
+                }
+                None => vec![],
+            };
+            // rated, picks leave Review's queue (the sheet keeps them), as
+            // Rate does
+            if !links.is_empty() && d.images == state.picked && state.review_view != ReviewView::Sheet {
+                state.picked.clear();
+            }
+            let new = d.new_name.as_ref().map(|n| n.trim().to_string());
+            let folder = if new.is_some() { d.folder.unwrap_or_default() } else { target };
+            let fx = lib(state, LibOp::CollectAndReview { folder, new, images: d.images, links });
+            state.review_cursor = state.review_cursor.min(state.review_queue().len().saturating_sub(1));
+            fx
+        }
         Msg::SweepProject(true) => {
             if state.picked.is_empty() || state.library.is_none() {
                 return vec![];
@@ -6275,7 +6347,7 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
         }
         // the last rating, of one image or of all the picked at once
         Msg::UndoReview => match state.review_undo.pop() {
-            Some(links) => lib(state, LibOp::ReviewOutputs { links, undo: true }),
+            Some(u) => lib(state, LibOp::UndoReview(u)),
             None => vec![],
         },
 
@@ -7009,9 +7081,19 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
     }
 }
 
+/// Why a new collection can't be named `name` in `parent` (relative to
+/// `collections/`), if it can't.
+pub fn collection_name_problem(state: &AppState, parent: &std::path::Path, name: &str) -> Option<String> {
+    let name = name.trim();
+    if let Err(e) = increart_core::library::validate_name(name) {
+        return Some(e.to_string());
+    }
+    state.index.collection_folders.contains(&parent.join(name)).then(|| "already a collection here".to_string())
+}
+
 fn lib(state: &mut AppState, op: LibOp) -> Vec<Effect> {
     state.busy += 1;
-    if let LibOp::ReviewOutputs { links, undo: false } = &op {
+    if let LibOp::ReviewOutputs { links, undo: false } | LibOp::CollectAndReview { links, .. } = &op {
         state.reviewing.extend(links.iter().map(|(l, _)| l.clone()));
     }
     vec![Effect::Lib(Box::new(op))]
@@ -9280,9 +9362,9 @@ fn op_done(state: &mut AppState, ok: OpOk) -> Vec<Effect> {
             state.messages_info("Run queued");
             return fx;
         }
-        OpOk::Reviewed { done, undo, error } => {
+        OpOk::Reviewed { done, collected, undo, error } => {
             if !undo && !done.is_empty() {
-                state.review_undo.push(done);
+                state.review_undo.push(crate::state::ReviewUndo { links: done, collected });
             }
             if let Some(e) = error {
                 state.messages_error(e);

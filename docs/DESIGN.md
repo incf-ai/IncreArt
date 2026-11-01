@@ -3186,6 +3186,20 @@ the keys and mouse buttons go through that view's own history instead.
   compare with pinned, `E` = new edit run from this image, `R` = add to input
   library as ref, `I` = new idea from this image, `4` / `Ctrl+Z` = undo last review
   action.
+- **Add to collection…** (Review's right-click on an image, in every view,
+  and on the picks for them all) opens a modal: the image (or the picks, as
+  a stack), a filter box, the collections as a tree with their image
+  counts (filtered: whole paths, a flat list), **New collection…** (a name
+  field; it's made in the collection picked, or at the top level), and
+  **Rate**: don't rate / good / neutral / bad. It opens on the collection
+  and rating used last (good the first time). ↑ / ↓ move through the
+  collections, a double-click or Enter adds; the main button says what
+  happens ("Add to birds and rate good"). Rated, the images leave the queue
+  as with `1`/`2`/`3`, and one undo (`4` / `Ctrl+Z`) takes back the rating
+  and the collection links it made (not an image's link that was there
+  already); not rated, they stay in the queue and there's nothing to undo.
+  The rating keys don't work in the modal. Elsewhere it's the **Add to
+  collection ▸** submenu.
 - **Output library**: the place for finished work, as opposed to Projects
   (where images are made and triaged). Tabs **Grid** (default) · **Folder**
   · **Discarded**.
@@ -3208,8 +3222,8 @@ the keys and mouse buttons go through that view's own history instead.
     collection in this panel (the picks when the drag starts on one of them,
     else that image; they're added, staying where they were), or with
     **Add to collection ▸** in the right-click menus of
-    the Output library, Review and the folder views (which also offers **New
-    collection**). On disk: `collections/<folder>/…/<image-id>.png`, links into
+    the Output library and the folder views (which also offers **New
+    collection**), or Review's **Add to collection…**, which can rate too. On disk: `collections/<folder>/…/<image-id>.png`, links into
     `output_images/`; removing an image from a collection removes only that
     link, deleting a collection removes its links (asks first), the images
     keep their rating and project.

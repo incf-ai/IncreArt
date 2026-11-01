@@ -1145,6 +1145,7 @@ impl eframe::App for App {
             crate::projects::retag_window(&ctx, &self.st, &mut out);
             crate::projects::new_project_window(&ctx, &self.st, &mut self.tex, &mut out);
             crate::projects::sweep_project_window(&ctx, &self.st, &mut self.tex, &mut out);
+            crate::review::collect_window(&ctx, &self.st, &mut self.tex, &mut out);
             crate::projects::duplicate_window(&ctx, &self.st, &mut out);
             crate::home::start_project_window(&ctx, &self.st, &mut out);
             crate::projects::from_ideas_window(&ctx, &self.st, &mut out);

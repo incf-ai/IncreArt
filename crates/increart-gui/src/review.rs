@@ -24,7 +24,7 @@ pub const VERDICTS: [(&str, Verdict, egui::Color32); 3] =
 
 fn keys(ui: &egui::Ui, st: &AppState, out: &mut Vec<Msg>) {
     // the full-size preview or the picker is up: its keys are its own
-    if ui.ctx().egui_wants_keyboard_input() || st.preview.is_some() || st.ref_picker.is_some() {
+    if ui.ctx().egui_wants_keyboard_input() || st.preview.is_some() || st.ref_picker.is_some() || st.collect.is_some() {
         return;
     }
     // Ctrl+G: Generate (taken first, so G doesn't rate too)
@@ -678,6 +678,8 @@ fn single(ui: &mut egui::Ui, st: &AppState, root: &Path, tex: &mut Textures, out
                     r.context_menu(|ui| {
                         crate::tiles::menu(ui, st, &o.image, out);
                         use_menu(ui, st, root, &o.image, out);
+                        ui.separator();
+                        collect_button(ui, st, &o.image, out);
                     });
                 }
             });
@@ -725,7 +727,7 @@ fn single(ui: &mut egui::Ui, st: &AppState, root: &Path, tex: &mut Textures, out
             crate::tiles::menu(ui, st, &item.image, out);
             use_menu(ui, st, root, &item.image, out);
             ui.separator();
-            collection_menu(ui, st, std::slice::from_ref(&item.image), out);
+            collect_button(ui, st, &item.image, out);
             if ui.button(ic(ph::FOLDER_OPEN, "Show in file manager")).clicked() {
                 out.push(Msg::ShowInFileManager(item.path.clone()));
                 ui.close();
@@ -834,6 +836,7 @@ fn grid(ui: &mut egui::Ui, st: &AppState, root: &Path, tex: &mut Textures, out: 
                                 ui.close();
                             }
                         }
+                        collect_button(ui, st, &o.image, out);
                         ui.separator();
                         use_menu(ui, st, root, &o.image, out);
                     });
@@ -1219,6 +1222,7 @@ fn sheet_row(
                             ui.close();
                         }
                     }
+                    collect_button(ui, st, &o.image, out);
                     ui.separator();
                     use_menu(ui, st, root, &o.image, out);
                 });
@@ -2162,6 +2166,238 @@ pub fn lineage_panel(
     ui.separator();
     ui.label(RichText::new("Recipe").strong());
     recipe_grid(ui, st, root, tex, image, out);
+}
+
+/// Review's "Add to collection…" for one image (picked, the picks menu has
+/// it for them all).
+fn collect_button(ui: &mut egui::Ui, st: &AppState, image: &increart_core::ImageRef, out: &mut Vec<Msg>) {
+    if !st.picked.contains(image) && ui.button(ic(ph::FOLDER_PLUS, "Add to collection…")).clicked() {
+        out.push(Msg::Collect(vec![image.clone()]));
+        ui.close();
+    }
+}
+
+/// Add to collection for these images: Review's modal, else the submenu.
+pub fn add_to_collection(ui: &mut egui::Ui, st: &AppState, images: &[increart_core::ImageRef], out: &mut Vec<Msg>) {
+    if st.tab != Tab::Review {
+        return collection_menu(ui, st, images, out);
+    }
+    if ui.button(ic(ph::FOLDER_PLUS, "Add to collection…")).clicked() {
+        out.push(Msg::Collect(images.to_vec()));
+        ui.close();
+    }
+}
+
+/// Review's Add to collection… modal (DESIGN.md, Review): a collection
+/// (filtered, or a new one made in the one picked) and the rating that goes
+/// with it. ↑ / ↓ move through the collections, Enter adds, a double-click
+/// adds to that one.
+pub fn collect_window(ctx: &egui::Context, st: &AppState, tex: &mut Textures, out: &mut Vec<Msg>) {
+    let (Some(d0), Some(root)) = (&st.collect, &st.library) else { return };
+    let Some(first) = d0.images.first() else { return };
+    let mut d = d0.clone();
+    let (mut confirm, mut cancel) = (false, false);
+    let name_id = egui::Id::unique("collect_new_name");
+    let mut folders = st.index.collection_folders.clone();
+    folders.sort();
+    let mut counts = std::collections::HashMap::<&Path, usize>::new();
+    for l in &st.index.collection_links {
+        *counts.entry(l.folder.as_path()).or_default() += 1;
+    }
+    let needle = d.filter.trim().to_lowercase();
+    let shown: Vec<&PathBuf> =
+        folders.iter().filter(|f| needle.is_empty() || f.to_string_lossy().to_lowercase().contains(&needle)).collect();
+    // the one picked filtered out: the first shown instead
+    if d.new_name.is_none() && d.folder.as_ref().is_none_or(|f| !shown.contains(&f)) {
+        d.folder = shown.first().map(|f| (*f).clone());
+    }
+    // ↑ / ↓ (before the filter box takes them)
+    let step = ctx.input_mut(|i| {
+        let down = i.consume_key(egui::Modifiers::NONE, Key::ArrowDown);
+        let up = i.consume_key(egui::Modifiers::NONE, Key::ArrowUp);
+        down as isize - up as isize
+    });
+    if step != 0 && !shown.is_empty() {
+        let at = d.folder.as_ref().and_then(|f| shown.iter().position(|s| *s == f));
+        let i = match at {
+            Some(i) => (i as isize + step).clamp(0, shown.len() as isize - 1) as usize,
+            None => 0,
+        };
+        d.folder = Some(shown[i].clone());
+    }
+    let enter = ctx.input(|i| i.key_pressed(Key::Enter));
+    let m = egui::Modal::new(egui::Id::unique("collect")).show(ctx, |ui| {
+        ui.set_width(560.0);
+        ui.heading(ic(ph::FOLDER_PLUS, "Add to collection"));
+        ui.add_space(4.0);
+        ui.horizontal(|ui| {
+            let n = d.images.len();
+            let t = tex.thumb(root, first);
+            if n > 1 {
+                crate::widgets::stacked_thumb(ui, t.as_ref(), 64.0);
+            } else {
+                thumb(ui, t.as_ref(), 64.0, false, None);
+            }
+            ui.vertical(|ui| {
+                ui.label(RichText::new(if n == 1 { "1 image".into() } else { format!("{n} images") }).strong());
+                match st.output_link(first).filter(|_| n == 1) {
+                    Some(o) => {
+                        let project = st.index.run(&o.name.run).map(|(p, _)| p.name()).unwrap_or_default();
+                        ui.weak(format!("{project} · seed {}", o.name.seed));
+                    }
+                    None => {
+                        ui.weak("the picked");
+                    }
+                }
+            });
+        });
+        ui.add_space(6.0);
+        let filter = ui.add(
+            egui::TextEdit::singleline(&mut d.filter)
+                .hint_text(format!("{} Filter collections", ph::MAGNIFYING_GLASS))
+                .desired_width(f32::INFINITY),
+        );
+        if d.new_name.is_none() && ui.memory(|m| m.focused().is_none()) {
+            filter.request_focus();
+        }
+        egui::Frame::group(ui.style()).show(ui, |ui| {
+            ScrollArea::vertical().max_height(220.0).auto_shrink([false, true]).show(ui, |ui| {
+                if d.new_name.is_some() {
+                    // a new one can go at the top level too
+                    let r = ui.selectable_label(d.folder.is_none(), ic(ph::FOLDERS, "collections (the top level)"));
+                    if r.clicked() {
+                        d.folder = None;
+                    }
+                }
+                if folders.is_empty() {
+                    ui.weak("No collections yet: make one with New collection…");
+                } else if shown.is_empty() {
+                    ui.weak("No collection's name has that in it.");
+                }
+                for f in &shown {
+                    let depth = f.components().count().saturating_sub(1);
+                    // filtered: whole paths, a flat list
+                    let name = if needle.is_empty() {
+                        f.file_name().map(|s| s.to_string_lossy().to_string()).unwrap_or_default()
+                    } else {
+                        f.display().to_string()
+                    };
+                    ui.horizontal(|ui| {
+                        if needle.is_empty() {
+                            ui.add_space(depth as f32 * 18.0);
+                        }
+                        let picked = d.folder.as_ref() == Some(*f);
+                        let r = ui.selectable_label(picked, ic(ph::FOLDER, &name));
+                        if picked && step != 0 {
+                            r.scroll_to_me(None);
+                        }
+                        if r.clicked() {
+                            d.folder = Some((*f).clone());
+                        }
+                        if r.double_clicked() && d.new_name.is_none() {
+                            confirm = true;
+                        }
+                        ui.weak(counts.get(f.as_path()).copied().unwrap_or(0).to_string());
+                        if st.collect_last.0.as_ref() == Some(*f) {
+                            ui.weak("· last used");
+                        }
+                    });
+                }
+            });
+        });
+        let parent = d.folder.clone().unwrap_or_default();
+        let mut problem = None;
+        if let Some(name) = &mut d.new_name {
+            let mut drop = false;
+            ui.horizontal(|ui| {
+                ui.label(ic(ph::PLUS, "New collection in"));
+                ui.strong(if parent.as_os_str().is_empty() {
+                    "the top level".into()
+                } else {
+                    parent.display().to_string()
+                });
+                ui.add(egui::TextEdit::singleline(name).id(name_id).hint_text("its name").desired_width(180.0));
+                drop = ui.small_button(ph::X).on_hover_text("not a new one: add to the one picked").clicked();
+            });
+            if name.trim().is_empty() {
+                problem = Some("Name the new collection".to_string());
+            } else if let Some(p) = increart_gui_core::update::collection_name_problem(st, &parent, name) {
+                ui.colored_label(BAD, &p);
+                problem = Some(p);
+            }
+            if drop {
+                d.new_name = None;
+                problem = None;
+            }
+        }
+        if d.target().is_none() {
+            problem = Some("Pick a collection, or make one with New collection…".into());
+        }
+        ui.add_space(8.0);
+        ui.horizontal(|ui| {
+            ui.label(RichText::new("Rate").strong());
+            ui.add_space(6.0);
+            if ui.selectable_label(d.verdict.is_none(), "don't rate").clicked() {
+                d.verdict = None;
+            }
+            for (label, v, c) in VERDICTS {
+                if ui.selectable_label(d.verdict == Some(v), RichText::new(label.to_lowercase()).color(c)).clicked() {
+                    d.verdict = Some(v);
+                }
+            }
+        });
+        ui.weak(match d.verdict {
+            Some(_) if st.review_view == ReviewView::Sheet => "Rated, it stays on the sheet with its new colour.",
+            Some(_) => "Rated, it leaves Review's queue and the next image shows. Undo (4 / Ctrl+Z) takes both back.",
+            None => "It stays in Review's queue, unrated.",
+        });
+        ui.add_space(8.0);
+        let what = d.target().map(|t| t.display().to_string()).unwrap_or_default();
+        let rate = d.verdict.and_then(|v| VERDICTS.iter().find(|x| x.1 == v)).map(|x| x.0.to_lowercase());
+        let label = match (d.new_name.is_some(), rate) {
+            (false, None) => format!("Add to {what}"),
+            (false, Some(r)) => format!("Add to {what} and rate {r}"),
+            (true, None) => format!("Make {what} and add"),
+            (true, Some(r)) => format!("Make {what}, add and rate {r}"),
+        };
+        crate::widgets::dialog_footer(
+            ui,
+            |ui| {
+                if d.new_name.is_none()
+                    && ui.button(ic(ph::PLUS, "New collection…")).on_hover_text("in the collection picked").clicked()
+                {
+                    d.new_name = Some(String::new());
+                    ui.memory_mut(|m| m.request_focus(name_id));
+                }
+            },
+            |ui| {
+                let r = ui.add_enabled(
+                    problem.is_none(),
+                    egui::Button::new(RichText::new(ic(ph::FOLDER_PLUS, &format!("{label}   Enter"))).strong()),
+                );
+                if r.on_disabled_hover_text(problem.clone().unwrap_or_default()).clicked() {
+                    confirm = true;
+                }
+                if ui.button("Cancel   Esc").clicked() {
+                    cancel = true;
+                }
+            },
+        );
+        if enter && problem.is_none() {
+            confirm = true;
+        }
+    });
+    if m.should_close() {
+        cancel = true;
+    }
+    if d != *d0 {
+        out.push(Msg::EditCollect(d));
+    }
+    if cancel {
+        out.push(Msg::CancelCollect);
+    } else if confirm {
+        out.push(Msg::ConfirmCollect);
+    }
 }
 
 /// "Add to collection ▸": existing collections and a new one.
