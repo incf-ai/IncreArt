@@ -148,6 +148,12 @@ Review → Tag… (`L`) on two images: the stack, the field (Enter adds what's t
 
 ![13g-review-tag](13g-review-tag.webp)
 
+## 13h-review-use-ref
+
+Review → Use as a reference… (`U`) on two picked images: the stack, To (the project's Generate form / the input library, `R`), the Rate row (neutral to start), the button saying what happens
+
+![13h-review-use-ref](13h-review-use-ref.webp)
+
 ## 14-output-library-rejected
 
 Output library → Grid → Rejected tab: the source's bad images, with Delete these N rejected… (they go to Discarded, under the project's `discarded/`)

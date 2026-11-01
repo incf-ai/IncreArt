@@ -6,7 +6,9 @@ use eframe::egui::{self, ComboBox, Panel, RichText, ScrollArea};
 use increart_core::config::TreeOrder;
 use increart_core::engine::Stop;
 use increart_core::{Tree, Verdict};
-use increart_gui_core::{AppState, Confirm, Msg, OutputSource, PickKind, ProjectsTab, Tab, UseTarget, counts, cover};
+use increart_gui_core::{
+    AppState, Confirm, Msg, OutputSource, PickKind, ProjectsTab, RefTo, Tab, UseTarget, counts, cover,
+};
 
 use crate::folder_pick;
 use crate::textures::Textures;
@@ -1337,13 +1339,15 @@ pub fn preview_window(ctx: &egui::Context, st: &AppState, tex: &mut Textures, ke
     // opened from the contact sheet: ↑ / ↓ move between its style rows
     let rows = at.is_some() && st.tab == Tab::Review && st.review_view == increart_gui_core::ReviewView::Sheet;
     let keys = ctx.input(|i| {
-        let k = |key| i.key_pressed(key) && st.tagging.is_none();
+        let k = |key| i.key_pressed(key) && st.tagging.is_none() && st.use_ref.is_none();
         let actual = k(egui::Key::Num1) && !rates;
         (k(egui::Key::Plus) || k(egui::Key::Equals), k(egui::Key::Minus), k(egui::Key::Num0), actual)
     });
     let used = out.len();
-    // the Tag… modal over it: its keys are its own
-    let tagging = st.tagging.is_some();
+    // the Tag… or Use as a reference… modal over it: its keys are its own
+    let tagging = st.tagging.is_some() || st.use_ref.is_some();
+    // Review: U / R ask first, with a rating (the modal)
+    let review = st.tab == Tab::Review && st.output_link(img).is_some();
     let output = st.output_link(img).is_some();
     if output && !tagging {
         ctx.input(|i| crate::review::tag_keys(i, vec![img.clone()], out));
@@ -1383,12 +1387,21 @@ pub fn preview_window(ctx: &egui::Context, st: &AppState, tex: &mut Textures, ke
                 for (key, msg) in [
                     (egui::Key::E, Msg::UseImage(img.clone(), UseTarget::Edit)),
                     (egui::Key::D, Msg::UseImage(img.clone(), UseTarget::DuplicateProject)),
-                    (egui::Key::R, Msg::ToInputLibrary(img.clone())),
                     (egui::Key::I, Msg::NewIdeaFromImage(img.clone())),
                 ] {
                     if i.key_pressed(key) {
                         out.push(msg);
                     }
+                }
+                if review {
+                    if i.key_pressed(egui::Key::U) {
+                        out.push(Msg::UseAsRef(vec![img.clone()], RefTo::Project));
+                    }
+                    if i.key_pressed(egui::Key::R) {
+                        out.push(Msg::UseAsRef(vec![img.clone()], RefTo::InputLibrary));
+                    }
+                } else if i.key_pressed(egui::Key::R) {
+                    out.push(Msg::ToInputLibrary(img.clone()));
                 }
             }
         });
@@ -1480,7 +1493,7 @@ pub fn preview_window(ctx: &egui::Context, st: &AppState, tex: &mut Textures, ke
                         popup
                             .align(egui::RectAlign::TOP_END)
                             .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
-                            .show(|ui| preview_keys(ui, at.is_some(), rows, rates, output));
+                            .show(|ui| preview_keys(ui, at.is_some(), rows, rates, output, review));
                         ui.separator();
                         if output && ui.small_button(ph::TAG).on_hover_text("tag it…   L").clicked() {
                             picked.push(Msg::TagImages(vec![img.clone()]));
@@ -1556,7 +1569,7 @@ pub fn preview_window(ctx: &egui::Context, st: &AppState, tex: &mut Textures, ke
 /// The large preview's keyboard shortcuts, those that apply: stepping when
 /// it was opened from a list (between style rows on the contact sheet),
 /// rating and using when that list is outputs.
-fn preview_keys(ui: &mut egui::Ui, steps: bool, rows: bool, rates: bool, tags: bool) {
+fn preview_keys(ui: &mut egui::Ui, steps: bool, rows: bool, rates: bool, tags: bool, review: bool) {
     let mut groups: Vec<(&str, Vec<(&str, &str)>)> = vec![];
     if steps {
         let mut nav = vec![("← / →", "previous / next image")];
@@ -1570,15 +1583,14 @@ fn preview_keys(ui: &mut egui::Ui, steps: bool, rows: bool, rates: bool, tags: b
             "Rate",
             vec![("1 / G", "Good"), ("2 / N", "Neutral"), ("3 / B", "Bad"), ("4 / Ctrl+Z", "undo the last rating")],
         ));
-        groups.push((
-            "Use",
-            vec![
-                ("E", "edit this image"),
-                ("D", "duplicate the project with this image"),
-                ("R", "to the input library as a ref"),
-                ("I", "new idea from this image"),
-            ],
-        ));
+        let mut uses = vec![("E", "edit this image"), ("D", "duplicate the project with this image")];
+        if review {
+            uses.extend([("U", "use as a reference in the current project…"), ("R", "to the input library as a ref…")]);
+        } else {
+            uses.push(("R", "to the input library as a ref"));
+        }
+        uses.push(("I", "new idea from this image"));
+        groups.push(("Use", uses));
     }
     if tags {
         groups.push(("Tag", vec![("L", "tag this image…"), ("Shift+L", "the last tags again")]));

@@ -7605,6 +7605,90 @@ fn review_adds_to_a_collection_and_rates_in_one_step() {
 }
 
 #[test]
+fn review_uses_images_as_references_and_rates_in_one_step() {
+    use increart_gui_core::RefTo;
+    let mut h = Harness::new();
+    h.send(Msg::NewProject(PathBuf::new()));
+    h.send(Msg::CommitRename);
+    h.settle();
+    let project = h.state.project.clone().unwrap();
+    Library_::steal(&h.root).write_two(&project);
+    h.rt.run(Effect::Rescan);
+    h.settle();
+    h.send(Msg::Tab(Tab::Review));
+    let imgs: Vec<_> = h.state.review_queue().iter().map(|o| o.image.clone()).collect();
+    assert_eq!(imgs.len(), 2);
+    let refs = |h: &Harness| h.state.generate.refs();
+
+    // U on the picks: neutral to start; both join the form and leave the queue
+    h.send(Msg::PickSet(imgs.clone()));
+    h.send(Msg::UseAsRef(imgs.clone(), RefTo::Project));
+    let d = h.state.use_ref.clone().unwrap();
+    assert_eq!((d.to, d.verdict), (RefTo::Project, Some(Verdict::Neutral)));
+    h.send(Msg::ConfirmUseRef);
+    h.settle();
+    assert!(h.state.use_ref.is_none());
+    assert_eq!(refs(&h), imgs);
+    assert!(h.state.picked.is_empty());
+    assert!(imgs.iter().all(|i| h.state.output_link(i).unwrap().verdict == Some(Verdict::Neutral)));
+    assert!(h.state.review_queue().is_empty());
+
+    // one undo takes back the ratings and the references
+    h.send(Msg::UndoReview);
+    h.settle();
+    assert!(refs(&h).is_empty());
+    assert!(imgs.iter().all(|i| h.state.output_link(i).unwrap().verdict.is_none()));
+
+    // a reference there already stays on undo
+    h.send(Msg::UseImage(imgs[0].clone(), increart_gui_core::UseTarget::CurrentProject));
+    h.send(Msg::UseAsRef(imgs.clone(), RefTo::Project));
+    h.send(Msg::ConfirmUseRef);
+    h.settle();
+    assert_eq!(refs(&h), imgs);
+    h.send(Msg::UndoReview);
+    h.settle();
+    assert_eq!(refs(&h), [imgs[0].clone()], "it was in the form before");
+
+    // R, rated good: an idea in the input library; undo discards it
+    h.send(Msg::UseAsRef(vec![imgs[1].clone()], RefTo::InputLibrary));
+    let mut d = h.state.use_ref.clone().unwrap();
+    assert_eq!(d.verdict, Some(Verdict::Neutral), "neutral every time");
+    d.verdict = Some(Verdict::Good);
+    h.send(Msg::EditUseRef(d));
+    h.send(Msg::ConfirmUseRef);
+    h.settle();
+    let kept = h.state.library_ideas();
+    assert_eq!(kept.len(), 1);
+    assert_eq!(kept[0].idea.source, increart_core::model::IdeaSource::FromOutput { image: imgs[1].clone() });
+    assert_eq!(h.state.output_link(&imgs[1]).unwrap().verdict, Some(Verdict::Good));
+    h.send(Msg::UndoReview);
+    h.settle();
+    assert!(h.state.library_ideas().is_empty());
+    assert_eq!(h.state.output_link(&imgs[1]).unwrap().verdict, None);
+
+    // not rated: made, still in the queue, nothing to undo
+    let undos = h.state.review_undo.len();
+    h.send(Msg::UseAsRef(vec![imgs[1].clone()], RefTo::InputLibrary));
+    let mut d = h.state.use_ref.clone().unwrap();
+    d.verdict = None;
+    h.send(Msg::EditUseRef(d));
+    h.send(Msg::ConfirmUseRef);
+    h.settle();
+    assert_eq!(h.state.library_ideas().len(), 1);
+    assert_eq!(h.state.review_queue().len(), 2);
+    assert_eq!(h.state.review_undo.len(), undos);
+
+    // no project selected: U says so, R still opens
+    h.state.project = None;
+    h.send(Msg::UseAsRef(vec![imgs[0].clone()], RefTo::Project));
+    assert!(h.state.use_ref.is_none());
+    h.send(Msg::UseAsRef(vec![imgs[0].clone()], RefTo::InputLibrary));
+    assert!(h.state.use_ref.is_some());
+    h.send(Msg::CancelUseRef);
+    assert!(h.state.use_ref.is_none());
+}
+
+#[test]
 fn output_images_are_tagged_in_a_modal_filtered_and_undone() {
     let mut h = Harness::new();
     h.send(Msg::NewProject(PathBuf::new()));
