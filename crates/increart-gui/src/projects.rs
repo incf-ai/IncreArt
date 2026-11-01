@@ -1452,13 +1452,27 @@ pub fn preview_window(ctx: &egui::Context, st: &AppState, tex: &mut Textures, ke
                 scale * 100.0
             ));
             resp.context_menu(|ui| {
+                if rates && ui.horizontal(|ui| verdict_buttons(ui, verdict.flatten(), false, out)).inner {
+                    ui.close();
+                }
+                // an output's tags and collections, as on its grid tile
+                if output {
+                    if rates {
+                        ui.separator();
+                    }
+                    if ui.button(ic(ph::TAG, "Tag…   L")).clicked() {
+                        out.push(Msg::TagImages(vec![img.clone()]));
+                        ui.close();
+                    }
+                    crate::review::add_to_collection(ui, st, std::slice::from_ref(img), out);
+                    ui.separator();
+                }
                 if !rates {
                     return crate::widgets::image_menu_items(ui, root, img, out);
                 }
-                if ui.horizontal(|ui| verdict_buttons(ui, verdict.flatten(), false, out)).inner {
-                    ui.close();
+                if !output {
+                    ui.separator();
                 }
-                ui.separator();
                 crate::review::use_menu(ui, st, root, img, out);
             });
 
