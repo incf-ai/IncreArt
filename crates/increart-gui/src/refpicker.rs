@@ -27,9 +27,11 @@ pub fn window(ctx: &egui::Context, st: &AppState, tex: &mut Textures, out: &mut 
     // images (again if wanted)
     let tile = matches!(p.target, PickTarget::Tile(_));
     let compare = p.target == PickTarget::Compare;
+    let sweep = p.target == PickTarget::Sweep;
     let refs: Vec<ImageRef> = match p.target {
         PickTarget::Tile(_) => st.tile.iter().flat_map(|t| t.layout.images()).cloned().collect(),
         PickTarget::Generate => st.generate.refs(),
+        PickTarget::Sweep => st.generate.sweep.images.clone(),
         PickTarget::Compare => vec![],
     };
     let m = egui::Modal::new(egui::Id::unique("ref_picker")).show(ctx, |ui| {
@@ -38,6 +40,7 @@ pub fn window(ctx: &egui::Context, st: &AppState, tex: &mut Textures, out: &mut 
         let heading = match p.target {
             PickTarget::Tile(_) => "Add images to the tiling",
             PickTarget::Generate => "Add references from the library",
+            PickTarget::Sweep => "Add images to the sweep",
             PickTarget::Compare => "Compare with…",
         };
         ui.heading(ic(ph::IMAGES, heading));
@@ -172,6 +175,8 @@ pub fn window(ctx: &egui::Context, st: &AppState, tex: &mut Textures, out: &mut 
                                 "click: compare against it (A)"
                             } else if added && tile && chosen.is_none() {
                                 "already in the tiling · click: choose again"
+                            } else if added && sweep {
+                                "already in the sweep"
                             } else if added && !tile {
                                 "already a reference"
                             } else if chosen.is_some() {
@@ -209,7 +214,7 @@ pub fn window(ctx: &egui::Context, st: &AppState, tex: &mut Textures, out: &mut 
                 },
             );
         } else {
-            footer(ui, st, p.chosen.len(), refs.len(), tile, out);
+            footer(ui, st, p.chosen.len(), refs.len(), &p.target, out);
         }
     });
     ctx.data_mut(|d| d.insert_temp(cell_id, cell));
@@ -235,18 +240,22 @@ pub fn window(ctx: &egui::Context, st: &AppState, tex: &mut Textures, out: &mut 
     }
 }
 
-fn footer(ui: &mut egui::Ui, st: &AppState, chosen: usize, refs: usize, tile: bool, out: &mut Vec<Msg>) {
+fn footer(ui: &mut egui::Ui, st: &AppState, chosen: usize, refs: usize, target: &PickTarget, out: &mut Vec<Msg>) {
     let mut clear = vec![];
+    let tile = matches!(target, PickTarget::Tile(_));
+    let sweep = *target == PickTarget::Sweep;
     dialog_footer(
         ui,
         |ui| {
             let after = refs + chosen;
             let text = if tile {
                 format!("{chosen} chosen · added in the order chosen")
+            } else if sweep {
+                format!("{chosen} chosen · {after} images in the sweep after adding, a run each")
             } else {
                 format!("{chosen} chosen · {after} / {MAX_REFS} references after adding")
             };
-            if !tile && after > MAX_REFS {
+            if !tile && !sweep && after > MAX_REFS {
                 ui.colored_label(BAD, format!("{text}: more than Qwen-Image 2.1 takes"));
             } else {
                 ui.weak(text);
@@ -258,7 +267,11 @@ fn footer(ui: &mut egui::Ui, st: &AppState, chosen: usize, refs: usize, tile: bo
             }
         },
         |ui| {
-            let what = if tile { "image(s) to the tiling" } else { "reference(s)" };
+            let what = match target {
+                PickTarget::Tile(_) => "image(s) to the tiling",
+                PickTarget::Sweep => "image(s) to the sweep",
+                _ => "reference(s)",
+            };
             let add = egui::Button::new(RichText::new(ic(ph::PLUS, &format!("Add {chosen} {what}   Enter"))).strong());
             if ui.add_enabled(chosen > 0, add).clicked() {
                 out.push(Msg::RefPickerAdd);

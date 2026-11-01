@@ -1021,11 +1021,11 @@ fn sheet(ui: &mut egui::Ui, st: &AppState, root: &Path, tex: &mut Textures, out:
                         if compact {
                             ui.vertical(|ui| {
                                 ui.set_width(band_w);
-                                sheet_caption(ui, row, r, out);
+                                sheet_caption(ui, root, tex, row, r, out);
                                 ui.horizontal(|ui| sheet_row(ui, st, root, tex, row, r, size, &mut rects, out));
                             });
                         } else {
-                            sheet_head(ui, row, r, out);
+                            sheet_head(ui, root, tex, row, r, out);
                             sheet_row(ui, st, root, tex, row, r, size, &mut rects, out);
                         }
                     }
@@ -1069,18 +1069,54 @@ fn sheet_style(row: &increart_gui_core::SheetRow) -> (String, Option<String>) {
 }
 
 fn sheet_use_tip(row: &increart_gui_core::SheetRow) -> &'static str {
-    if row.run.sweep.as_ref().is_some_and(|s| s.param.is_some()) {
-        "Use these settings: open its run in Generate"
-    } else {
-        "Use this style: open its run in Generate"
+    match row.run.sweep.as_ref().and_then(|s| s.param.as_ref()) {
+        Some(p) if p.image().is_some() => "Use this image: open its run in Generate",
+        Some(_) => "Use these settings: open its run in Generate",
+        None => "Use this style: open its run in Generate",
+    }
+}
+
+/// An image sweep's row's image: its run's start image, else its `<image1>`.
+fn sheet_image(row: &increart_gui_core::SheetRow) -> Option<increart_core::ImageRef> {
+    let start = row.run.sweep.as_ref()?.param.as_ref()?.image()?;
+    match &row.run.mode {
+        increart_core::model::Mode::Edit { init: Some(i), .. } if start => Some(i.clone()),
+        _ if !start => row.run.refs.first().cloned(),
+        _ => None,
+    }
+}
+
+/// A row's image (an image sweep's), as a small thumbnail.
+fn sheet_image_thumb(
+    ui: &mut egui::Ui,
+    root: &std::path::Path,
+    tex: &mut Textures,
+    row: &increart_gui_core::SheetRow,
+    size: f32,
+    out: &mut Vec<Msg>,
+) {
+    let Some(image) = sheet_image(row) else { return };
+    let t = tex.thumb(root, &image);
+    let r = crate::widgets::thumb(ui, t.as_ref(), size, false, None)
+        .on_hover_text("the row's image · double-click: full size");
+    if r.double_clicked() {
+        out.push(Msg::Preview(Some(image)));
     }
 }
 
 /// A full row header beside the row: the style, its counts, G N B for its
 /// unreviewed images and Use.
-fn sheet_head(ui: &mut egui::Ui, row: &increart_gui_core::SheetRow, r: usize, out: &mut Vec<Msg>) {
+fn sheet_head(
+    ui: &mut egui::Ui,
+    root: &std::path::Path,
+    tex: &mut Textures,
+    row: &increart_gui_core::SheetRow,
+    r: usize,
+    out: &mut Vec<Msg>,
+) {
     ui.vertical(|ui| {
         ui.set_width(SHEET_HEAD);
+        sheet_image_thumb(ui, root, tex, row, 64.0, out);
         let (style, low_cfg) = sheet_style(row);
         ui.label(RichText::new(style).strong()).on_hover_text(&row.run.label);
         if let Some(cfg) = low_cfg {
@@ -1106,9 +1142,17 @@ fn sheet_head(ui: &mut egui::Ui, row: &increart_gui_core::SheetRow, r: usize, ou
 
 /// A compact row header: the style as a caption above the row; its menu
 /// rates the row's unreviewed images or uses the style.
-fn sheet_caption(ui: &mut egui::Ui, row: &increart_gui_core::SheetRow, r: usize, out: &mut Vec<Msg>) {
+fn sheet_caption(
+    ui: &mut egui::Ui,
+    root: &std::path::Path,
+    tex: &mut Textures,
+    row: &increart_gui_core::SheetRow,
+    r: usize,
+    out: &mut Vec<Msg>,
+) {
     let (style, low_cfg) = sheet_style(row);
     ui.horizontal(|ui| {
+        sheet_image_thumb(ui, root, tex, row, 22.0, out);
         if let Some(cfg) = &low_cfg {
             ui.colored_label(crate::widgets::NEUTRAL, ph::WARNING)
                 .on_hover_text(format!("no negative prompt: at {cfg} it isn't used"));

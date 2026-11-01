@@ -180,6 +180,9 @@ pub fn menu(ui: &mut egui::Ui, st: &AppState, image: &ImageRef, out: &mut Vec<Ms
     if new_sweep_button(ui, st, out) {
         ui.close();
     }
+    if sweep_project_button(ui, st, out) {
+        ui.close();
+    }
     crate::review::collection_menu(ui, st, &st.picked, out);
     if ui.button(ic(ph::EXPORT, &format!("Export the {n} picked…"))).clicked() {
         out.push(Msg::OpenExport(st.picked.clone(), format!("{n} images")));
@@ -226,7 +229,8 @@ pub fn keys(ui: &egui::Ui, st: &AppState, out: &mut Vec<Msg>) -> bool {
     })
 }
 
-/// "3 picked · Good Neutral Bad · Tile… · Clear", while anything is picked.
+/// "3 picked · Good Neutral Bad · Tile… · New project with these as a sweep…
+/// · Clear", while anything is picked.
 pub fn bar(ui: &mut egui::Ui, st: &AppState, out: &mut Vec<Msg>) {
     if st.picked.is_empty() {
         return;
@@ -247,6 +251,7 @@ pub fn bar(ui: &mut egui::Ui, st: &AppState, out: &mut Vec<Msg>) {
                 out.push(Msg::OpenTile);
             }
             new_sweep_button(ui, st, out);
+            sweep_project_button(ui, st, out);
             if ui.button(ic(ph::X, "Clear")).on_hover_text("Esc").clicked() {
                 out.push(Msg::PickSet(vec![]));
             }
@@ -274,12 +279,15 @@ fn new_sweep_button(ui: &mut egui::Ui, st: &AppState, out: &mut Vec<Msg>) -> boo
     if runs.is_empty() {
         return false;
     }
-    let setting = runs[0].sweep.as_ref().is_some_and(|s| s.param.is_some());
-    let what = match (runs.len(), setting) {
-        (1, false) => "1 style".to_string(),
-        (1, true) => "1 value".to_string(),
-        (n, false) => format!("{n} styles"),
-        (n, true) => format!("{n} values"),
+    let param = runs[0].sweep.as_ref().and_then(|s| s.param.as_ref());
+    let kind = match param {
+        Some(p) if p.image().is_some() => "image",
+        Some(_) => "value",
+        None => "style",
+    };
+    let what = match runs.len() {
+        1 => format!("1 {kind}"),
+        n => format!("{n} {kind}s"),
     };
     let names: Vec<String> = runs.iter().filter_map(|r| r.sweep.as_ref()).map(|s| s.row()).collect();
     let tip = format!(
@@ -290,6 +298,21 @@ fn new_sweep_button(ui: &mut egui::Ui, st: &AppState, out: &mut Vec<Msg>) -> boo
     let clicked = ui.button(ic(ph::STACK, &format!("New sweep from their {what}…"))).on_hover_text(tip).clicked();
     if clicked {
         out.push(Msg::SheetNewSweep);
+    }
+    clicked
+}
+
+/// **New project with these as a sweep…**: the picks as an image sweep in
+/// a new project (DESIGN.md, Image sweeps). Whether it was clicked.
+fn sweep_project_button(ui: &mut egui::Ui, st: &AppState, out: &mut Vec<Msg>) -> bool {
+    let n = st.picked.len();
+    let tip = format!(
+        "a new project (in the folder selected in Projects) sweeping these {n} images: \
+         a run each, the image its <image1>, the same prompt and seeds"
+    );
+    let clicked = ui.button(ic(ph::ROCKET_LAUNCH, "New project with these as a sweep…")).on_hover_text(tip).clicked();
+    if clicked {
+        out.push(Msg::SweepProject(true));
     }
     clicked
 }

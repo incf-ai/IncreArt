@@ -382,7 +382,9 @@ impl SweepTag {
 }
 
 /// A setting sweep's value for one run: `name` is `steps`, `cfg`,
-/// `flow_shift`, `strength` or `model` (the model preset's name as `value`).
+/// `flow_shift`, `strength` or `model` (the model preset's name as `value`);
+/// an image sweep's is `image` or `start_image`, the image's name as
+/// `value` (the image itself is the run's `<image1>` or start image).
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename = "SweepParam")]
 pub struct SweepParam {
@@ -391,6 +393,16 @@ pub struct SweepParam {
 }
 
 impl SweepParam {
+    /// An image sweep's: the image is the run's start image, else its
+    /// `<image1>`.
+    pub fn image(&self) -> Option<bool> {
+        match self.name.as_str() {
+            "image" => Some(false),
+            "start_image" => Some(true),
+            _ => None,
+        }
+    }
+
     /// "20 steps", "cfg 3", "shift 3.1", "strength 0.6", or the model.
     pub fn label(&self) -> String {
         let v = &self.value;

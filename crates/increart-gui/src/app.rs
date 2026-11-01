@@ -750,14 +750,16 @@ fn jobs_indicator(ui: &mut egui::Ui, st: &AppState, out: &mut Vec<Msg>, force_op
     if force_open {
         popup = popup.open_memory(egui::SetOpenCommand::Bool(true));
     }
+    // wide enough for a run's line with its time left; narrower on a small window
+    let width = 680.0_f32.min(ui.ctx().content_rect().width() - 24.0).max(320.0);
     popup
         .align(egui::RectAlign::TOP_END)
         .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
-        .width(520.0)
+        .width(width)
         .show(|ui| {
             // a fixed width: the states and steps in it change all the time
-            ui.set_min_width(520.0);
-            ui.set_max_width(520.0);
+            ui.set_min_width(width);
+            ui.set_max_width(width);
             ui.horizontal(|ui| {
                 ui.label(RichText::new(ic(ph::QUEUE, "Jobs")).strong());
                 ui.add_space(12.0);
@@ -1142,6 +1144,7 @@ impl eframe::App for App {
             crate::projects::preview_window(&ctx, &self.st, &mut self.tex, keys_open, &mut out);
             crate::projects::retag_window(&ctx, &self.st, &mut out);
             crate::projects::new_project_window(&ctx, &self.st, &mut self.tex, &mut out);
+            crate::projects::sweep_project_window(&ctx, &self.st, &mut self.tex, &mut out);
             crate::projects::duplicate_window(&ctx, &self.st, &mut out);
             crate::home::start_project_window(&ctx, &self.st, &mut out);
             crate::projects::from_ideas_window(&ctx, &self.st, &mut out);

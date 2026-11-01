@@ -234,6 +234,12 @@ pub struct Sweep {
     /// A model sweep's model presets, by name.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub models: Vec<String>,
+    /// An image sweep's images, in order: each run's `<image1>`.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub images: Vec<crate::model::ImageRef>,
+    /// An image sweep's images are each run's start image instead.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub image_start: bool,
     /// Prompt enhance's values for the blanks.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub suggestions: Vec<BlankValues>,
@@ -502,16 +508,19 @@ pub enum SweepVary {
     Strength,
     /// The model preset (each with its own steps, CFG and flow shift).
     Model,
+    /// The image: `<image1>` (or the start image) of each run.
+    Image,
 }
 
 impl SweepVary {
-    pub const EVERY: [SweepVary; 6] = [
+    pub const EVERY: [SweepVary; 7] = [
         SweepVary::Style,
         SweepVary::Steps,
         SweepVary::Cfg,
         SweepVary::FlowShift,
         SweepVary::Strength,
         SweepVary::Model,
+        SweepVary::Image,
     ];
 
     pub fn name(self) -> &'static str {
@@ -522,6 +531,7 @@ impl SweepVary {
             SweepVary::FlowShift => "Flow shift",
             SweepVary::Strength => "Strength",
             SweepVary::Model => "Model",
+            SweepVary::Image => "Image",
         }
     }
 
@@ -534,6 +544,7 @@ impl SweepVary {
             SweepVary::FlowShift => "flow_shift",
             SweepVary::Strength => "strength",
             SweepVary::Model => "model",
+            SweepVary::Image => "image",
         }
     }
 }

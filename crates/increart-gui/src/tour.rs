@@ -202,6 +202,9 @@ const EXTRA_SCENES: &[&str] = &[
     "97j-check-library-click",
     "98-setting-sweep",
     "98b-model-sweep",
+    "98b2-image-sweep",
+    "98b2b-image-sweep-all",
+    "98b3-image-sweep-project",
     "98c-output-sources",
     "98d-output-project-search",
     "98e-check-show-outputs-reveal",
@@ -719,6 +722,41 @@ impl Tour {
                     f.sweep.vary = increart_core::prompts::SweepVary::Model;
                     f.sweep.models = st.config.recipes.iter().take(2).map(|r| r.name.clone()).collect();
                 }
+                v.push(Msg::Generate(f));
+                v
+            }
+            "98b2-image-sweep" | "98b2b-image-sweep-all" | "98b3-image-sweep-project" => {
+                let mut v = vec![Msg::ContinueWithoutServers, Msg::Preview(None)];
+                // a style sweep's project, and an image of each of its first styles
+                let style = |r: &increart_core::model::Run| r.sweep.as_ref().filter(|s| s.param.is_none()).cloned();
+                let Some(p) = st.index.projects.iter().find(|p| p.runs.iter().any(|r| style(r).is_some())) else {
+                    return v;
+                };
+                let sweep = p.runs.iter().find_map(style).map(|s| s.name).unwrap_or_default();
+                let mut runs: Vec<_> =
+                    p.runs.iter().filter(|r| r.sweep.as_ref().is_some_and(|s| s.name == sweep)).collect();
+                runs.sort_by(|a, b| a.id.cmp(&b.id));
+                let images: Vec<_> = runs
+                    .iter()
+                    .filter_map(|r| p.outputs.iter().find(|o| o.name.run == r.id))
+                    .map(|o| o.image.clone())
+                    .take(5)
+                    .collect();
+                if name == "98b3-image-sweep-project" {
+                    v.extend([Msg::Tab(Tab::OutputLibrary), Msg::PickSet(images), Msg::SweepProject(true)]);
+                    return v;
+                }
+                v.extend([
+                    Msg::Tab(Tab::Projects),
+                    Msg::ProjectsTab(ProjectsTab::Generate),
+                    Msg::SelectProject(p.project.id.clone()),
+                ]);
+                let mut f = st.generate.clone();
+                f.prompt = "<image1> at night, in heavy neon-lit rain".into();
+                f.seeds = 2;
+                f.sweep.on = true;
+                f.sweep.vary = increart_core::prompts::SweepVary::Image;
+                f.sweep.images = images;
                 v.push(Msg::Generate(f));
                 v
             }
@@ -1928,6 +1966,10 @@ impl Tour {
                     image::ExtendedColorType::Rgba8,
                 );
             });
+        }
+        if name == "98b2b-image-sweep-all" && self.settled == 3 {
+            // the swept placeholder double-clicked
+            ctx.data_mut(|d| d.insert_temp(egui::Id::unique(crate::projects::SWEPT_MODAL), true));
         }
         if name == "G07-prompt-history" && self.settled == 5 {
             // once loaded (loading selects the newest): the entry before the
