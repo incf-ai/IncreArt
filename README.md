@@ -17,8 +17,8 @@ Questions, or something you made to share? Come say hi in
 - **Two review queues.** Ideas (text, images, or both) land in an *Idea
   inbox*. Save the good ones to the *Input library* (`1`/`2`/`S`), discard
   the rest (`3`/`B`). Generated images land in *Review*, rated `1`/`G` good,
-  `2`/`N` neutral, `3`/`B` bad, and the ones you keep go to the *Output
-  library*. Both queues use arrows to move and `Ctrl+Z` to undo.
+  `2`/`N` neutral, `3`/`B` bad (`4` undoes), and the ones you keep go to the
+  *Output library*. Both queues use arrows to move and `Ctrl+Z` to undo.
 - **Projects, runs and seeds.** A project holds runs, and a run is one prompt
   over many seeds. Runs are spread across all your GPUs and queued as jobs.
 - **Text-to-image and editing with references.** Point the prompt at

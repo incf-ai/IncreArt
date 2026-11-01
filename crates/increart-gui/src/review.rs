@@ -67,7 +67,7 @@ fn keys(ui: &egui::Ui, st: &AppState, out: &mut Vec<Msg>) {
         if i.key_pressed(Key::C) && !i.modifiers.command {
             out.push(if i.modifiers.shift { Msg::CompareWith(None) } else { Msg::Compare });
         }
-        if i.modifiers.command && i.key_pressed(Key::Z) {
+        if i.key_pressed(Key::Num4) || (i.modifiers.command && i.key_pressed(Key::Z)) {
             out.push(Msg::UndoReview);
         }
         if !i.modifiers.command
@@ -505,7 +505,7 @@ fn key_hints(ui: &mut egui::Ui, sheet: bool) {
         ("Home / End", "row's first / last"),
         ("Ctrl+Home / End", "sheet's first / last"),
         ("Ctrl+G", "open in Generate"),
-        ("Ctrl+Z", "undo"),
+        ("4 / Ctrl+Z", "undo"),
     ];
     egui::CollapsingHeader::new(RichText::new(ic(ph::KEYBOARD, "Keys")).strong())
         .id_salt("review_keys")
@@ -526,7 +526,7 @@ fn key_hints(ui: &mut egui::Ui, sheet: bool) {
                 ("R", "→ input library"),
                 ("I", "→ new idea"),
                 ("Ctrl+G", "open in Generate"),
-                ("Ctrl+Z", "undo"),
+                ("4 / Ctrl+Z", "undo"),
             ];
             for &(k, what) in if sheet { SHEET } else { all } {
                 ui.horizontal(|ui| {
@@ -701,6 +701,7 @@ fn single(ui: &mut egui::Ui, st: &AppState, root: &Path, tex: &mut Textures, out
                 }
                 if ui
                     .add_enabled(!st.review_undo.is_empty(), egui::Button::new(ic(ph::ARROW_COUNTER_CLOCKWISE, "Undo")))
+                    .on_hover_text("undo the last rating (4 or Ctrl+Z)")
                     .clicked()
                 {
                     out.push(Msg::UndoReview);
@@ -872,7 +873,7 @@ fn sheet_keys(ui: &egui::Ui, st: &AppState, picking: bool, out: &mut Vec<Msg>) {
                 out.push(Msg::SheetMove(dr, dc));
             }
         }
-        if i.modifiers.command && i.key_pressed(Key::Z) {
+        if i.key_pressed(Key::Num4) || (i.modifiers.command && i.key_pressed(Key::Z)) {
             out.push(Msg::UndoReview);
         }
     });

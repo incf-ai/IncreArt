@@ -214,7 +214,7 @@ fn key_hints(ui: &mut egui::Ui, tab: ProjectsTab) {
         ("1 / G", "good"),
         ("2 / N", "neutral"),
         ("3 / B", "bad"),
-        ("Ctrl+Z", "undo"),
+        ("4 / Ctrl+Z", "undo"),
         ("E", "edit this image"),
         ("D", "duplicate its project"),
         ("R", "→ input library"),
@@ -914,7 +914,7 @@ pub fn retag_window(ctx: &egui::Context, st: &AppState, out: &mut Vec<Msg>) {
 /// dragging pans, `0` fits and `1` is 100%; ← / → step through the list it
 /// was opened from (Review, its contact sheet, the Output library's grid).
 /// There the image can be rated as in Review — 1 / G, 2 / N, 3 / B (so `1`
-/// no longer zooms), Ctrl+Z, the bar's Good · Neutral · Bad · undo, or the
+/// no longer zooms), 4 or Ctrl+Z (undo), the bar's Good · Neutral · Bad · undo, or the
 /// right-click menu — and used (E, D, R, I, the menu). A click (when not
 /// zoomed in), Esc or a click outside closes it.
 /// `keys_open` opens the shortcuts popover (for the tour).
@@ -974,7 +974,7 @@ pub fn preview_window(ctx: &egui::Context, st: &AppState, tex: &mut Textures, ke
                     out.push(Msg::PreviewRate(v));
                 }
             }
-            if i.modifiers.command && i.key_pressed(egui::Key::Z) {
+            if i.key_pressed(egui::Key::Num4) || (i.modifiers.command && i.key_pressed(egui::Key::Z)) {
                 out.push(Msg::UndoReview);
             }
             if !i.modifiers.command {
@@ -1043,7 +1043,7 @@ pub fn preview_window(ctx: &egui::Context, st: &AppState, tex: &mut Textures, ke
             };
             let close = if zoomed_in { "drag to move · Esc to close" } else { "click or Esc to close" };
             let (hundred, menu) = if rates { ("", "rate and use") } else { (", 1 100%", "copy") };
-            let rate = if rates { " · 1 / 2 / 3 Good / Neutral / Bad, Ctrl+Z undo" } else { "" };
+            let rate = if rates { " · 1 / 2 / 3 Good / Neutral / Bad, 4 or Ctrl+Z undo" } else { "" };
             let resp = resp.on_hover_text(format!(
                 "{}\n{:.0}% · wheel or + / − zoom, 0 fit{hundred}{arrows}{rate} · {close} · right-click to {menu}",
                 crate::widgets::size_info(w, h),
@@ -1092,7 +1092,7 @@ pub fn preview_window(ctx: &egui::Context, st: &AppState, tex: &mut Textures, ke
                                 !st.review_undo.is_empty(),
                                 egui::Button::new(ph::ARROW_COUNTER_CLOCKWISE),
                             );
-                            if undo.on_hover_text("undo the last rating (Ctrl+Z)").clicked() {
+                            if undo.on_hover_text("undo the last rating (4 or Ctrl+Z)").clicked() {
                                 picked.push(Msg::UndoReview);
                             }
                             ui.separator();
@@ -1163,7 +1163,7 @@ fn preview_keys(ui: &mut egui::Ui, steps: bool, rows: bool, rates: bool) {
     if rates {
         groups.push((
             "Rate",
-            vec![("1 / G", "Good"), ("2 / N", "Neutral"), ("3 / B", "Bad"), ("Ctrl+Z", "undo the last rating")],
+            vec![("1 / G", "Good"), ("2 / N", "Neutral"), ("3 / B", "Bad"), ("4 / Ctrl+Z", "undo the last rating")],
         ));
         groups.push((
             "Use",

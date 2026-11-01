@@ -53,7 +53,7 @@ ideas ──► INPUT QUEUE ──review──► INPUT LIBRARY ──new projec
 ```
 
 - Both queues use the same mechanism: an item's folder is its verdict. Review
-  rates with `1`/`2`/`3` (or `G`/`N`/`B`); the Idea inbox has two verdicts,
+  rates with `1`/`2`/`3` (or `G`/`N`/`B`; `4` undoes); the Idea inbox has two verdicts,
   save to input library (`1`/`2`/`S`) and discard (`3`/`B`); both take arrows
   and `Ctrl+Z`. (`Space`
   differs: it makes a project from an idea in the Idea inbox and toggles grid / single in
@@ -2216,7 +2216,7 @@ images arrive.
 
 - Click selects a cell, double-click opens the image; 1/G, 2/N, 3/B rate the
   selected image and move on (right, then the next row's first seed);
-  arrows move as the sheet is shown; Ctrl+Z undoes.
+  arrows move as the sheet is shown; 4 or Ctrl+Z undoes.
 - Each row: the style, its counts, **G N B** (rate the row's *unreviewed*
   images only), and **Use this style** (its run in Generate as a single
   prompt, with the next label and seed; the old prompt goes to the history).
@@ -3125,7 +3125,7 @@ the keys and mouse buttons go through that view's own history instead.
   Opened from the contact sheet, `↑`/`↓` go to the same seed one style up or
   down (skipping cells with no image yet), and the selected cell follows.
   There (contact sheet included) the image can also be rated and used without
-  closing: `1`/`2`/`3` (or `G`/`N`/`B`; `1` then no longer zooms), `Ctrl+Z`,
+  closing: `1`/`2`/`3` (or `G`/`N`/`B`; `1` then no longer zooms), `4` or `Ctrl+Z` (undo),
   `E`/`D`/`R`/`I`, the bar's right end (↶ undo · Good · Neutral · Bad, the
   current verdict marked · ⋯ the use menu), or right-click (the verdicts over
   the use menu). In Review's queue the rated image leaves it and the preview
@@ -3139,7 +3139,7 @@ the keys and mouse buttons go through that view's own history instead.
   sheet's; Grid, the strip and the sheet scroll to the image moved to),
   `Space` = toggle grid/single, `C` =
   compare with pinned, `E` = new edit run from this image, `R` = add to input
-  library as ref, `I` = new idea from this image, `Ctrl+Z` = undo last review
+  library as ref, `I` = new idea from this image, `4` / `Ctrl+Z` = undo last review
   action.
 - **Output library**: the place for finished work, as opposed to Projects
   (where images are made and triaged). Tabs **Grid** (default) · **Folder**
