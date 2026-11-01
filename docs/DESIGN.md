@@ -2705,6 +2705,13 @@ servers' in the viewer (titled **Logs**):
 - Every message the Messages list gets, as `<date time> info|error|alert:
   <text>` (config warnings at start among them), and a panic's, as
   `<date time> panic: thread '<name>' at <file>:<line>: <what>`.
+- Each library opened, with how long it took: `info: library <path>
+  opened in <ms> ms (lock <ms> ms, scan <ms> ms: <n> projects, <n>
+  folders, <n> outputs)`.
+- What was slow on the GUI thread: `slow: <message> took <ms> ms` for a
+  message handled in 250 ms or more (the start of its Debug, at most 80
+  bytes), `slow: drawing a frame took <ms> ms` for a frame of 1 s or more;
+  and `hang:` when the window hasn't drawn for 10 s.
 - Grown past 2 MB, it's moved to `increart-previous.log` at the next start.
 - A screenshot tour (`INCREART_TOUR`) keeps none.
 

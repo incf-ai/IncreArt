@@ -96,3 +96,65 @@ fn gui_thread_state() -> String {
 fn gui_thread_state() -> String {
     String::new()
 }
+
+/// A message whose update takes this long is noted in the app's log.
+pub const SLOW_MSG: Duration = Duration::from_millis(250);
+/// A frame taking this long to draw is noted.
+pub const SLOW_FRAME: Duration = Duration::from_secs(1);
+
+/// Notes `what` in the app's log when `took` reached `limit`.
+pub fn note_slow(what: &str, took: Duration, limit: Duration) {
+    if took >= limit {
+        increart_core::applog::line("slow", &format!("{what} took {} ms", took.as_millis()));
+    }
+}
+
+/// Times a frame's drawing, noted (on drop) when it reached [`SLOW_FRAME`].
+pub struct SlowFrame(Instant);
+
+impl SlowFrame {
+    pub fn start() -> SlowFrame {
+        SlowFrame(Instant::now())
+    }
+}
+
+impl Drop for SlowFrame {
+    fn drop(&mut self) {
+        note_slow("drawing a frame", self.0.elapsed(), SLOW_FRAME);
+    }
+}
+
+/// The start of `v`'s Debug, at most `max` bytes: formatting stops there,
+/// so a message holding a whole index costs no more than a short one.
+pub fn short_debug(v: &impl std::fmt::Debug, max: usize) -> String {
+    struct Upto(String, usize);
+    impl std::fmt::Write for Upto {
+        fn write_str(&mut self, s: &str) -> std::fmt::Result {
+            let room = self.1 - self.0.len();
+            if s.len() <= room {
+                self.0.push_str(s);
+                return Ok(());
+            }
+            let cut = (0..=room).rev().find(|&i| s.is_char_boundary(i)).unwrap_or(0);
+            self.0.push_str(&s[..cut]);
+            Err(std::fmt::Error)
+        }
+    }
+    let mut w = Upto(String::new(), max);
+    let full = std::fmt::write(&mut w, format_args!("{v:?}")).is_ok();
+    if !full {
+        w.0.push('…');
+    }
+    w.0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::short_debug;
+
+    #[test]
+    fn short_debug_stops_at_max() {
+        assert_eq!(short_debug(&Some(1), 80), "Some(1)");
+        assert_eq!(short_debug(&"é".repeat(50), 9), "\"éééé…");
+    }
+}

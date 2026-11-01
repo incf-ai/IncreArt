@@ -136,7 +136,12 @@ impl App {
     }
 
     fn dispatch(&mut self, msg: Msg) {
-        for fx in update(&mut self.st, msg) {
+        // its start only: a message can hold a whole index
+        let label = crate::watchdog::short_debug(&msg, 80);
+        let t = std::time::Instant::now();
+        let fxs = update(&mut self.st, msg);
+        crate::watchdog::note_slow(&label, t.elapsed(), crate::watchdog::SLOW_MSG);
+        for fx in fxs {
             // the screenshot tour is silent: its Xvfb hides the windows, not
             // the speakers (its alert scenes would sound for real)
             if self.tour.is_some() && matches!(fx, increart_gui_core::Effect::PlaySound { .. }) {
@@ -1086,6 +1091,7 @@ impl eframe::App for App {
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        let _timed = crate::watchdog::SlowFrame::start();
         let ctx = ui.ctx().clone();
         self.zoom(&ctx);
         if let Some(img) = self.st.clipboard_image.take() {
