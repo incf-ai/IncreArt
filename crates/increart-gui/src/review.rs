@@ -24,7 +24,12 @@ pub const VERDICTS: [(&str, Verdict, egui::Color32); 3] =
 
 fn keys(ui: &egui::Ui, st: &AppState, out: &mut Vec<Msg>) {
     // the full-size preview or the picker is up: its keys are its own
-    if ui.ctx().egui_wants_keyboard_input() || st.preview.is_some() || st.ref_picker.is_some() || st.collect.is_some() {
+    if ui.ctx().egui_wants_keyboard_input()
+        || st.preview.is_some()
+        || st.ref_picker.is_some()
+        || st.collect.is_some()
+        || st.tagging.is_some()
+    {
         return;
     }
     // Ctrl+G: Generate (taken first, so G doesn't rate too)
@@ -74,6 +79,7 @@ fn keys(ui: &egui::Ui, st: &AppState, out: &mut Vec<Msg>) {
             && !picking
             && let Some(o) = st.review_queue().get(st.review_cursor)
         {
+            tag_keys(i, vec![o.image.clone()], out);
             for (key, msg) in [
                 (Key::E, Msg::UseImage(o.image.clone(), UseTarget::Edit)),
                 (Key::N, Msg::UseImage(o.image.clone(), UseTarget::NewProject)),
@@ -504,6 +510,8 @@ fn key_hints(ui: &mut egui::Ui, sheet: bool) {
         ("← → ↑ ↓", "move"),
         ("Home / End", "row's first / last"),
         ("Ctrl+Home / End", "sheet's first / last"),
+        ("L", "tag…"),
+        ("Shift+L", "tag again"),
         ("Ctrl+G", "open in Generate"),
         ("4 / Ctrl+Z", "undo"),
     ];
@@ -525,6 +533,8 @@ fn key_hints(ui: &mut egui::Ui, sheet: bool) {
                 ("D", "duplicate its project"),
                 ("R", "→ input library"),
                 ("I", "→ new idea"),
+                ("L", "tag…"),
+                ("Shift+L", "tag again"),
                 ("Ctrl+G", "open in Generate"),
                 ("4 / Ctrl+Z", "undo"),
             ];
@@ -560,6 +570,7 @@ fn info_panel(
 ) {
     ui.label(RichText::new(format!("{} / {n}", pos + 1)).strong());
     ui.label(describe(st, item));
+    tag_chips(ui, st, &item.image, out);
     recipe_grid(ui, st, root, tex, &item.image, out);
 }
 
@@ -680,6 +691,7 @@ fn single(ui: &mut egui::Ui, st: &AppState, root: &Path, tex: &mut Textures, out
                         use_menu(ui, st, root, &o.image, out);
                         ui.separator();
                         collect_button(ui, st, &o.image, out);
+                        tag_button(ui, st, &o.image, out);
                     });
                 }
             });
@@ -728,6 +740,7 @@ fn single(ui: &mut egui::Ui, st: &AppState, root: &Path, tex: &mut Textures, out
             use_menu(ui, st, root, &item.image, out);
             ui.separator();
             collect_button(ui, st, &item.image, out);
+            tag_button(ui, st, &item.image, out);
             if ui.button(ic(ph::FOLDER_OPEN, "Show in file manager")).clicked() {
                 out.push(Msg::ShowInFileManager(item.path.clone()));
                 ui.close();
@@ -837,6 +850,7 @@ fn grid(ui: &mut egui::Ui, st: &AppState, root: &Path, tex: &mut Textures, out: 
                             }
                         }
                         collect_button(ui, st, &o.image, out);
+                        tag_button(ui, st, &o.image, out);
                         ui.separator();
                         use_menu(ui, st, root, &o.image, out);
                     });
@@ -878,6 +892,14 @@ fn sheet_keys(ui: &egui::Ui, st: &AppState, picking: bool, out: &mut Vec<Msg>) {
         }
         if i.key_pressed(Key::Num4) || (i.modifiers.command && i.key_pressed(Key::Z)) {
             out.push(Msg::UndoReview);
+        }
+        let (r, c) = st.sheet_cell;
+        let cell = st.sheet().and_then(|sh| match sh.rows.get(r)?.cells.get(c)? {
+            increart_gui_core::SheetCell::Image(o) => Some(o.image.clone()),
+            _ => None,
+        });
+        if !picking && let Some(img) = cell {
+            tag_keys(i, vec![img], out);
         }
     });
 }
@@ -1223,6 +1245,7 @@ fn sheet_row(
                         }
                     }
                     collect_button(ui, st, &o.image, out);
+                    tag_button(ui, st, &o.image, out);
                     ui.separator();
                     use_menu(ui, st, root, &o.image, out);
                 });
@@ -1452,6 +1475,8 @@ fn output_keys_hint(ui: &mut egui::Ui) {
                 ("Ctrl+A", "pick all"),
                 ("1 2 3 / G N B", "rate the picked"),
                 ("T", "tile the picked"),
+                ("L", "tag the selected / picked…"),
+                ("Shift+L", "tag them again"),
                 ("Esc", "clear the picks"),
                 ("Double-click", "full size"),
             ] {
@@ -1492,11 +1517,23 @@ pub fn output_library(ui: &mut egui::Ui, st: &AppState, tex: &mut Textures, out:
     {
         out.push(Msg::TitleDialog(Some(img.clone())));
     }
+    // L / Shift+L: the selected image (the picks: tiles::keys)
+    if st.output_tab == OutputTab::Grid
+        && st.preview.is_none()
+        && st.title_edit.is_none()
+        && st.tagging.is_none()
+        && st.picked.is_empty()
+        && !ui.ctx().egui_wants_keyboard_input()
+        && let Some(img) = &st.output_selected
+    {
+        ui.input(|i| tag_keys(i, vec![img.clone()], out));
+    }
     // the arrows and Home / End: the image selected, shown in the lineage panel
     if st.output_tab == OutputTab::Grid
         && st.preview.is_none()
         && st.title_edit.is_none()
         && st.ref_picker.is_none()
+        && st.tagging.is_none()
         && !ui.ctx().egui_wants_keyboard_input()
         && let Some(last) = images.len().checked_sub(1)
     {
@@ -1883,7 +1920,7 @@ fn search_panel(ui: &mut egui::Ui, st: &AppState, out: &mut Vec<Msg>) {
     ui.allocate_ui_with_layout(row, egui::Layout::right_to_left(egui::Align::Center), |ui| {
         let mut q = if projects { st.output_project_search.clone() } else { f.text.clone() };
         let mut clear = !q.is_empty() && ui.small_button(ph::X).on_hover_text("clear").clicked();
-        let hint = if projects { "Search project names" } else { "Search titles and prompts" };
+        let hint = if projects { "Search project names" } else { "Search titles, tags and prompts" };
         let r = ui.add(
             egui::TextEdit::singleline(&mut q)
                 .hint_text(ic(ph::MAGNIFYING_GLASS, hint))
@@ -1902,7 +1939,7 @@ fn search_panel(ui: &mut egui::Ui, st: &AppState, out: &mut Vec<Msg>) {
     ui.horizontal(|ui| {
         ui.weak("in");
         let images =
-            ui.selectable_label(!projects, "Images").on_hover_text("the images' titles and their runs' prompts");
+            ui.selectable_label(!projects, "Images").on_hover_text("the images' titles and tags, their runs' prompts");
         if images.clicked() {
             out.push(Msg::OutputSearchProjects(false));
         }
@@ -1921,9 +1958,49 @@ fn search_panel(ui: &mut egui::Ui, st: &AppState, out: &mut Vec<Msg>) {
         ui.checkbox(&mut f.ratings.bad, "bad");
         ui.checkbox(&mut f.ratings.unreviewed, "unreviewed");
     });
+    tag_filter(ui, st, &mut f);
     if f != st.output_filter {
         out.push(Msg::OutputFilter(f));
     }
+}
+
+/// The source's tags (with the ratings picked) and their counts: a click
+/// shows only the images with it (several: all of them), again lets go.
+fn tag_filter(ui: &mut egui::Ui, st: &AppState, f: &mut increart_gui_core::OutputFilter) {
+    let images = st.source_images_in(&st.output_source, f.ratings);
+    let mut tags = st.tag_counts(images.iter().map(|o| &o.image));
+    // one picked that none of these have stays, to let go of it
+    for t in &f.tags {
+        if !tags.iter().any(|(x, _)| x.to_lowercase() == t.to_lowercase()) {
+            tags.push((t.clone(), 0));
+        }
+    }
+    ui.horizontal(|ui| {
+        ui.label(ic(ph::TAG, "Tags"));
+        if !f.tags.is_empty() && ui.small_button("clear").on_hover_text("show every tag's images").clicked() {
+            f.tags.clear();
+        }
+    });
+    if tags.is_empty() {
+        ui.weak("No tags here yet: tag images with L.");
+        return;
+    }
+    ScrollArea::vertical().id_salt("tag_filter").max_height(110.0).auto_shrink([false, true]).show(ui, |ui| {
+        ui.horizontal_wrapped(|ui| {
+            for (t, n) in tags {
+                let at = f.tags.iter().position(|x| x.to_lowercase() == t.to_lowercase());
+                let r = ui.selectable_label(at.is_some(), format!("{t} ({n})"));
+                if r.on_hover_text("only images with this tag (several: all of them)").clicked() {
+                    match at {
+                        Some(i) => {
+                            f.tags.remove(i);
+                        }
+                        None => f.tags.push(t),
+                    }
+                }
+            }
+        });
+    });
 }
 
 /// Search and filters, then the sources: collections (All projects first,
@@ -2038,6 +2115,22 @@ fn sources_panel(ui: &mut egui::Ui, st: &AppState, out: &mut Vec<Msg>) {
     });
     let at = shown.header_response.rect;
     ui.ctx().data_mut(|d| d.insert_temp(egui::Id::unique("tour_by_project_header"), at));
+    let by_tag = matches!(st.output_source, OutputSource::Smart(Smart::Tag(_)));
+    egui::CollapsingHeader::new("by tag").default_open(by_tag).show(ui, |ui| {
+        let tags = st.kept_tags();
+        if tags.is_empty() {
+            ui.weak("No kept image has a tag yet.");
+        }
+        for (t, n) in tags {
+            pick(
+                ui,
+                st,
+                out,
+                OutputSource::Smart(Smart::Tag(t.clone())),
+                ic(ph::TAG, &format!("{} ({n})", short(&t, 26))),
+            );
+        }
+    });
     let n_alpha = kept.iter().filter(|o| st.index.transparent(&o.image)).count();
     pick(
         ui,
@@ -2113,6 +2206,7 @@ pub fn lineage_panel(
                 out.push(Msg::TitleDialog(Some(image.clone())));
             }
         });
+        tag_chips(ui, st, image, out);
     }
     if let Some(p) = link.and_then(|o| st.project_of_link(o)) {
         ui.horizontal(|ui| {
@@ -2400,6 +2494,277 @@ pub fn collect_window(ctx: &egui::Context, st: &AppState, tex: &mut Textures, ou
     }
 }
 
+/// "Tag…" for one image (picked, the picks menu has it for them all).
+pub fn tag_button(ui: &mut egui::Ui, st: &AppState, image: &increart_core::ImageRef, out: &mut Vec<Msg>) {
+    if !st.picked.contains(image) && st.output_link(image).is_some() && ui.button(ic(ph::TAG, "Tag…   L")).clicked() {
+        out.push(Msg::TagImages(vec![image.clone()]));
+        ui.close();
+    }
+}
+
+/// An output image's tags as chips (× takes one off), and + for the Tag…
+/// modal.
+pub fn tag_chips(ui: &mut egui::Ui, st: &AppState, image: &increart_core::ImageRef, out: &mut Vec<Msg>) {
+    if st.output_link(image).is_none() {
+        return;
+    }
+    ui.horizontal_wrapped(|ui| {
+        ui.weak("tags");
+        for t in st.image_tags(image) {
+            egui::Frame::new()
+                .fill(ui.visuals().faint_bg_color)
+                .stroke(egui::Stroke::new(1.0, ui.visuals().widgets.noninteractive.bg_stroke.color))
+                .corner_radius(8.0)
+                .inner_margin(egui::Margin { left: 6, right: 2, top: 0, bottom: 0 })
+                .show(ui, |ui| {
+                    ui.spacing_mut().item_spacing.x = 2.0;
+                    ui.label(t);
+                    let x = ui.add(egui::Button::new(RichText::new(ph::X).small()).frame(false));
+                    if x.on_hover_text(format!("take “{t}” off (undo: 4 / Ctrl+Z)")).clicked() {
+                        out.push(Msg::RemoveTag(image.clone(), t.clone()));
+                    }
+                });
+        }
+        if st.image_tags(image).is_empty() {
+            ui.weak("none");
+        }
+        if ui.small_button(ph::PLUS).on_hover_text("tag it…   L").clicked() {
+            out.push(Msg::TagImages(vec![image.clone()]));
+        }
+    });
+}
+
+/// L / Shift+L on these images: the Tag… modal, or the last tags again.
+pub fn tag_keys(i: &egui::InputState, images: Vec<increart_core::ImageRef>, out: &mut Vec<Msg>) {
+    if images.is_empty() || i.modifiers.command || !i.key_pressed(Key::L) {
+        return;
+    }
+    out.push(if i.modifiers.shift { Msg::TagAgain(images) } else { Msg::TagImages(images) });
+}
+
+/// "bad hands, sky", or "3 tags" when there are more.
+fn tag_list(tags: &[String]) -> String {
+    match tags {
+        [a] => format!("“{a}”"),
+        [a, b] => format!("“{a}”, “{b}”"),
+        _ => format!("{} tags", tags.len()),
+    }
+}
+
+/// The Tag… modal (DESIGN.md, Output library tags): the image or a stack of
+/// the picks, a field that adds what's typed and narrows the list, the
+/// tags with three-state ticks (on all, on none, on some: "2 / 5"), and in
+/// Review the rating that goes with it. ↑ / ↓ move through the list, Space
+/// or Enter ticks the row, Enter adds what's typed, Enter with nothing
+/// typed applies.
+pub fn tag_window(ctx: &egui::Context, st: &AppState, tex: &mut Textures, out: &mut Vec<Msg>) {
+    let (Some(d0), Some(root)) = (&st.tagging, &st.library) else { return };
+    let Some(first) = d0.images.first() else { return };
+    let mut d = d0.clone();
+    let (mut confirm, mut cancel) = (false, false);
+    let known = st.known_tags();
+    let rows = st.tag_rows(&d);
+    let n = d.images.len();
+    let field_id = egui::Id::unique("tag_field");
+    if d.cursor.as_ref().is_some_and(|c| !rows.iter().any(|r| &r.tag == c)) {
+        d.cursor = None;
+    }
+    // ↑ / ↓ (before the field takes them)
+    let step = ctx.input_mut(|i| {
+        let down = i.consume_key(egui::Modifiers::NONE, Key::ArrowDown);
+        let up = i.consume_key(egui::Modifiers::NONE, Key::ArrowUp);
+        down as isize - up as isize
+    });
+    if step != 0 && !rows.is_empty() {
+        let at = d.cursor.as_ref().and_then(|c| rows.iter().position(|r| &r.tag == c));
+        let i = match at {
+            Some(i) => (i as isize + step).clamp(0, rows.len() as isize - 1) as usize,
+            None => 0,
+        };
+        d.cursor = Some(rows[i].tag.clone());
+    }
+    let at_row =
+        |d: &increart_gui_core::TagDialog| d.cursor.as_ref().and_then(|c| rows.iter().find(|r| &r.tag == c)).cloned();
+    // Space ticks the row the arrows are on, while nothing is typed
+    let space =
+        d.field.is_empty() && d.cursor.is_some() && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, Key::Space));
+    if space && let Some(r) = at_row(&d) {
+        d.toggle(&r);
+    }
+    let enter = ctx.input(|i| i.key_pressed(Key::Enter));
+    let m = egui::Modal::new(egui::Id::unique("tag_images")).show(ctx, |ui| {
+        ui.set_width(520.0);
+        ui.heading(ic(ph::TAG, if n == 1 { "Tag 1 image".into() } else { format!("Tag {n} images") }.as_str()));
+        ui.add_space(4.0);
+        ui.horizontal(|ui| {
+            let t = tex.thumb(root, first);
+            if n > 1 {
+                crate::widgets::stacked_thumb(ui, t.as_ref(), 64.0);
+            } else {
+                thumb(ui, t.as_ref(), 64.0, false, None);
+            }
+            ui.vertical(|ui| match st.output_link(first).filter(|_| n == 1) {
+                Some(o) => {
+                    let project = st.index.run(&o.name.run).map(|(p, _)| p.name()).unwrap_or_default();
+                    ui.weak(format!("{project} · seed {}", o.name.seed));
+                }
+                None if d.images == st.picked => {
+                    ui.weak(format!("the {n} picked"));
+                }
+                None => {}
+            });
+        });
+        ui.add_space(6.0);
+        let before = d.field.clone();
+        let field = ui.add(
+            egui::TextEdit::singleline(&mut d.field)
+                .id(field_id)
+                .hint_text(format!("{} Add a tag, or find one", ph::TAG))
+                .desired_width(f32::INFINITY),
+        );
+        if space {
+            // the space typed into the field too
+            d.field = before.clone();
+        }
+        if d.field != before {
+            d.cursor = None;
+        }
+        if ui.memory(|m| m.focused().is_none()) {
+            field.request_focus();
+        }
+        ui.weak("Enter adds what's typed (commas for several) · ↑ ↓ then Space ticks a row");
+        egui::Frame::group(ui.style()).show(ui, |ui| {
+            ScrollArea::vertical().max_height(240.0).auto_shrink([false, true]).show(ui, |ui| {
+                if rows.is_empty() {
+                    ui.weak(if d.field.trim().is_empty() {
+                        "No tags yet: type one above.".to_string()
+                    } else {
+                        format!("No tag has that in it: Enter makes “{}”.", d.field.trim())
+                    });
+                }
+                for r in &rows {
+                    // what Apply makes it: on all, on none, on some
+                    let all = r.change == Some(true) || (r.change.is_none() && r.have == n);
+                    let some = r.change.is_none() && r.have > 0 && r.have < n;
+                    let tick = if all {
+                        ph::CHECK_SQUARE
+                    } else if some {
+                        ph::MINUS_SQUARE
+                    } else {
+                        ph::SQUARE
+                    };
+                    ui.horizontal(|ui| {
+                        let mut text = RichText::new(format!("{tick}  {}", r.tag));
+                        if r.change.is_some() {
+                            text = text.color(crate::widgets::ACCENT);
+                        }
+                        let on = d.cursor.as_ref() == Some(&r.tag);
+                        let row = ui.selectable_label(on, text);
+                        if on && step != 0 {
+                            row.scroll_to_me(None);
+                        }
+                        if row.clicked() {
+                            d.toggle(r);
+                            d.cursor = Some(r.tag.clone());
+                        }
+                        if some {
+                            ui.weak(format!("{} / {n}", r.have));
+                        }
+                        match r.change {
+                            Some(true) if r.have < n => {
+                                ui.weak(if r.have == 0 && !known.iter().any(|(k, _)| k == &r.tag) {
+                                    "new"
+                                } else {
+                                    "added"
+                                });
+                            }
+                            Some(false) => {
+                                ui.weak("taken off");
+                            }
+                            _ => {}
+                        }
+                    });
+                }
+            });
+        });
+        if d.rate {
+            ui.add_space(8.0);
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("Rate").strong());
+                ui.add_space(6.0);
+                if ui.selectable_label(d.verdict.is_none(), "don't rate").clicked() {
+                    d.verdict = None;
+                }
+                for (label, v, c) in VERDICTS {
+                    if ui.selectable_label(d.verdict == Some(v), RichText::new(label.to_lowercase()).color(c)).clicked()
+                    {
+                        d.verdict = Some(v);
+                    }
+                }
+            });
+            ui.weak(match d.verdict {
+                Some(_) if st.review_view == ReviewView::Sheet => "Rated, it stays on the sheet with its new colour.",
+                Some(_) => "Rated, it leaves Review's queue. Undo (4 / Ctrl+Z) takes back the tags and the rating.",
+                None => "It stays in Review's queue, unrated. Undo (4 / Ctrl+Z) takes back the tags.",
+            });
+        }
+        ui.add_space(8.0);
+        let c = d.change(&known);
+        let mut what = vec![];
+        if !c.add.is_empty() {
+            what.push(format!("Add {}", tag_list(&c.add)));
+        }
+        if !c.remove.is_empty() {
+            what.push(format!("{} {}", if what.is_empty() { "Take off" } else { "take off" }, tag_list(&c.remove)));
+        }
+        let rate = d.verdict.and_then(|v| VERDICTS.iter().find(|x| x.1 == v)).map(|x| x.0.to_lowercase());
+        let on = if n == 1 { "this image".to_string() } else { format!("{n} images") };
+        let label = match (what.is_empty(), rate.clone()) {
+            (true, None) => "Apply".to_string(),
+            (true, Some(r)) => format!("Rate {r}, no tags changed"),
+            (false, None) => format!("{} · {on}", what.join(", ")),
+            (false, Some(r)) => format!("{} · {on} · rate {r}", what.join(", ")),
+        };
+        let ready = !what.is_empty() || rate.is_some();
+        crate::widgets::dialog_footer(
+            ui,
+            |_| {},
+            |ui| {
+                let r = ui.add_enabled(ready, egui::Button::new(RichText::new(ic(ph::TAG, &label)).strong()));
+                if r.on_disabled_hover_text("Tick, untick or type a tag first").clicked() {
+                    confirm = true;
+                }
+                if ui.button("Cancel   Esc").clicked() {
+                    cancel = true;
+                }
+            },
+        );
+        // Enter: tick the row the arrows are on, else add what's typed,
+        // else apply
+        if enter {
+            if let Some(r) = at_row(&d) {
+                d.toggle(&r);
+            } else if !d.field.trim().is_empty() {
+                d.add_typed(&known);
+            } else if ready {
+                confirm = true;
+            }
+            ui.memory_mut(|m| m.request_focus(field_id));
+        }
+    });
+    if m.should_close() {
+        cancel = true;
+    }
+    if d != *d0 {
+        out.push(Msg::EditTags(d));
+    }
+    if cancel {
+        out.push(Msg::CancelTags);
+    } else if confirm {
+        out.push(Msg::ConfirmTags);
+    }
+}
+
 /// "Add to collection ▸": existing collections and a new one.
 pub fn collection_menu(ui: &mut egui::Ui, st: &AppState, images: &[increart_core::ImageRef], out: &mut Vec<Msg>) {
     ui.menu_button(ic(ph::FOLDER_PLUS, "Add to collection"), |ui| {
@@ -2556,6 +2921,7 @@ fn image_grid(
                         }
                     }
                     ui.separator();
+                    tag_button(ui, st, &o.image, out);
                     collection_menu(ui, st, std::slice::from_ref(&o.image), out);
                     if let OutputSource::Collection(f) = &st.output_source
                         && let Some(link) = st.index.collection_links.iter().find(|l| l.image == o.image && l.folder.starts_with(f))

@@ -273,6 +273,26 @@ pub struct Project {
     /// Titles given to its output images, by image ID.
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub titles: std::collections::BTreeMap<Id, String>,
+    /// Tags given to its output images, by image ID (see [`normalize_tags`]).
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub tags: std::collections::BTreeMap<Id, Vec<String>>,
+}
+
+/// Tags as stored: each trimmed (inner spaces one each), the empty ones
+/// and commas dropped (a comma splits), one of each regardless of case
+/// (the first spelling kept), sorted regardless of case.
+pub fn normalize_tags<S: AsRef<str>>(tags: impl IntoIterator<Item = S>) -> Vec<String> {
+    let mut v: Vec<String> = vec![];
+    for t in tags {
+        for t in t.as_ref().split(',') {
+            let t = t.split_whitespace().collect::<Vec<_>>().join(" ");
+            if !t.is_empty() && !v.iter().any(|x| x.to_lowercase() == t.to_lowercase()) {
+                v.push(t);
+            }
+        }
+    }
+    v.sort_by_key(|t| t.to_lowercase());
+    v
 }
 
 /// A project's choice for images taken from outputs: as references

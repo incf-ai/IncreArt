@@ -245,6 +245,8 @@ pub struct OutputFilter {
     pub transparent: bool,
     /// The ratings shown (the preset tabs set them).
     pub ratings: Ratings,
+    /// Tags an image must all have (any case).
+    pub tags: Vec<String>,
 }
 
 impl OutputFilter {
@@ -410,6 +412,8 @@ pub enum Smart {
     Idea(Id),
     /// Runs with Transparent on.
     Transparent,
+    /// Images with this tag (any case).
+    Tag(String),
 }
 
 /// The history window (Generate history, or an idea's text history).
@@ -1642,6 +1646,120 @@ pub struct NewProjectDialog {
 pub struct ReviewUndo {
     pub links: Vec<(PathBuf, Option<Verdict>)>,
     pub collected: Vec<PathBuf>,
+    /// (project, image, its tags before) of each image tagged.
+    pub tags: Vec<(Id, Id, Vec<String>)>,
+}
+
+/// Output images' tags to set, by project: (project, [(image, tags)]).
+pub type ProjectTags = Vec<(Id, Vec<(Id, Vec<String>)>)>;
+
+/// Tags added to and removed from images (the Tag… modal's Apply, kept for
+/// Shift+L "tag again").
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct TagChange {
+    pub add: Vec<String>,
+    pub remove: Vec<String>,
+}
+
+impl TagChange {
+    pub fn is_empty(&self) -> bool {
+        self.add.is_empty() && self.remove.is_empty()
+    }
+
+    /// An image's tags with the change made (normalized).
+    pub fn apply(&self, tags: &[String]) -> Vec<String> {
+        let gone = |t: &String| self.remove.iter().any(|r| r.to_lowercase() == t.to_lowercase());
+        increart_core::model::normalize_tags(tags.iter().filter(|t| !gone(t)).chain(&self.add))
+    }
+
+    /// "+bad hands −sky".
+    pub fn describe(&self) -> String {
+        let add = self.add.iter().map(|t| format!("+{t}"));
+        add.chain(self.remove.iter().map(|t| format!("−{t}"))).collect::<Vec<_>>().join(" ")
+    }
+}
+
+/// The Tag… modal (DESIGN.md, Output library tags): the images, what's
+/// typed (a new tag; it also filters the list), the tags changed so far
+/// (true: on every image, false: on none), the row the arrow keys are on,
+/// and, opened in Review, the rating that goes with it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TagDialog {
+    pub images: Vec<ImageRef>,
+    pub field: String,
+    pub changes: std::collections::BTreeMap<String, bool>,
+    pub cursor: Option<String>,
+    /// Opened in Review: it can rate too.
+    pub rate: bool,
+    pub verdict: Option<Verdict>,
+}
+
+/// A tag row of the Tag… modal: how many of the images have it now, and
+/// what Apply will make it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TagRow {
+    pub tag: String,
+    pub have: usize,
+    pub change: Option<bool>,
+}
+
+impl TagDialog {
+    pub fn new(images: Vec<ImageRef>, rate: bool) -> TagDialog {
+        TagDialog { images, field: String::new(), changes: Default::default(), cursor: None, rate, verdict: None }
+    }
+
+    /// The tag as already spelled in `known` (or the changes), else as typed.
+    fn spelled(&self, tag: &str, known: &[(String, usize)]) -> String {
+        let l = tag.to_lowercase();
+        let same = |t: &&String| t.to_lowercase() == l;
+        self.changes
+            .keys()
+            .find(same)
+            .or_else(|| known.iter().map(|(t, _)| t).find(same))
+            .cloned()
+            .unwrap_or(tag.into())
+    }
+
+    /// Adds what's typed (comma-separated) to every image; clears it.
+    pub fn add_typed(&mut self, known: &[(String, usize)]) {
+        for t in increart_core::model::normalize_tags([std::mem::take(&mut self.field)]) {
+            let t = self.spelled(&t, known);
+            self.changes.insert(t, true);
+        }
+        self.cursor = None;
+    }
+
+    /// A row clicked: some → all → none → some; all ⇄ none.
+    pub fn toggle(&mut self, row: &TagRow) {
+        let n = self.images.len();
+        let mixed = row.have > 0 && row.have < n;
+        let next = match row.change {
+            None if row.have == n => Some(false),
+            None => Some(true),
+            Some(true) if mixed => Some(false),
+            Some(_) => None,
+        };
+        match next {
+            Some(b) => self.changes.insert(row.tag.clone(), b),
+            None => self.changes.remove(&row.tag),
+        };
+    }
+
+    /// What Apply does (what's typed but not added yet is added too).
+    pub fn change(&self, known: &[(String, usize)]) -> TagChange {
+        let mut c = TagChange::default();
+        for (t, on) in &self.changes {
+            if *on { &mut c.add } else { &mut c.remove }.push(t.clone());
+        }
+        for t in increart_core::model::normalize_tags([&self.field]) {
+            let t = self.spelled(&t, known);
+            if !c.add.contains(&t) {
+                c.remove.retain(|r| r != &t);
+                c.add.push(t);
+            }
+        }
+        c
+    }
 }
 
 /// Review's Add to collection… modal (DESIGN.md, Review): the images, the
@@ -3220,6 +3338,10 @@ pub struct AppState {
     pub collect: Option<CollectDialog>,
     /// The modal's last collection and rating, picked again when it opens.
     pub collect_last: (Option<PathBuf>, Option<Verdict>),
+    /// The Tag… modal.
+    pub tagging: Option<TagDialog>,
+    /// The last tags applied, for Shift+L "tag again".
+    pub tag_last: Option<TagChange>,
     /// Output links sent to be rated, until the index shows them moved (or
     /// no library op is in flight): they leave Review's queue at once, so a
     /// quick next rating goes to the next image, not to this one by the
@@ -3496,6 +3618,8 @@ impl AppState {
             review_undo: vec![],
             collect: None,
             collect_last: (None, Some(Verdict::Good)),
+            tagging: None,
+            tag_last: None,
             reviewing: HashSet::new(),
             renaming: None,
             busy: 0,
@@ -4348,6 +4472,84 @@ impl AppState {
         p.project.titles.get(&image.id).map(String::as_str)
     }
 
+    /// An output image's tags (project.rsn `tags`).
+    pub fn image_tags(&self, image: &ImageRef) -> &[String] {
+        let p = self.output_link(image).and_then(|o| self.project_of_link(o));
+        p.and_then(|p| p.project.tags.get(&image.id)).map_or(&[], Vec::as_slice)
+    }
+
+    /// Every output image's tags, by image ID (an image in two projects:
+    /// the first one's, as [`image_tags`](Self::image_tags)).
+    pub fn output_tags(&self) -> HashMap<&Id, &[String]> {
+        let mut m = HashMap::new();
+        for p in &self.index.projects {
+            for o in &p.outputs {
+                let tags = p.project.tags.get(&o.image.id).map_or(&[][..], Vec::as_slice);
+                m.entry(&o.image.id).or_insert(tags);
+            }
+        }
+        m
+    }
+
+    /// The tags of these images, each with how many have it, most first
+    /// (then by name).
+    pub fn tag_counts<'a>(&self, images: impl IntoIterator<Item = &'a ImageRef>) -> Vec<(String, usize)> {
+        let all = self.output_tags();
+        let mut n: std::collections::BTreeMap<String, (String, usize)> = Default::default();
+        for i in images {
+            for t in all.get(&i.id).copied().unwrap_or_default() {
+                n.entry(t.to_lowercase()).or_insert((t.clone(), 0)).1 += 1;
+            }
+        }
+        let mut v: Vec<(String, usize)> = n.into_values().collect();
+        v.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.to_lowercase().cmp(&b.0.to_lowercase())));
+        v
+    }
+
+    /// Every tag in the library, output images' and ideas', with how many
+    /// images and ideas have it, most used first.
+    pub fn known_tags(&self) -> Vec<(String, usize)> {
+        let outputs: Vec<&ImageRef> = self.index.projects.iter().flat_map(|p| &p.outputs).map(|o| &o.image).collect();
+        let mut v = self.tag_counts(outputs);
+        for e in &self.index.ideas {
+            for t in &e.idea.tags {
+                match v.iter_mut().find(|(x, _)| x.to_lowercase() == t.to_lowercase()) {
+                    Some(x) => x.1 += 1,
+                    None => v.push((t.clone(), 1)),
+                }
+            }
+        }
+        v.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.to_lowercase().cmp(&b.0.to_lowercase())));
+        v
+    }
+
+    /// The Tag… modal's rows: the tags changed or on any of its images,
+    /// then the library's other tags, most used first; narrowed by what's
+    /// typed.
+    pub fn tag_rows(&self, d: &TagDialog) -> Vec<TagRow> {
+        let on = self.tag_counts(&d.images);
+        let known = self.known_tags();
+        let q = d.field.trim().to_lowercase();
+        let mut rows: Vec<TagRow> = vec![];
+        let mut push = |tag: &String, have: usize| {
+            if !rows.iter().any(|r| r.tag.to_lowercase() == tag.to_lowercase()) {
+                let change = d.changes.iter().find(|(t, _)| t.to_lowercase() == tag.to_lowercase()).map(|(_, b)| *b);
+                rows.push(TagRow { tag: tag.clone(), have, change });
+            }
+        };
+        for (t, _) in d.changes.iter().filter(|(t, _)| !on.iter().any(|(o, _)| o.to_lowercase() == t.to_lowercase())) {
+            push(t, 0);
+        }
+        for (t, n) in &on {
+            push(t, *n);
+        }
+        for (t, _) in &known {
+            push(t, 0);
+        }
+        rows.retain(|r| q.is_empty() || r.tag.to_lowercase().contains(&q));
+        rows
+    }
+
     /// What each style (a sweep's prompt preset) has made, in every project.
     pub fn style_stats(&self) -> HashMap<increart_core::prompts::PresetKey, StyleStats> {
         let mut m: HashMap<increart_core::prompts::PresetKey, StyleStats> = HashMap::new();
@@ -4489,12 +4691,17 @@ impl AppState {
         let f = &self.output_filter;
         let mut v = self.source_images_in(&self.output_source, f.ratings);
         let q = f.text.to_lowercase();
+        let tags = self.output_tags();
+        let tags_of = |o: &OutputLink| tags.get(&o.image.id).copied().unwrap_or_default();
+        let has = |o: &OutputLink, t: &str| tags_of(o).iter().any(|x| x.to_lowercase() == t.to_lowercase());
         v.retain(|o| {
             let run = self.index.run(&o.name.run).map(|(_, r)| r);
             let title = || self.image_title(&o.image).is_some_and(|t| t.to_lowercase().contains(&q));
-            (q.is_empty() || run.is_some_and(|r| r.prompt.to_lowercase().contains(&q)) || title())
+            let tagged = || tags_of(o).iter().any(|t| t.to_lowercase().contains(&q));
+            (q.is_empty() || run.is_some_and(|r| r.prompt.to_lowercase().contains(&q)) || title() || tagged())
                 && (!f.has_refs || run.is_some_and(|r| !r.refs.is_empty()))
                 && (!f.transparent || self.index.transparent(&o.image))
+                && f.tags.iter().all(|t| has(o, t))
         });
         v
     }
@@ -4544,6 +4751,13 @@ impl AppState {
                 .collect(),
             OutputSource::Smart(Smart::Transparent) => {
                 kept.into_iter().filter(|o| self.index.transparent(&o.image)).collect()
+            }
+            OutputSource::Smart(Smart::Tag(tag)) => {
+                let tags = self.output_tags();
+                let l = tag.to_lowercase();
+                let has =
+                    |o: &&OutputLink| tags.get(&o.image.id).is_some_and(|t| t.iter().any(|x| x.to_lowercase() == l));
+                kept.into_iter().filter(has).collect()
             }
             OutputSource::Run(id) => kept.into_iter().filter(|o| &o.name.run == id).collect(),
             OutputSource::Collection(folder) => {
@@ -4626,8 +4840,9 @@ impl AppState {
     pub fn smart_children(&self, rel: &Path) -> Option<Vec<String>> {
         let parts: Vec<String> = rel.iter().map(|c| c.to_string_lossy().into_owned()).collect();
         Some(match parts.iter().map(String::as_str).collect::<Vec<_>>().as_slice() {
-            [] => ["by date", "by source idea", "by project", "transparent"].map(String::from).to_vec(),
+            [] => ["by date", "by source idea", "by project", "by tag", "transparent"].map(String::from).to_vec(),
             ["by date"] => self.kept_days().into_iter().map(|(d, _)| d).collect(),
+            ["by tag"] => self.kept_tags().into_iter().map(|(t, _)| t).collect(),
             ["by source idea"] => self.kept_source_ideas().iter().map(|(id, _)| self.smart_idea_name(id)).collect(),
             // the project tree, folders and all
             ["by project", rest @ ..] => {
@@ -4666,6 +4881,7 @@ impl AppState {
                 }
             }
             ["transparent"] => OutputSource::Smart(Smart::Transparent),
+            ["by tag", tag] => OutputSource::Smart(Smart::Tag(tag.to_string())),
             _ => return None,
         })
     }
@@ -4780,6 +4996,13 @@ impl AppState {
         let mut seen = BTreeSet::new();
         images.retain(|i| seen.insert(i.clone()));
         images
+    }
+
+    /// Tags of kept images, with counts, by name.
+    pub fn kept_tags(&self) -> Vec<(String, usize)> {
+        let mut v = self.tag_counts(self.kept_outputs().into_iter().map(|o| &o.image));
+        v.sort_by_key(|(t, _)| t.to_lowercase());
+        v
     }
 
     /// Days with kept images (`YYYY.MM.DD`), newest first.

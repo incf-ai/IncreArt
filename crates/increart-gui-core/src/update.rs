@@ -843,6 +843,17 @@ pub enum Msg {
     /// Adds the images to the collection (a new one made first) and rates
     /// them as the modal says.
     ConfirmCollect,
+    /// The Tag… modal on these output images.
+    TagImages(Vec<ImageRef>),
+    /// The modal as edited (what's typed, the changes, the rating).
+    EditTags(crate::state::TagDialog),
+    CancelTags,
+    /// Tags the images (and rates them, in Review) as the modal says.
+    ConfirmTags,
+    /// Shift+L: the last tags applied, on these images.
+    TagAgain(Vec<ImageRef>),
+    /// A tag's chip ×: the tag off the image.
+    RemoveTag(ImageRef, String),
     SetCover(Id, Option<ImageRef>),
     /// Opens the title dialog for an output image (with its title), or
     /// closes it.
@@ -1268,8 +1279,14 @@ pub enum LibOp {
         images: Vec<ImageRef>,
         links: Vec<(PathBuf, Option<Verdict>)>,
     },
-    /// Takes back a review action: its collection links removed, its
-    /// ratings back as they were.
+    /// Sets output images' tags, by project (project, [(image, tags)]),
+    /// then rates `links` as `ReviewOutputs` does, both undone together.
+    TagAndReview {
+        tags: crate::state::ProjectTags,
+        links: Vec<(PathBuf, Option<Verdict>)>,
+    },
+    /// Takes back a review action: its tags and collection links back as
+    /// they were, its ratings too.
     UndoReview(crate::state::ReviewUndo),
     SetCover(Id, Option<ImageRef>),
     /// project, output image, title ("" removes it)
@@ -1329,10 +1346,12 @@ pub enum OpOk {
         then: StartRefs,
     },
     /// (link path now, verdict before) of each rated link, the collection
-    /// links made; `error`: why the rest weren't.
+    /// links made, (project, image, tags before) of each image tagged;
+    /// `error`: why the rest weren't.
     Reviewed {
         done: Vec<(PathBuf, Option<Verdict>)>,
         collected: Vec<PathBuf>,
+        tagged: Vec<(Id, Id, Vec<String>)>,
         undo: bool,
         error: Option<String>,
     },
@@ -5028,6 +5047,68 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
             state.review_cursor = state.review_cursor.min(state.review_queue().len().saturating_sub(1));
             fx
         }
+        Msg::TagImages(images) => {
+            let images: Vec<ImageRef> = images.into_iter().filter(|i| state.output_link(i).is_some()).collect();
+            if images.is_empty() || state.library.is_none() {
+                return vec![];
+            }
+            state.tagging = Some(crate::state::TagDialog::new(images, state.tab == Tab::Review));
+            vec![]
+        }
+        Msg::EditTags(d) => {
+            if state.tagging.is_some() {
+                state.tagging = Some(d);
+            }
+            vec![]
+        }
+        Msg::CancelTags => {
+            state.tagging = None;
+            vec![]
+        }
+        Msg::ConfirmTags => {
+            let Some(d) = state.tagging.take() else { return vec![] };
+            let change = d.change(&state.known_tags());
+            if change.is_empty() && d.verdict.is_none() {
+                return vec![];
+            }
+            if !change.is_empty() {
+                state.tag_last = Some(change.clone());
+            }
+            let links: Vec<(PathBuf, Option<Verdict>)> = match d.verdict.filter(|_| d.rate) {
+                Some(v) => {
+                    d.images.iter().filter_map(|i| state.output_link(i)).map(|o| (o.path.clone(), Some(v))).collect()
+                }
+                None => vec![],
+            };
+            // rated, picks leave Review's queue (the sheet keeps them), as
+            // Rate does
+            if !links.is_empty() && d.images == state.picked && state.review_view != ReviewView::Sheet {
+                state.picked.clear();
+            }
+            let fx = tag_images(state, &d.images, &change, links);
+            state.review_cursor = state.review_cursor.min(state.review_queue().len().saturating_sub(1));
+            fx
+        }
+        Msg::TagAgain(images) => {
+            let Some(change) = state.tag_last.clone() else {
+                state.messages_info("Nothing to tag again yet: tag with L first");
+                return vec![];
+            };
+            let fx = tag_images(state, &images, &change, vec![]);
+            if !fx.is_empty() {
+                let n = images.len();
+                state.messages_info(format!(
+                    "{} on {}",
+                    change.describe(),
+                    if n == 1 { "1 image".into() } else { format!("{n} images") }
+                ));
+            }
+            fx
+        }
+        Msg::RemoveTag(image, tag) => {
+            let change = crate::state::TagChange { add: vec![], remove: vec![tag] };
+            tag_images(state, &[image], &change, vec![])
+        }
         Msg::SweepProject(true) => {
             if state.picked.is_empty() || state.library.is_none() {
                 return vec![];
@@ -7081,6 +7162,34 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
     }
 }
 
+/// Tags output images with `change` (only those it changes, by project)
+/// and rates `links`, in one library op.
+fn tag_images(
+    state: &mut AppState,
+    images: &[ImageRef],
+    change: &crate::state::TagChange,
+    links: Vec<(PathBuf, Option<Verdict>)>,
+) -> Vec<Effect> {
+    let mut tags: crate::state::ProjectTags = vec![];
+    for i in images {
+        let Some(p) = state.output_link(i).and_then(|o| state.project_of_link(o)) else { continue };
+        let now = state.image_tags(i);
+        let new = change.apply(now);
+        if new == now {
+            continue;
+        }
+        let project = p.project.id.clone();
+        match tags.iter_mut().find(|(p, _)| *p == project) {
+            Some((_, v)) => v.push((i.id.clone(), new)),
+            None => tags.push((project, vec![(i.id.clone(), new)])),
+        }
+    }
+    if tags.is_empty() && links.is_empty() {
+        return vec![];
+    }
+    lib(state, LibOp::TagAndReview { tags, links })
+}
+
 /// Why a new collection can't be named `name` in `parent` (relative to
 /// `collections/`), if it can't.
 pub fn collection_name_problem(state: &AppState, parent: &std::path::Path, name: &str) -> Option<String> {
@@ -7093,7 +7202,10 @@ pub fn collection_name_problem(state: &AppState, parent: &std::path::Path, name:
 
 fn lib(state: &mut AppState, op: LibOp) -> Vec<Effect> {
     state.busy += 1;
-    if let LibOp::ReviewOutputs { links, undo: false } | LibOp::CollectAndReview { links, .. } = &op {
+    if let LibOp::ReviewOutputs { links, undo: false }
+    | LibOp::CollectAndReview { links, .. }
+    | LibOp::TagAndReview { links, .. } = &op
+    {
         state.reviewing.extend(links.iter().map(|(l, _)| l.clone()));
     }
     vec![Effect::Lib(Box::new(op))]
@@ -8849,6 +8961,12 @@ fn source_path(state: &AppState, source: &OutputSource) -> PathBuf {
         OutputSource::Collection(f) => PathBuf::from("collections").join(f),
         OutputSource::Smart(Smart::Day(d)) => smart.join("by date").join(d),
         OutputSource::Smart(Smart::Transparent) => smart.join("transparent"),
+        OutputSource::Smart(Smart::Tag(t)) => {
+            // as the smart folder spells it
+            let l = t.to_lowercase();
+            let name = state.kept_tags().into_iter().map(|(n, _)| n).find(|n| n.to_lowercase() == l);
+            smart.join("by tag").join(name.unwrap_or_else(|| t.clone()))
+        }
         OutputSource::ProjectFolder(f) => smart.join("by project").join(f),
         OutputSource::Run(id) => match state.index.run(id) {
             Some((p, _)) => source_path(state, &OutputSource::Project(p.project.id.clone())),
@@ -9362,9 +9480,9 @@ fn op_done(state: &mut AppState, ok: OpOk) -> Vec<Effect> {
             state.messages_info("Run queued");
             return fx;
         }
-        OpOk::Reviewed { done, collected, undo, error } => {
-            if !undo && !done.is_empty() {
-                state.review_undo.push(crate::state::ReviewUndo { links: done, collected });
+        OpOk::Reviewed { done, collected, tagged, undo, error } => {
+            if !undo && (!done.is_empty() || !tagged.is_empty()) {
+                state.review_undo.push(crate::state::ReviewUndo { links: done, collected, tags: tagged });
             }
             if let Some(e) = error {
                 state.messages_error(e);

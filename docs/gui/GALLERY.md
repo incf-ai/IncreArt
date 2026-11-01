@@ -130,6 +130,12 @@ Review → A/B compare against an input image: A has no rating buttons, the keys
 
 ![13d-review-compare-input](13d-review-compare-input.webp)
 
+## 13g-review-tag
+
+Review → Tag… (`L`) on two images: the stack, the field (Enter adds what's typed), the tags ticked on all, on some ("1 / 2") or added, the Rate row (here bad), the button saying what happens
+
+![13g-review-tag](13g-review-tag.webp)
+
 ## 14-output-library-rejected
 
 Output library → Grid → Rejected tab: the source's bad images, with Delete these N rejected… (they go to Discarded, under the project's `discarded/`)
@@ -141,6 +147,12 @@ Output library → Grid → Rejected tab: the source's bad images, with Delete t
 Output library → right-click → Compare with…: the Grid shows A beside the selected image (B), ←/→ step B
 
 ![14b-output-library-compare](14b-output-library-compare.webp)
+
+## 14c-output-library-tags
+
+Output library filtered by the tag "sky" (Tags under the filters, with counts; by tag in the smart folders), the selected image's tags as chips in the lineage view
+
+![14c-output-library-tags](14c-output-library-tags.webp)
 
 ## 15-generate-img2img
 

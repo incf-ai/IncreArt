@@ -1271,6 +1271,7 @@ impl Library {
             cover: None,
             edit_with: src.edit_with,
             titles: Default::default(),
+            tags: Default::default(),
         };
         self.write_project_dir(to, &project)?;
         for run_dir in fsutil::subdirs(&from.join("runs"))? {
@@ -1375,6 +1376,7 @@ impl Library {
             cover: None,
             edit_with: EditWith::default(),
             titles: Default::default(),
+            tags: Default::default(),
         };
         for s in sources {
             self.load_idea(s)?;
@@ -1498,6 +1500,24 @@ impl Library {
             p.titles.insert(image.clone(), title);
         }
         rsnfmt::write(&dir.join(PROJECT_FILE), &p)
+    }
+
+    /// Sets the tags of some of a project's output images (normalized; none
+    /// removes them), in one write. Returns each image's tags before.
+    pub fn set_tags(&self, project: &Id, tags: &[(Id, Vec<String>)]) -> Result<Vec<(Id, Vec<String>)>> {
+        for (image, _) in tags {
+            self.require_image(&ImageRef::output(image.clone()))?;
+        }
+        let dir = self.find_project(project)?;
+        let mut p: Project = rsnfmt::read(&dir.join(PROJECT_FILE))?;
+        let mut before = vec![];
+        for (image, t) in tags {
+            let t = crate::model::normalize_tags(t);
+            let old = if t.is_empty() { p.tags.remove(image) } else { p.tags.insert(image.clone(), t) };
+            before.push((image.clone(), old.unwrap_or_default()));
+        }
+        rsnfmt::write(&dir.join(PROJECT_FILE), &p)?;
+        Ok(before)
     }
 
     pub fn create_run(&mut self, project: &Id, new: NewRun) -> Result<Id> {
