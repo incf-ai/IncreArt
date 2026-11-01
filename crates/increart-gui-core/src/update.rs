@@ -3103,7 +3103,10 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
             }
             state.tab = t;
             fv_sync(state);
-            relist(state)
+            match fv_follow_source(state) {
+                Some(fx) => fx,
+                None => relist(state),
+            }
         }
         Msg::InboxTab(t) => {
             if t != state.inbox_tab {
@@ -6126,7 +6129,10 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
             state.output_tab = t;
             state.output_compare = None;
             fv_sync(state);
-            relist_if_stale(state)
+            match fv_follow_source(state) {
+                Some(fx) => fx,
+                None => relist_if_stale(state),
+            }
         }
         Msg::OutputSource(s) => {
             // on the Folder tab, the folder view goes to the source too
@@ -6137,6 +6143,7 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
             state.output_source = s;
             state.output_notice = false;
             if state.tab == Tab::OutputLibrary && state.output_tab == OutputTab::Folder {
+                state.fv_source = Some(state.output_source.clone());
                 return fv_go(state, path, true);
             }
             vec![]
@@ -8574,6 +8581,21 @@ fn source_path(state: &AppState, source: &OutputSource) -> PathBuf {
     }
 }
 
+/// On the Output library's Folder tab: goes to the source selected (in
+/// the Grid, say) if the folder view hasn't been there since it changed.
+/// None when it stays where it was.
+fn fv_follow_source(state: &mut AppState) -> Option<Vec<Effect>> {
+    if state.tab != Tab::OutputLibrary
+        || state.output_tab != OutputTab::Folder
+        || state.fv_source.as_ref() == Some(&state.output_source)
+    {
+        return None;
+    }
+    state.fv_source = Some(state.output_source.clone());
+    let path = source_path(state, &state.output_source);
+    Some(fv_go(state, path, true))
+}
+
 /// Navigates the folder view (within its root), keeping the selected project
 /// in sync when it enters one.
 fn fv_go(state: &mut AppState, path: PathBuf, push_history: bool) -> Vec<Effect> {
@@ -8665,6 +8687,8 @@ fn fv_open(state: &mut AppState, name: &str) -> Vec<Effect> {
             if let Some(s) = source {
                 state.output_source = s;
             }
+            // the folder view is at this source already
+            state.fv_source = Some(state.output_source.clone());
             update(state, Msg::OutputSelect(Some(img)))
         }
         EntryKind::Image(_) => {

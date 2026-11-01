@@ -2572,6 +2572,57 @@ fn scale_dialog_resizes_the_generate_size_and_resolution_rows() {
 }
 
 #[test]
+fn output_library_folder_tab_goes_to_the_source_picked_in_the_grid() {
+    let mut h = Harness::new();
+    h.send(Msg::NewProject(PathBuf::new()));
+    h.send(Msg::CommitRename);
+    h.settle();
+    let project = h.state.project.clone().unwrap();
+    Library_::steal(&h.root).write_two(&project);
+    h.rt.run(Effect::Rescan);
+    h.settle();
+    let imgs: Vec<_> = h.state.review_queue().iter().map(|o| o.image.clone()).collect();
+    for (i, v) in imgs.iter().zip([Verdict::Good, Verdict::Neutral]) {
+        h.send(Msg::ReviewLink(h.state.output_link(i).unwrap().path.clone(), Some(v)));
+        h.settle();
+    }
+    let dir = h.state.index.project(&project).unwrap().dir.clone();
+    let smart_dir = PathBuf::from("collections/smart/by project").join(dir.strip_prefix("projects").unwrap());
+
+    // the project picked in the Grid, then the Folder tab: its smart folder
+    h.send(Msg::Tab(Tab::OutputLibrary));
+    h.send(Msg::OutputSource(OutputSource::Project(project.clone())));
+    h.send(Msg::OutputTab(OutputTab::Folder));
+    h.settle();
+    assert_eq!(h.state.folder_view.path, smart_dir);
+    assert_eq!(h.state.folder_view.shown().len(), 2);
+
+    // somewhere else in the folder view; Grid and back, the source the
+    // same: it stays where it was left
+    h.send(Msg::FvGo(PathBuf::from("collections/smart")));
+    h.settle();
+    h.send(Msg::OutputTab(OutputTab::Grid));
+    h.send(Msg::OutputTab(OutputTab::Folder));
+    h.settle();
+    assert_eq!(h.state.folder_view.path, PathBuf::from("collections/smart"));
+
+    // another source in the Grid, then another tab and back to the
+    // Output library on its Folder tab: the new source
+    h.send(Msg::OutputTab(OutputTab::Grid));
+    h.send(Msg::OutputSource(OutputSource::Smart(Smart::Transparent)));
+    h.send(Msg::OutputTab(OutputTab::Folder));
+    h.send(Msg::Tab(Tab::Projects));
+    h.send(Msg::OutputSource(OutputSource::Project(project.clone())));
+    h.send(Msg::Tab(Tab::OutputLibrary));
+    h.settle();
+    assert_eq!(h.state.folder_view.path, smart_dir);
+    // Back: where it was before
+    h.send(Msg::FvBack);
+    h.settle();
+    assert_eq!(h.state.folder_view.path, PathBuf::from("collections/smart/transparent"));
+}
+
+#[test]
 fn output_library_folder_view_collections_and_smart_folders() {
     let mut h = Harness::new();
     h.send(Msg::NewProject(PathBuf::new()));
