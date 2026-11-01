@@ -2051,7 +2051,7 @@ pub fn lib_op(lib: &mut Library, op: LibOp) -> Result<OpOk, String> {
             }
             Ok(OpOk::Done)
         }
-        LibOp::ReviewOutputs { links, undo } => review_outputs(lib, links, undo, vec![]),
+        LibOp::ReviewOutputs { links, undo } => review_outputs(lib, links, undo, vec![], vec![]),
         LibOp::CollectAndReview { folder, new, images, links } => {
             let folder = match new {
                 Some(name) => lib.create_folder(Tree::Collections, &folder, Some(&name)).map_err(err)?,
@@ -2064,9 +2064,28 @@ pub fn lib_op(lib: &mut Library, op: LibOp) -> Result<OpOk, String> {
                     collected.push(at);
                 }
             }
-            review_outputs(lib, links, false, collected)
+            review_outputs(lib, links, false, collected, vec![])
+        }
+        LibOp::TagAndReview { tags, links } => {
+            let mut tagged = vec![];
+            for (project, images) in tags {
+                for (image, before) in lib.set_tags(&project, &images).map_err(err)? {
+                    tagged.push((project.clone(), image, before));
+                }
+            }
+            review_outputs(lib, links, false, vec![], tagged)
         }
         LibOp::UndoReview(u) => {
+            let mut by_project: crate::state::ProjectTags = vec![];
+            for (project, image, before) in u.tags {
+                match by_project.iter_mut().find(|(p, _)| *p == project) {
+                    Some((_, v)) => v.push((image, before)),
+                    None => by_project.push((project, vec![(image, before)])),
+                }
+            }
+            for (project, images) in by_project {
+                lib.set_tags(&project, &images).map_err(err)?;
+            }
             // a link removed since (by hand) is fine: it's gone either way
             for at in &u.collected {
                 if let Ok(rel) = at.strip_prefix("collections")
@@ -2075,18 +2094,20 @@ pub fn lib_op(lib: &mut Library, op: LibOp) -> Result<OpOk, String> {
                     lib.delete_node(Tree::Collections, rel).map_err(err)?;
                 }
             }
-            review_outputs(lib, u.links, true, vec![])
+            review_outputs(lib, u.links, true, vec![], vec![])
         }
     }
 }
 
 /// Rates output links (each to its own verdict) for `ReviewOutputs` and
-/// the like; `collected`: the collection links made with it, for undo.
+/// the like; `collected`, `tagged`: the collection links made and the tags
+/// set with it, for undo.
 fn review_outputs(
     lib: &mut Library,
     links: Vec<(PathBuf, Option<Verdict>)>,
     undo: bool,
     collected: Vec<PathBuf>,
+    tagged: Vec<(Id, Id, Vec<String>)>,
 ) -> Result<OpOk, String> {
     let mut done = vec![];
     for (link, verdict) in links {
@@ -2097,11 +2118,11 @@ fn review_outputs(
             Ok(new) => done.push((new, previous)),
             // nothing rated: an error as before (the collection links stay,
             // made); else keep what was
-            Err(e) if done.is_empty() && collected.is_empty() => return Err(err(e)),
-            Err(e) => return Ok(OpOk::Reviewed { done, collected, undo, error: Some(err(e)) }),
+            Err(e) if done.is_empty() && collected.is_empty() && tagged.is_empty() => return Err(err(e)),
+            Err(e) => return Ok(OpOk::Reviewed { done, collected, tagged, undo, error: Some(err(e)) }),
         }
     }
-    Ok(OpOk::Reviewed { done, collected, undo, error: None })
+    Ok(OpOk::Reviewed { done, collected, tagged, undo, error: None })
 }
 
 /// Keeps the ideas (inbox ones move to the top of the input library) and

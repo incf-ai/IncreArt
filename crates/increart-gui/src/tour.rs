@@ -54,8 +54,11 @@ const SCENES: &[&str] = &[
     "13d-review-compare-input",
     "13e-review-collect",
     "13f-review-image-menu",
+    "13g-review-tag",
     "14-output-library-rejected",
     "14b-output-library-compare",
+    // after 13g (its tags)
+    "14c-output-library-tags",
     "15-generate-img2img",
     "16-servers-opening",
     "17-prompt-history",
@@ -1279,6 +1282,49 @@ impl Tour {
                 Msg::ReviewScope(None),
                 Msg::ReviewView(ReviewView::Single),
             ],
+            "13g-review-tag" => {
+                // two images tagged (sky on both, wide shot on one), then
+                // the Tag… modal on both: sky on both, wide shot on one,
+                // bad hands added, rated bad
+                use increart_gui_core::TagDialog;
+                let mut v = vec![
+                    Msg::ContinueWithoutServers,
+                    Msg::Tab(Tab::Review),
+                    Msg::ReviewScope(None),
+                    Msg::ReviewView(ReviewView::Single),
+                ];
+                let q: Vec<_> = st.review_queue().iter().take(2).map(|o| o.image.clone()).collect();
+                if let [a, b] = &q[..] {
+                    for (img, tags) in [(a, &["sky", "wide shot"][..]), (b, &["sky"][..])] {
+                        let mut d = TagDialog::new(vec![img.clone()], true);
+                        d.changes.extend(tags.iter().map(|t| (t.to_string(), true)));
+                        v.extend([Msg::TagImages(vec![img.clone()]), Msg::EditTags(d), Msg::ConfirmTags]);
+                    }
+                    let mut d = TagDialog::new(q.clone(), true);
+                    d.changes.insert("bad hands".into(), true);
+                    d.verdict = Some(increart_core::Verdict::Bad);
+                    v.extend([Msg::TagImages(q.clone()), Msg::EditTags(d)]);
+                }
+                v
+            }
+            "14c-output-library-tags" => {
+                // filtered by 13g's "sky", its first image in the lineage
+                // view with its tags
+                let f = increart_gui_core::OutputFilter {
+                    tags: vec!["sky".into()],
+                    ..increart_gui_core::OutputPreset::All.filter()
+                };
+                let mut v = vec![
+                    Msg::Tab(Tab::OutputLibrary),
+                    Msg::OutputTab(OutputTab::Grid),
+                    Msg::OutputSource(increart_gui_core::OutputSource::AllProjects),
+                    Msg::OutputPreset(increart_gui_core::OutputPreset::All),
+                    Msg::OutputFilter(f),
+                ];
+                let tagged = st.all_outputs().into_iter().find(|o| st.image_tags(&o.image).len() > 1);
+                v.push(Msg::OutputSelect(tagged.map(|o| o.image.clone())));
+                v
+            }
             "13e-review-collect" => {
                 // Add to collection… on the first image in Review
                 let mut v = vec![
@@ -1933,6 +1979,8 @@ impl Tour {
                 Msg::CloseScale,
                 Msg::Preview(None),
                 Msg::CancelNewProject,
+                Msg::CancelCollect,
+                Msg::CancelTags,
             ]);
             out.extend(self.msgs(name, st));
             if name.starts_with("54")

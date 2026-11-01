@@ -312,6 +312,26 @@ fn whole_library_through_the_api() {
     assert_eq!(inputs[0].original_name, None);
     lib.set_cover(&project, Some(ImageRef::output(outs[0].0.clone()))).unwrap();
 
+    // ---- tags: normalized, one write for several images, the old ones back
+    let tag = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+    let before = lib
+        .set_tags(
+            &project,
+            &[
+                (outs[0].0.clone(), tag(&[" bad  hands ", "Sky", "sky", "", "night,wide"])),
+                (outs[1].0.clone(), tag(&["sky"])),
+            ],
+        )
+        .unwrap();
+    assert_eq!(before, [(outs[0].0.clone(), vec![]), (outs[1].0.clone(), vec![])]);
+    let tags = |lib: &Library| lib.scan().unwrap().project(&project).unwrap().project.tags.clone();
+    assert_eq!(tags(&lib)[&outs[0].0], ["bad hands", "night", "Sky", "wide"]);
+    let before = lib.set_tags(&project, &[(outs[0].0.clone(), vec![])]).unwrap();
+    assert_eq!(before[0].1, ["bad hands", "night", "Sky", "wide"]);
+    assert_eq!(tags(&lib).keys().collect::<Vec<_>>(), [&outs[1].0], "none: removed");
+    assert!(lib.set_tags(&project, &[(increart_core::id::Id::new(t0(), 99), tag(&["x"]))]).is_err(), "not an image");
+    lib.set_tags(&project, &[(outs[1].0.clone(), vec![])]).unwrap();
+
     // ---- collections, output → input
     lib.create_folder(Tree::Collections, Path::new(""), Some("best")).unwrap();
     let in_coll = lib.add_to_collection(Path::new("best"), &outs[0].0).unwrap();

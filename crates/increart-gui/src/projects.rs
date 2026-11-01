@@ -1171,12 +1171,18 @@ pub fn preview_window(ctx: &egui::Context, st: &AppState, tex: &mut Textures, ke
     // opened from the contact sheet: ↑ / ↓ move between its style rows
     let rows = at.is_some() && st.tab == Tab::Review && st.review_view == increart_gui_core::ReviewView::Sheet;
     let keys = ctx.input(|i| {
-        let k = |key| i.key_pressed(key);
+        let k = |key| i.key_pressed(key) && st.tagging.is_none();
         let actual = k(egui::Key::Num1) && !rates;
         (k(egui::Key::Plus) || k(egui::Key::Equals), k(egui::Key::Minus), k(egui::Key::Num0), actual)
     });
     let used = out.len();
-    if at.is_some() {
+    // the Tag… modal over it: its keys are its own
+    let tagging = st.tagging.is_some();
+    let output = st.output_link(img).is_some();
+    if output && !tagging {
+        ctx.input(|i| crate::review::tag_keys(i, vec![img.clone()], out));
+    }
+    if at.is_some() && !tagging {
         ctx.input(|i| {
             if i.key_pressed(egui::Key::ArrowLeft) {
                 out.push(Msg::PreviewStep(-1));
@@ -1308,8 +1314,11 @@ pub fn preview_window(ctx: &egui::Context, st: &AppState, tex: &mut Textures, ke
                         popup
                             .align(egui::RectAlign::TOP_END)
                             .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
-                            .show(|ui| preview_keys(ui, at.is_some(), rows, rates));
+                            .show(|ui| preview_keys(ui, at.is_some(), rows, rates, output));
                         ui.separator();
+                        if output && ui.small_button(ph::TAG).on_hover_text("tag it…   L").clicked() {
+                            picked.push(Msg::TagImages(vec![img.clone()]));
+                        }
                         if rates {
                             // right to left, so Good · Neutral · Bad read left to right
                             ui.menu_button(ph::DOTS_THREE, |ui| {
@@ -1381,7 +1390,7 @@ pub fn preview_window(ctx: &egui::Context, st: &AppState, tex: &mut Textures, ke
 /// The large preview's keyboard shortcuts, those that apply: stepping when
 /// it was opened from a list (between style rows on the contact sheet),
 /// rating and using when that list is outputs.
-fn preview_keys(ui: &mut egui::Ui, steps: bool, rows: bool, rates: bool) {
+fn preview_keys(ui: &mut egui::Ui, steps: bool, rows: bool, rates: bool, tags: bool) {
     let mut groups: Vec<(&str, Vec<(&str, &str)>)> = vec![];
     if steps {
         let mut nav = vec![("← / →", "previous / next image")];
@@ -1404,6 +1413,9 @@ fn preview_keys(ui: &mut egui::Ui, steps: bool, rows: bool, rates: bool) {
                 ("I", "new idea from this image"),
             ],
         ));
+    }
+    if tags {
+        groups.push(("Tag", vec![("L", "tag this image…"), ("Shift+L", "the last tags again")]));
     }
     let mut zoom = vec![("wheel  + / −", "zoom in / out"), ("0", "fit the window")];
     if !rates {

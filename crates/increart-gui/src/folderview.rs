@@ -429,6 +429,21 @@ fn entry_menu(ui: &mut egui::Ui, st: &AppState, e: &FvEntry, out: &mut Vec<Msg>)
                     ui.close();
                 }
             }
+            // every image selected
+            let images: Vec<_> = fv
+                .shown()
+                .iter()
+                .filter(|x| fv.selected.contains(&x.name))
+                .filter_map(|x| match &x.kind {
+                    EntryKind::Image(i) if st.output_link(i).is_some() => Some(i.clone()),
+                    _ => None,
+                })
+                .collect();
+            if !images.is_empty() {
+                let n = images.len();
+                let label = if n == 1 { "Tag…".to_string() } else { format!("Tag the {n} selected…") };
+                item(ui, out, ic(ph::TAG, &label), Msg::TagImages(images));
+            }
             item(ui, out, ic(ph::EXPORT, "Export…"), Msg::OpenExport(vec![img.clone()], e.name.clone()));
         }
         _ => {}

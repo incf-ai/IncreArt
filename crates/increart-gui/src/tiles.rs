@@ -184,6 +184,10 @@ pub fn menu(ui: &mut egui::Ui, st: &AppState, image: &ImageRef, out: &mut Vec<Ms
         ui.close();
     }
     crate::review::add_to_collection(ui, st, &st.picked, out);
+    if ui.button(ic(ph::TAG, &format!("Tag the {n} picked…   L"))).clicked() {
+        out.push(Msg::TagImages(st.picked.clone()));
+        ui.close();
+    }
     if ui.button(ic(ph::EXPORT, &format!("Export the {n} picked…"))).clicked() {
         out.push(Msg::OpenExport(st.picked.clone(), format!("{n} images")));
         ui.close();
@@ -196,11 +200,12 @@ pub fn menu(ui: &mut egui::Ui, st: &AppState, image: &ImageRef, out: &mut Vec<Ms
     ui.weak("this image");
 }
 
-/// Ctrl+A picks everything shown, Esc drops the picks, T tiles them; with
+/// Ctrl+A picks everything shown, Esc drops the picks, T tiles them, L
+/// tags them (Shift+L: the last tags again); with
 /// picks, 1/2/3 (G/N/B) rate them all. True when the rating keys were
 /// taken.
 pub fn keys(ui: &egui::Ui, st: &AppState, out: &mut Vec<Msg>) -> bool {
-    if ui.ctx().egui_wants_keyboard_input() || st.preview.is_some() || st.tile.is_some() {
+    if ui.ctx().egui_wants_keyboard_input() || st.preview.is_some() || st.tile.is_some() || st.tagging.is_some() {
         return false;
     }
     ui.input(|i| {
@@ -216,6 +221,7 @@ pub fn keys(ui: &egui::Ui, st: &AppState, out: &mut Vec<Msg>) -> bool {
         if i.key_pressed(Key::T) && !i.modifiers.command {
             out.push(Msg::OpenTile);
         }
+        crate::review::tag_keys(i, st.picked.clone(), out);
         for (keys, v) in [
             ([Key::Num1, Key::G], Verdict::Good),
             ([Key::Num2, Key::N], Verdict::Neutral),

@@ -1578,7 +1578,7 @@ costs ~4% speed and frees ~21 GiB: see Measurements so far).
     edited/<idea-id>/                 cropped and marked copies (Crop / mark…), hidden
   projects/                           folder tree (see Project folders)
     <folder>/…/<project>/             output queue + output library (per project)
-      project.rsn                     project id + source idea ids (+ cover image, image titles)
+      project.rsn                     project id + source idea ids (+ cover image, image titles and tags)
       runs/<run-id>/run.rsn
       runs/<run-id>/generation.log    what the engine did for it and its servers' answers (Job window ▸ Generation log)
       unreviewed/<run-id>_r<rev>_s<seed>.png  link → output_images/<image-id>.png
@@ -3178,14 +3178,17 @@ the keys and mouse buttons go through that view's own history instead.
   goes on to the next one (closing after the last); on the contact sheet it
   steps on; in the Output library it stays. A use that opens another tab
   closes the preview. The bar's ⌨ button opens a popover listing the keys
-  that apply there (navigate, rate, use, zoom, close). The keys are listed in a collapsible
+  that apply there (navigate, rate, use, tag, zoom, close). For an output
+  image, `L` tags it (the Tag… modal over the preview; the bar's tag button
+  too) and `Shift+L` puts the last tags on it again. The keys are listed in a collapsible
   **Keys** section pinned to the bottom of the scope panel: `1`/`2`/`3` (or `G`/`N`/`B`) =
   good/neutral/bad, arrows = next/prev, `Home`/`End` = the oldest / newest
   (on the contact sheet the row's first / last seed, with `Ctrl` the
   sheet's; Grid, the strip and the sheet scroll to the image moved to),
   `Space` = toggle grid/single, `C` =
   compare with pinned, `E` = new edit run from this image, `R` = add to input
-  library as ref, `I` = new idea from this image, `4` / `Ctrl+Z` = undo last review
+  library as ref, `I` = new idea from this image, `L` = tag it (the picks:
+  them), `Shift+L` = the last tags again, `4` / `Ctrl+Z` = undo last review
   action.
 - **Add to collection…** (Review's right-click on an image, in every view,
   and on the picks for them all) opens a modal: the image (or the picks, as
@@ -3201,16 +3204,23 @@ the keys and mouse buttons go through that view's own history instead.
   already); not rated, they stay in the queue and there's nothing to undo.
   The rating keys don't work in the modal. Elsewhere it's the **Add to
   collection ▸** submenu.
+- **Tag…** (`L`, or the right-click menus) opens the Tag… modal on the
+  image, or on the picks, with a **Rate** row as in Add to collection… that
+  starts on "don't rate" every time (see Output library → **Tags**). Tagging
+  alone doesn't review: the images stay in the queue. Rated, they leave it,
+  and one undo takes back the tags and the rating.
 - **Output library**: the place for finished work, as opposed to Projects
   (where images are made and triaged). Tabs **Grid** (default) · **Folder**
   · **Discarded**.
   The full-height left panel has, from the top: the **search** box with
-  **in Images | Project names** under it (Images: an image's title or its
-  run's prompt; Project names: narrows the "by project" smart folder to the
+  **in Images | Project names** under it (Images: an image's title or tags,
+  or its run's prompt; Project names: narrows the "by project" smart folder to the
   projects and folders whose names have the text, a matching folder with all
   it holds, every folder shown open; switching takes the text along), the
-  filters (has refs, has alpha, and one checkbox per rating: good, neutral,
-  bad, unreviewed), then the **sources**, collections first and smart folders
+  filters (has refs, has alpha, one checkbox per rating: good, neutral,
+  bad, unreviewed, and **Tags**: the source's tags with their counts, a
+  click shows only the images with it, several only those with all of them,
+  **clear** lets go), then the **sources**, collections first and smart folders
   after; whichever is picked drives Grid and Folder. In Grid, a **Keys**
   list is pinned at the bottom of that panel; ← → ↑ ↓ and `Home`/`End`
   select the previous / next / first / last image (shown in the lineage
@@ -3229,7 +3239,8 @@ the keys and mouse buttons go through that view's own history instead.
     link, deleting a collection removes its links (asks first), the images
     keep their rating and project.
   - **Smart folders** (virtual, read-only, computed): by date (per day, from
-    the image IDs), by source idea, by project, transparent. **By project**
+    the image IDs), by source idea, by project, by tag (one folder per tag
+    of a kept image, by name), transparent. **By project**
     follows the project tree: folders and subfolders (each a source of its
     own, its projects' kept images together) down to the projects, showing
     only what has kept images; in the side panel a folder holding the
@@ -3239,8 +3250,8 @@ the keys and mouse buttons go through that view's own history instead.
   - **Grid**: flat grid of the source's images, under a row of preset tabs
     that each count the source's images: **Kept** (good + neutral, the
     default) · **Good** · **Rejected** (bad) · **Unreviewed** · **All**.
-    Clicking a tab replaces the filters (sets its ratings, clears text, refs
-    and alpha); once the filters are changed the tab shows "•" and clicking
+    Clicking a tab replaces the filters (sets its ratings, clears text, refs,
+    alpha and tags); once the filters are changed the tab shows "•" and clicking
     it again resets them. **Rejected** follows the source, with **Delete these
     N rejected…** (asks first; they go to **Discarded**, their seeds not
     generated again) and right-click to re-rate, send back to Review or
@@ -3251,14 +3262,15 @@ the keys and mouse buttons go through that view's own history instead.
     lineage view (source idea → parent ← image → children) with its recipe
     (as in Review's info panel);
     double-click any of its images for the full-size preview. Right-click: change rating, back to Review, edit run, → input ref, → new
-    idea, add to collection, **Use as project cover** (the Projects Grid then
+    idea, **Tag…**, add to collection, **Use as project cover** (the Projects Grid then
     shows it instead of the best-rated image), **Export…**, show project, copy
     path. **Export these N…** exports everything shown.
   - **Folder**: the file-manager component over the collections tree, with a
     `smart/` folder at the top for the smart folders. Collections behave like
     folders (new, rename, move, copy, delete); images in them can be moved or
     copied between collections, removed (`Del`), opened (Grid + lineage),
-    exported, or set as project cover. Its location and history are its own.
+    tagged (**Tag…**, every image selected), exported, or set as project
+    cover. Its location and history are its own.
     Projects → Folder stays the place for project files (`runs/`,
     `unreviewed/`, triage); the "by project" smart folder is the project
     tree with only the kept images.
@@ -3282,6 +3294,38 @@ the keys and mouse buttons go through that view's own history instead.
     image ID → title; not copied when a project's setup is copied), show
     in the image's tooltip and lineage view, and are matched by the text
     filter (and the reference picker's).
+  - **Tags**: an output image can have any number of tags ("bad hands",
+    "wallpaper"), to find it by and to keep sets you can't sort by rating
+    or project. Stored per project in `project.rsn` (`tags`, image ID →
+    tags, as titles), each trimmed, a comma splitting two, one of each
+    whatever the case (the first spelling kept), sorted. They stay through
+    re-rating and while an image is discarded. Ideas' tags are their own;
+    the modal offers them to pick from, nothing more.
+    - **Tag…** opens a modal on the image, or the picks when it's one of
+      them: the Grid's and Review's right-click menus (the picks' menu:
+      **Tag the N picked…**), **Tag…** in the folder views (every image
+      selected), `L` (the selected image or the picks; Review's image; the
+      preview's), or + by the image's tags in the lineage view and Review's
+      info panel. In it: the image or a stack of the picks, a field, and
+      the tags: first those changed or on any of the images, then the
+      library's others (ideas' too), most used first. What's typed narrows
+      the list; Enter adds it (commas for several; a tag already there in
+      another case is that one). Each row's tick shows what Apply makes it:
+      on all the images, on none, or on some ("2 / 5", left as each image
+      has it); a click (or ↑ / ↓ then Space or Enter) goes some → all →
+      none → some, all ⇄ none. Changed rows are coloured, with "added",
+      "new" or "taken off". Opened in Review it has the **Rate** row.
+      Enter with nothing typed applies; the button says what happens
+      ("Add “bad hands” · 12 images · rate bad"). Apply is one library op
+      (one `project.rsn` write per project), leaves the selection, the
+      filters and Review's place as they were, and goes on Review's undo:
+      `4` / `Ctrl+Z` in Review or the preview takes it back (and its
+      rating), as for a rating made here.
+    - `Shift+L` **tag again**: the last Apply's changes on the selected
+      image or the picks, without the modal (never its rating); a message
+      says what ("+bad hands on 3 images"), and it's undone the same way.
+    - The lineage view and Review's info panel list an image's tags as
+      chips: × takes one off (undone the same way), + opens the modal.
   - **Show outputs (N kept)** jumps here from a project or project folder:
     the right-click menus of project tiles, the project tree's projects and
     folders, the button at the top left of a hovered tile, the Projects

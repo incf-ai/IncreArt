@@ -2685,7 +2685,7 @@ fn output_library_folder_view_collections_and_smart_folders() {
     assert_eq!(names(&h), ["smart"]);
     h.send(Msg::FvOpen("smart".into()));
     h.settle();
-    assert_eq!(names(&h), ["by date", "by source idea", "by project", "transparent"]);
+    assert_eq!(names(&h), ["by date", "by source idea", "by project", "by tag", "transparent"]);
     h.send(Msg::FvGo(PathBuf::from("collections/smart/by project")));
     h.settle();
     h.send(Msg::FvOpen(names(&h)[0].clone()));
@@ -7498,4 +7498,134 @@ fn review_adds_to_a_collection_and_rates_in_one_step() {
     assert!(h.state.collect.is_some());
     h.send(Msg::CancelCollect);
     assert!(h.state.collect.is_none());
+}
+
+#[test]
+fn output_images_are_tagged_in_a_modal_filtered_and_undone() {
+    let mut h = Harness::new();
+    h.send(Msg::NewProject(PathBuf::new()));
+    h.send(Msg::CommitRename);
+    h.settle();
+    let project = h.state.project.clone().unwrap();
+    Library_::steal(&h.root).write_two(&project);
+    h.rt.run(Effect::Rescan);
+    h.settle();
+    h.send(Msg::Tab(Tab::Review));
+    let imgs: Vec<_> = h.state.review_queue().iter().map(|o| o.image.clone()).collect();
+    assert_eq!(imgs.len(), 2);
+    let tags = |h: &Harness, i: usize| h.state.image_tags(&imgs[i]).to_vec();
+    let rows = |h: &Harness| h.state.tag_rows(h.state.tagging.as_ref().unwrap());
+
+    // both: typed tags, normalized; not rated, they stay in the queue
+    h.send(Msg::TagImages(imgs.clone()));
+    let mut d = h.state.tagging.clone().unwrap();
+    assert!(d.rate, "opened in Review: it can rate");
+    assert_eq!(d.verdict, None, "don't rate, every time");
+    d.field = " bad  hands, Sky".into();
+    d.add_typed(&h.state.known_tags());
+    assert!(d.field.is_empty());
+    h.send(Msg::EditTags(d));
+    let undos = h.state.review_undo.len();
+    h.send(Msg::ConfirmTags);
+    h.settle();
+    assert!(h.state.tagging.is_none());
+    assert_eq!(tags(&h, 0), ["bad hands", "Sky"]);
+    assert_eq!(tags(&h, 1), ["bad hands", "Sky"]);
+    assert_eq!(h.state.review_queue().len(), 2);
+    assert_eq!(h.state.review_undo.len(), undos + 1, "tagging can be undone");
+
+    // one: sky off (typed in another case it's the same tag) and rated bad,
+    // in one step: it leaves the queue; one undo takes back both
+    h.send(Msg::TagImages(vec![imgs[0].clone()]));
+    let mut d = h.state.tagging.clone().unwrap();
+    d.field = "sky".into();
+    h.send(Msg::EditTags(d.clone()));
+    let r = rows(&h);
+    assert_eq!(
+        r.iter().map(|r| (r.tag.as_str(), r.have)).collect::<Vec<_>>(),
+        [("Sky", 1)],
+        "narrowed by what's typed"
+    );
+    d.toggle(&r[0]);
+    d.field.clear();
+    d.verdict = Some(Verdict::Bad);
+    h.send(Msg::EditTags(d));
+    h.send(Msg::ConfirmTags);
+    h.settle();
+    assert_eq!(tags(&h, 0), ["bad hands"]);
+    assert_eq!(h.state.output_link(&imgs[0]).unwrap().verdict, Some(Verdict::Bad));
+    assert_eq!(h.state.review_queue().len(), 1);
+    h.send(Msg::UndoReview);
+    h.settle();
+    assert_eq!(tags(&h, 0), ["bad hands", "Sky"]);
+    assert_eq!(h.state.output_link(&imgs[0]).unwrap().verdict, None);
+
+    // a chip's ×; then a mixed row cycles some → all → none → some
+    h.send(Msg::RemoveTag(imgs[1].clone(), "sky".into()));
+    h.settle();
+    assert_eq!(tags(&h, 1), ["bad hands"]);
+    h.send(Msg::TagImages(imgs.clone()));
+    let mut d = h.state.tagging.clone().unwrap();
+    let sky = rows(&h).into_iter().find(|r| r.tag == "Sky").unwrap();
+    assert_eq!((sky.have, sky.change), (1, None));
+    let mut seen = vec![];
+    for _ in 0..3 {
+        let r = TagRow { change: d.changes.get("Sky").copied(), ..sky.clone() };
+        d.toggle(&r);
+        seen.push(d.changes.get("Sky").copied());
+    }
+    assert_eq!(seen, [Some(true), Some(false), None]);
+    // nothing changed: Apply does nothing
+    h.send(Msg::EditTags(d));
+    let undos = h.state.review_undo.len();
+    h.send(Msg::ConfirmTags);
+    h.settle();
+    assert_eq!(h.state.review_undo.len(), undos);
+
+    // Shift+L: the last tags applied (+sky −… here: the "sky off" one)
+    assert_eq!(h.state.tag_last.as_ref().unwrap().remove, ["Sky"]);
+    h.send(Msg::TagAgain(vec![imgs[0].clone()]));
+    h.settle();
+    assert_eq!(tags(&h, 0), ["bad hands"]);
+
+    // the Output library: filtered by tags (all of them), the text filter
+    // finds them, and the smart folder holds the kept ones
+    h.send(Msg::TagImages(vec![imgs[1].clone()]));
+    let mut d = h.state.tagging.clone().unwrap();
+    d.field = "wide".into();
+    h.send(Msg::EditTags(d));
+    h.send(Msg::ConfirmTags);
+    h.settle();
+    h.send(Msg::ReviewLink(h.state.output_link(&imgs[1]).unwrap().path.clone(), Some(Verdict::Good)));
+    h.settle();
+    h.send(Msg::Tab(Tab::OutputLibrary));
+    h.send(Msg::OutputPreset(OutputPreset::All));
+    let shown = |h: &Harness| h.state.output_source_images().iter().map(|o| o.image.clone()).collect::<Vec<_>>();
+    let mut f = h.state.output_filter.clone();
+    f.tags = vec!["Bad Hands".into()];
+    h.send(Msg::OutputFilter(f.clone()));
+    assert_eq!(shown(&h).len(), 2);
+    f.tags.push("wide".into());
+    h.send(Msg::OutputFilter(f));
+    assert_eq!(shown(&h), [imgs[1].clone()]);
+    h.send(Msg::OutputPreset(OutputPreset::All));
+    assert!(h.state.output_filter.tags.is_empty(), "a preset tab clears them");
+    let mut f = h.state.output_filter.clone();
+    f.text = "wid".into();
+    h.send(Msg::OutputFilter(f));
+    assert_eq!(shown(&h), [imgs[1].clone()]);
+    assert_eq!(h.state.kept_tags(), [("bad hands".to_string(), 1), ("wide".to_string(), 1)]);
+    h.send(Msg::OutputPreset(OutputPreset::Kept));
+    h.send(Msg::OutputSource(OutputSource::Smart(Smart::Tag("WIDE".into()))));
+    assert_eq!(shown(&h), [imgs[1].clone()]);
+    assert_eq!(h.state.smart_children(Path::new("by tag")).unwrap(), ["bad hands", "wide"]);
+    assert_eq!(h.state.smart_images(Path::new("by tag/wide")).len(), 1);
+
+    // the modal is only for output images; Cancel closes it
+    h.send(Msg::TagImages(vec![]));
+    assert!(h.state.tagging.is_none());
+    h.send(Msg::TagImages(vec![imgs[0].clone()]));
+    assert!(!h.state.tagging.as_ref().unwrap().rate, "outside Review: no rating");
+    h.send(Msg::CancelTags);
+    assert!(h.state.tagging.is_none());
 }
