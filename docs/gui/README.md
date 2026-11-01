@@ -52,6 +52,8 @@ size (regenerate it with `scripts/make-gui-gallery.sh`).
 | [13-review-compare](13-review-compare.webp) | Review → A/B compare: B (the next image, which ← → change) on the left, A pinned on the right with its own buttons |
 | [13c-review-compare-with](13c-review-compare-with.webp) | Review → Compare with… (`Shift+C`): the picker opens on the image's references, its project's next; one click makes it A |
 | [13d-review-compare-input](13d-review-compare-input.webp) | Review → A/B compare against an input image: A has no rating buttons, the keys rate B |
+| [13e-review-collect](13e-review-collect.webp) | Review → Add to collection…: the image, a filter, the collections (none yet here: New collection…), and Rate (don't rate / good / neutral / bad), the button saying what happens |
+| [13f-review-image-menu](13f-review-image-menu.webp) | Review → right-click on the image: pick, copy, crop, compare, the uses with their keys, Add to collection…, Tag… (`L`), Show in file manager |
 | [13g-review-tag](13g-review-tag.webp) | Review → Tag… (`L`) on two images: the stack, the field (Enter adds what's typed), the tags ticked on all, on some ("1 / 2") or added, the Rate row (here bad), the button saying what happens |
 | [14-output-library-rejected](14-output-library-rejected.webp) | Output library → Grid → Rejected tab: the source's bad images, with Delete these N rejected… (they go to Discarded, under the project's `discarded/`) |
 | [14b-output-library-compare](14b-output-library-compare.webp) | Output library → right-click → Compare with…: the Grid shows A beside the selected image (B), ←/→ step B |

@@ -130,6 +130,18 @@ Review → A/B compare against an input image: A has no rating buttons, the keys
 
 ![13d-review-compare-input](13d-review-compare-input.webp)
 
+## 13e-review-collect
+
+Review → Add to collection…: the image, a filter, the collections (none yet here: New collection…), and Rate (don't rate / good / neutral / bad), the button saying what happens
+
+![13e-review-collect](13e-review-collect.webp)
+
+## 13f-review-image-menu
+
+Review → right-click on the image: pick, copy, crop, compare, the uses with their keys, Add to collection…, Tag… (`L`), Show in file manager
+
+![13f-review-image-menu](13f-review-image-menu.webp)
+
 ## 13g-review-tag
 
 Review → Tag… (`L`) on two images: the stack, the field (Enter adds what's typed), the tags ticked on all, on some ("1 / 2") or added, the Rate row (here bad), the button saying what happens

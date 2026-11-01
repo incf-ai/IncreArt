@@ -1979,6 +1979,7 @@ impl Tour {
                 Msg::CloseScale,
                 Msg::Preview(None),
                 Msg::CancelNewProject,
+                Msg::CancelCollect,
                 Msg::CancelTags,
             ]);
             out.extend(self.msgs(name, st));
