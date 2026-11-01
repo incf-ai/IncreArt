@@ -1633,7 +1633,7 @@ fn sd_unchanged(state: &AppState, sd: &[ServerConfig]) -> bool {
     !sd.is_empty()
         && state.engine_running
         && state.background.is_none()
-        && state.servers_opened_with.as_ref() == Some(&state.config.sdserver)
+        && state.servers_opened_with.as_ref() == Some(&state.config.programs.sd_server)
         && state.servers.len() == sd.len()
         && state.servers.iter().zip(sd).all(|(s, c)| s.config.as_ref() == Some(c))
 }
@@ -1641,7 +1641,7 @@ fn sd_unchanged(state: &AppState, sd: &[ServerConfig]) -> bool {
 /// The servers in use that opening `sd` stops: those it doesn't have, and
 /// started ones when the sd-server settings changed since.
 fn stopping_for(state: &AppState, sd: &[ServerConfig]) -> Vec<String> {
-    let same_settings = state.servers_opened_with.as_ref() == Some(&state.config.sdserver);
+    let same_settings = state.servers_opened_with.as_ref() == Some(&state.config.programs.sd_server);
     let kept = |c: &ServerConfig| sd.contains(c) && (same_settings || !c.is_started());
     state.servers.iter().filter(|s| !s.config.as_ref().is_some_and(kept)).map(server_label).collect()
 }
@@ -1717,8 +1717,8 @@ fn kobold_version_once(state: &AppState) -> Vec<Effect> {
 /// settings' **List devices** asks again).
 fn list_devices_once(state: &AppState) -> Vec<Effect> {
     match &state.phase {
-        Phase::Servers(d) if d.devices.is_none() && !state.config.sdserver.binary.is_empty() => {
-            vec![Effect::ListDevices(state.config.sdserver.binary.clone())]
+        Phase::Servers(d) if d.devices.is_none() && !state.config.programs.sd_server.binary.is_empty() => {
+            vec![Effect::ListDevices(state.config.programs.sd_server.binary.clone())]
         }
         _ => vec![],
     }
@@ -1956,7 +1956,7 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
                 state.phase = Phase::Main;
                 if state.engine_running {
                     fx.push(Effect::StartEngine {
-                        shared: state.config.sdserver.clone(),
+                        shared: state.config.programs.sd_server.clone(),
                         order: state.config.job_order,
                         skip_ram_check: state.config.skip_ram_check,
                     });
@@ -2012,7 +2012,7 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
             state.phase = Phase::Main;
             if sw.stopped && state.engine_running {
                 return vec![Effect::StartEngine {
-                    shared: state.config.sdserver.clone(),
+                    shared: state.config.programs.sd_server.clone(),
                     order: state.config.job_order,
                     skip_ram_check: state.config.skip_ram_check,
                 }];
@@ -2161,7 +2161,7 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
             };
             save_config(state)
         }
-        Msg::ListDevices => vec![Effect::ListDevices(state.config.sdserver.binary.clone())],
+        Msg::ListDevices => vec![Effect::ListDevices(state.config.programs.sd_server.binary.clone())],
         Msg::Devices(r) => {
             let Phase::Servers(d) = &mut state.phase else { return vec![] };
             // the wizard starts with every GPU ticked
@@ -2201,7 +2201,8 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
             let binary = kobold_binary(state);
             let models_dir = state
                 .config
-                .sdserver
+                .programs
+                .sd_server
                 .model_dirs
                 .first()
                 .cloned()
@@ -2338,7 +2339,7 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
                     k.error = None;
                     let files = plan.downloads.clone();
                     k.downloading = Some((plan, WizardDownload::default()));
-                    let model_dirs = state.config.sdserver.model_dirs.clone();
+                    let model_dirs = state.config.programs.sd_server.model_dirs.clone();
                     vec![Effect::DownloadModels { dir: k.models_dir.trim().to_string(), files, model_dirs }]
                 }
             }
@@ -2364,10 +2365,10 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
             d.draft.servers = plan.servers;
             // the recipe's files are under the model directory
             let c = &mut state.config;
-            c.koboldcpp = k.binary.trim().to_string();
+            c.programs.koboldcpp = k.binary.trim().to_string();
             let open = k.open;
-            if !c.sdserver.model_dirs.contains(&dir) {
-                c.sdserver.model_dirs.push(dir);
+            if !c.programs.sd_server.model_dirs.contains(&dir) {
+                c.programs.sd_server.model_dirs.push(dir);
             }
             match c.recipes.iter_mut().find(|r| r.name == plan.recipe.name) {
                 Some(r) => *r = plan.recipe,
@@ -2457,10 +2458,10 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
                     worked: false,
                 })
                 .collect();
-            state.servers_opened_with = Some(state.config.sdserver.clone());
+            state.servers_opened_with = Some(state.config.programs.sd_server.clone());
             fx.push(Effect::OpenServers {
                 servers: sd,
-                shared: state.config.sdserver.clone(),
+                shared: state.config.programs.sd_server.clone(),
                 attempt: state.open_attempt,
             });
             fx
@@ -2544,7 +2545,7 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
                 state.engine_running = true;
                 state.servers.iter_mut().for_each(|s| (s.idle_since, s.worked) = (None, false));
                 return vec![Effect::StartEngine {
-                    shared: state.config.sdserver.clone(),
+                    shared: state.config.programs.sd_server.clone(),
                     order: state.config.job_order,
                     skip_ram_check: state.config.skip_ram_check,
                 }];
@@ -2590,7 +2591,7 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
             state.engine_running = true;
             state.servers.iter_mut().for_each(|s| (s.idle_since, s.worked) = (None, false));
             vec![Effect::StartEngine {
-                shared: state.config.sdserver.clone(),
+                shared: state.config.programs.sd_server.clone(),
                 order: state.config.job_order,
                 skip_ram_check: state.config.skip_ram_check,
             }]
@@ -5711,7 +5712,7 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
                 project,
                 form: f.clone(),
                 preset,
-                model_dirs: state.config.sdserver.model_dirs.clone(),
+                model_dirs: state.config.programs.sd_server.model_dirs.clone(),
                 queue: state.engine_running,
                 queued,
             };
@@ -6217,12 +6218,12 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
                     _ => None,
                 },
                 PickKind::ModelDir(i) => {
-                    let dirs = &state.config.sdserver.model_dirs;
+                    let dirs = &state.config.programs.sd_server.model_dirs;
                     dirs.get(i).or(dirs.last()).filter(|d| !d.trim().is_empty()).map(PathBuf::from)
                 }
                 // the current file's folder, else the model directory
                 PickKind::RecipeFile(slot) => {
-                    let dirs = &state.config.sdserver.model_dirs;
+                    let dirs = &state.config.programs.sd_server.model_dirs;
                     let on_disk = state.recipe_editor.as_ref().and_then(|e| {
                         let file = e.rows.get(e.selected)?.preset.files.get(*MODEL_SLOTS.get(slot)?)?;
                         increart_core::config::model_file_on_disk(file, dirs)
@@ -6231,7 +6232,7 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
                 }
                 // the current LoRA's folder, else the loras folder
                 PickKind::RecipeLora(i) => {
-                    let dirs = &state.config.sdserver.model_dirs;
+                    let dirs = &state.config.programs.sd_server.model_dirs;
                     let on_disk = state.recipe_editor.as_ref().and_then(|e| {
                         let lora = e.rows.get(e.selected)?.preset.loras.get(i)?;
                         increart_core::config::model_file_on_disk(&lora.file, dirs)
@@ -6243,7 +6244,9 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
                             .or_else(|| dirs.first().map(PathBuf::from))
                     })
                 }
-                PickKind::SdServerBinary => PathBuf::from(&state.config.sdserver.binary).parent().map(PathBuf::from),
+                PickKind::SdServerBinary => {
+                    PathBuf::from(&state.config.programs.sd_server.binary).parent().map(PathBuf::from)
+                }
                 PickKind::KoboldBinary => PathBuf::from(kobold_binary(state)).parent().map(PathBuf::from),
                 PickKind::ExportDir => state.export.as_ref().map(|e| PathBuf::from(&e.dest)),
                 PickKind::Pe(f) => match state.pe.editor.as_ref().map(|e| &e.draft.run) {
@@ -6289,7 +6292,7 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
                         },
                         _ => String::new(),
                     };
-                    let models = state.config.sdserver.model_dirs.first().map(PathBuf::from);
+                    let models = state.config.programs.sd_server.model_dirs.first().map(PathBuf::from);
                     PathBuf::from(p).parent().map(PathBuf::from).filter(|p| p.is_dir()).or(models)
                 }
                 PickKind::WizardBinary | PickKind::WizardModels => match &state.phase {
@@ -6372,7 +6375,7 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
                 let config = state.config_path.clone();
                 vec![Effect::SaveBugReport {
                     config,
-                    model_dirs: state.config.sdserver.model_dirs.clone(),
+                    model_dirs: state.config.programs.sd_server.model_dirs.clone(),
                     validations: state.validations_path.clone(),
                     dest,
                 }]
@@ -6384,7 +6387,7 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
                 vec![]
             }
             PickKind::SdServerBinary => {
-                let mut c = state.config.sdserver.clone();
+                let mut c = state.config.programs.sd_server.clone();
                 c.binary = paths.remove(0).to_string_lossy().into_owned();
                 update(state, Msg::SetSdServer(c))
             }
@@ -6435,7 +6438,8 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
                 fx
             }
             PickKind::RecipeFile(slot) => {
-                let id = increart_core::config::model_file_id(&paths.remove(0), &state.config.sdserver.model_dirs);
+                let id =
+                    increart_core::config::model_file_id(&paths.remove(0), &state.config.programs.sd_server.model_dirs);
                 let Some(e) = &mut state.recipe_editor else { return vec![] };
                 let Some(name) = MODEL_SLOTS.get(slot) else { return vec![] };
                 match id {
@@ -6450,7 +6454,8 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
                 vec![]
             }
             PickKind::RecipeLora(i) => {
-                let id = increart_core::config::lora_file_id(&paths.remove(0), &state.config.sdserver.model_dirs);
+                let id =
+                    increart_core::config::lora_file_id(&paths.remove(0), &state.config.programs.sd_server.model_dirs);
                 let Some(e) = &mut state.recipe_editor else { return vec![] };
                 match id {
                     Ok(id) => {
@@ -6464,7 +6469,7 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
                 vec![]
             }
             PickKind::ModelDir(i) => {
-                let mut c = state.config.sdserver.clone();
+                let mut c = state.config.programs.sd_server.clone();
                 let dir = paths.remove(0).to_string_lossy().into_owned();
                 if let Some(d) = c.model_dirs.get_mut(i) {
                     *d = dir;
@@ -6488,14 +6493,14 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
             vec![]
         }
         Msg::SetSdServer(c) => {
-            if c == state.config.sdserver {
+            if c == state.config.programs.sd_server {
                 return vec![];
             }
-            state.config.sdserver = c;
+            state.config.programs.sd_server = c;
             save_config(state)
         }
         Msg::SetKoboldBinary(b) => {
-            if b == state.config.koboldcpp {
+            if b == state.config.programs.koboldcpp {
                 return vec![];
             }
             state.config.set_koboldcpp(b);
@@ -7512,7 +7517,7 @@ fn queue_sweep(state: &mut AppState, confirmed: bool) -> Vec<Effect> {
     let op = LibOp::CreateSweep {
         project,
         runs,
-        model_dirs: state.config.sdserver.model_dirs.clone(),
+        model_dirs: state.config.programs.sd_server.model_dirs.clone(),
         queue: state.engine_running,
         queued,
     };
@@ -8195,7 +8200,7 @@ fn start_with_up(state: &mut AppState, progress: &[ServerProgress]) -> Vec<Effec
     state.engine_running = true;
     state.servers.iter_mut().for_each(|s| (s.idle_since, s.worked) = (None, false));
     vec![Effect::StartEngine {
-        shared: state.config.sdserver.clone(),
+        shared: state.config.programs.sd_server.clone(),
         order: state.config.job_order,
         skip_ram_check: state.config.skip_ram_check,
     }]

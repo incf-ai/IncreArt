@@ -1042,7 +1042,7 @@ impl Tour {
                 vec![Msg::EditKoboldWizard(k), Msg::EditKoboldWizard(first)]
             }
             "54b-server-wizard-sd-server" => {
-                let mut c = st.config.sdserver.clone();
+                let mut c = st.config.programs.sd_server.clone();
                 c.binary = self.stand_in().to_string_lossy().into();
                 vec![Msg::SetSdServer(c), Msg::WizardKobold(false)]
             }
@@ -1526,7 +1526,7 @@ impl Tour {
             }
             "16-servers-opening" => {
                 // A Start server whose binary never answers: stays "starting".
-                let mut c = st.config.sdserver.clone();
+                let mut c = st.config.programs.sd_server.clone();
                 c.binary = self.stand_in().to_string_lossy().into();
                 vec![Msg::OpenServerDialog, Msg::SetSdServer(c), Msg::OpenPreset(0)]
             }

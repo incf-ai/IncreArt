@@ -592,7 +592,7 @@ fn kobold_fields(
             }
             if on != k.chat.is_some() {
                 // the wizard's Qwen3-VL, if it's downloaded
-                k.chat = on.then(|| match tiers::chat_files(&st.config.sdserver.model_dirs) {
+                k.chat = on.then(|| match tiers::chat_files(&st.config.programs.sd_server.model_dirs) {
                     Some((model, mmproj)) => KoboldChat { model, mmproj, context: 8192 },
                     None => KoboldChat::default(),
                 });
@@ -1089,7 +1089,7 @@ fn settings(ui: &mut egui::Ui, st: &AppState, d: &ServerDialog, out: &mut Vec<Ms
     kobold_binary_field(ui, st, d, out);
     ui.add_space(12.0);
     ui.label(RichText::new(ic(ph::PLAY_CIRCLE, "sd-server")).strong());
-    let mut c = st.config.sdserver.clone();
+    let mut c = st.config.programs.sd_server.clone();
     sdserver_binary_field(ui, &mut c, out);
     ui.horizontal(|ui| {
         let label = if d.devices.is_some() { "List again" } else { "List devices (sd-server --list-devices)" };
@@ -1120,7 +1120,7 @@ fn settings(ui: &mut egui::Ui, st: &AppState, d: &ServerDialog, out: &mut Vec<Ms
     };
     ui.weak(format!("KoboldCpp loads the recipes' model files from these too; the setup wizard downloads {wizard}."));
     leave_running_field(ui, &mut c);
-    if c != st.config.sdserver {
+    if c != st.config.programs.sd_server {
         out.push(Msg::SetSdServer(c));
     }
     let mut check = !st.config.skip_ram_check;
@@ -1154,13 +1154,13 @@ fn settings(ui: &mut egui::Ui, st: &AppState, d: &ServerDialog, out: &mut Vec<Ms
 /// The shared KoboldCpp binary, and its version (checked when the field is
 /// left, or a file picked).
 fn kobold_binary_field(ui: &mut egui::Ui, st: &AppState, d: &ServerDialog, out: &mut Vec<Msg>) {
-    let mut b = st.config.koboldcpp.clone();
+    let mut b = st.config.programs.koboldcpp.clone();
     let fallback = increart_gui_core::kobold_binary(st);
     let left = ui.horizontal(|ui| {
         ui.add_sized([56.0, 18.0], egui::Label::new("Binary"));
         path_edit(ui, &mut b, &fallback, PickKind::KoboldBinary, out)
     });
-    if b != st.config.koboldcpp {
+    if b != st.config.programs.koboldcpp {
         out.push(Msg::SetKoboldBinary(b));
     }
     if left.inner.lost_focus() {
@@ -1203,7 +1203,7 @@ fn image_model_line(ui: &mut egui::Ui, out: &mut Vec<Msg>) {
 fn command_line(ui: &mut egui::Ui, st: &AppState, i: usize, s: &ServerConfig) {
     let log_dir = increart_gui_core::runtime::log_dir();
     let state_dir = log_dir.parent().unwrap_or(&log_dir);
-    let Some(line) = increart_core::launcher::command_line(s, &st.config.sdserver, state_dir) else { return };
+    let Some(line) = increart_core::launcher::command_line(s, &st.config.programs.sd_server, state_dir) else { return };
     egui::CollapsingHeader::new(ic(ph::TERMINAL, "Command line")).id_salt(("command line", i)).show(
         ui,
         |ui| match line {
@@ -1237,11 +1237,11 @@ fn leave_running_field(ui: &mut egui::Ui, c: &mut increart_core::config::SdServe
 
 /// The sd-server binary, model directories and leave-running setting.
 fn sdserver_fields(ui: &mut egui::Ui, st: &AppState, out: &mut Vec<Msg>) {
-    let mut c = st.config.sdserver.clone();
+    let mut c = st.config.programs.sd_server.clone();
     sdserver_binary_field(ui, &mut c, out);
     models_field(ui, &mut c, MODEL_DIRS_NOTE, out);
     leave_running_field(ui, &mut c);
-    if c != st.config.sdserver {
+    if c != st.config.programs.sd_server {
         out.push(Msg::SetSdServer(c));
     }
 }
@@ -1250,9 +1250,9 @@ fn sdserver_fields(ui: &mut egui::Ui, st: &AppState, out: &mut Vec<Msg>) {
 /// has it too, with `note` saying what they mean there): saved as it's
 /// changed.
 pub(crate) fn models_list(ui: &mut egui::Ui, st: &AppState, note: &str, out: &mut Vec<Msg>) {
-    let mut c = st.config.sdserver.clone();
+    let mut c = st.config.programs.sd_server.clone();
     models_field(ui, &mut c, note, out);
-    if c != st.config.sdserver {
+    if c != st.config.programs.sd_server {
         out.push(Msg::SetSdServer(c));
     }
 }
@@ -1348,7 +1348,7 @@ fn server_wizard(ctx: &egui::Context, st: &AppState, d: &ServerDialog, out: &mut
         if let Some(k) = &d.kobold {
             let binary = increart_gui_core::update::wizard_binary(k);
             let version = d.kobold_version.as_ref().filter(|(b, _)| *b == binary).map(|(_, r)| r);
-            kobold_wizard(ui, k, version, &st.config.sdserver.model_dirs, out);
+            kobold_wizard(ui, k, version, &st.config.programs.sd_server.model_dirs, out);
             return;
         }
         ui.label("IncreArt runs sd-server on your GPUs, one server per GPU.");

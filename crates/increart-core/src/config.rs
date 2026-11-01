@@ -37,7 +37,13 @@ pub struct Config {
     pub editor: String,
     /// Model presets for the Generate panel (recipe + model files + sampling
     /// defaults).
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    /// Written as `model_presets` (older files: `recipes`).
+    #[serde(
+        rename = "model_presets",
+        alias = "recipes",
+        deserialize_with = "rsnfmt::any_names",
+        skip_serializing_if = "Vec::is_empty"
+    )]
     pub recipes: Vec<RecipePreset>,
     /// Named server setups, chosen in the startup dialog.
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -45,13 +51,16 @@ pub struct Config {
     /// The preset chosen last time (preselected in the startup dialog).
     #[serde(serialize_with = "crate::rsnfmt::bare", skip_serializing_if = "Option::is_none")]
     pub last_preset: Option<String>,
+    /// The programs the app starts: sd-server's settings and KoboldCpp.
     #[serde(skip_serializing_if = "is_default")]
-    pub sdserver: SdServerConfig,
-    /// The KoboldCpp binary new KoboldCpp entries and the setup wizard
-    /// start (empty: the one in use, see `known_koboldcpp`; found at
-    /// startup if none is); entries keep their own.
-    #[serde(skip_serializing_if = "String::is_empty")]
-    pub koboldcpp: String,
+    pub programs: Programs,
+    /// Older configs' `sdserver`: read, moved into `programs` by
+    /// [`normalize`](Self::normalize), never written.
+    #[serde(rename = "sdserver", skip_serializing)]
+    pub old_sdserver: Option<rsnfmt::AnyName<SdServerConfig>>,
+    /// Older configs' `koboldcpp`: as `old_sdserver`.
+    #[serde(rename = "koboldcpp", skip_serializing)]
+    pub old_koboldcpp: Option<String>,
     /// How long the servers may go quiet (see [`Timeouts`]).
     #[serde(skip_serializing_if = "is_default")]
     pub timeouts: Timeouts,
@@ -145,7 +154,7 @@ pub struct Config {
 /// A model preset: which sd-server recipe and model files to load, and the
 /// Generate panel's defaults for it.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(rename = "RecipePreset")]
+#[serde(rename = "ModelPreset")]
 pub struct RecipePreset {
     pub name: String,
     pub recipe: String,
@@ -280,6 +289,8 @@ pub fn builtin_recipes() -> Vec<RecipePreset> {
 #[serde(rename = "ServerPreset")]
 pub struct ServerPreset {
     pub name: String,
+    /// Written as [`crate::serverwire`] says.
+    #[serde(with = "crate::serverwire")]
     pub servers: Vec<ServerConfig>,
 }
 
@@ -607,28 +618,16 @@ impl Config {
     /// The shared KoboldCpp binary set: the entries that started with the
     /// one before (a preset saved before KoboldCpp was found) follow it.
     pub fn set_koboldcpp(&mut self, binary: String) {
-        use crate::kobold::KoboldRun;
-        use crate::pe::PeRun;
-        let old = self.koboldcpp.trim().to_string();
+        let old = self.programs.koboldcpp.trim().to_string();
         if !old.is_empty() {
-            for s in self.server_presets.iter_mut().flat_map(|p| &mut p.servers) {
-                let b = match s {
-                    ServerConfig::Kobold(k) => match &mut k.run {
-                        KoboldRun::Start { binary, .. } => binary,
-                        _ => continue,
-                    },
-                    ServerConfig::Chat(c) => match &mut c.run {
-                        PeRun::KoboldCpp { binary, .. } => binary,
-                        _ => continue,
-                    },
-                    _ => continue,
-                };
+            for b in self.koboldcpp_binaries() {
                 if b.trim() == old {
                     *b = binary.clone();
                 }
             }
         }
-        self.koboldcpp = binary;
+        self.programs.koboldcpp = binary;
+        self.fill_koboldcpp();
     }
 
     /// The presets' chat servers, one per process (the first preset's name
@@ -639,7 +638,7 @@ impl Config {
         use crate::kobold::KoboldRun;
         use crate::pe::PeRun;
         let set = |b: &str| (!b.trim().is_empty()).then(|| b.trim().to_string());
-        set(&self.koboldcpp)
+        set(&self.programs.koboldcpp)
             .or_else(|| {
                 self.chat_servers().into_iter().find_map(|c| match &c.run {
                     PeRun::KoboldCpp { binary, .. } => set(binary),
@@ -711,9 +710,22 @@ impl Config {
     }
 }
 
+/// The programs the app starts, shared by every preset's entries.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename = "Programs", default)]
+pub struct Programs {
+    #[serde(skip_serializing_if = "is_default")]
+    pub sd_server: SdServerConfig,
+    /// The KoboldCpp binary new KoboldCpp entries and the setup wizard
+    /// start (empty: the one in use, see `known_koboldcpp`; found at
+    /// startup if none is), and the one an entry naming none starts.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub koboldcpp: String,
+}
+
 /// Settings shared by every sd-server.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename = "SdServer", default)]
+#[serde(rename = "SdServerSettings", default)]
 pub struct SdServerConfig {
     pub binary: String,
     /// `--model-dir` roots, in order.
@@ -1018,8 +1030,50 @@ impl Config {
         }
     }
 
+    /// Writes the config, entries' KoboldCpp binaries that are the shared
+    /// one left out (read back from it, see [`fill_koboldcpp`](Self::fill_koboldcpp)).
     pub fn save(&self, path: &Path) -> Result<()> {
-        rsnfmt::write(path, self)
+        let shared = self.programs.koboldcpp.trim();
+        if shared.is_empty() {
+            return rsnfmt::write_compact(path, self);
+        }
+        let mut c = self.clone();
+        for b in c.koboldcpp_binaries() {
+            if b.trim() == shared {
+                b.clear();
+            }
+        }
+        rsnfmt::write_compact(path, &c)
+    }
+
+    /// The KoboldCpp binaries the presets' started entries name.
+    fn koboldcpp_binaries(&mut self) -> impl Iterator<Item = &mut String> {
+        use crate::kobold::KoboldRun;
+        use crate::pe::PeRun;
+        self.server_presets.iter_mut().flat_map(|p| &mut p.servers).filter_map(|s| match s {
+            ServerConfig::Kobold(k) => match &mut k.run {
+                KoboldRun::Start { binary, .. } => Some(binary),
+                KoboldRun::Connect { .. } => None,
+            },
+            ServerConfig::Chat(c) => match &mut c.run {
+                PeRun::KoboldCpp { binary, .. } => Some(binary),
+                PeRun::Connect { .. } => None,
+            },
+            _ => None,
+        })
+    }
+
+    /// Entries naming no KoboldCpp binary start the shared one (when set).
+    pub fn fill_koboldcpp(&mut self) {
+        let shared = self.programs.koboldcpp.trim().to_string();
+        if shared.is_empty() {
+            return;
+        }
+        for b in self.koboldcpp_binaries() {
+            if b.trim().is_empty() {
+                *b = shared.clone();
+            }
+        }
     }
 
     /// Applies the load rules: old PE servers moved into the server presets,
@@ -1029,8 +1083,15 @@ impl Config {
     /// default (the first marked, else the first).
     pub fn normalize(&mut self) -> Vec<String> {
         let mut warnings = Vec::new();
+        if let Some(s) = self.old_sdserver.take() {
+            self.programs.sd_server = s.0;
+        }
+        if let Some(k) = self.old_koboldcpp.take() {
+            self.programs.koboldcpp = k;
+        }
         warnings.extend(self.move_pe_servers());
         let said = self.full_paths();
+        self.fill_koboldcpp();
         if !said.is_empty() {
             warnings.push(format!(
                 "paths made full (a relative one is taken from the folder IncreArt started in): {}",
@@ -1078,13 +1139,13 @@ impl Config {
     /// as `old → new`.
     pub fn full_paths(&mut self) -> Vec<String> {
         let mut said = vec![];
-        make_full(&mut self.sdserver.binary, full_binary, &mut said);
-        make_full(&mut self.koboldcpp, full_binary, &mut said);
-        for d in &mut self.sdserver.model_dirs {
+        make_full(&mut self.programs.sd_server.binary, full_binary, &mut said);
+        make_full(&mut self.programs.koboldcpp, full_binary, &mut said);
+        for d in &mut self.programs.sd_server.model_dirs {
             make_full(d, full_path, &mut said);
         }
         let mut seen = vec![];
-        self.sdserver.model_dirs.retain(|d| {
+        self.programs.sd_server.model_dirs.retain(|d| {
             !d.is_empty() && !seen.contains(d) && {
                 seen.push(d.clone());
                 true
@@ -1236,7 +1297,7 @@ mod tests {
         assert_eq!(c.chat_servers().len(), 2, "one per process");
         // written the new way, and read back the same
         let out = rsnfmt::to_string(&c).unwrap();
-        assert!(out.contains("Chat(") && !out.contains("servers: []") && !out.contains("server:"), "{out}");
+        assert!(out.contains("OpenAiChat {") && !out.contains("servers: []") && !out.contains("server:"), "{out}");
         assert_eq!(rsnfmt::from_str::<Config>(&out).unwrap(), c);
         assert!(c.clone().normalize().is_empty(), "moved once");
     }
@@ -1459,7 +1520,7 @@ mod tests {
 
     #[test]
     fn server_presets() {
-        let c: Config = rsnfmt::from_str(
+        let mut c: Config = rsnfmt::from_str(
             r#"Config {
                 server_presets: [
                     ServerPreset { name: "Both GPUs", servers: [
@@ -1473,13 +1534,168 @@ mod tests {
             }"#,
         )
         .unwrap();
+        c.normalize();
+        assert_eq!(c.programs.sd_server.binary, "/opt/sd-server", "the old field read");
         let both = c.preset("Both GPUs").unwrap();
         assert_eq!(both.servers[0].base_url(), "http://127.0.0.1:1234");
         assert_eq!(both.servers[1].device(), "ROCm1");
         assert_eq!(c.preset("Remote").unwrap().servers[0].base_url(), "http://10.0.0.2:1234");
-        assert_eq!(c.sdserver.args, ["--fa", "--conditioning-cache-size", "32"], "defaults for missing fields");
+        assert_eq!(
+            c.programs.sd_server.args,
+            ["--fa", "--conditioning-cache-size", "32"],
+            "defaults for missing fields"
+        );
         let again: Config = rsnfmt::from_str(&rsnfmt::to_string(&c).unwrap()).unwrap();
         assert_eq!(again, c);
+    }
+
+    /// Entries named for their program, read into the app's types; older
+    /// configs' entries the same; saved in the new form, shared binaries
+    /// left out.
+    #[test]
+    fn server_entries_as_written() {
+        use crate::kobold::{KoboldChat, KoboldRun, KoboldServer};
+        use crate::pe::{GpuRuntime, PeDevice, PeRun, PeServer, PeStart};
+        let new = r#"Config {
+            model_presets: [ModelPreset { name: "m", recipe: "r", files: {}, steps: 20, cfg: 2 }],
+            server_presets: [ServerPreset { name: "p", servers: [
+                SdServer { name: "sd0", run: Launch { port: 1234, gpu: Rocm(0), args: ["--offload-to-cpu"] } },
+                SdServer { name: "box", run: Connect { url: "http://b:1", gpu: Backend("MTL0") } },
+                KoboldCpp {
+                    name: "k",
+                    run: Launch { port: 5001, gpu: Vulkan([1, 2]) },
+                    chat: Chat { model: "/m/chat.gguf", context: 8192 },
+                    swap: true,
+                },
+                KoboldCpp { name: "pe", run: Launch { binary: "/own/kcpp", port: 5003, gpu: Cpu(8) }, images: false, when: AtOpen },
+                OpenAiChat { name: "far", url: "http://far:1" },
+            ] }],
+            programs: Programs { sd_server: SdServerSettings { binary: "/opt/sd-server" }, koboldcpp: "/opt/kcpp" },
+        }"#;
+        let old = r#"Config {
+            recipes: [RecipePreset { name: "m", recipe: "r", files: {}, steps: 20, cfg: 2 }],
+            server_presets: [ServerPreset { name: "p", servers: [
+                Start { name: "sd0", port: 1234, device: "ROCm0", args: ["--offload-to-cpu"] },
+                Connect { name: "box", url: "http://b:1", device: "MTL0" },
+                Kobold(KoboldServer {
+                    name: "k",
+                    run: Start { binary: "/opt/kcpp", port: 5001, device: Gpu { devices: [1, 2] } },
+                    chat: KoboldChat { model: "/m/chat.gguf", context: 8192 },
+                    swap: true,
+                }),
+                Chat(PeServer {
+                    name: "pe",
+                    run: KoboldCpp { binary: "/own/kcpp", host: "127.0.0.1", port: 5003, device: Cpu { threads: 8 } },
+                    start: AtLaunch,
+                }),
+                Chat(PeServer { name: "far", run: Connect { url: "http://far:1" } }),
+            ] }],
+            sdserver: SdServer { binary: "/opt/sd-server" },
+            koboldcpp: "/opt/kcpp",
+        }"#;
+        let read = |text: &str| {
+            let mut c: Config = rsnfmt::from_str(text).unwrap();
+            c.normalize();
+            c
+        };
+        let c = read(new);
+        assert_eq!(c, read(old), "the old form reads the same");
+        assert_eq!(c.recipes[0].name, "m");
+        assert_eq!(c.programs.sd_server.binary, "/opt/sd-server");
+        let s = &c.server_presets[0].servers;
+        let l = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert_eq!(
+            s[0],
+            ServerConfig::Start {
+                name: "sd0".into(),
+                host: "127.0.0.1".into(),
+                port: 1234,
+                device: "ROCm0".into(),
+                args: l(&["--offload-to-cpu"])
+            }
+        );
+        assert_eq!(s[1], ServerConfig::Connect { name: "box".into(), url: "http://b:1".into(), device: "MTL0".into() });
+        assert_eq!(
+            s[2],
+            ServerConfig::Kobold(KoboldServer {
+                name: "k".into(),
+                run: KoboldRun::Start {
+                    binary: "/opt/kcpp".into(),
+                    config: String::new(),
+                    host: "127.0.0.1".into(),
+                    port: 5001,
+                    device: PeDevice::Gpu { devices: vec![1, 2], runtime: GpuRuntime::Vulkan },
+                    args: vec![],
+                },
+                chat: Some(KoboldChat { model: "/m/chat.gguf".into(), mmproj: String::new(), context: 8192 }),
+                swap: true,
+            }),
+            "the shared binary filled in"
+        );
+        let ServerConfig::Chat(PeServer { run: PeRun::KoboldCpp { binary, device, .. }, start, .. }) = &s[3] else {
+            panic!("{:?}", s[3])
+        };
+        assert_eq!((binary.as_str(), device, *start), ("/own/kcpp", &PeDevice::Cpu { threads: 8 }, PeStart::AtLaunch));
+        assert!(matches!(
+            &s[4],
+            ServerConfig::Chat(PeServer { run: PeRun::Connect { .. }, start: PeStart::OnDemand, .. })
+        ));
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.rsn");
+        c.save(&path).unwrap();
+        let out = fs::read_to_string(&path).unwrap();
+        for want in [
+            "model_presets: [",
+            "ModelPreset {",
+            "SdServer {",
+            "gpu: Rocm(0)",
+            r#"gpu: Backend("MTL0")"#,
+            "gpu: Vulkan([1, 2])",
+            "gpu: Cpu(8)",
+            "chat: Chat {",
+            "images: false",
+            "when: AtOpen",
+            "OpenAiChat {",
+            "programs: Programs {",
+            r#"binary: "/own/kcpp""#,
+        ] {
+            assert!(out.contains(want), "{want} in {out}");
+        }
+        for old in ["recipes", "Start {", "Kobold(", "PeServer", "Some(", "127.0.0.1"] {
+            assert!(!out.contains(old), "{old} in {out}");
+        }
+        assert_eq!(out.matches(r#""/opt/kcpp""#).count(), 1, "the shared binary only in programs: {out}");
+        assert_eq!(Config::load(&path).unwrap().0, c, "read back the same");
+    }
+
+    #[test]
+    fn server_entries_that_cant_be() {
+        let entry = |e: &str| {
+            let text = format!("Config {{ server_presets: [ServerPreset {{ name: \"p\", servers: [{e}] }}] }}");
+            rsnfmt::from_str::<Config>(&text).map(|_| ()).map_err(|e| format!("{:?}", e.kind))
+        };
+        assert!(
+            entry(r#"SdServer { name: "a", run: Launch { port: 1, gpu: Rocm([0, 1]) } }"#)
+                .unwrap_err()
+                .contains("one device")
+        );
+        assert!(
+            entry(r#"KoboldCpp { name: "a", run: Launch { port: 1, gpu: Backend("X") } }"#)
+                .unwrap_err()
+                .contains("Backend")
+        );
+        assert!(
+            entry(r#"KoboldCpp { name: "a", run: Launch { port: 1 }, when: AtOpen }"#)
+                .unwrap_err()
+                .contains("chat-only")
+        );
+        assert!(
+            entry(r#"KoboldCpp { name: "a", run: Connect { url: "u" }, images: false }"#)
+                .unwrap_err()
+                .contains("OpenAiChat")
+        );
+        assert!(entry(r#"SdServer { name: "a", run: Launch { port: 1, gpu: Cuda(1) } }"#).is_ok());
     }
 
     #[test]
@@ -1569,8 +1785,8 @@ mod tests {
         .unwrap();
         let w = c.normalize();
         assert!(w.iter().any(|w| w.contains(&format!("models → {}", abs("models")))), "{w:?}");
-        assert_eq!(c.sdserver.model_dirs, [abs("models")], "the empty and the repeated one dropped");
-        assert_eq!(c.sdserver.binary, "sd-server");
+        assert_eq!(c.programs.sd_server.model_dirs, [abs("models")], "the empty and the repeated one dropped");
+        assert_eq!(c.programs.sd_server.binary, "sd-server");
         let ServerConfig::Kobold(k) = &c.server_presets[0].servers[0] else { panic!() };
         let crate::kobold::KoboldRun::Start { binary, .. } = &k.run else { panic!() };
         assert_eq!(

@@ -37,6 +37,7 @@ impl App {
     ) -> std::io::Result<App> {
         let ctx = cc.egui_ctx.clone();
         let rt = Runtime::new(move || ctx.request_repaint())?;
+        crate::watchdog::start(&cc.egui_ctx);
         let mut st = AppState::new(config, config_path);
         st.gpu_runtime = increart_core::pe::GpuRuntime::likely();
         st.validations_path = increart_core::validation::path();
@@ -997,17 +998,26 @@ impl Drop for App {
         for fx in update(&mut self.st, Msg::FlushDrafts) {
             self.rt.save_now(fx);
         }
-        self.rt.shutdown(self.st.config.sdserver.leave_running);
+        self.rt.shutdown(self.st.config.programs.sd_server.leave_running);
     }
 }
 
 /// "draft saved" / "unsaved changes…" next to a form.
 pub fn draft_note(ui: &mut egui::Ui, st: &AppState, dirty: Option<f64>) {
-    if dirty.is_some() {
-        ui.weak(ic(ph::PENCIL_SIMPLE, "unsaved changes…"));
-    } else if st.draft_saved.is_some_and(|t| st.now - t < 3.0) {
-        ui.weak(ic(ph::CHECK, "draft saved"));
-    }
+    let unsaved = ic(ph::PENCIL_SIMPLE, "unsaved changes…");
+    // as wide whatever it says (or nothing), so a row it is in keeps its layout
+    let widest = egui::WidgetText::from(unsaved.as_str())
+        .into_galley(ui, Some(egui::TextWrapMode::Extend), f32::INFINITY, egui::TextStyle::Body)
+        .size()
+        .x;
+    ui.scope(|ui| {
+        ui.set_min_width(widest);
+        if dirty.is_some() {
+            ui.weak(unsaved);
+        } else if st.draft_saved.is_some_and(|t| st.now - t < 3.0) {
+            ui.weak(ic(ph::CHECK, "draft saved"));
+        }
+    });
 }
 
 pub trait Counts {
@@ -1030,6 +1040,7 @@ impl eframe::App for App {
     /// Runs even while the window is minimized or hidden (no `ui` then), so
     /// the clock, the runtime's messages and the notification alerts go on.
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        crate::watchdog::beat();
         // a clock of our own: egui's input time stops while hidden
         self.dispatch(Msg::Tick(self.started.elapsed().as_secs_f64()));
         for m in self.rt.poll() {

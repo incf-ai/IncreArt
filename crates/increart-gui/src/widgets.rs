@@ -452,12 +452,16 @@ pub fn dialog_footer<L, R>(
 ) -> (L, R) {
     use egui::{Align, Layout};
     const GAP: f32 = 16.0;
+    // room a stacked row needs over a fit to go back across, so a width
+    // changing a little (a count, a status) doesn't flip it back and forth
+    const SLACK: f32 = 48.0;
     // the two sides' widths as last drawn decide this frame's layout
     let id = ui.next_auto_id().with("dialog_footer");
-    let (was_tools, was_actions) = ui.data(|d| d.get_temp::<(f32, f32)>(id)).unwrap_or_default();
+    let (was_tools, was_actions, was_across) =
+        ui.data(|d| d.get_temp::<(f32, f32, bool)>(id)).unwrap_or((0.0, 0.0, true));
     let width = ui.available_width();
-    let fits = |t: f32, a: f32| t == 0.0 || t + GAP + a <= width;
-    let across = fits(was_tools, was_actions);
+    let fits = |t: f32, a: f32, across: bool| t == 0.0 || t + GAP + a + if across { 0.0 } else { SLACK } <= width;
+    let across = fits(was_tools, was_actions, was_across);
     let ((l, wt), (r, wa)) = if across {
         ui.horizontal(|ui| {
             let left = ui.horizontal(|ui| (tools(ui), ui.min_rect().width())).inner;
@@ -473,8 +477,8 @@ pub fn dialog_footer<L, R>(
         let left = ui.horizontal(|ui| (tools(ui), ui.min_rect().width())).inner;
         (left, right.inner)
     };
-    ui.data_mut(|d| d.insert_temp(id, (wt, wa)));
-    if fits(wt, wa) != across {
+    ui.data_mut(|d| d.insert_temp(id, (wt, wa, across)));
+    if fits(wt, wa, across) != across {
         ui.ctx().request_discard("dialog footer layout");
     }
     (l, r)

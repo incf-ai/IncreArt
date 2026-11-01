@@ -45,6 +45,7 @@ pub mod scan;
 pub mod scheduler;
 pub mod sdserver;
 pub mod servertest;
+pub mod serverwire;
 pub mod sync;
 pub mod thumbs;
 pub mod tiers;

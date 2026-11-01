@@ -3197,7 +3197,7 @@ impl AppState {
         if !refused.is_empty() {
             return refused.join("\n");
         }
-        if increart_core::config::model_file_on_disk(id, &self.config.sdserver.model_dirs).is_none() {
+        if increart_core::config::model_file_on_disk(id, &self.config.programs.sd_server.model_dirs).is_none() {
             "Not in the model directories, so no open server lists it".into()
         } else {
             "No open server lists it (a server you connect to lists its own model directories)".into()
@@ -3507,7 +3507,7 @@ impl AppState {
     /// missing one or model directory. A bare binary name is looked up on PATH
     /// and not checked.
     pub fn sdserver_problem(&self) -> Option<String> {
-        let c = &self.config.sdserver;
+        let c = &self.config.programs.sd_server;
         if c.binary.is_empty() {
             return Some("No sd-server binary set".into());
         }

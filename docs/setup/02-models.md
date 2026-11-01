@@ -142,7 +142,7 @@ After sd-server runs (guide 4), `GET /sdcpp/v1/model-files` must list these
 exact IDs.
 
 **If it fails:**
-- Put this root **first** in `sdserver.model_dirs`: sd-server qualifies file
+- Put this root **first** in `programs.sd_server.model_dirs`: sd-server qualifies file
   IDs of additional roots, and the built-in preset uses the bare relative
   paths above.
 - Don't symlink these files from outside the root: sd-server rejects

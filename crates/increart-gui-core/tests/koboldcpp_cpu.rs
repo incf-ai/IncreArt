@@ -150,7 +150,7 @@ fn config(kcpp: &str, models: &Path, vision: bool) -> Config {
     // KoboldCpp on Windows stalled for minutes), but not KoboldCpp's own
     // choice of one on a macOS runner
     let threads = std::thread::available_parallelism().map_or(2, |n| (n.get() as u32 / 2).max(2));
-    config.sdserver.model_dirs = vec![models.to_string_lossy().into_owned()];
+    config.programs.sd_server.model_dirs = vec![models.to_string_lossy().into_owned()];
     config.server_presets = vec![ServerPreset {
         name: "CPU".into(),
         servers: vec![

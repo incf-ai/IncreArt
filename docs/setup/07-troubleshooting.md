@@ -88,7 +88,7 @@ config and the end of each log, passwords masked.
 | `GPU {n}: the {x} GB preset peaks at {y} GiB, more than its …` | chosen preset too big | expect out-of-memory; pick Auto |
 | `{url}: got {done} of {total} bytes` | download interrupted | run the wizard again (finished files are kept; `.part` files restart) |
 | `{url} isn't KoboldCpp` | something else answers on that port | change the port or stop that program |
-| `{id} isn't in the model folders` | model preset file missing under `sdserver.model_dirs` | check `ls <models>/koboldcpp/`; re-run the wizard |
+| `{id} isn't in the model folders` | model preset file missing under `programs.sd_server.model_dirs` | check `ls <models>/koboldcpp/`; re-run the wizard |
 | `is in sd-server's int8 format, which KoboldCpp can't load` | int8 convrot file given to KoboldCpp | use the GGUF preset (guide 2.1) |
 | `KoboldCpp didn't load it (see its log)`, or the log line, e.g. `Cannot find image model file: …` | reload with the model failed; KoboldCpp went back to launch settings | read `koboldcpp-<name>.log`; usually a path or out of memory |
 | `KoboldCpp didn't write its settings: …` | `--exportconfig` failed (old KoboldCpp, bad args) | check `--version` ≥ 1.123; check entry `args` |

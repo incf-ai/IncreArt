@@ -235,8 +235,8 @@ after the first image (the first reload).
 
 ## 3.7 Connecting to a KoboldCpp you start yourself
 
-A preset entry `Kobold(KoboldServer { name, run: Connect { url, password,
-device } })` uses a running KoboldCpp as is. Without admin mode it only runs
+A preset entry `KoboldCpp { name, run: Connect { url, password, gpu } }`
+uses a running KoboldCpp as is. Without admin mode it only runs
 the image model it was started with; a run needing another model fails with
 "it runs X and can't switch to Y". Example standalone start with a shipped
 template (downloads its own models; KoboldCpp's autoswap, unlike the app,

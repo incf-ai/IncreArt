@@ -73,8 +73,13 @@ pub fn open(cx: &mut Ctx, _: Target) -> Verdict {
                 let (server, log_dir) = (s.config.clone(), log_dir.clone());
                 sc.spawn(move || {
                     let t = Instant::now();
-                    let r =
-                        increart_core::launcher::open_cancellable(&server, &config.sdserver, &log_dir, wait, cancel);
+                    let r = increart_core::launcher::open_cancellable(
+                        &server,
+                        &config.programs.sd_server,
+                        &log_dir,
+                        wait,
+                        cancel,
+                    );
                     (r.map_err(|e| e.to_string()), t.elapsed())
                 })
             })

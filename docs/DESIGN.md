@@ -307,7 +307,7 @@ asks among them):
   `--version` (checked when the settings open, the field is left or a file
   picked) or why it can't run. **sd-server**: the binary and the devices
   (`sd-server --list-devices`, **List again**). **Both**: the **Models**
-  folders (`sdserver.model_dirs`), a row each, in order: typed or Browse…,
+  folders (`programs.sd_server.model_dirs`), a row each, in order: typed or Browse…,
   Show, ↑ / ↓ to search it earlier or later, × to drop it from the list (not
   from disk), and **Add folder…** (browses to another; one already listed
   isn't added twice). The wizard adds its download folder when it isn't
@@ -392,7 +392,7 @@ asks among them):
   are ignored (and a server it started after all is stopped).
 - If one fails (and you stayed in the dialog) it stays open: retry, change
   the preset, or continue with the servers that did come up.
-- **Leave started servers running when IncreArt exits** (`sdserver:
+- **Leave started servers running when IncreArt exits** (`programs.sd_server.
   leave_running`, off by default): started servers outlive the app with
   the model loaded, and the next session's Start finds them on their ports,
   so it is ready at once; the GPU memory stays in use meanwhile.
@@ -495,21 +495,21 @@ API behind sd-server's job calls, so scheduling, previews, cancel and recipes
 work the same.
 
 ```rsn
-Kobold(KoboldServer {
+KoboldCpp {
     name: "kcpp0",
-    run: Start {
-        binary: "/opt/koboldcpp/koboldcpp",  // or "python3 …/koboldcpp.py"
+    run: Launch {
+        // binary: "/opt/koboldcpp/koboldcpp",  // or "python3 …/koboldcpp.py"; missing: programs.koboldcpp
         // config: "…/qwen-image.kcpps",  // from KoboldCpp's launcher; what follows goes over it
         port: 5001,
-        device: Gpu { devices: [1] },     // as for prompt enhance (runtime: Vulkan unless set); missing: KoboldCpp's choice
+        gpu: Vulkan(1),                   // as for prompt enhance; missing: KoboldCpp's choice
         // args: ["--sdflashattention"],
     },
-    // chat: Some(KoboldChat { model: "…/Qwen3VL-8B-Instruct-Q4_K_M.gguf", mmproj: "…", context: 8192 }),
-}),
-// Kobold(KoboldServer { name: "box", run: Connect { url: "http://10.0.0.2:5001", password: "", device: "Vulkan1" } }),
+    // chat: Chat { model: "…/Qwen3VL-8B-Instruct-Q4_K_M.gguf", mmproj: "…", context: 8192 },
+},
+// KoboldCpp { name: "box", run: Connect { url: "http://10.0.0.2:5001", gpu: Vulkan(1) } },
 ```
 
-- **Started** (`Start`): launched with no image model (`--nomodel`, or the
+- **Started** (`run: Launch`): launched with no image model (`--nomodel`, or the
   chat model) and admin mode on: `--admin --admindir
   <state>/koboldcpp/<name> --adminpassword <made once, kept there>`, so a
   server left running from an earlier session still takes the app's
@@ -528,7 +528,7 @@ Kobold(KoboldServer {
   fails KoboldCpp goes back to its launch settings; the error says why,
   from its log ("Cannot find image model file: …"). A chat model running
   beside it restarts too (asks in flight fail).
-- **Connected** (`Connect`): used as it runs. A run whose diffusion model
+- **Connected** (`run: Connect`): used as it runs. A run whose diffusion model
   is the one it runs generates there; any other can't load ("it runs X and
   can't switch to Y"), and the scheduler leaves those runs to other
   servers.
@@ -607,7 +607,7 @@ Prompt enhance (PE) runs **Qwen3-VL-8B-Instruct** (GGUF: `Q4_K_M` plus the
 `Q8_0` mmproj for vision) in **KoboldCpp**, through its OpenAI-compatible
 `/v1/chat/completions`. It's the same model the image presets use as their
 text encoder, so one download serves both. Any other OpenAI-compatible chat
-server can be connected instead (`Connect`).
+server can be connected instead (`OpenAiChat`).
 
 - sd-server cannot run chat models, so PE is a **separate, optional
   service**: a chat server entry in a server preset (see PE server and
@@ -657,23 +657,25 @@ rewrites).
   sampling are shared by every chat server:
   ```rsn
   ServerPreset { name: "Both GPUs", servers: [
-      Start { name: "gpu0", port: 1234, device: "ROCm0" },
-      Chat(PeServer {
+      SdServer { name: "gpu0", run: Launch { port: 1234, gpu: Rocm(0) } },
+      KoboldCpp {
           name: "Qwen3-VL 8B (GPU)",
-          run: KoboldCpp {
-              binary: "/opt/koboldcpp/koboldcpp",  // or a command line: "python3 /opt/koboldcpp/koboldcpp.py"
+          run: Launch {
+              // binary: "/opt/koboldcpp/koboldcpp",  // or a command line: "python3 /opt/koboldcpp/koboldcpp.py"; missing: programs.koboldcpp
               // config: "…/qwen3vl.kcpps",  // settings saved from KoboldCpp's launcher; what's below goes over it
-              model: "…/Qwen3VL-8B-Instruct-Q4_K_M.gguf",  // may be left out with a config
-              mmproj: "…/mmproj-Qwen3VL-8B-Instruct-Q8_0.gguf",  // vision; empty: text only
-              host: "127.0.0.1",
               port: 1240,
-              device: Gpu { devices: [1] },  // or Cpu { threads: 16 }; missing: Auto (KoboldCpp's choice)
-              context: 8192,                 // --contextsize; missing or 0: KoboldCpp's default
+              gpu: Vulkan(1),  // or Cpu(16); missing: Auto (KoboldCpp's choice)
               // args: ["--blasthreads", "24"],  // more arguments, last
           },
-          start: AtLaunch,  // missing: OnDemand (when first asked)
-      }),
-      // Chat(PeServer { name: "…", run: Connect { url: "http://127.0.0.1:5001" } }),
+          images: false,  // chat only
+          chat: Chat {
+              model: "…/Qwen3VL-8B-Instruct-Q4_K_M.gguf",  // may be left out with a config
+              mmproj: "…/mmproj-Qwen3VL-8B-Instruct-Q8_0.gguf",  // vision; empty: text only
+              context: 8192,  // --contextsize; missing or 0: KoboldCpp's default
+          },
+          when: AtOpen,  // missing: OnDemand (when first asked)
+      },
+      // OpenAiChat { name: "…", url: "http://127.0.0.1:5001" },
   ] },
   pe: Pe {
       // system_prompts: { "rewrite": "…" },  // fill_blanks / style_prompt / rewrite / describe; empty or missing: built in
@@ -689,10 +691,10 @@ rewrites).
   the status bar says what moved.
 - The chat server in use is the open preset's, or the one picked to
   continue without sd-servers; none until then.
-- `device`: `Cpu { threads }` adds `--usecpu [--threads N]`; `Gpu { devices,
-  runtime }` puts every layer on the GPUs (no ids: every GPU, the model split
-  across them) through `runtime` (`Vulkan` when missing, so older configs
-  read as before): `Vulkan` adds `--usevulkan [ids…] --gpulayers 999`;
+- `gpu`: `Cpu(threads)` adds `--usecpu [--threads N]` (0: no `--threads`);
+  `Vulkan(ids)`, `Cuda(ids)`, `Rocm(ids)` and `Metal(ids)` put every layer on
+  the GPUs (one id or a list; `[]`: every GPU, the model split across them)
+  through that runtime: `Vulkan` adds `--usevulkan [ids…] --gpulayers 999`;
   `Metal` (KoboldCpp's Mac build, which has no Vulkan) only `--gpulayers 999`;
   `Cuda` and `Rocm` add `--usecuda --gpulayers 999` and pick the GPUs with
   `CUDA_VISIBLE_DEVICES` / `HIP_VISIBLE_DEVICES` (`--usecuda` takes one id
@@ -707,7 +709,7 @@ rewrites).
   one R9700, against 3–7 s on 16 CPU threads; it takes about 7.2 GB of the
   card beside sd-server's (the 8B Q4 model 4.5, its 8192-token cache 1.2,
   the vision projector 1.1, working memory 0.5).
-- `start`: `OnDemand` starts it on the first request; `AtLaunch` when its
+- `when`: `OnDemand` starts it on the first request; `AtOpen` when its
   preset opens (or it's picked to continue without sd-servers), so the
   first ask doesn't wait for the model to load. A preset's chat servers in
   use change together: ones no longer used stop first (they hold memory,
@@ -748,7 +750,7 @@ rewrites).
   system prompts and sampling don't (they go with each request). Starts
   and stops go through the same queue as the requests, in order, so a
   restarted server's port is free before the new one starts.
-  `Connect` only checks the server answers (`/v1/models`).
+  `OpenAiChat` only checks the server answers (`/v1/models`).
 - Requests wait in one queue shared by the chat servers in use: each has a
   worker that opens it (all at once) and then takes the next ask when free,
   so N servers answer N asks at a time; `PeOn` says which took an ask
@@ -924,30 +926,42 @@ comments are not preserved.
 Config {
     server_presets: [
         ServerPreset { name: "Both GPUs", servers: [
-            Start { name: "gpu0", port: 1234, device: "ROCm0" },
-            Start { name: "gpu1", port: 1235, device: "ROCm1" },
+            SdServer { name: "gpu0", run: Launch { port: 1234, gpu: Rocm(0) } },
+            SdServer { name: "gpu1", run: Launch { port: 1235, gpu: Rocm(1) } },
         ] },
         ServerPreset { name: "Remote box", servers: [
-            Connect { name: "box", url: "http://10.0.0.2:1234", device: "ROCm0" },
-            Chat(PeServer { name: "Box chat", run: Connect { url: "http://10.0.0.2:5001" } }),
+            SdServer { name: "box", run: Connect { url: "http://10.0.0.2:1234", gpu: Rocm(0) } },
+            OpenAiChat { name: "Box chat", url: "http://10.0.0.2:5001" },
         ] },
     ],
     last_preset: "Both GPUs",
-    sdserver: SdServer {
-        binary: "/opt/sdcpp/build-hip/bin/sd-server",
-        model_dirs: ["/path/to/ComfyUI/models"],
-        args: ["--fa", "--conditioning-cache-size", "32"],
-        preview: "none",
-        commit: "fd21ecf",
+    programs: Programs {
+        sd_server: SdServerSettings {
+            binary: "/opt/sdcpp/build-hip/bin/sd-server",
+            model_dirs: ["/path/to/ComfyUI/models"],
+            args: ["--fa", "--conditioning-cache-size", "32"],
+            preview: "none",
+            commit: "fd21ecf",
+        },
+        koboldcpp: "/opt/koboldcpp/koboldcpp",  // every KoboldCpp entry's, unless it names its own binary
     },
     resolutions: [ … ],
 }
 ```
 
-- `Start` servers take `host` (default `127.0.0.1`), `port`, `device` and
-  optional per-server `args` (e.g. `--offload-to-cpu`). The command line is
+- Each entry is named for its program (`SdServer`, `KoboldCpp`,
+  `OpenAiChat`); `run: Launch {…}` is started by the app, `run: Connect {…}`
+  already running. Configs from before (`Start`, `Connect`,
+  `Kobold(KoboldServer …)`, `Chat(PeServer …)`, and `sdserver`, `koboldcpp`
+  and `recipes` at the top level) still load and are written this way at the
+  next save. Only how the file spells them changed: validation stamps still
+  match.
+- An `SdServer` launched takes `host` (default `127.0.0.1`), `port`, `gpu`
+  (`Rocm(0)`, `Vulkan(1)`, `Cuda(0)`, `Cpu(0)`, `Metal([])`, or
+  `Backend("…")` for another `--list-devices` name) and optional per-server
+  `args` (e.g. `--offload-to-cpu`). The command line is
   `--listen-ip host --listen-port port --backend device`, then a
-  `--model-dir` per `model_dirs` entry, then `sdserver.args`, then the
+  `--model-dir` per `model_dirs` entry, then `programs.sd_server.args`, then the
   server's own `args`. Output goes to `sd-server-<name>.log` in the app's log
   directory.
 - **Model directories** (`model_dirs`, edited in Server settings and Model
@@ -960,12 +974,12 @@ Config {
   path) and sends its name; what it reports loaded, and what it lists as
   loadable, are read back without the `@<hash>/`. Runs record each file's
   SHA-256 from whichever folder holds it.
-- `Connect` servers take a `url`; `device` is optional and only recorded in
+- `run: Connect` takes a `url`; `gpu` is optional and only recorded in
   recipes.
-- `Chat` is the preset's chat server for prompt enhance, at most one (see
-  Prompt rewriting → PE server and requests); it isn't an sd-server and
-  generates nothing.
-- `sdserver.preview` is the preview mode sent with every job (`none`,
+- A `KoboldCpp` with `images: false`, or an `OpenAiChat`, is a chat server
+  for prompt enhance only (see Prompt rewriting → PE server and requests);
+  it generates nothing.
+- `programs.sd_server.preview` is the preview mode sent with every job (`none`,
   `proj`, `tae`, `vae`); `commit` is recorded in recipes as `sdcpp`.
 
 ### Resolutions
@@ -1924,7 +1938,7 @@ unreviewed images (every run and sweep, oldest first, as the project
 tile's **Review** does); with none it's greyed ("nothing to review yet"),
 and its tooltip says how many more are generating.
 
-- Generate's **Model preset**: the model presets (config `recipes`) the open servers
+- Generate's **Model preset**: the model presets (config `model_presets`) the open servers
   can run. Once a server is open the app asks what it can load: an
   sd-server its `model-files`, a started KoboldCpp the files in its model
   folders, one started elsewhere the diffusion model it runs (matched by
@@ -1948,7 +1962,7 @@ and its tooltip says how many more are generating.
   follow the same list (a ticked preset stays to be unticked).
 - The **⚙** beside the Model preset list (and beside the server preset
   editor's Image model line) opens **Model presets**, a modal editor of
-  config `recipes`: the list (a ✓ when an open server runs it, naming which
+  config `model_presets`: the list (a ✓ when an open server runs it, naming which
   on hover; new, duplicate, move, delete) and the selected one's name,
   recipe, steps, CFG, flow shift (off: the recipe's), custom sigmas
   (comma-separated; empty: the recipe's) and files: a slot (`diffusion_model`,
@@ -2486,7 +2500,9 @@ ends, is stopped, or loses the app (its stdin closing).
 - `increart-apitest list [--json]` lists the cases;
   `increart-apitest run` runs them: `--config` (default
   `$INCREART_CONFIG`, else the app's), `--preset` (again for more),
-  `--cases` (comma-separated, `*` for any text: `"*/jobs.*"`), `--light`,
+  `--cases` (comma-separated, `*` for any text: `"*/jobs.*"`), `--case`
+  (one, taken whole, again for more: the app passes each ID so, as a preset
+  name may have a comma; a pattern matching no case is exit 3), `--light`,
   `--basic`, `--url <url> --kind sd-server|koboldcpp|chat` (one running
   server, no preset), `--out`, `--no-stamp`, `--verbose`, `--jsonl` (events
   as JSON lines, a `stop` line on stdin stops: what the app reads). Exit

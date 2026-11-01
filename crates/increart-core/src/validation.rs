@@ -54,11 +54,11 @@ pub fn fingerprint(config: &Config, preset: &ServerPreset) -> String {
     let mut h = Sha256::new();
     h.update(serde_json::to_vec(&preset.servers).unwrap_or_default());
     if preset.servers.iter().any(|s| matches!(s, ServerConfig::Start { .. })) {
-        let sd = &config.sdserver;
+        let sd = &config.programs.sd_server;
         h.update(serde_json::to_vec(&(&sd.binary, &sd.model_dirs, &sd.args)).unwrap_or_default());
     }
     if preset.servers.iter().any(|s| matches!(s, ServerConfig::Kobold(_)) && s.is_started()) {
-        h.update(config.koboldcpp.as_bytes());
+        h.update(config.programs.koboldcpp.as_bytes());
     }
     hex(&h.finalize())[..16].to_string()
 }
@@ -298,7 +298,7 @@ mod tests {
             }],
         };
         let before = fingerprint(&config, &p);
-        config.sdserver.binary = "/opt/sd-server".into();
+        config.programs.sd_server.binary = "/opt/sd-server".into();
         assert_ne!(fingerprint(&config, &p), before);
         // a connected one doesn't use them
         let c = preset("http://10.0.0.2:7860");

@@ -14,7 +14,8 @@ use increart_core::pe::{PeRun, PeServer};
 
 const USAGE: &str = "\
 usage: increart-apitest list [<options>] [--json]
-       increart-apitest run [<options>] [--cases <pattern>,…] [--light | --basic] [--out <folder>]
+       increart-apitest run [<options>] [--cases <pattern>,…] [--case <pattern>] [--light | --basic]
+                            [--out <folder>]
                             [--no-stamp] [--jsonl] [--verbose]
        increart-apitest --version
 
@@ -34,6 +35,8 @@ options:
 run:
   --cases <patterns>  only these case IDs, comma-separated; * for any text
                       (\"*/jobs.*\", \"Remote/proxy/*\"); `list` shows the IDs
+  --case <pattern>    one case ID or pattern, taken whole (again for more): for IDs
+                      whose preset name has a comma
   --light             only the light cases: nothing loaded, nothing generated
   --basic             only the basic cases: each server answers, lists its models and
                       makes a small image, a chat server answers, and the servers
@@ -96,6 +99,7 @@ fn parse() -> Result<Args, String> {
             "--cases" => {
                 a.cases.extend(value("--cases")?.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()))
             }
+            "--case" => a.cases.push(value("--case")?),
             "--light" => a.light = true,
             "--basic" => a.basic = true,
             "--no-stamp" => a.no_stamp = true,
@@ -217,6 +221,22 @@ fn main() -> ExitCode {
             }
         }
         return ExitCode::SUCCESS;
+    }
+    // a pattern that picks nothing is a mistake (or a split ID), not a pass
+    let all = increart_apitest::plan(&config, &presets);
+    let unmatched: Vec<&str> = a
+        .cases
+        .iter()
+        .filter(|p| !all.iter().any(|c| increart_core::apitest::matches(p, &c.id)))
+        .map(String::as_str)
+        .collect();
+    if !unmatched.is_empty() {
+        let e = format!("no case matches {} (`list` shows the IDs)", unmatched.join(", "));
+        if a.jsonl {
+            println!("{}", serde_json::to_string(&Event::Error { text: e.clone() }).unwrap_or_default());
+        }
+        eprintln!("increart-apitest: {e}");
+        return ExitCode::from(3);
     }
     let out = a
         .out

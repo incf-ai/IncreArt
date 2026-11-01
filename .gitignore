@@ -8,3 +8,5 @@ __pycache__/
 /example-library/cache/
 /example-library/thumbs/
 /example-library/library.lock
+# Claude Code worktrees
+/.claude/worktrees/

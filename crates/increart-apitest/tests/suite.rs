@@ -282,7 +282,7 @@ mod started {
 
     fn started_config(preset: &ServerPreset) -> Config {
         let mut c = config(std::slice::from_ref(preset));
-        c.sdserver.binary = env!("CARGO_BIN_EXE_increart-fake-sd-server").into();
+        c.programs.sd_server.binary = env!("CARGO_BIN_EXE_increart-fake-sd-server").into();
         c
     }
 

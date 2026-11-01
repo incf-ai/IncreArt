@@ -27,7 +27,7 @@ to load, ~18 s per ask with one image, a few seconds without.
 
 ## 5.2 Option B: a chat KoboldCpp started by the app
 
-**Goal:** a `Chat(PeServer { run: KoboldCpp { … } })` entry in a server preset.
+**Goal:** a `KoboldCpp { images: false, chat: Chat { … }, … }` entry in a server preset.
 
 **Preconditions:** KoboldCpp binary (guide 3.1–3.2); model + mmproj (guide
 2.1, the `Qwen3VL…` and `mmproj…` files); a free port.
@@ -56,13 +56,13 @@ the sd-server wizard's **Add a chat server…**. Fields: name, **KoboldCpp**,
 binary, model, vision file (mmproj), address `127.0.0.1`, port, **Runs on**
 (GPU with a runtime and GPU numbers / CPU threads / KoboldCpp's choice),
 context `8192`, **Starts** when first asked (`OnDemand`) or when the preset
-opens (`AtLaunch`). **Add**, then **Save** the preset.
+opens (`AtOpen`). **Add**, then **Save** the preset.
 
 GPU numbers: Vulkan as `vulkaninfo --summary` lists them, CUDA as
 `nvidia-smi`, ROCm as `rocm-smi` (HIP order). CUDA/ROCm need the CUDA build
 or a ROCm build; the `nocuda` build is Vulkan only.
 
-**Verify** (after the first ask, or at preset open with `AtLaunch`):
+**Verify** (after the first ask, or at preset open with `AtOpen`):
 
 ```sh
 curl -s http://127.0.0.1:5001/v1/models; echo
@@ -83,7 +83,7 @@ returns text.
 
 ## 5.3 Option C: connect to a running server
 
-**Goal:** `Chat(PeServer { name, run: Connect { url } })`.
+**Goal:** `OpenAiChat { name, url }`.
 
 **Preconditions:** a server exposing `GET /v1/models` (2xx) and streaming
 `POST /v1/chat/completions` with `image_url` data-URL parts (OpenAI format).

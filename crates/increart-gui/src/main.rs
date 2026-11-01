@@ -31,6 +31,7 @@ mod textures;
 mod tiles;
 mod tour;
 mod tree;
+mod watchdog;
 mod widgets;
 
 use std::path::PathBuf;
@@ -193,7 +194,8 @@ fn main() -> eframe::Result {
     if config.known_koboldcpp().is_none()
         && let Some(b) = increart_core::kobold::find_binary()
     {
-        config.koboldcpp = b;
+        config.programs.koboldcpp = b;
+        config.fill_koboldcpp();
     }
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()

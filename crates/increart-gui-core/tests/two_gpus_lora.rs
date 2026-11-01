@@ -30,7 +30,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use increart_core::Library;
-use increart_core::config::{Config, PresetLora, RecipePreset, SdServerConfig, ServerConfig, ServerPreset};
+use increart_core::config::{Config, PresetLora, Programs, RecipePreset, SdServerConfig, ServerConfig, ServerPreset};
 use increart_core::kobold::{KoboldRun, KoboldServer};
 use increart_core::model::Recipe;
 use increart_core::pe::PeDevice;
@@ -161,14 +161,16 @@ fn config(sd: &str, kcpp: &str, dirs: &[String], sd_device: &str, kcpp_gpu: u32)
             preset("ZIT bf16", BF16, false),
             preset("ZIT Q8", Q8, false),
         ],
-        sdserver: SdServerConfig {
-            binary: sd.into(),
-            model_dirs: dirs.to_vec(),
-            args: vec!["--fa".into()],
-            preview: "none".into(),
-            ..Default::default()
+        programs: Programs {
+            sd_server: SdServerConfig {
+                binary: sd.into(),
+                model_dirs: dirs.to_vec(),
+                args: vec!["--fa".into()],
+                preview: "none".into(),
+                ..Default::default()
+            },
+            koboldcpp: kcpp.into(),
         },
-        koboldcpp: kcpp.into(),
         ..Default::default()
     };
     config.server_presets = vec![ServerPreset {

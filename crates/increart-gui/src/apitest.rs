@@ -459,6 +459,16 @@ fn summary(ui: &mut egui::Ui, st: &AppState, t: &ApiTest, preset: &str) {
                 if n == 1 { "it's" } else { "they're" }
             ),
         )
+    } else if ran.is_empty() || !skipped.is_empty() {
+        // nothing failed, but not everything ran: no pass
+        let n =
+            if ran.is_empty() { "No check".to_string() } else { format!("{} of {} checks", skipped.len(), ran.len()) };
+        (
+            ph::WARNING_CIRCLE,
+            BAD,
+            format!("{n} didn't run"),
+            format!("{preset} isn't validated: Run again, and if the checks still don't run, Copy report."),
+        )
     } else if !warned.is_empty() {
         (
             ph::CHECK_CIRCLE,
@@ -647,18 +657,21 @@ fn basic_footer(ui: &mut egui::Ui, t: &ApiTest, out: &mut Vec<Msg>) {
                 }
                 return out;
             }
-            if ui
-                .add_enabled(idle, egui::Button::new(ic(ph::X, "Close")))
-                .on_hover_text("back to the Servers screen")
-                .clicked()
-            {
-                out.push(Msg::ApiTest(false));
-            }
-            let Some(p) = preset.filter(|_| idle && !t.cases.is_empty()) else { return out };
-            if finished {
-                if ui.button(ic(ph::ARROW_CLOCKWISE, "Run again")).clicked() {
-                    out.push(Msg::ValidateBasic(p.clone()));
+            let close = |ui: &mut egui::Ui, out: &mut Vec<Msg>| {
+                if ui
+                    .add_enabled(idle, egui::Button::new(ic(ph::X, "Close")))
+                    .on_hover_text("back to the Servers screen")
+                    .clicked()
+                {
+                    out.push(Msg::ApiTest(false));
                 }
+            };
+            let Some(p) = preset.filter(|_| idle && !t.cases.is_empty()) else {
+                close(ui, &mut out);
+                return out;
+            };
+            if finished {
+                // right to left: the way on at the far right, Close at the left
                 let mut label =
                     RichText::new(ic(ph::PLAY, if failed { "Open anyway" } else { "Open the preset" })).strong();
                 if !failed {
@@ -667,14 +680,19 @@ fn basic_footer(ui: &mut egui::Ui, t: &ApiTest, out: &mut Vec<Msg>) {
                 if ui.button(label).on_hover_text(format!("closes this and opens {p}")).clicked() {
                     out.push(Msg::ApiTestContinue);
                 }
+                if ui.button(ic(ph::ARROW_CLOCKWISE, "Run again")).clicked() {
+                    out.push(Msg::ValidateBasic(p.clone()));
+                }
+                close(ui, &mut out);
             } else {
+                let start = RichText::new(ic(ph::PLAY, "Start validation")).strong().color(ACCENT);
+                if ui.add_enabled(!t.basic_cases().is_empty(), egui::Button::new(start)).clicked() {
+                    out.push(Msg::ValidateBasic(p.clone()));
+                }
                 if ui.button("Skip and open").on_hover_text(format!("opens {p} without validating it")).clicked() {
                     out.push(Msg::ApiTestContinue);
                 }
-                let start = RichText::new(ic(ph::PLAY, "Start validation")).strong().color(ACCENT);
-                if ui.add_enabled(!t.basic_cases().is_empty(), egui::Button::new(start)).clicked() {
-                    out.push(Msg::ValidateBasic(p));
-                }
+                close(ui, &mut out);
             }
             out
         },
@@ -824,7 +842,9 @@ fn command_line(st: &AppState, t: &ApiTest) -> String {
     }
     let ids = t.ids(ApiRun::Checked);
     if !ids.is_empty() && ids.len() < t.shown_cases().len() {
-        cmd.push_str(&format!(" --cases {}", quote(&ids.join(","))));
+        for id in &ids {
+            cmd.push_str(&format!(" --case {}", quote(id)));
+        }
     }
     cmd
 }

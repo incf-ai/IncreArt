@@ -43,13 +43,13 @@ Config {
         ServerPreset {
             name: "Two GPUs",
             servers: [
-                Start { name: "gpu0", host: "127.0.0.1", port: 18931, device: "", args: ["--fake-files", "$files"] },
-                Start { name: "gpu1", host: "127.0.0.1", port: 18932, device: "", args: ["--fake-files", "$files"] }
+                SdServer { name: "gpu0", run: Launch { port: 18931, args: ["--fake-files", "$files"] } },
+                SdServer { name: "gpu1", run: Launch { port: 18932, args: ["--fake-files", "$files"] } }
             ]
         }
     ],
     last_preset: "Two GPUs",
-    sdserver: SdServer { binary: "$fake" }
+    programs: Programs { sd_server: SdServerSettings { binary: "$fake" } }
 }
 RSN
 "$root/scripts/headless.sh" env INCREART_CONFIG="$work/vconfig/config.rsn" XDG_STATE_HOME="$work/vstate" \

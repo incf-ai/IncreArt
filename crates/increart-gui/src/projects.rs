@@ -1527,7 +1527,7 @@ pub fn recipes_window(ctx: &egui::Context, st: &AppState, out: &mut Vec<Msg>) {
                 );
                 ui.add_space(6.0);
                 ui.label(RichText::new("Files").strong());
-                let dirs = &st.config.sdserver.model_dirs;
+                let dirs = &st.config.programs.sd_server.model_dirs;
                 if dirs.iter().all(|d| d.trim().is_empty()) {
                     ui.colored_label(NEUTRAL, "No model directory yet: add the one holding the model files.");
                 }
@@ -1782,8 +1782,8 @@ fn generate(ui: &mut egui::Ui, st: &AppState, tex: &mut Textures, out: &mut Vec<
     // the rest of the space, so the form stays left of the images pane
     egui::CentralPanel::default().show(ui, |ui| {
         // Queue stays in sight however long the form (a sweep's prompts)
-        Panel::bottom("gen_queue").show(ui, |ui| queue_strip(ui, st, &f, out));
-        ScrollArea::vertical().auto_shrink([false, true]).show(ui, |ui| {
+        let strip = Panel::bottom("gen_queue").show(ui, |ui| queue_strip(ui, st, &f, out)).response.rect;
+        let scroll = ScrollArea::vertical().auto_shrink([false, true]).show(ui, |ui| {
             ui.heading(ic(ph::MAGIC_WAND, &format!("Generate in {}", p.name())));
             ui.horizontal(|ui| {
                 ui.label("Label");
@@ -1974,10 +1974,34 @@ fn generate(ui: &mut egui::Ui, st: &AppState, tex: &mut Textures, out: &mut Vec<
             if !f.width.is_multiple_of(32) || !f.height.is_multiple_of(32) {
                 ui.colored_label(BAD, "Width and height must be multiples of 32.");
             }
+            // scrolled to the end, the form stops well clear of the Queue strip
+            ui.add_space(64.0);
         });
+        debug_layout(ui, strip, &scroll);
     });
     if f != st.generate {
         out.push(Msg::Generate(f));
+    }
+}
+
+/// `INCREART_DEBUG_LAYOUT`: the Generate form's layout on stderr, each
+/// frame it differs from the one before (a jump for a frame shows as two).
+fn debug_layout<R>(ui: &egui::Ui, strip: egui::Rect, scroll: &egui::scroll_area::ScrollAreaOutput<R>) {
+    if std::env::var_os("INCREART_DEBUG_LAYOUT").is_none() {
+        return;
+    }
+    let now = format!(
+        "strip {:?} view {:?} content {:?} offset {:?}",
+        strip,
+        scroll.inner_rect,
+        scroll.content_size,
+        scroll.state.unclamped_offset()
+    );
+    let id = egui::Id::unique("debug_layout");
+    if ui.data(|d| d.get_temp::<String>(id)).as_deref() != Some(now.as_str()) {
+        let (frame, discard) = (ui.ctx().cumulative_pass_nr(), ui.ctx().will_discard());
+        eprintln!("[layout] pass {frame}{} {now}", if discard { " (discarded)" } else { "" });
+        ui.data_mut(|d| d.insert_temp(id, now));
     }
 }
 

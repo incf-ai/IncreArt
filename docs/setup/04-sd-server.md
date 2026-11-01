@@ -163,7 +163,7 @@ sd-server --listen-ip 127.0.0.1 --listen-port 1234 --backend ROCm0 \
   --model-dir <models> [--model-dir …] --fa --conditioning-cache-size 32 [entry args]
 ```
 
-- `sdserver.args` defaults to `--fa --conditioning-cache-size 32`.
+- `programs.sd_server.args` defaults to `--fa --conditioning-cache-size 32`.
 - Waits for `GET /sdcpp/v1/capabilities` to answer, giving up once the log
   has had no new line for the server start timeout (300 s by default;
   Settings → Timeouts, or Server settings).
@@ -191,7 +191,7 @@ correct it in **Server settings…**. Other errors:
 
 ## 4.5 Connecting to a running sd-server
 
-A `Connect { name, url, device }` entry (wizard: **Or connect to a server
-that's already running**) uses a server you started yourself, e.g. on another
-machine. It's left running when the app exits. `device` is only recorded in
-recipes.
+An `SdServer { name, run: Connect { url, gpu } }` entry (wizard: **Or connect
+to a server that's already running**) uses a server you started yourself, e.g.
+on another machine. It's left running when the app exits. `gpu` (`Rocm(0)`, …)
+is optional and only recorded in recipes.

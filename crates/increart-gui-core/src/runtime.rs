@@ -265,8 +265,9 @@ impl Runtime {
         let out = self.ctx.paths.logs().join("apitest").join(chrono::Local::now().format("%Y%m%d-%H%M%S").to_string());
         let mut cmd = apitest_command();
         cmd.args(["run", "--jsonl", "--config"]).arg(&config).arg("--out").arg(&out);
-        if !cases.is_empty() {
-            cmd.arg("--cases").arg(cases.join(","));
+        // one each: a preset name (the IDs' start) may have a comma
+        for c in &cases {
+            cmd.arg("--case").arg(c);
         }
         cmd.stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
@@ -1103,14 +1104,18 @@ fn open_servers(ctx: &Ctx, servers: Vec<ServerConfig>, cfg: SdServerConfig, atte
                     opening.fetch_sub(1, Ordering::Relaxed);
                     let msg = match opened {
                         Ok(p) => {
-                            let mut s = session.lock_or_recover();
                             // Kept only for the current attempt; otherwise
-                            // dropped, which stops a server this app started.
-                            if s.attempt == attempt
-                                && let Some(slot) = s.servers.get_mut(i)
-                            {
-                                *slot = Some((server, p));
-                            }
+                            // dropped, which stops a server this app started
+                            // (kill, then wait: not with the session locked)
+                            let unkept = {
+                                let mut s = session.lock_or_recover();
+                                let current = s.attempt == attempt;
+                                match s.servers.get_mut(i) {
+                                    Some(slot) if current => slot.replace((server, p)),
+                                    _ => Some((server, p)),
+                                }
+                            };
+                            drop(unkept);
                             Msg::ServerOpened(attempt, i, Ok(()))
                         }
                         Err(e) => Msg::ServerOpened(attempt, i, Err(e.to_string())),

@@ -844,7 +844,14 @@ fn style_sweep(ui: &mut egui::Ui, st: &AppState, f: &mut GenerateForm, out: &mut
             } else {
                 ui.label(line);
             }
-            ui.add(egui::Label::new(RichText::new(names.join(" · ")).weak()).wrap());
+            folding_box(
+                ui,
+                "sweep_styles",
+                &format!("The styles ({})", names.len()),
+                "the runs of this sweep, one per style",
+                true,
+                |ui| name_grid(ui, "sweep_styles_grid", &names),
+            );
         }
         if !unfit.is_empty() {
             ui.colored_label(
@@ -888,8 +895,20 @@ pub fn prompt_blanks(ui: &mut egui::Ui, st: &AppState, f: &mut GenerateForm, out
 /// A table in a box of its own, with its title and what it's for; the
 /// title's arrow folds it up (for the session, by `id`).
 fn table_box(ui: &mut egui::Ui, id: &str, title: &str, what: &str, add: impl FnOnce(&mut egui::Ui)) {
+    folding_box(ui, id, title, what, false, add);
+}
+
+/// A [`table_box`], folded up until it's first opened when `folded_at_first`.
+fn folding_box(
+    ui: &mut egui::Ui,
+    id: &str,
+    title: &str,
+    what: &str,
+    folded_at_first: bool,
+    add: impl FnOnce(&mut egui::Ui),
+) {
     let key = egui::Id::unique(("table_box_folded", id));
-    let folded: bool = ui.ctx().data(|d| d.get_temp(key)).unwrap_or(false);
+    let folded: bool = ui.ctx().data(|d| d.get_temp(key)).unwrap_or(folded_at_first);
     egui::Frame::group(ui.style()).inner_margin(egui::Margin::same(6)).show(ui, |ui| {
         ui.set_width(ui.available_width());
         ui.horizontal_wrapped(|ui| {
@@ -905,6 +924,29 @@ fn table_box(ui: &mut egui::Ui, id: &str, title: &str, what: &str, add: impl FnO
         if !folded {
             ui.separator();
             add(ui);
+        }
+    });
+}
+
+/// Names in as many equal columns as fit across, read along the rows.
+fn name_grid(ui: &mut egui::Ui, id: &str, names: &[&str]) {
+    const GAP: f32 = 16.0;
+    let widest = names
+        .iter()
+        .map(|n| {
+            egui::WidgetText::from(*n)
+                .into_galley(ui, Some(egui::TextWrapMode::Extend), f32::INFINITY, egui::TextStyle::Body)
+                .size()
+                .x
+        })
+        .fold(0.0, f32::max);
+    let columns = ((ui.available_width() + GAP) / (widest + GAP)).floor().max(1.0) as usize;
+    egui::Grid::new(id).num_columns(columns).spacing([GAP, 4.0]).min_col_width(widest).striped(true).show(ui, |ui| {
+        for row in names.chunks(columns) {
+            for n in row {
+                ui.label(*n);
+            }
+            ui.end_row();
         }
     });
 }

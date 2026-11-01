@@ -78,9 +78,9 @@ without. A screen still shows, saying why, when its argument doesn't work.
 
 ## 6.4 Model presets (Generate → Model preset)
 
-`recipes` in `config.rsn`: which files to load and the default steps / CFG.
+`model_presets` (`ModelPreset { … }` entries) in `config.rsn`: which files to load and the default steps / CFG.
 
-- Built in (added when `recipes` is empty): **"Qwen-Image 2.1"**, recipe
+- Built in (added when `model_presets` is empty): **"Qwen-Image 2.1"**, recipe
   `qwen-image-21`, sd-server int8 files (guide 2.2), 20 steps, CFG 2.
 - The KoboldCpp wizard adds **"Qwen-Image 2.1 GGUF Q8_0 (CFG 2, refs)"** (or
   `Q4_K`) with `diffusion_model`, `llm`, `clip_l`, `vae` under `koboldcpp/`.
@@ -107,32 +107,40 @@ bare (`last_preset: "x"`); `Some(…)` is accepted too.
 | `recent_libraries` | list of paths | `[]` | libraries offered at start-up, newest first (max 10) |
 | `server_presets` | list of `ServerPreset { name, servers }` | `[]` | the servers screen's presets |
 | `last_preset` | preset name | none | used by `--servers last` and the main button |
-| `sdserver` | `SdServer { … }` | see below | shared by every sd-server **and** the models folders KoboldCpp loads from |
-| `sdserver.binary` | path or name on `PATH` | `"sd-server"` | |
-| `sdserver.model_dirs` | list of paths | `[]` | `--model-dir` roots; also KoboldCpp's model folders |
-| `sdserver.args` | list | `["--fa", "--conditioning-cache-size", "32"]` | for every sd-server |
-| `sdserver.preview` | `none` / `proj` / `tae` / `vae` | `"none"` | preview sent with each sd-server job |
-| `sdserver.commit` | string | `""` | sd.cpp commit, recorded in recipes |
-| `sdserver.leave_running` | bool | `false` | started servers outlive the app |
-| `koboldcpp` | path or command line | found at start-up | binary for new KoboldCpp entries and the wizard |
-| `recipes` | list of `RecipePreset` | built-in one | model presets (6.4) |
+| `programs` | `Programs { sd_server, koboldcpp }` | see below | the programs every server entry shares |
+| `programs.sd_server` | `SdServerSettings { … }` | see below | shared by every sd-server **and** the models folders KoboldCpp loads from |
+| `programs.sd_server.binary` | path or name on `PATH` | `"sd-server"` | |
+| `programs.sd_server.model_dirs` | list of paths | `[]` | `--model-dir` roots; also KoboldCpp's model folders |
+| `programs.sd_server.args` | list | `["--fa", "--conditioning-cache-size", "32"]` | for every sd-server |
+| `programs.sd_server.preview` | `none` / `proj` / `tae` / `vae` | `"none"` | preview sent with each sd-server job |
+| `programs.sd_server.commit` | string | `""` | sd.cpp commit, recorded in recipes |
+| `programs.sd_server.leave_running` | bool | `false` | started servers outlive the app |
+| `programs.koboldcpp` | path or command line | found at start-up | the KoboldCpp every `KoboldCpp` entry runs unless it names its own `binary` |
+| `model_presets` | list of `ModelPreset` | built-in one | model presets (6.4) |
 | `resolutions` | list of `Resolution { name, width, height, default }` | 6 built-ins, 1024² default | multiples of 32; others are snapped with a warning |
 | `pe` | `Pe { system_prompts, sampling }` | built-in | PE prompts per job (`fill_blanks`, `style_prompt`, `rewrite`, `describe`) |
 | `job_order` | `Spread` / `BySweep` / `Sequential` | `Spread` | how queued runs share servers |
 | `file_manager`, `editor` | command | empty = desktop default | open folders / logs |
 
-Server entries (`servers: [ … ]`):
+Server entries (`servers: [ … ]`) are named for the program they are. Each has
+a `run`: `Launch { … }` (the app starts it) or `Connect { url, … }` (it is
+already running).
 
 | Entry | Fields |
 |---|---|
-| `Start { name, host, port, device, args }` | sd-server started by the app; `host` default `127.0.0.1`; `device` as `--list-devices` names it (`ROCm0`) |
-| `Connect { name, url, device }` | running sd-server; `device` optional |
-| `Kobold(KoboldServer { name, run, chat, swap })` | KoboldCpp image server; `run: Start { binary, config, host, port, device, args }` or `Connect { url, password, device }`; `chat: Some(KoboldChat { model, mmproj, context })` makes it a PE server too; `swap: true` for 8–16 GB presets |
-| `Chat(PeServer { name, run, start })` | PE server; `run: KoboldCpp { binary, model, mmproj, config, host, port, device, context, args }` (`host` and `port` required) or `Connect { url }`; `start: OnDemand` (default) or `AtLaunch` |
+| `SdServer { name, run }` | sd-server, makes images. `run: Launch { host, port, gpu, args }` (`host` default `127.0.0.1`) or `Connect { url, gpu }` (`gpu` optional, for recipes) |
+| `KoboldCpp { name, run, images, chat, swap, when }` | KoboldCpp. `run: Launch { binary, config, host, port, gpu, args }` (`binary` default `programs.koboldcpp`; `config` a `.kcpps` to start from) or `Connect { url, password, gpu }`. `images` (default `true`) makes images; `chat: Chat { model, mmproj, context }` makes it a PE server too. With `images: false` it is a PE server only: it needs `chat` and `run: Launch`, and `when: OnDemand` (default, at the first ask) or `AtOpen` (when the preset opens) says when it starts. `swap: true` for 8–16 GB presets |
+| `OpenAiChat { name, url, when }` | a running OpenAI-compatible chat server, for PE |
 
-`device` for KoboldCpp entries: omitted = KoboldCpp's choice; `Cpu { threads: 16 }`;
-`Gpu { devices: [1] }` (Vulkan); `Gpu { devices: [0], runtime: Cuda }`
-(also `Rocm`, `Metal`). `devices: []` = every GPU.
+`gpu`: `Rocm(0)`, `Vulkan(1)`, `Cuda(0)`, `Metal([])`; a KoboldCpp may take
+several (`Vulkan([1, 2])`; `Vulkan([])` = every GPU). `Cpu(16)` runs a
+KoboldCpp on the CPU with 16 threads (`Cpu(0)`: its own count); an sd-server
+takes `Cpu(0)`. Omitted: `Auto`, the program's choice. A name sd-server's
+`--list-devices` gives that isn't one of these is written `Backend("…")`.
+
+Configs written before these names (`Start`, `Connect`, `Kobold(KoboldServer
+…)`, `Chat(PeServer …)`, `recipes`, `sdserver`, `koboldcpp` at the top) still
+load, and the app writes them the new way at its next save.
 
 ## 6.6 Annotated minimal examples
 
@@ -156,12 +164,8 @@ What the wizard writes for this case (args from the 24 GB tier):
 ```rsn
 Config {
     recent_libraries: ["<home>/IncreArt"],
-    koboldcpp: "<home>/koboldcpp/koboldcpp-linux-x64-nocuda",
-    sdserver: SdServer {
-        model_dirs: ["<home>/models"],            // KoboldCpp finds koboldcpp/… here
-    },
-    recipes: [
-        RecipePreset {
+    model_presets: [
+        ModelPreset {
             name: "Qwen-Image 2.1 GGUF Q8_0 (CFG 2, refs)",
             recipe: "qwen-image-21",
             files: {
@@ -176,25 +180,30 @@ Config {
     ],
     server_presets: [
         ServerPreset { name: "KoboldCpp Vulkan0", servers: [
-            Kobold(KoboldServer {
+            KoboldCpp {
                 name: "kcpp-gpu0",
-                run: Start {
-                    binary: "<home>/koboldcpp/koboldcpp-linux-x64-nocuda",
+                run: Launch {                        // binary: programs.koboldcpp
                     port: 5001,
-                    device: Gpu { devices: [0] },   // vulkaninfo's GPU0; NVIDIA: Gpu { devices: [0], runtime: Cuda }
+                    gpu: Vulkan(0),                  // vulkaninfo's GPU0; NVIDIA: Cuda(0)
                     args: ["--sdflashattention", "--sdoffloadcpu", "--sdtiledvae", "512",
                            "--sdvaedevice", "main", "--sdclipdevice", "main", "--sdvramlimit", "10240"],
                 },
-                chat: Some(KoboldChat {              // also the PE chat server
+                chat: Chat {                         // also the PE chat server
                     model: "<home>/models/koboldcpp/Qwen3VL-8B-Instruct-Q4_K_M.gguf",
                     mmproj: "<home>/models/koboldcpp/mmproj-Qwen3VL-8B-Instruct-Q8_0.gguf",
                     context: 8192,
-                }),
+                },
                 // swap: true,                       // only for the 8/12/16 GB presets
-            }),
+            },
         ] },
     ],
     last_preset: "KoboldCpp Vulkan0",
+    programs: Programs {
+        sd_server: SdServerSettings {
+            model_dirs: ["<home>/models"],        // KoboldCpp finds koboldcpp/… here
+        },
+        koboldcpp: "<home>/koboldcpp/koboldcpp-linux-x64-nocuda",
+    },
 }
 ```
 
@@ -203,34 +212,35 @@ Config {
 ```rsn
 Config {
     recent_libraries: ["<home>/IncreArt"],
-    sdserver: SdServer {
-        binary: "<home>/sdcpp/build-hip/bin/sd-server",
-        model_dirs: ["<home>/models"],            // first root: holds diffusion_models/, text_encoders/, vae/
-        args: ["--fa", "--conditioning-cache-size", "32"],
-        preview: "proj",
-        commit: "fd21ecf",
-    },
-    // recipes omitted: the built-in "Qwen-Image 2.1" (int8 convrot files) is used
+    // model_presets omitted: the built-in "Qwen-Image 2.1" (int8 convrot files) is used
     server_presets: [
         ServerPreset { name: "ROCm0 + ROCm1", servers: [
-            Start { name: "gpu0", port: 1234, device: "ROCm0" },
-            Start { name: "gpu1", port: 1235, device: "ROCm1" },   // args: ["--offload-to-cpu"] if VRAM is short
-            Chat(PeServer {
+            SdServer { name: "gpu0", run: Launch { port: 1234, gpu: Rocm(0) } },
+            SdServer { name: "gpu1", run: Launch { port: 1235, gpu: Rocm(1) } },   // args: ["--offload-to-cpu"] if VRAM is short
+            KoboldCpp {
                 name: "Qwen3-VL 8B (CPU)",
-                run: KoboldCpp {
-                    binary: "<home>/koboldcpp/koboldcpp-linux-x64-nocuda",
+                run: Launch { port: 1240, gpu: Cpu(16) },
+                images: false,                       // chat only
+                chat: Chat {
                     model: "<home>/models/koboldcpp/Qwen3VL-8B-Instruct-Q4_K_M.gguf",
                     mmproj: "<home>/models/koboldcpp/mmproj-Qwen3VL-8B-Instruct-Q8_0.gguf",
-                    host: "127.0.0.1",
-                    port: 1240,
-                    device: Cpu { threads: 16 },
                     context: 8192,
                 },
-                start: AtLaunch,                    // load at preset open; default OnDemand
-            }),
+                when: AtOpen,                        // load at preset open; default OnDemand
+            },
         ] },
     ],
     last_preset: "ROCm0 + ROCm1",
+    programs: Programs {
+        sd_server: SdServerSettings {
+            binary: "<home>/sdcpp/build-hip/bin/sd-server",
+            model_dirs: ["<home>/models"],        // first root: holds diffusion_models/, text_encoders/, vae/
+            args: ["--fa", "--conditioning-cache-size", "32"],
+            preview: "proj",
+            commit: "fd21ecf",
+        },
+        koboldcpp: "<home>/koboldcpp/koboldcpp-linux-x64-nocuda",
+    },
 }
 ```
 
