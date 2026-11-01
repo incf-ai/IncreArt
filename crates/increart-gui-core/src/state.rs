@@ -1,6 +1,6 @@
 //! Everything the GUI shows, and the lists derived from the library index.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use increart_core::HistoryKey;
@@ -3119,6 +3119,11 @@ pub struct AppState {
     /// (link path now, verdict before) of review actions, for `Ctrl+Z`:
     /// one entry per action (rating the picked rates them all at once).
     pub review_undo: Vec<Vec<(PathBuf, Option<Verdict>)>>,
+    /// Output links sent to be rated, until the index shows them moved (or
+    /// no library op is in flight): they leave Review's queue at once, so a
+    /// quick next rating goes to the next image, not to this one by the
+    /// path it no longer has.
+    pub reviewing: HashSet<PathBuf>,
     pub renaming: Option<Renaming>,
     /// Library operations in flight.
     pub busy: usize,
@@ -3380,6 +3385,7 @@ impl AppState {
             imports: None,
             checkerboard: true,
             review_undo: vec![],
+            reviewing: HashSet::new(),
             renaming: None,
             busy: 0,
             usage_check: None,
@@ -3842,7 +3848,7 @@ impl AppState {
             .filter(|(p, o)| self.review_sweep.as_ref().is_none_or(|s| in_sweep(p, &o.name.run, s)))
             .filter(|(_, o)| self.review_run.as_ref().is_none_or(|r| &o.name.run == r))
             .map(|(_, o)| o)
-            .filter(|o| o.verdict.is_none())
+            .filter(|o| o.verdict.is_none() && !self.reviewing.contains(&o.path))
             .collect();
         v.sort_by(|a, b| a.image.id.cmp(&b.image.id));
         v

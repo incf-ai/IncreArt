@@ -2,6 +2,7 @@
 //! touches disk, servers or the engine is an [`Effect`] the runtime carries
 //! out, reporting back with more [`Msg`]s.
 
+use std::collections::HashSet;
 use std::path::PathBuf;
 
 use increart_core::config::{Config, MODEL_SLOTS, RecipePreset, SdServerConfig, ServerConfig, ServerPreset};
@@ -6056,7 +6057,10 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
             let Some(link) = just_moved.or(queue.get(state.review_cursor)).map(|o| o.path.clone()) else {
                 return vec![];
             };
-            lib(state, LibOp::ReviewOutputs { links: vec![(link, Some(v))], undo: false })
+            let fx = lib(state, LibOp::ReviewOutputs { links: vec![(link, Some(v))], undo: false });
+            // it left the queue: the cursor is on the next one (the last: the one before)
+            state.review_cursor = state.review_cursor.min(state.review_queue().len().saturating_sub(1));
+            fx
         }
         Msg::ReviewView(v) => {
             if v == ReviewView::Compare {
@@ -6181,6 +6185,10 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
         }
         Msg::OpDone(result, ix) => {
             state.busy = state.busy.saturating_sub(1);
+            // (a rating that failed: its image is back in the queue)
+            if state.busy == 0 {
+                state.reviewing.clear();
+            }
             if let Some(ix) = ix {
                 set_index(state, ix);
             }
@@ -6902,6 +6910,9 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
 
 fn lib(state: &mut AppState, op: LibOp) -> Vec<Effect> {
     state.busy += 1;
+    if let LibOp::ReviewOutputs { links, undo: false } = &op {
+        state.reviewing.extend(links.iter().map(|(l, _)| l.clone()));
+    }
     vec![Effect::Lib(op)]
 }
 
@@ -7598,6 +7609,9 @@ fn follow_step(state: &mut AppState) {
 
 fn set_index(state: &mut AppState, ix: Index) {
     state.index = ix;
+    // the links rated that this index shows moved
+    let links: HashSet<&PathBuf> = state.index.projects.iter().flat_map(|p| &p.outputs).map(|o| &o.path).collect();
+    state.reviewing.retain(|l| links.contains(l));
     state.rebuild_usage();
     state.folder_view.listed = None;
     for v in &mut state.parked_folder_views {

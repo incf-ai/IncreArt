@@ -2048,6 +2048,8 @@ pub fn lib_op(lib: &mut Library, op: LibOp) -> Result<OpOk, String> {
         LibOp::ReviewOutputs { links, undo } => {
             let mut done = vec![];
             for (link, verdict) in links {
+                // (a path from before a rating: where it is now, for undo)
+                let link = lib.resolve_output_link(&link).unwrap_or(link);
                 let previous = verdict_of(&link);
                 match lib.review_output(&link, verdict) {
                     Ok(new) => done.push((new, previous)),

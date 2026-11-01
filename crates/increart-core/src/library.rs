@@ -1705,13 +1705,31 @@ impl Library {
         Ok((id, self.rel(&at)))
     }
 
-    /// Moves an output link to `unreviewed/` (`None`) or `reviewed/<verdict>/`
-    /// of its project. `link` is relative to the root. Returns the new path.
-    pub fn review_output(&self, link_path: &Path, verdict: Option<Verdict>) -> Result<PathBuf> {
+    /// Where an output link is now, relative to the root: `link_path`, or
+    /// if it isn't there, the link of that name in another review folder of
+    /// its project (a path from before a rating that hasn't been rescanned).
+    pub fn resolve_output_link(&self, link_path: &Path) -> Result<PathBuf> {
         let abs = self.root.join(link_path);
-        if !fsutil::exists(&abs) {
-            return Err(Error::NotFound(link_path.display().to_string()));
+        if fsutil::exists(&abs) {
+            return Ok(link_path.to_path_buf());
         }
+        let not_found = || Error::NotFound(link_path.display().to_string());
+        let project = abs.ancestors().skip(1).take(3).find(|d| d.join(PROJECT_FILE).is_file()).ok_or_else(not_found)?;
+        let name = abs.name()?;
+        std::iter::once(None)
+            .chain(Verdict::ALL.map(Some))
+            .map(|v| project.join(Verdict::output_dir(v)).join(name))
+            .find(|p| fsutil::exists(p))
+            .map(|p| self.rel(&p))
+            .ok_or_else(not_found)
+    }
+
+    /// Moves an output link to `unreviewed/` (`None`) or `reviewed/<verdict>/`
+    /// of its project. `link` is relative to the root (where it was: see
+    /// [`Self::resolve_output_link`]). Returns the new path.
+    pub fn review_output(&self, link_path: &Path, verdict: Option<Verdict>) -> Result<PathBuf> {
+        let link_path = &self.resolve_output_link(link_path)?;
+        let abs = self.root.join(link_path);
         let project = abs
             .ancestors()
             .skip(1)

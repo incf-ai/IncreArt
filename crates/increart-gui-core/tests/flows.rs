@@ -683,6 +683,39 @@ fn review_and_undo() {
 }
 
 #[test]
+fn quick_ratings_go_to_the_next_image() {
+    let mut h = Harness::new();
+    h.send(Msg::NewProject(PathBuf::new()));
+    h.send(Msg::CommitRename);
+    h.settle();
+    let project = h.state.project.clone().unwrap();
+    {
+        let lib = Library_::steal(&h.root);
+        lib.write_two(&project);
+    }
+    h.rt.run(Effect::Rescan);
+    h.settle();
+    let queue: Vec<_> = h.state.review_queue().iter().map(|o| (o.image.clone(), o.path.clone())).collect();
+    assert_eq!(queue.len(), 2);
+    // the second key before the first rating's index is back
+    h.send(Msg::ReviewCurrent(Verdict::Good));
+    h.send(Msg::ReviewCurrent(Verdict::Bad));
+    h.settle();
+    assert_eq!(h.errors(), Vec::<&str>::new());
+    assert!(h.state.reviewing.is_empty());
+    let verdict = |h: &Harness, i: usize| h.state.output_link(&queue[i].0).unwrap().verdict;
+    assert_eq!((verdict(&h, 0), verdict(&h, 1)), (Some(Verdict::Good), Some(Verdict::Bad)));
+    // a rating by the path from before: the link where it is now
+    h.send(Msg::ReviewLink(queue[0].1.clone(), Some(Verdict::Neutral)));
+    h.settle();
+    assert_eq!(h.errors(), Vec::<&str>::new());
+    assert_eq!(verdict(&h, 0), Some(Verdict::Neutral));
+    h.send(Msg::UndoReview);
+    h.settle();
+    assert_eq!(verdict(&h, 0), Some(Verdict::Good), "undo knows where it was");
+}
+
+#[test]
 fn review_tree_sorts_and_hides_reviewed() {
     let mut h = Harness::new();
     let from_ideas = |h: &mut Harness, name: &str, folder: Option<&str>| {
