@@ -1409,13 +1409,30 @@ fn work_on(ctx: &Ctx, fx: Effect) -> Vec<Msg> {
             Err(e) => vec![Msg::Problem(format!("saving settings: {e}"))],
         },
         Effect::OpenLibrary { path, create } => {
+            let t = std::time::Instant::now();
             let opened = if create { Library::create(&path, None) } else { Library::open(&path) };
+            let locked = t.elapsed();
             vec![Msg::LibraryOpened(opened.map_err(err).and_then(|mut lib| {
                 if let Some(d) = ctx.paths.disposal.get() {
                     lib.set_disposal(d.clone());
                 }
                 let ix = lib.scan().map_err(err)?;
                 let root = lib.root().to_path_buf();
+                // in the app's log, for a slow start
+                let outputs: usize = ix.projects.iter().map(|p| p.outputs.len()).sum();
+                increart_core::applog::line(
+                    "info",
+                    &format!(
+                        "library {} opened in {} ms (lock {} ms, scan {} ms: {} projects, {} folders, {} outputs)",
+                        root.display(),
+                        t.elapsed().as_millis(),
+                        locked.as_millis(),
+                        (t.elapsed() - locked).as_millis(),
+                        ix.projects.len(),
+                        ix.project_folders.len(),
+                        outputs,
+                    ),
+                );
                 ctx.session.lock_or_recover().library = Some(Arc::new(Mutex::new(lib)));
                 Ok((root, ix))
             }))]
