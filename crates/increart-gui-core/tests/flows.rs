@@ -7393,3 +7393,79 @@ fn a_preview_opened_on_a_list_steps_through_it() {
     h.send(Msg::Preview(None));
     assert!(h.state.preview_among.is_none());
 }
+
+#[test]
+fn review_adds_to_a_collection_and_rates_in_one_step() {
+    let mut h = Harness::new();
+    h.send(Msg::NewProject(PathBuf::new()));
+    h.send(Msg::CommitRename);
+    h.settle();
+    let project = h.state.project.clone().unwrap();
+    Library_::steal(&h.root).write_two(&project);
+    h.rt.run(Effect::Rescan);
+    h.settle();
+    h.send(Msg::Tab(Tab::Review));
+    let imgs: Vec<_> = h.state.review_queue().iter().map(|o| o.image.clone()).collect();
+    assert_eq!(imgs.len(), 2);
+
+    // a new collection, rated good: it leaves the queue
+    h.send(Msg::Collect(vec![imgs[0].clone()]));
+    let mut d = h.state.collect.clone().unwrap();
+    assert_eq!(d.verdict, Some(Verdict::Good), "good the first time");
+    assert_eq!(d.folder, None, "no collections yet");
+    d.new_name = Some("birds".into());
+    h.send(Msg::EditCollect(d));
+    h.send(Msg::ConfirmCollect);
+    h.settle();
+    assert!(h.state.collect.is_none());
+    assert!(h.state.index.collection_folders.contains(&PathBuf::from("birds")));
+    assert_eq!(h.state.index.collection_links.len(), 1);
+    assert_eq!(h.state.output_link(&imgs[0]).unwrap().verdict, Some(Verdict::Good));
+    assert_eq!(h.state.review_queue().len(), 1);
+
+    // one undo takes back both
+    h.send(Msg::UndoReview);
+    h.settle();
+    assert!(h.state.index.collection_links.is_empty());
+    assert_eq!(h.state.output_link(&imgs[0]).unwrap().verdict, None);
+
+    // it opens on the last collection; an image in it already stays there on undo
+    h.send(Msg::AddToCollection("birds".into(), vec![imgs[1].clone()]));
+    h.settle();
+    h.send(Msg::Collect(vec![imgs[1].clone()]));
+    let mut d = h.state.collect.clone().unwrap();
+    assert_eq!(d.folder, Some(PathBuf::from("birds")));
+    d.verdict = Some(Verdict::Neutral);
+    h.send(Msg::EditCollect(d));
+    h.send(Msg::ConfirmCollect);
+    h.settle();
+    assert_eq!(h.state.output_link(&imgs[1]).unwrap().verdict, Some(Verdict::Neutral));
+    h.send(Msg::UndoReview);
+    h.settle();
+    assert_eq!(h.state.output_link(&imgs[1]).unwrap().verdict, None);
+    assert_eq!(h.state.index.collection_links.len(), 1, "it was in the collection before");
+
+    // not rated: added, still in the queue, nothing to undo
+    let undos = h.state.review_undo.len();
+    h.send(Msg::Collect(vec![imgs[0].clone()]));
+    let mut d = h.state.collect.clone().unwrap();
+    assert_eq!(d.verdict, Some(Verdict::Neutral), "the last rating");
+    d.verdict = None;
+    h.send(Msg::EditCollect(d));
+    h.send(Msg::ConfirmCollect);
+    h.settle();
+    assert_eq!(h.state.index.collection_links.len(), 2);
+    assert_eq!(h.state.review_queue().len(), 2);
+    assert_eq!(h.state.review_undo.len(), undos);
+
+    // a name taken: it stays open
+    h.send(Msg::Collect(vec![imgs[0].clone()]));
+    let mut d = h.state.collect.clone().unwrap();
+    d.folder = None;
+    d.new_name = Some("birds".into());
+    h.send(Msg::EditCollect(d));
+    h.send(Msg::ConfirmCollect);
+    assert!(h.state.collect.is_some());
+    h.send(Msg::CancelCollect);
+    assert!(h.state.collect.is_none());
+}

@@ -52,6 +52,8 @@ const SCENES: &[&str] = &[
     "13b-review-follow",
     "13c-review-compare-with",
     "13d-review-compare-input",
+    "13e-review-collect",
+    "13f-review-image-menu",
     "14-output-library-rejected",
     "14b-output-library-compare",
     "15-generate-img2img",
@@ -1271,6 +1273,25 @@ impl Tour {
                 let b = tour_with_refs(st);
                 vec![Msg::Tab(Tab::Review), Msg::ReviewView(ReviewView::Single), Msg::CompareWith(b)]
             }
+            "13f-review-image-menu" => vec![
+                Msg::ContinueWithoutServers,
+                Msg::Tab(Tab::Review),
+                Msg::ReviewScope(None),
+                Msg::ReviewView(ReviewView::Single),
+            ],
+            "13e-review-collect" => {
+                // Add to collection… on the first image in Review
+                let mut v = vec![
+                    Msg::ContinueWithoutServers,
+                    Msg::Tab(Tab::Review),
+                    Msg::ReviewScope(None),
+                    Msg::ReviewView(ReviewView::Single),
+                ];
+                if let Some(o) = st.review_queue().first() {
+                    v.push(Msg::Collect(vec![o.image.clone()]));
+                }
+                v
+            }
             "13d-review-compare-input" => {
                 let b = tour_with_refs(st);
                 let mut v = vec![Msg::Tab(Tab::Review), Msg::ReviewView(ReviewView::Single), Msg::CompareWith(b)];
@@ -2120,6 +2141,8 @@ impl Tour {
         if let Some((a, b)) = match name {
             // the contact sheet's first cell; the Tile window's first two tiles
             "96b-picked-menu" => Some((egui::pos2(478.0, 197.0), None)),
+            // high on Review's image, so the menu opens downward
+            "13f-review-image-menu" => Some((egui::pos2(560.0, 160.0), None)),
             "97c-tile-menu" => Some((egui::pos2(480.0, 265.0), None)),
             // the empty row below the tiles
             "97d-tile-cell-menu" => Some((egui::pos2(305.0, 640.0), None)),

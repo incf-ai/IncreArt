@@ -2051,22 +2051,57 @@ pub fn lib_op(lib: &mut Library, op: LibOp) -> Result<OpOk, String> {
             }
             Ok(OpOk::Done)
         }
-        LibOp::ReviewOutputs { links, undo } => {
-            let mut done = vec![];
-            for (link, verdict) in links {
-                // (a path from before a rating: where it is now, for undo)
-                let link = lib.resolve_output_link(&link).unwrap_or(link);
-                let previous = verdict_of(&link);
-                match lib.review_output(&link, verdict) {
-                    Ok(new) => done.push((new, previous)),
-                    // nothing rated: an error as before; else keep what was
-                    Err(e) if done.is_empty() => return Err(err(e)),
-                    Err(e) => return Ok(OpOk::Reviewed { done, undo, error: Some(err(e)) }),
+        LibOp::ReviewOutputs { links, undo } => review_outputs(lib, links, undo, vec![]),
+        LibOp::CollectAndReview { folder, new, images, links } => {
+            let folder = match new {
+                Some(name) => lib.create_folder(Tree::Collections, &folder, Some(&name)).map_err(err)?,
+                None => folder,
+            };
+            let mut collected = vec![];
+            for img in images.iter().filter(|i| i.store == increart_core::Store::Output) {
+                let (at, new) = lib.collect(&folder, &img.id).map_err(err)?;
+                if new {
+                    collected.push(at);
                 }
             }
-            Ok(OpOk::Reviewed { done, undo, error: None })
+            review_outputs(lib, links, false, collected)
+        }
+        LibOp::UndoReview(u) => {
+            // a link removed since (by hand) is fine: it's gone either way
+            for at in &u.collected {
+                if let Ok(rel) = at.strip_prefix("collections")
+                    && lib.root().join(at).symlink_metadata().is_ok()
+                {
+                    lib.delete_node(Tree::Collections, rel).map_err(err)?;
+                }
+            }
+            review_outputs(lib, u.links, true, vec![])
         }
     }
+}
+
+/// Rates output links (each to its own verdict) for `ReviewOutputs` and
+/// the like; `collected`: the collection links made with it, for undo.
+fn review_outputs(
+    lib: &mut Library,
+    links: Vec<(PathBuf, Option<Verdict>)>,
+    undo: bool,
+    collected: Vec<PathBuf>,
+) -> Result<OpOk, String> {
+    let mut done = vec![];
+    for (link, verdict) in links {
+        // (a path from before a rating: where it is now, for undo)
+        let link = lib.resolve_output_link(&link).unwrap_or(link);
+        let previous = verdict_of(&link);
+        match lib.review_output(&link, verdict) {
+            Ok(new) => done.push((new, previous)),
+            // nothing rated: an error as before (the collection links stay,
+            // made); else keep what was
+            Err(e) if done.is_empty() && collected.is_empty() => return Err(err(e)),
+            Err(e) => return Ok(OpOk::Reviewed { done, collected, undo, error: Some(err(e)) }),
+        }
+    }
+    Ok(OpOk::Reviewed { done, collected, undo, error: None })
 }
 
 /// Keeps the ideas (inbox ones move to the top of the input library) and
