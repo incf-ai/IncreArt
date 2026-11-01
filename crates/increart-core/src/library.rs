@@ -2113,7 +2113,7 @@ impl Library {
         // discarded projects keep theirs, to be restored
         for p in ix.projects.iter().chain(ix.discarded_projects.iter().map(|d| &d.entry)) {
             todo.extend(p.project.cover.iter().cloned());
-            todo.extend(p.draft.iter().flat_map(|d| d.refs.iter().cloned()));
+            todo.extend(p.draft.iter().flat_map(|d| d.refs.iter().chain(&d.sweep.images).cloned()));
             for r in &p.runs {
                 todo.extend(r.refs.iter().cloned());
                 if let Mode::Edit { init: Some(init), .. } = &r.mode {

@@ -506,9 +506,10 @@ fn images_pane(
     // a sweep's prompts can name what the prompt doesn't
     let named = increart_gui_core::update::named_image_tags(st);
     ui.separator();
-    if f.images.is_empty() {
+    if f.images.is_empty() && f.swept().is_empty() {
         ui.weak("No images: the run is text-to-image.");
     }
+    swept_placeholder(ui, st, root, tex, f, out);
     let n = f.images.len();
     ScrollArea::vertical().auto_shrink([false, true]).id_salt("gen_images_scroll").show(ui, |ui| {
         for i in 0..n {
@@ -677,6 +678,172 @@ fn images_pane(
     });
 }
 
+/// An image sweep's images, first in the Images pane as one: a stacked
+/// thumbnail, "swept · K images", `<image1>` or start (DESIGN.md, Image
+/// sweeps). A double-click shows them all in a modal.
+fn swept_placeholder(
+    ui: &mut egui::Ui,
+    st: &AppState,
+    root: &std::path::Path,
+    tex: &mut Textures,
+    f: &mut increart_gui_core::GenerateForm,
+    out: &mut Vec<Msg>,
+) {
+    let swept = f.swept().to_vec();
+    let Some(first) = swept.first() else { return };
+    let names = st.swept_names(&swept);
+    egui::Frame::group(ui.style()).show(ui, |ui| {
+        ui.set_width(ui.available_width());
+        ui.horizontal(|ui| {
+            let t = tex.thumb(root, first);
+            let resp = crate::widgets::stacked_thumb(ui, t.as_ref(), 84.0);
+            let resp = resp.on_hover_text("double-click: all the sweep's images");
+            let open = egui::Id::unique(SWEPT_MODAL);
+            if resp.double_clicked() {
+                ui.ctx().data_mut(|d| d.insert_temp(open, true));
+            }
+            if ui.ctx().data(|d| d.get_temp::<bool>(open)).is_some() {
+                swept_modal(ui.ctx(), st.preview.is_some(), root, tex, &swept, &names, out);
+            }
+            ui.vertical(|ui| {
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new(ic(ph::STACK, &format!("swept · {} images", swept.len()))).strong());
+                });
+                // one size for all: use size as for any image
+                let dims: Vec<Option<[u32; 2]>> = swept.iter().map(|i| tex.dims(root, i)).collect();
+                match dims.first().copied().flatten().filter(|d| dims.iter().all(|x| *x == Some(*d))) {
+                    Some([w, h]) => {
+                        ui.horizontal(|ui| {
+                            ui.weak(format!("{w} × {h}"));
+                            let fit = increart_gui_core::fit_size(w, h);
+                            let r = ui.add_enabled(
+                                fit != (f.width, f.height),
+                                egui::Button::new(ic(ph::ARROWS_OUT_SIMPLE, "use size")).small(),
+                            );
+                            if r.on_hover_text(format!("set the output size to {} × {}", fit.0, fit.1))
+                                .on_disabled_hover_text("the output size already matches")
+                                .clicked()
+                            {
+                                (f.width, f.height) = fit;
+                            }
+                        });
+                    }
+                    None => {
+                        ui.weak("sizes differ");
+                    }
+                }
+                ui.horizontal(|ui| {
+                    let start = f.sweep.image_start;
+                    if ui
+                        .selectable_label(!start, "<image1>")
+                        .on_hover_text("each run's image is its <image1>, the form's references after it")
+                        .clicked()
+                    {
+                        f.sweep.image_start = false;
+                    }
+                    if ui
+                        .selectable_label(start, "start")
+                        .on_hover_text("each run's image is its img2img start image")
+                        .clicked()
+                    {
+                        f.sweep.image_start = true;
+                    }
+                });
+                if f.sweep.image_start && f.images.iter().any(|i| i.start) {
+                    ui.weak("the list's own start image isn't used");
+                }
+                ui.weak("Vary something else to take it out");
+            });
+        });
+        if f.sweep.image_start {
+            // as for a start image: how much of it to keep
+            let mut keep = ((1.0 - f.strength) * 100.0).round();
+            let r = ui
+                .add(egui::Slider::new(&mut keep, 0.0..=95.0).step_by(5.0).suffix(" %").text("keep"))
+                .on_hover_text("How much of each start image the result keeps (strength = 1 − keep)");
+            if r.changed() {
+                f.strength = 1.0 - keep / 100.0;
+            }
+        }
+    });
+}
+
+/// Whether the swept images' modal is open (egui temp data).
+pub const SWEPT_MODAL: &str = "swept_images_modal";
+
+/// An image sweep's images, all of them, larger and named (the swept
+/// placeholder double-clicked). Double-click one for full size.
+fn swept_modal(
+    ctx: &egui::Context,
+    previewing: bool,
+    root: &std::path::Path,
+    tex: &mut Textures,
+    swept: &[increart_core::ImageRef],
+    names: &[String],
+    out: &mut Vec<Msg>,
+) {
+    // cards of a 3:2 image box over the name; as many columns as fit
+    const CELL: f32 = 210.0;
+    const GAP: f32 = 12.0;
+    let open = egui::Id::unique(SWEPT_MODAL);
+    let mut close = false;
+    let room = ctx.content_rect().size() * 0.9 - egui::Vec2::splat(32.0);
+    let fit = (((room.x + GAP) / (CELL + GAP)).floor() as usize).max(1);
+    let cols = fit.min(swept.len().max(1)).min(5);
+    let width = (cols as f32 * (CELL + GAP) - GAP).max(420.0);
+    let m = egui::Modal::new(egui::Id::unique("swept_images")).show(ctx, |ui| {
+        ui.set_width(width);
+        ui.set_max_width(width);
+        ui.heading(ic(ph::STACK, &format!("The sweep's {} images", swept.len())));
+        ui.weak("A run each, in this order · double-click one for full size, ← / → there for the others");
+        ui.add_space(6.0);
+        ScrollArea::vertical().max_height((room.y - 120.0).max(200.0)).auto_shrink([false, true]).show(ui, |ui| {
+            for (row, line) in swept.iter().zip(names).enumerate().collect::<Vec<_>>().chunks(cols).enumerate() {
+                if row > 0 {
+                    ui.add_space(GAP);
+                }
+                ui.horizontal_top(|ui| {
+                    ui.spacing_mut().item_spacing.x = GAP;
+                    for (i, (image, name)) in line {
+                        ui.vertical(|ui| {
+                            ui.set_width(CELL);
+                            let (rect, r) =
+                                ui.allocate_exact_size(egui::vec2(CELL, CELL * 2.0 / 3.0), egui::Sense::click());
+                            let p = ui.painter_at(rect);
+                            p.rect_filled(rect, 3.0, egui::Color32::from_gray(30));
+                            let t = tex.thumb(root, image);
+                            crate::widgets::image_fit(&p, rect, t.as_ref());
+                            if r.hovered() {
+                                p.rect_stroke(rect, 3.0, (1.0, egui::Color32::GRAY), egui::StrokeKind::Inside);
+                            }
+                            if r.on_hover_text(name.as_str()).double_clicked() {
+                                out.push(Msg::PreviewAmong(swept.to_vec(), (*image).clone()));
+                            }
+                            ui.horizontal(|ui| {
+                                ui.weak(format!("{}", i + 1));
+                                ui.add(egui::Label::new(RichText::new(name.as_str()).strong()).truncate());
+                            });
+                            if let Some([w, h]) = tex.dims(root, image) {
+                                ui.weak(RichText::new(format!("{w} × {h}")).small());
+                            }
+                        });
+                    }
+                });
+            }
+        });
+        ui.add_space(6.0);
+        dialog_buttons(ui, |ui| {
+            if ui.button(RichText::new("Close   Esc").strong()).clicked() {
+                close = true;
+            }
+        });
+    });
+    // Esc closing the full-size preview over it leaves it open
+    if close || (m.should_close() && !previewing) {
+        ctx.data_mut(|d| d.remove::<bool>(open));
+    }
+}
+
 /// Names the project "New project from this image" or "Duplicate project
 /// with this image" makes.
 pub fn new_project_window(ctx: &egui::Context, st: &AppState, tex: &mut Textures, out: &mut Vec<Msg>) {
@@ -725,6 +892,69 @@ pub fn new_project_window(ctx: &egui::Context, st: &AppState, tex: &mut Textures
     });
     if m.should_close() {
         out.push(Msg::CancelNewProject);
+    }
+}
+
+/// New project with these as a sweep: the picked images, the project's
+/// name and where it goes (DESIGN.md, Image sweeps).
+pub fn sweep_project_window(ctx: &egui::Context, st: &AppState, tex: &mut Textures, out: &mut Vec<Msg>) {
+    let (Some(d), Some(root)) = (&st.sweep_project, &st.library) else { return };
+    let n = d.images.len();
+    let m = egui::Modal::new(egui::Id::unique("sweep_project")).show(ctx, |ui| {
+        ui.set_width(520.0);
+        ui.heading(ic(ph::STACK, "New project with these as a sweep"));
+        ScrollArea::vertical().max_height(200.0).show(ui, |ui| {
+            ui.horizontal_wrapped(|ui| {
+                for image in &d.images {
+                    let t = tex.thumb(root, image);
+                    thumb(ui, t.as_ref(), 56.0, false, None);
+                }
+            });
+        });
+        let folder = if d.parent.as_os_str().is_empty() {
+            "projects/".to_string()
+        } else {
+            format!("projects/{}/", d.parent.display())
+        };
+        ui.weak(format!(
+            "An image sweep of these {n} images, in pick order: a run each, the image its <image1>.              Made in {folder} and opened in Generate (nothing queued)."
+        ));
+        if n as u64 >= increart_gui_core::update::BIG_SWEEP {
+            ui.colored_label(NEUTRAL, format!("{n} images: {n} runs per seed"));
+        }
+        ui.label("Name");
+        let mut name = d.name.clone();
+        let r = ui.add(egui::TextEdit::singleline(&mut name).desired_width(f32::INFINITY));
+        crate::widgets::focus_until_done(&r);
+        if name != d.name {
+            out.push(Msg::EditSweepProjectName(name.clone()));
+        }
+        let problem = match increart_core::library::validate_name(name.trim()) {
+            Err(e) => Some(e.to_string()),
+            Ok(()) if st.project_name_taken(&d.parent.join("_"), name.trim()) => {
+                Some("already exists here".to_string())
+            }
+            Ok(()) => None,
+        };
+        if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) && problem.is_none() {
+            out.push(Msg::ConfirmSweepProject);
+        }
+        if let Some(e) = &problem {
+            ui.colored_label(BAD, e);
+        }
+        ui.add_space(4.0);
+        dialog_buttons(ui, |ui| {
+            let create = egui::Button::new(RichText::new(ic(ph::CHECK, "Create   Enter")).strong());
+            if ui.add_enabled(problem.is_none(), create).clicked() {
+                out.push(Msg::ConfirmSweepProject);
+            }
+            if ui.button("Cancel   Esc").clicked() {
+                out.push(Msg::SweepProject(false));
+            }
+        });
+    });
+    if m.should_close() {
+        out.push(Msg::SweepProject(false));
     }
 }
 
@@ -936,7 +1166,7 @@ pub fn preview_window(ctx: &egui::Context, st: &AppState, tex: &mut Textures, ke
     // ← / →: the previous / next image where it was opened from, an output
     // there, so it can be rated (its verdict) and used
     let at = st.preview_position();
-    let verdict = at.and_then(|(i, _)| Some(st.preview_list()?.get(i)?.verdict));
+    let verdict = at.filter(|_| st.preview_among.is_none()).and_then(|(i, _)| Some(st.preview_list()?.get(i)?.verdict));
     let rates = verdict.is_some();
     // opened from the contact sheet: ↑ / ↓ move between its style rows
     let rows = at.is_some() && st.tab == Tab::Review && st.review_view == increart_gui_core::ReviewView::Sheet;
@@ -1874,7 +2104,7 @@ fn generate(ui: &mut egui::Ui, st: &AppState, tex: &mut Textures, out: &mut Vec<
             ui.add(egui::TextEdit::singleline(&mut f.negative).desired_width(f32::INFINITY));
             if f.sweep.on {
                 ui.add_space(6.0);
-                crate::presets::sweep_panel(ui, st, &mut f, out);
+                crate::presets::sweep_panel(ui, st, &root, tex, &mut f, out);
             }
 
             ui.add_space(6.0);

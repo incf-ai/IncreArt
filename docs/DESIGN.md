@@ -1998,8 +1998,8 @@ and its tooltip says how many more are generating.
   seed saying why. The run and each image's recipe record them (ID,
   SHA-256, weight); the image details and run info show them.
 - Generate's **Mode**: **Single prompt** | **Sweep**, and the sweep box's
-  **Vary**: **Style** (a prompt preset per run, below) or a setting (see
-  *Setting sweeps*). In a style sweep the prompt is a **template**: `{preset}` marks where each preset's prompt goes
+  **Vary**: **Style** (a prompt preset per run, below), a setting (see
+  *Setting sweeps*) or **Image** (see *Image sweeps*). In a style sweep the prompt is a **template**: `{preset}` marks where each preset's prompt goes
   ("cute robot mascot sticker, {preset}"); a template without it is replaced
   by the preset's prompt (a note says so).
 - **Styles**: the presets ticked for the sweep, shown as "N ticked ·
@@ -2205,6 +2205,50 @@ the form has it, the same seeds in each.
   comparison chart; **settings** captions any image with its run's
   "20 steps · cfg 3 · shift 3.1 · strength 0.6".
 
+**Image sweeps.** Vary **Image**: a run per image, the same prompt and
+seeds in each, the image `<image1>` (or the start image) of its run. For
+one edit tried on several images, e.g. the styled outputs of a style sweep
+("<image1> at night, in heavy rain").
+
+- **New project with these as a sweep…** (the picks bar and a picked
+  image's right-click menu, in Review and the Output library's Grid): a new
+  project of the picked images as an image sweep, in pick order. It asks
+  the name (the picks' project's "<project> sweep", else "image sweep",
+  numbered if taken), says where it goes: the folder selected in the
+  Projects tree, beside the selected project, else the top level; and from
+  100 runs on how many it makes. **Create** makes it and opens it in
+  Generate (nothing queued): the prompt `<image1> `, the size, model preset,
+  steps and CFG of the first pick's run, its source idea.
+- The sweep box lists the images in order (thumbnail, its name, ↑ ↓ ×),
+  **From library…** adds more (the picker as for references), and the
+  summary reads "K images × N seeds = X images ≈ time". No cap: the count is
+  what was picked, and the summary shows it before Queue (which asks from
+  100 images, as for every sweep).
+- An image's name is its row on the contact sheet: an output's run's sweep
+  row (a style sweep's "Modern anime", "cfg 3") or its run's label, an input
+  image's idea title (else "input image"); names that repeat get the seed
+  (or the image's ID) after them ("Modern anime · s0003").
+- In the Images pane the swept image is a placeholder first in the list: a
+  stacked thumbnail, "swept · K images", tagged `<image1>` (the form's own
+  references follow from `<image2>`) or **start** (each run's start image,
+  the keep slider under it; the list's own start image isn't used then).
+  Double-clicking it opens a modal of all K images, larger, numbered and
+  named (double-click one for full size, where ← / → step through the
+  sweep's images, not the project's; Close or Esc). It has no ×: Vary
+  something else and it goes (the images stay in the sweep's settings, as a
+  setting sweep's values do). It counts as one reference in "3 / 9", and
+  **use size** is offered when all the images
+  share one size.
+- Runs are labelled `r05 · Modern anime` and tagged with the name
+  (`param: SweepParam { name: "image", value: "Modern anime" }`; `name` is
+  `start_image` when it is the start image). The run's own `refs` (or
+  `init`) hold the image, so its lineage leads back to it and Clean up keeps
+  it. On the contact sheet each row starts with its image's thumbnail and
+  its button is **Use this image** (its run in Generate). **New sweep from
+  their K images…** on the sheet's picks sweeps just those images again.
+- One thing varies per sweep: an image sweep has no styles and no setting
+  values (Vary chooses one).
+
 **Review.** A project's runs are listed under it in Review's scope, newest
 first: a single run by its label (`r03 (unreviewed)`, scoping
 Review to that run's images), a sweep once (`sweep r05 (unreviewed)`). Only
@@ -2283,7 +2327,8 @@ out as one image.
   does another tab, scope or source. Picks are numbered in the order picked,
   which is the order they are tiled in.
 - While anything is picked, a bar shows **N picked · Good Neutral Bad ·
-  Tile… · Clear**, and in Review 1/G, 2/N, 3/B rate every picked image (each
+  Tile… · New project with these as a sweep… · Clear** (see *Image
+  sweeps*), and in Review 1/G, 2/N, 3/B rate every picked image (each
   is a separate Ctrl+Z). Rated images leave Review's queue, so the picks go
   with them there; the contact sheet keeps them.
 - **Tile…** (T) opens the Tile window (a modal: the rest dims; Close or
@@ -2787,8 +2832,8 @@ without the chat server's name, `PE ● ready`), and which form fits is worked
 out from those widths, so the bar doesn't move as states change many times a
 second. The same goes for the servers list (Jobs, its popover, the server
 status window: the state column a fixed 240 px, cut), the jobs popover (a
-fixed 520 px) and the server status window's PE line (Start now / Stop
-before the state, which is cut to the room left). The window is at least
+fixed 680 px, less on a narrow window) and the server status window's PE
+line (Start now / Stop before the state, which is cut to the room left). The window is at least
 1000 × 640.
 
 Each tab label is an icon, a Title Case name and a count (Home has none):

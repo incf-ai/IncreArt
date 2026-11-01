@@ -305,6 +305,8 @@ pub enum PickTarget {
     /// Compare with…: the image clicked becomes A, against Review's image
     /// (or the Output library's selected one) as B.
     Compare,
+    /// Generate's image sweep: added after its images.
+    Sweep,
 }
 
 impl RefSource {
@@ -536,9 +538,7 @@ pub fn settings_changes(a: &GenerateDraft, b: &GenerateDraft) -> Vec<String> {
     if a.seeds != b.seeds {
         v.push(format!("seeds {} → {}", a.seeds, b.seeds));
     }
-    let images = |d: &GenerateDraft| {
-        if d.images.is_empty() { images_of(&d.refs, d.init.as_ref()) } else { d.images.clone() }
-    };
+    let images = |d: &GenerateDraft| draft_images(d);
     let (ia, ib) = (images(a), images(b));
     let added = ib.iter().filter(|x| !ia.iter().any(|y| y.image == x.image)).count();
     let removed = ia.iter().filter(|x| !ib.iter().any(|y| y.image == x.image)).count();
@@ -1554,6 +1554,13 @@ fn in_sweep(p: &ProjectEntry, run: &Id, sweep: &str) -> bool {
     p.runs.iter().any(|r| &r.id == run && r.sweep.as_ref().is_some_and(|s| s.name == sweep))
 }
 
+/// A draft's image list; older drafts have only `refs` and `init` (an
+/// image sweep's `refs` start with its first image, which isn't the list's).
+fn draft_images(d: &GenerateDraft) -> Vec<GenerateImage> {
+    let image_sweep = d.sweep.on && d.sweep.vary == increart_core::prompts::SweepVary::Image;
+    if !d.images.is_empty() || image_sweep { d.images.clone() } else { images_of(&d.refs, d.init.as_ref()) }
+}
+
 /// The image list for references and a start image (older drafts and runs
 /// keep them apart): the references in order, the start image marked on its
 /// reference or added after them.
@@ -1626,6 +1633,16 @@ pub struct NewProjectDialog {
     pub image: ImageRef,
     pub target: UseTarget,
     pub name: String,
+}
+
+/// New project with these as a sweep (DESIGN.md, Image sweeps): the
+/// picked images, the project's name, and the folder it goes in (relative
+/// to `projects/`).
+#[derive(Clone, Debug, PartialEq)]
+pub struct SweepProjectDialog {
+    pub images: Vec<ImageRef>,
+    pub name: String,
+    pub parent: PathBuf,
 }
 
 /// Home's Start a new project: its name, and the references to add once
@@ -2324,7 +2341,7 @@ impl GenerateForm {
             flow_shift: d.flow_shift,
             seeds: d.seeds,
             first_seed: d.first_seed,
-            images: if d.images.is_empty() { images_of(&d.refs, d.init.as_ref()) } else { d.images.clone() },
+            images: draft_images(d),
             strength: d.strength,
             source_idea: d.source_idea.clone(),
             // ticks from before Modify style was split, in the style tasks
@@ -2355,19 +2372,43 @@ impl GenerateForm {
         f
     }
 
-    /// The references, in order (`<image1>` first).
-    pub fn refs(&self) -> Vec<ImageRef> {
-        self.images.iter().filter(|i| i.reference).map(|i| i.image.clone()).collect()
+    /// An image sweep's images, while the form sweeps them (the first
+    /// stands for them all in [`Self::refs`] and [`Self::init`]).
+    pub fn swept(&self) -> &[ImageRef] {
+        let s = &self.sweep;
+        if s.on && s.vary == increart_core::prompts::SweepVary::Image { &s.images } else { &[] }
     }
 
-    /// The img2img start image, if any.
+    /// The swept image's place: `<image1>`, before the list's references.
+    fn swept_ref(&self) -> Option<&ImageRef> {
+        self.swept().first().filter(|_| !self.sweep.image_start)
+    }
+
+    /// The references, in order (`<image1>` first; in an image sweep, the
+    /// first swept image).
+    pub fn refs(&self) -> Vec<ImageRef> {
+        let own = self.images.iter().filter(|i| i.reference).map(|i| i.image.clone());
+        self.swept_ref().cloned().into_iter().chain(own).collect()
+    }
+
+    /// The img2img start image, if any (the first swept image when the
+    /// sweep's images are the start image).
     pub fn init(&self) -> Option<ImageRef> {
+        if self.sweep.image_start
+            && let Some(i) = self.swept().first()
+        {
+            return Some(i.clone());
+        }
         self.images.iter().find(|i| i.start).map(|i| i.image.clone())
     }
 
     /// The `<imageN>` number of the list's `i`th image, if it's a reference.
     pub fn tag_of(&self, i: usize) -> Option<usize> {
-        self.images.get(i).filter(|x| x.reference).map(|_| self.images[..i].iter().filter(|x| x.reference).count() + 1)
+        let before = usize::from(self.swept_ref().is_some()) + 1;
+        self.images
+            .get(i)
+            .filter(|x| x.reference)
+            .map(|_| self.images[..i].iter().filter(|x| x.reference).count() + before)
     }
 
     /// Adds an image as the next reference (or makes it one, if it's in the
@@ -2382,7 +2423,7 @@ impl GenerateForm {
     /// Makes an image the start image (at most one); returns the one it
     /// replaced.
     pub fn set_start(&mut self, image: ImageRef) -> Option<ImageRef> {
-        let old = self.init().filter(|o| *o != image);
+        let old = self.images.iter().find(|i| i.start).map(|i| i.image.clone()).filter(|o| *o != image);
         for i in &mut self.images {
             i.start = i.image == image;
         }
@@ -3066,6 +3107,9 @@ pub struct AppState {
     /// An image shown large over everything (double-click a reference or
     /// the start image in Generate).
     pub preview: Option<ImageRef>,
+    /// What the preview's ← / → step through when it was opened on a list
+    /// of its own (an image sweep's images), not where it was opened.
+    pub preview_among: Option<Vec<ImageRef>>,
     /// The title dialog of an output image, while open.
     pub title_edit: Option<TitleEdit>,
     /// Generate's From library… picker, while open.
@@ -3094,6 +3138,7 @@ pub struct AppState {
     pub watch_status: String,
     /// Naming the project New project / Duplicate with an image makes.
     pub new_project: Option<NewProjectDialog>,
+    pub sweep_project: Option<SweepProjectDialog>,
     /// Home's Start a new project dialog.
     pub start_project: Option<StartProjectDialog>,
     /// Naming a project's plain Duplicate.
@@ -3372,6 +3417,7 @@ impl AppState {
             recipe_editor: None,
             scale: None,
             preview: None,
+            preview_among: None,
             ref_picker: None,
             ref_picker_source: None,
             title_edit: None,
@@ -3391,6 +3437,7 @@ impl AppState {
             alerts: Alerts { focused: true, ..Default::default() },
             retag: None,
             new_project: None,
+            sweep_project: None,
             start_project: None,
             sweep_order_ask: None,
             sweep_order_asked: false,
@@ -3842,6 +3889,9 @@ impl AppState {
     /// Where the preview is in [`Self::preview_list`]: (index, count).
     pub fn preview_position(&self) -> Option<(usize, usize)> {
         let p = self.preview.as_ref()?;
+        if let Some(among) = &self.preview_among {
+            return among.iter().position(|i| i == p).map(|i| (i, among.len()));
+        }
         let list = self.preview_list()?;
         list.iter().position(|o| &o.image == p).map(|i| (i, list.len()))
     }
@@ -4360,6 +4410,40 @@ impl AppState {
     /// The link of a store image (the first project link to it), any verdict.
     pub fn output_link(&self, image: &ImageRef) -> Option<&OutputLink> {
         self.index.projects.iter().flat_map(|p| &p.outputs).find(|o| &o.image == image)
+    }
+
+    /// An image sweep's images' names, in order (DESIGN.md, Image sweeps):
+    /// an output's run's sweep row or label, an input image's idea title;
+    /// one that repeats gets its seed (or ID) after it.
+    pub fn swept_names(&self, images: &[ImageRef]) -> Vec<String> {
+        let named: Vec<(String, String)> = images
+            .iter()
+            .map(|i| match self.output_link(i) {
+                Some(o) => {
+                    let run = self.index.run(&o.name.run).map(|(_, r)| r);
+                    let name = run.map_or_else(
+                        || o.name.run.to_string(),
+                        |r| r.sweep.as_ref().map_or_else(|| r.label.clone(), |s| s.row()),
+                    );
+                    (name, format!("s{:04}", o.name.seed))
+                }
+                None => {
+                    let idea = self.index.ideas.iter().find(|e| e.idea.images.contains(&i.id));
+                    let title = idea.map(|e| e.idea.title.trim().to_string()).filter(|t| !t.is_empty());
+                    (title.unwrap_or_else(|| "input image".into()), i.id.to_string())
+                }
+            })
+            .collect();
+        named
+            .iter()
+            .map(|(name, more)| {
+                if named.iter().filter(|(n, _)| n == name).count() > 1 {
+                    format!("{name} · {more}")
+                } else {
+                    name.clone()
+                }
+            })
+            .collect()
     }
 
     /// The Output library Grid's images for the chosen source, newest first.

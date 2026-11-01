@@ -594,7 +594,14 @@ pub fn save_window(ctx: &egui::Context, st: &AppState, out: &mut Vec<Msg>) {
 /// all or a random few, the `{slot}` values, and what Queue will make.
 /// The Generate form's sweep: what it varies, then the styles (a prompt
 /// preset per run) or the setting's values (DESIGN.md, Sweeps).
-pub fn sweep_panel(ui: &mut egui::Ui, st: &AppState, f: &mut GenerateForm, out: &mut Vec<Msg>) {
+pub fn sweep_panel(
+    ui: &mut egui::Ui,
+    st: &AppState,
+    root: &std::path::Path,
+    tex: &mut crate::textures::Textures,
+    f: &mut GenerateForm,
+    out: &mut Vec<Msg>,
+) {
     use increart_core::prompts::SweepVary;
     egui::Frame::group(ui.style()).show(ui, |ui| {
         ui.set_width(ui.available_width());
@@ -607,6 +614,7 @@ pub fn sweep_panel(ui: &mut egui::Ui, st: &AppState, f: &mut GenerateForm, out: 
                     SweepVary::Style => "a run per chosen prompt preset",
                     SweepVary::Strength if f.init().is_none() => "needs a start image",
                     SweepVary::Model => "a run per model preset, each with its own steps and CFG",
+                    SweepVary::Image => "a run per image, each its run's <image1> (or start image)",
                     _ => "a run per value, the rest as the form has it",
                 };
                 let ok = v != SweepVary::Strength || f.init().is_some();
@@ -620,10 +628,10 @@ pub fn sweep_panel(ui: &mut egui::Ui, st: &AppState, f: &mut GenerateForm, out: 
                 }
             }
         });
-        if f.sweep.vary == SweepVary::Style {
-            style_sweep(ui, st, f, out);
-        } else {
-            setting_sweep(ui, st, f);
+        match f.sweep.vary {
+            SweepVary::Style => style_sweep(ui, st, f, out),
+            SweepVary::Image => image_sweep(ui, st, root, tex, f, out),
+            _ => setting_sweep(ui, st, f),
         }
     });
 }
@@ -707,6 +715,82 @@ fn setting_sweep(ui: &mut egui::Ui, st: &AppState, f: &mut GenerateForm) {
                     crate::widgets::NEUTRAL,
                     "At CFG 1 or below the negative prompt isn't used (and each step is about twice as fast).",
                 );
+            }
+        }
+    }
+}
+
+/// An image sweep's images in order (thumbnail, name, ↑ ↓ ×), From
+/// library… for more, and the runs they make (DESIGN.md, Image sweeps).
+fn image_sweep(
+    ui: &mut egui::Ui,
+    st: &AppState,
+    root: &std::path::Path,
+    tex: &mut crate::textures::Textures,
+    f: &mut GenerateForm,
+    out: &mut Vec<Msg>,
+) {
+    let names = st.swept_names(&f.sweep.images);
+    let n = f.sweep.images.len();
+    ui.horizontal(|ui| {
+        ui.label("Images");
+        let role = if f.sweep.image_start { "start image" } else { "<image1>" };
+        ui.weak(format!("{n} · each its run's {role}"));
+        if ui.button(ic(ph::IMAGES, "From library…")).on_hover_text("add images to the sweep").clicked() {
+            out.push(Msg::SweepPicker);
+        }
+    });
+    // (from, to): a move, or a removal with no `to`
+    let mut change: Option<(usize, Option<usize>)> = None;
+    ScrollArea::vertical().id_salt("sweep_images").max_height(330.0).auto_shrink([false, true]).show(ui, |ui| {
+        for (i, (image, name)) in f.sweep.images.iter().zip(&names).enumerate() {
+            ui.horizontal(|ui| {
+                let t = tex.thumb(root, image);
+                let resp =
+                    crate::widgets::thumb(ui, t.as_ref(), 48.0, false, None).on_hover_text("double-click to view");
+                if resp.double_clicked() {
+                    out.push(Msg::Preview(Some(image.clone())));
+                }
+                ui.label(name);
+                ui.weak(tex.dims_text(root, image));
+                if ui.add_enabled(i > 0, egui::Button::new(ph::ARROW_UP).small()).on_hover_text("move up").clicked() {
+                    change = Some((i, Some(i - 1)));
+                }
+                let down = egui::Button::new(ph::ARROW_DOWN).small();
+                if ui.add_enabled(i + 1 < n, down).on_hover_text("move down").clicked() {
+                    change = Some((i, Some(i + 1)));
+                }
+                if ui.small_button(ph::X).on_hover_text("take it out of the sweep").clicked() {
+                    change = Some((i, None));
+                }
+            });
+        }
+    });
+    match change {
+        Some((i, Some(j))) => f.sweep.images.swap(i, j),
+        Some((i, None)) => {
+            f.sweep.images.remove(i);
+        }
+        None => {}
+    }
+    match increart_gui_core::update::image_runs(f, &st.swept_names(&f.sweep.images)) {
+        Err(e) => {
+            ui.colored_label(BAD, e);
+        }
+        Ok(runs) => {
+            let secs: f32 = runs.iter().map(|(r, _)| crate::projects::estimate(st, r) * r.seeds as f32).sum();
+            let images = runs.len() as u64 * f.seeds;
+            let line = format!(
+                "{} {} × {} seeds = {images} images ≈ {} of GPU time · same seeds for every image",
+                runs.len(),
+                if runs.len() == 1 { "image" } else { "images" },
+                f.seeds,
+                crate::projects::fmt_secs(secs)
+            );
+            if images > increart_gui_core::update::BIG_SWEEP {
+                ui.colored_label(crate::widgets::NEUTRAL, format!("{line} (Queue asks first)"));
+            } else {
+                ui.label(line);
             }
         }
     }

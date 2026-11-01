@@ -419,7 +419,7 @@ pub enum Msg {
     SheetRow(usize, Verdict),
     /// This many more seeds for every style with a Good image.
     SheetMoreSeeds(u64),
-    /// The styles (or values) of the sweep's images picked, as a new sweep
+    /// The styles (values, images) of the sweep's images picked, as a new sweep
     /// in Generate.
     SheetNewSweep,
     /// A run's prompt and settings into its project's Generate form.
@@ -763,8 +763,17 @@ pub enum Msg {
     EditNewProjectName(String),
     ConfirmNewProject,
     CancelNewProject,
+    /// New project with these as a sweep: opened on the picks (true) or
+    /// cancelled; its name; Create.
+    SweepProject(bool),
+    EditSweepProjectName(String),
+    ConfirmSweepProject,
+    /// Generate's image sweep's From library…
+    SweepPicker,
     /// Shows an image large (`None` closes it).
     Preview(Option<ImageRef>),
+    /// Shows the image large, ← / → stepping through the list.
+    PreviewAmong(Vec<ImageRef>, ImageRef),
     /// The large preview's next (1) or previous (-1) image in
     /// [`AppState::preview_list`], selecting it there too.
     PreviewStep(isize),
@@ -3505,6 +3514,20 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
             });
             vec![]
         }
+        Msg::SweepPicker => {
+            let source = match &state.ref_picker_source {
+                Some(s) if !s.contextual() => s.clone(),
+                _ => RefSource::Outputs(OutputSource::AllProjects),
+            };
+            state.ref_picker = Some(RefPicker {
+                source,
+                text: String::new(),
+                ratings: Ratings::KEPT,
+                chosen: vec![],
+                target: PickTarget::Sweep,
+            });
+            vec![]
+        }
         Msg::RefPicker(false) => {
             state.ref_picker = None;
             vec![]
@@ -3536,9 +3559,13 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
             compare_against(state, img)
         }
         Msg::RefPickerToggle(img) => {
-            let refs = state.generate.refs();
+            let refs = match state.ref_picker.as_ref().map(|p| &p.target) {
+                Some(PickTarget::Generate) => state.generate.refs(),
+                Some(PickTarget::Sweep) => state.generate.sweep.images.clone(),
+                _ => vec![],
+            };
             if let Some(p) = &mut state.ref_picker
-                && (p.target != PickTarget::Generate || !refs.contains(&img))
+                && !refs.contains(&img)
             {
                 match p.chosen.iter().position(|c| *c == img) {
                     Some(i) => {
@@ -3561,6 +3588,16 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
                     Some(a) => compare_against(state, a),
                     None => vec![],
                 },
+                PickTarget::Sweep => {
+                    let sw = &mut state.generate.sweep;
+                    for i in p.chosen {
+                        if !sw.images.contains(&i) {
+                            sw.images.push(i);
+                        }
+                    }
+                    mark_generate(state);
+                    vec![]
+                }
             }
         }
         Msg::CompareWith(image) => {
@@ -4919,12 +4956,52 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
             state.new_project = None;
             vec![]
         }
+        Msg::SweepProject(true) => {
+            if state.picked.is_empty() || state.library.is_none() {
+                return vec![];
+            }
+            state.sweep_project = Some(sweep_project_dialog(state, state.picked.clone()));
+            vec![]
+        }
+        Msg::SweepProject(false) => {
+            state.sweep_project = None;
+            vec![]
+        }
+        Msg::EditSweepProjectName(n) => {
+            if let Some(d) = &mut state.sweep_project {
+                d.name = n;
+            }
+            vec![]
+        }
+        Msg::ConfirmSweepProject => {
+            let Some(d) = state.sweep_project.take() else { return vec![] };
+            let name = d.name.trim().to_string();
+            if increart_core::library::validate_name(&name).is_err()
+                || state.project_name_taken(&d.parent.join("_"), &name)
+            {
+                state.sweep_project = Some(d);
+                return vec![];
+            }
+            let form = sweep_project_form(state, d.images);
+            lib(state, LibOp::PrepareProject { parent: d.parent, name, copy_of: None, form, then: StartRefs::None })
+        }
         Msg::Preview(image) => {
             state.preview = image;
+            state.preview_among = None;
+            vec![]
+        }
+        Msg::PreviewAmong(list, image) => {
+            state.preview = Some(image);
+            state.preview_among = Some(list);
             vec![]
         }
         Msg::PreviewStep(d) => {
             let Some((i, n)) = state.preview_position() else { return vec![] };
+            if let Some(among) = &state.preview_among {
+                let j = (i as isize + d).clamp(0, n as isize - 1) as usize;
+                state.preview = among.get(j).cloned();
+                return vec![];
+            }
             let j = (i as isize + d).clamp(0, n as isize - 1) as usize;
             let img = state.preview_list().and_then(|l| l.get(j).map(|o| o.image.clone()));
             if j == i || img.is_none() {
@@ -7150,6 +7227,28 @@ fn new_sweep(state: &mut AppState, ask: NewSweepAsk, entries: &[HistoryEntry]) -
     s.random = 0;
     let mut gone = vec![];
     match param {
+        Some(param) if let Some(start) = param.image() => {
+            s.vary = SweepVary::Image;
+            s.image_start = start;
+            // each run's image: its start image, else its <image1>
+            s.images = runs
+                .iter()
+                .filter_map(|r| match &r.mode {
+                    increart_core::model::Mode::Edit { init: Some(i), .. } if start => Some(i.clone()),
+                    _ if !start => r.refs.first().cloned(),
+                    _ => None,
+                })
+                .collect();
+            if form.is_none() {
+                // the form is the first run's: its image is the sweep's
+                if let Some(first) = s.images.first() {
+                    let at = f.images.iter().position(|i| &i.image == first);
+                    if let Some(at) = at {
+                        f.images.remove(at);
+                    }
+                }
+            }
+        }
         Some(param) => {
             s.vary = SweepVary::EVERY.into_iter().find(|v| v.key() == param.name).unwrap_or_default();
             let values: Vec<String> = tags.iter().filter_map(|t| t.param.as_ref()).map(|p| p.value.clone()).collect();
@@ -7211,7 +7310,11 @@ fn new_sweep(state: &mut AppState, ask: NewSweepAsk, entries: &[HistoryEntry]) -
     f.sweep.enhance_ask = state.generate.sweep.enhance_ask.take();
     state.generate = f;
     mark_generate(state);
-    let what = if param.is_some() { "values" } else { "styles" };
+    let what = match param {
+        Some(p) if p.image().is_some() => "images",
+        Some(_) => "values",
+        None => "styles",
+    };
     let mut note = format!("Sweep {} again: {n} {what} in Generate, to queue", ask.sweep);
     if form.is_none() {
         note.push_str("; its template wasn't in the prompt history, so each style keeps its run's prompt");
@@ -7262,6 +7365,9 @@ pub const BIG_SWEEP: u64 = 100;
 pub fn sweep_runs(state: &AppState) -> Result<(Vec<(GenerateForm, SweepTag)>, usize), String> {
     use increart_core::prompts::{slot_names, sweep_presets};
     let f = &state.generate;
+    if f.sweep.vary == increart_core::prompts::SweepVary::Image {
+        return image_runs(f, &state.swept_names(&f.sweep.images)).map(|r| (r, 0));
+    }
     if f.sweep.vary != increart_core::prompts::SweepVary::Style {
         return param_runs(f, &state.config.recipes).map(|r| (r, 0));
     }
@@ -7381,9 +7487,59 @@ pub fn param_runs(f: &GenerateForm, recipes: &[RecipePreset]) -> Result<Vec<(Gen
                         (run.preset, run.steps, run.cfg, run.flow_shift) = (i, p.steps, p.cfg, p.flow_shift);
                     }
                 }
-                SweepVary::Style => {}
+                SweepVary::Style | SweepVary::Image => {}
             }
             run.label = format!("{name} · {}", param.label());
+            let tag = SweepTag {
+                name: name.clone(),
+                task: String::new(),
+                preset: String::new(),
+                param: Some(param),
+                enhanced: false,
+            };
+            (run, tag)
+        })
+        .collect();
+    Ok(runs)
+}
+
+/// An image sweep's runs: one per image (`names`, its name), the image
+/// `<image1>` or the start image and the rest as the form has it.
+pub fn image_runs(f: &GenerateForm, names: &[String]) -> Result<Vec<(GenerateForm, SweepTag)>, String> {
+    use increart_core::prompts::{PRESET_SLOT, fill_slots};
+    if f.sweep.images.is_empty() {
+        return Err("No images to sweep: add them with From library…".into());
+    }
+    if f.prompt.contains(PRESET_SLOT) {
+        return Err(format!("{PRESET_SLOT} in the prompt is for style sweeps: take it out, or vary the style"));
+    }
+    let prompt = fill_slots(f.prompt.clone(), &f.sweep.slots);
+    let unfilled: Vec<String> =
+        increart_core::prompts::slot_names([prompt.as_str()]).into_iter().map(|n| format!("{{{n}}}")).collect();
+    if !unfilled.is_empty() {
+        return Err(format!("Fill in {} (type over it) before queueing", unfilled.join(", ")));
+    }
+    let start = f.sweep.image_start;
+    let name = f.label.trim().to_string();
+    let runs = f
+        .sweep
+        .images
+        .iter()
+        .zip(names)
+        .map(|(image, value)| {
+            let mut run = f.clone();
+            run.sweep = Default::default();
+            run.prompt = prompt.clone();
+            if start {
+                // the list's own start image isn't used
+                for i in &mut run.images {
+                    i.start = false;
+                }
+            }
+            run.images
+                .insert(0, increart_core::model::GenerateImage { image: image.clone(), reference: !start, start });
+            run.label = format!("{name} · {value}");
+            let param = SweepParam { name: if start { "start_image" } else { "image" }.into(), value: value.clone() };
             let tag = SweepTag {
                 name: name.clone(),
                 task: String::new(),
@@ -7470,7 +7626,7 @@ pub fn sweep_defaults(vary: increart_core::prompts::SweepVary, f: &GenerateForm)
             [0.5, 2.0 / 3.0, 1.0, 4.0 / 3.0, 2.0].iter().map(|k| round(x * k, 0.1)).collect()
         }
         SweepVary::Strength => vec![0.3, 0.45, 0.6, 0.75, 0.9],
-        SweepVary::Style | SweepVary::Model => vec![],
+        SweepVary::Style | SweepVary::Model | SweepVary::Image => vec![],
     };
     let mut v = v;
     v.dedup();
@@ -7718,6 +7874,56 @@ fn use_image(state: &mut AppState, image: ImageRef, target: UseTarget) -> Vec<Ef
             vec![]
         }
     }
+}
+
+/// New project with these as a sweep's dialog: named after the picks'
+/// project (numbered if taken), in the folder selected in the Projects
+/// tree, beside the selected project, else at the top level.
+fn sweep_project_dialog(state: &AppState, images: Vec<ImageRef>) -> SweepProjectDialog {
+    let rel = |dir: &std::path::Path| dir.strip_prefix("projects").map(PathBuf::from).unwrap_or_default();
+    let parent = match (&state.proj_folder, state.project_entry()) {
+        (Some(folder), _) => folder.clone(),
+        (None, Some(p)) => rel(&p.dir).parent().map(PathBuf::from).unwrap_or_default(),
+        (None, None) => PathBuf::new(),
+    };
+    let mut projects: Vec<String> = images
+        .iter()
+        .filter_map(|i| state.output_link(i))
+        .filter_map(|o| state.project_of_link(o))
+        .map(|p| p.name())
+        .collect();
+    projects.sort();
+    projects.dedup();
+    let base = match projects.as_slice() {
+        [one] if images.iter().all(|i| state.output_link(i).is_some()) => format!("{one} sweep"),
+        _ => "image sweep".to_string(),
+    };
+    let mut name = base.clone();
+    for n in 2.. {
+        if !state.project_name_taken(&parent.join("_"), &name) {
+            break;
+        }
+        name = format!("{base} {n}");
+    }
+    SweepProjectDialog { images, name, parent }
+}
+
+/// The Generate form a sweep project opens on: an image sweep of `images`,
+/// with the first one's run's size, model preset, steps, CFG and source
+/// idea, and the prompt `<image1> `.
+fn sweep_project_form(state: &AppState, images: Vec<ImageRef>) -> GenerateForm {
+    let run = images.first().and_then(|i| state.output_link(i)).and_then(|o| state.index.run(&o.name.run));
+    let mut f = match run {
+        Some((_, r)) => GenerateForm::from_run(r, &state.config),
+        None => GenerateForm::new(&state.config),
+    };
+    f.prompt = "<image1> ".into();
+    f.negative.clear();
+    f.images.clear();
+    f.sweep.on = true;
+    f.sweep.vary = increart_core::prompts::SweepVary::Image;
+    f.sweep.images = images;
+    f
 }
 
 /// Makes the project the New project / Duplicate dialog named.
@@ -8354,9 +8560,10 @@ fn restore_form(state: &mut AppState, d: &increart_core::model::GenerateDraft) {
         notes.push(format!("model preset {} no longer exists, kept the current one", d.preset));
     }
     if let Some(root) = &state.library {
-        let before = f.images.len();
+        let before = f.images.len() + f.sweep.images.len();
         f.images.retain(|i| i.image.path(root).is_file());
-        let gone = before - f.images.len();
+        f.sweep.images.retain(|i| i.path(root).is_file());
+        let gone = before - f.images.len() - f.sweep.images.len();
         if gone > 0 {
             notes.push(format!("{gone} image(s) no longer in the library were left out"));
         }

@@ -7233,3 +7233,163 @@ fn home_starts_a_project_and_asks_for_references() {
     assert!(h.state.start_project.is_none());
     assert!(h.errors().is_empty(), "{:?}", h.errors());
 }
+
+#[test]
+fn picked_images_make_an_image_sweep_in_a_new_project() {
+    use increart_core::model::Mode;
+    use increart_core::prompts::{PromptPreset, PromptPresets, PromptTask, SweepVary};
+    let mut h = Harness::new();
+    h.send(Msg::NewProject(PathBuf::new()));
+    h.send(Msg::CommitRename);
+    h.settle();
+    h.state.no_server_warned = true;
+    let preset =
+        |name: &str, prompt: &str| PromptPreset { name: name.into(), prompt: prompt.into(), ..Default::default() };
+    h.state.prompt_presets = PromptPresets {
+        tasks: vec![PromptTask {
+            name: "Looks".into(),
+            description: String::new(),
+            presets: vec![preset("Clay", "claymation"), preset("Ink", "ink")],
+        }],
+    };
+    // a style sweep's outputs to pick from
+    let mut f = h.state.generate.clone();
+    f.prompt = "a fox, {preset}".into();
+    f.sweep.on = true;
+    f.steps = 12;
+    f.seeds = 1;
+    h.send(Msg::Generate(f));
+    h.send(Msg::SweepTicks(vec![(0, 0), (0, 1)], true));
+    h.send(Msg::QueueGenerate);
+    h.settle();
+    let p = h.state.project_entry().unwrap();
+    for r in &p.runs {
+        let seeds: Vec<u64> = r.all_seeds().map(|(_, s)| s).collect();
+        Library_::steal(&h.root).write_seeds(&r.id, &seeds);
+    }
+    h.rt.run(Effect::Rescan);
+    h.settle();
+    let style_of = |h: &Harness, i: &increart_core::ImageRef| {
+        let run = &h.state.output_link(i).unwrap().name.run;
+        h.state.index.run(run).unwrap().1.sweep.as_ref().unwrap().preset.clone()
+    };
+    let mut images: Vec<_> = h.state.project_entry().unwrap().outputs.iter().map(|o| o.image.clone()).collect();
+    images.sort_by_key(|i| std::cmp::Reverse(style_of(&h, i)));
+    assert_eq!(images.iter().map(|i| style_of(&h, i)).collect::<Vec<_>>(), ["Ink", "Clay"], "picked Ink first");
+
+    // the folder selected in the Projects tree is where it goes
+    h.send(Msg::NewFolder(increart_core::Tree::Projects, PathBuf::new()));
+    h.settle();
+    h.send(Msg::EditRename("dest".into()));
+    h.send(Msg::CommitRename);
+    h.settle();
+    h.send(Msg::SelectProjectFolder(Some("dest".into())));
+    h.send(Msg::Tab(Tab::OutputLibrary));
+    h.send(Msg::PickSet(images.clone()));
+    h.send(Msg::SweepProject(true));
+    let d = h.state.sweep_project.clone().expect("the dialog");
+    assert_eq!((d.name.as_str(), d.parent.as_path()), ("new project sweep", Path::new("dest")));
+    assert_eq!(d.images, images, "in pick order");
+    h.send(Msg::ConfirmSweepProject);
+    h.settle();
+    assert!(h.errors().is_empty(), "{:?}", h.errors());
+    assert_eq!(h.state.project_entry().unwrap().dir, Path::new("projects/dest/new project sweep"));
+    assert_eq!((h.state.tab, h.state.projects_tab), (Tab::Projects, ProjectsTab::Generate));
+    let g = h.state.generate.clone();
+    assert!(g.sweep.on && g.sweep.vary == SweepVary::Image);
+    assert_eq!(g.sweep.images, images);
+    assert_eq!((g.prompt.as_str(), g.steps), ("<image1> ", 12), "the first pick's run's settings");
+    assert!(g.images.is_empty());
+    // the first swept image stands for them all: <image1>, the form's own after it
+    assert_eq!(g.refs(), [images[0].clone()]);
+    let mut own = g.clone();
+    own.add_reference(images[1].clone());
+    assert_eq!((own.tag_of(0), own.refs().len()), (Some(2), 2));
+    // a draft comes back without the swept image in the list
+    let back = GenerateForm::from_draft(&g.to_draft(&h.state.config), &h.state.config);
+    assert!(back.images.is_empty() && back.sweep.images == images);
+
+    // a run per image, named by its style, the image its <image1>
+    let (runs, _) = update::sweep_runs(&h.state).unwrap();
+    let got: Vec<_> = runs.iter().map(|(f, t)| (f.label.clone(), f.refs(), t.param.clone().unwrap())).collect();
+    let label = g.label.clone();
+    let param = |name: &str, value: &str| increart_core::model::SweepParam { name: name.into(), value: value.into() };
+    assert_eq!(
+        got,
+        [
+            (format!("{label} · Ink"), vec![images[0].clone()], param("image", "Ink")),
+            (format!("{label} · Clay"), vec![images[1].clone()], param("image", "Clay")),
+        ]
+    );
+    // or each run's start image
+    let mut start = g.clone();
+    start.sweep.image_start = true;
+    assert_eq!(start.init(), Some(images[0].clone()));
+    assert!(start.refs().is_empty());
+    let runs = update::image_runs(&start, &h.state.swept_names(&images)).unwrap();
+    assert_eq!(runs[1].0.init(), Some(images[1].clone()));
+    assert_eq!(runs[1].1.param, Some(param("start_image", "Clay")));
+    // names that repeat get the seed
+    assert_eq!(h.state.swept_names(&[images[0].clone(), images[0].clone()]), ["Ink · s0000", "Ink · s0000"]);
+    let mut none = g.clone();
+    none.sweep.images.clear();
+    assert!(update::image_runs(&none, &[]).unwrap_err().contains("No images to sweep"));
+
+    // queued: the runs hold their images
+    h.send(Msg::QueueGenerate);
+    h.settle();
+    assert!(h.errors().is_empty(), "{:?}", h.errors());
+    let p = h.state.project_entry().unwrap();
+    let project = p.project.id.clone();
+    let mut queued: Vec<_> = p.runs.clone();
+    queued.sort_by(|a, b| a.id.cmp(&b.id));
+    assert_eq!(queued.len(), 2);
+    assert_eq!(queued[1].refs, [images[1].clone()]);
+    assert!(matches!(queued[1].mode, Mode::Generate));
+    assert_eq!(queued[1].sweep.as_ref().unwrap().row(), "Clay");
+
+    // its sheet's picks sweep just those images again
+    for r in &queued {
+        let seeds: Vec<u64> = r.all_seeds().map(|(_, s)| s).collect();
+        Library_::steal(&h.root).write_seeds(&r.id, &seeds);
+    }
+    h.rt.run(Effect::Rescan);
+    h.settle();
+    h.send(Msg::ReviewScope(Some(project.clone())));
+    h.send(Msg::ReviewSweep(project.clone(), label.clone()));
+    let clay: Vec<_> = h
+        .state
+        .project_entry()
+        .unwrap()
+        .outputs
+        .iter()
+        .filter(|o| o.name.run == queued[1].id)
+        .map(|o| o.image.clone())
+        .collect();
+    h.send(Msg::PickSet(clay));
+    h.send(Msg::SheetNewSweep);
+    h.settle();
+    let g = &h.state.generate;
+    assert!(g.sweep.on && g.sweep.vary == SweepVary::Image);
+    assert_eq!(g.sweep.images, [images[1].clone()]);
+    assert!(g.images.is_empty(), "the swept image isn't also in the list");
+    assert_ne!(g.label, label, "the next label");
+}
+
+#[test]
+fn a_preview_opened_on_a_list_steps_through_it() {
+    let mut h = Harness::new();
+    let list: Vec<_> = ["2026.11.01-15.24-0001", "2026.11.01-15.24-0002", "2026.11.01-15.24-0003"]
+        .iter()
+        .map(|n| increart_core::ImageRef::input(n.parse().unwrap()))
+        .collect();
+    h.send(Msg::PreviewAmong(list.clone(), list[1].clone()));
+    assert_eq!(h.state.preview_position(), Some((1, 3)));
+    h.send(Msg::PreviewStep(1));
+    h.send(Msg::PreviewStep(1));
+    assert_eq!(h.state.preview, Some(list[2].clone()), "stops at the last");
+    h.send(Msg::PreviewStep(-1));
+    assert_eq!(h.state.preview, Some(list[1].clone()));
+    h.send(Msg::Preview(None));
+    assert!(h.state.preview_among.is_none());
+}

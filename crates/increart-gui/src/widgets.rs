@@ -305,6 +305,26 @@ pub fn thumb(
     resp
 }
 
+/// A clickable thumbnail with two card edges behind it: one image standing
+/// for several (an image sweep's).
+pub fn stacked_thumb(ui: &mut egui::Ui, tex: Option<&TextureHandle>, size: f32) -> egui::Response {
+    let (rect, resp) = ui.allocate_exact_size(Vec2::splat(size), Sense::click());
+    let p = ui.painter_at(rect);
+    let step = 5.0;
+    let front = Rect::from_min_size(rect.min + Vec2::new(0.0, 2.0 * step), Vec2::splat(size - 2.0 * step));
+    let edge = Stroke::new(1.0, Color32::from_gray(110));
+    for k in [2.0, 1.0] {
+        let card = front.translate(Vec2::new(k * step, -k * step));
+        p.rect_filled(card, 2.0, Color32::from_gray(if k > 1.0 { 50 } else { 60 }));
+        p.rect_stroke(card, 2.0, edge, egui::StrokeKind::Inside);
+    }
+    p.rect_filled(front, 2.0, Color32::from_gray(35));
+    image_fit(&p, front, tex);
+    let stroke = if resp.hovered() { Stroke::new(1.0, Color32::GRAY) } else { edge };
+    p.rect_stroke(front, 2.0, stroke, egui::StrokeKind::Inside);
+    resp
+}
+
 /// A fixed-size card in a wrapped grid; the whole card is clickable.
 /// A plain click that isn't the start of a double-click: true a moment
 /// after it, once no second click came. For clicks that open a side panel,
