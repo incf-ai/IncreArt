@@ -2961,8 +2961,10 @@ the keys and mouse buttons go through that view's own history instead.
   the click, so a double-click (full size) doesn't open it; while it's
   open, a click shows the clicked idea at once. Ctrl/Shift+click only
   selects.
-- **Projects** side panel: **New project** and **New folder** (at the top
-  level; a folder's right-click menu makes them inside it) at the top, then a search field that narrows the tree to
+- **Projects** side panel: **New project** (at the top level; a folder's
+  right-click menu makes one inside it) and **New folder** (in the folder
+  selected in the tree, beside the selected project, else at the top level;
+  its tooltip says where) at the top, then a search field that narrows the tree to
   the projects and folders whose names contain the text (a matching folder
   shows all it holds; `Esc` or × clears it), **runs** (list the selected
   project's runs under it), the project and folder orders (**Created**:

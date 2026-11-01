@@ -762,6 +762,29 @@ fn review_tree_sorts_and_hides_reviewed() {
     assert_eq!(tree(&h).1, ["Alpha", "Beta"]);
 }
 
+#[test]
+fn new_folder_goes_in_the_selected_folder() {
+    let mut h = Harness::new();
+    h.send(Msg::Draft(IdeaDraft { title: "Zeta".into(), text: "x".into(), ..Default::default() }));
+    h.send(Msg::AddIdea(AddIdea::NewProject));
+    h.send(Msg::FromIdeasParent(PathBuf::new()));
+    h.send(Msg::FromIdeasNewFolder(Some("A".into())));
+    h.send(Msg::ConfirmFromIdeas);
+    h.settle();
+    // the selected project: beside it
+    assert_eq!(h.state.tree_parent(), Path::new("A"));
+    h.send(Msg::NewFolder(increart_core::Tree::Projects, h.state.tree_parent()));
+    h.settle();
+    assert_eq!(h.errors(), Vec::<&str>::new());
+    assert!(h.state.index.project_folders.contains(&PathBuf::from("A/new folder")));
+    // a folder selected: in it
+    h.send(Msg::SelectProjectFolder(Some(PathBuf::from("A/new folder"))));
+    assert_eq!(h.state.tree_parent(), Path::new("A/new folder"));
+    // All projects: the top level
+    h.send(Msg::SelectProjectFolder(Some(PathBuf::new())));
+    assert_eq!(h.state.tree_parent(), Path::new(""));
+}
+
 /// Writes outputs without the lock: only for setting up `review_and_undo`.
 struct Library_ {
     root: PathBuf,

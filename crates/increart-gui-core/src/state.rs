@@ -3609,6 +3609,20 @@ impl AppState {
 
     // ---------------------------------------------------------- projects
 
+    /// Where something new in the Projects tree goes (relative to
+    /// `projects/`): the folder selected there, beside the selected
+    /// project, else the top level.
+    pub fn tree_parent(&self) -> PathBuf {
+        match (&self.proj_folder, self.project_entry()) {
+            (Some(folder), _) => folder.clone(),
+            (None, Some(p)) => {
+                let rel = p.dir.strip_prefix("projects").unwrap_or(&p.dir);
+                rel.parent().map(PathBuf::from).unwrap_or_default()
+            }
+            (None, None) => PathBuf::new(),
+        }
+    }
+
     /// Whether `name` is taken next to the project at `path` (relative to
     /// `projects/`), by a project or a folder, ignoring case.
     pub fn project_name_taken(&self, path: &Path, name: &str) -> bool {
