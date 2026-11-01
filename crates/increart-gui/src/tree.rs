@@ -216,7 +216,9 @@ pub fn projects(ui: &mut egui::Ui, st: &AppState, out: &mut Vec<Msg>) {
             let collapsed = q.is_empty() && has_any && st.folder_collapsed(f);
             ui.horizontal(|ui| {
                 // the caret sits in the indent, so names line up with projects
-                ui.add_space(14.0 * depth - 16.0);
+                // (never a negative space: egui carries it on to the next row,
+                // each top-level folder a little further left)
+                ui.add_space(14.0 * depth - 14.0);
                 ui.spacing_mut().item_spacing.x = 2.0;
                 if has_any {
                     let caret = if collapsed { ph::CARET_RIGHT } else { ph::CARET_DOWN };
@@ -273,7 +275,7 @@ pub fn projects(ui: &mut egui::Ui, st: &AppState, out: &mut Vec<Msg>) {
         for p in ps {
             let Ok(rel) = p.dir.strip_prefix("projects").map(Path::to_path_buf) else { continue };
             ui.horizontal(|ui| {
-                ui.add_space(14.0 * depth);
+                ui.add_space(14.0 * depth + 2.0);
                 let [_, _, _, unreviewed] = counts(p);
                 let busy = p.runs.iter().any(|r| st.active_runs.contains(&r.id));
                 let mut label = ic(ph::ROCKET_LAUNCH, &p.name());
