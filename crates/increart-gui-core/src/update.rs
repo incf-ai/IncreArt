@@ -923,7 +923,7 @@ pub enum AddIdea {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Effect {
-    SaveConfig(Config, PathBuf),
+    SaveConfig(Box<Config>, PathBuf),
     /// Plays a sound with the configured player (on a thread); answers
     /// `SoundPlayed`.
     PlaySound {
@@ -1019,7 +1019,7 @@ pub enum Effect {
     /// down.
     PeShutdown,
     PeListGpus(increart_core::pe::GpuRuntime),
-    Lib(LibOp),
+    Lib(Box<LibOp>),
     QueueRun(Id),
     CancelRun(Id, Stop),
     Rescan,
@@ -1512,7 +1512,7 @@ fn api_test_event(t: &mut crate::state::ApiTest, event: increart_core::apitest::
 }
 
 fn save_config(state: &AppState) -> Vec<Effect> {
-    state.config_path.iter().map(|p| Effect::SaveConfig(state.config.clone(), p.clone())).collect()
+    state.config_path.iter().map(|p| Effect::SaveConfig(Box::new(state.config.clone()), p.clone())).collect()
 }
 
 fn server_dialog() -> ServerDialog {
@@ -3152,7 +3152,7 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
                 return vec![];
             }
             state.busy += 1;
-            vec![Effect::Lib(LibOp::ImportFiles(paths))]
+            vec![Effect::Lib(Box::new(LibOp::ImportFiles(paths)))]
         }
         Msg::InboxCursor(i) => {
             state.inbox_cursor = i.min(state.inbox_queue().len().saturating_sub(1));
@@ -6913,7 +6913,7 @@ fn lib(state: &mut AppState, op: LibOp) -> Vec<Effect> {
     if let LibOp::ReviewOutputs { links, undo: false } = &op {
         state.reviewing.extend(links.iter().map(|(l, _)| l.clone()));
     }
-    vec![Effect::Lib(op)]
+    vec![Effect::Lib(Box::new(op))]
 }
 
 /// The New idea form's draft as an idea: into the inbox, (Keep) named
@@ -6943,8 +6943,8 @@ fn add_idea(
     let idea = NewIdea { title: d.title, text: d.text, tags, images: d.images, loc, ..NewIdea::text("", "") };
     state.busy += 1;
     let add = match how {
-        AddIdea::NewProject => Effect::Lib(LibOp::NewIdeaNewProject(idea, parent, name)),
-        _ => Effect::Lib(LibOp::NewIdea(idea)),
+        AddIdea::NewProject => Effect::Lib(Box::new(LibOp::NewIdeaNewProject(idea, parent, name))),
+        _ => Effect::Lib(Box::new(LibOp::NewIdea(idea))),
     };
     state.saving += 1;
     let mut fx = vec![add, Effect::SaveDraft(DraftSave::ClearIdea)];

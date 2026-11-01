@@ -2067,7 +2067,7 @@ fn generate_more_seeds() {
     // with servers it is queued right away
     h.state.engine_running = true;
     let fx = h.send(Msg::MoreSeeds(run.clone(), 4));
-    assert!(matches!(&fx[..], [Effect::Lib(LibOp::AddSeeds(_, 4))]));
+    assert!(matches!(&fx[..], [Effect::Lib(op)] if matches!(**op, LibOp::AddSeeds(_, 4))));
     h.settle();
     assert!(h.state.active_runs.contains(&run));
     h.send(Msg::Tab(Tab::Review));
