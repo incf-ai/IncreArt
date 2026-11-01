@@ -4,7 +4,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use increart_core::HistoryKey;
-use increart_core::config::{Config, RecipePreset, Resolution, ServerConfig, ServerPreset, TreeOrder};
+use increart_core::config::{Config, RecipePreset, Resolution, ReviewOrder, ServerConfig, ServerPreset, TreeOrder};
 use increart_core::history::{HistoryEntry, HistoryKind};
 use increart_core::id::Timestamp;
 use increart_core::model::{GenerateDraft, GenerateImage, IdeaDraftFile};
@@ -1527,6 +1527,13 @@ pub struct GenerateForm {
     pub source_idea: Option<Id>,
     /// Sweep mode: a run per chosen prompt preset.
     pub sweep: Sweep,
+}
+
+/// A row of Review's scope tree at a folder: a subfolder or a project.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum ReviewNode<'a> {
+    Folder(&'a PathBuf),
+    Project(&'a ProjectEntry),
 }
 
 /// Whether a run of this project belongs to the named sweep.
@@ -3792,6 +3799,48 @@ impl AppState {
             (oldest.is_none(), oldest, f.to_string_lossy().to_lowercase())
         });
         (folders, projects)
+    }
+
+    /// [`review_tree_children`](Self::review_tree_children) as one list: by
+    /// a date (Created, Last run, Oldest to review) folders and projects
+    /// together, a folder by the projects in it (newest first; oldest to
+    /// review first); A–Z, folders first.
+    pub fn review_tree_nodes(&self, parent: &Path) -> Vec<ReviewNode<'_>> {
+        let (folders, projects) = self.review_tree_children(parent);
+        let mut v: Vec<ReviewNode> =
+            folders.into_iter().map(ReviewNode::Folder).chain(projects.into_iter().map(ReviewNode::Project)).collect();
+        // (stable sorts: what ties keeps the order within its kind)
+        match self.config.review_order {
+            ReviewOrder::Name => {}
+            o @ (ReviewOrder::Created | ReviewOrder::LastRun) => {
+                let last_run = o == ReviewOrder::LastRun;
+                v.sort_by_cached_key(|n| {
+                    let newest = self
+                        .node_projects(*n)
+                        .into_iter()
+                        .map(|p| (last_run.then(|| p.last_run()), p.project.id.clone()));
+                    std::cmp::Reverse(newest.max())
+                });
+            }
+            ReviewOrder::OldestToReview => v.sort_by_cached_key(|n| {
+                let oldest =
+                    self.node_projects(*n).into_iter().filter(|p| counts(p)[3] > 0).map(|p| p.project.id.clone()).min();
+                (oldest.is_none(), oldest)
+            }),
+        }
+        v
+    }
+
+    /// The projects a scope tree row stands for: the project, or every
+    /// project under the folder.
+    fn node_projects<'a>(&'a self, n: ReviewNode<'a>) -> Vec<&'a ProjectEntry> {
+        match n {
+            ReviewNode::Project(p) => vec![p],
+            ReviewNode::Folder(f) => {
+                let dir = Path::new("projects").join(f);
+                self.index.projects.iter().filter(|p| p.dir.starts_with(&dir)).collect()
+            }
+        }
     }
 
     /// [`sort_projects`] by the project tree's order.

@@ -730,6 +730,7 @@ fn review_tree_sorts_and_hides_reviewed() {
     let zeta = from_ideas(&mut h, "Zeta", Some("Zfold"));
     let mid = from_ideas(&mut h, "Mid", Some("Mfold"));
     let alpha = from_ideas(&mut h, "Alpha", None);
+    let alpha_id = alpha.clone();
     let beta = from_ideas(&mut h, "Beta", None);
     for p in [&zeta, &mid, &beta] {
         Library_::steal(&h.root).write_two(p);
@@ -741,7 +742,23 @@ fn review_tree_sorts_and_hides_reviewed() {
         let f: Vec<String> = f.iter().map(|f| f.display().to_string()).collect();
         (f, p.iter().map(|p| p.name()).collect::<Vec<_>>())
     };
-    // A–Z, hiding what has nothing to review (Alpha)
+    // the rows as shown: folders and projects in one list
+    let nodes = |h: &Harness| -> Vec<String> {
+        h.state
+            .review_tree_nodes(Path::new(""))
+            .into_iter()
+            .map(|n| match n {
+                ReviewNode::Folder(f) => f.display().to_string(),
+                ReviewNode::Project(p) => p.name().to_string(),
+            })
+            .collect()
+    };
+    // the last run first by default: a folder by its newest project
+    assert_eq!(h.state.config.review_order, ReviewOrder::LastRun);
+    assert_eq!(nodes(&h), ["Beta", "Mfold", "Zfold"]);
+    // A–Z, folders first, hiding what has nothing to review (Alpha)
+    h.send(Msg::ReviewOrder(ReviewOrder::Name));
+    assert_eq!(nodes(&h), ["Mfold", "Zfold", "Beta"]);
     assert_eq!(tree(&h), (vec!["Mfold".into(), "Zfold".into()], vec!["Beta".to_string()]));
     // a folder by the oldest project in it with images to review
     h.send(Msg::ReviewOrder(ReviewOrder::OldestToReview));
@@ -754,6 +771,19 @@ fn review_tree_sorts_and_hides_reviewed() {
     // newest created first, as the project tree can
     h.send(Msg::ReviewOrder(ReviewOrder::Created));
     assert_eq!(tree(&h), (vec!["Mfold".into(), "Zfold".into()], vec!["Beta".to_string(), "Alpha".into()]));
+    assert_eq!(nodes(&h), ["Beta", "Alpha", "Mfold", "Zfold"]);
+    // Alpha never ran: below the others unless made in the second they ran
+    // (times are to the second; a tie goes to the newer project)
+    h.send(Msg::ReviewOrder(ReviewOrder::LastRun));
+    let ran = |id: &increart_core::Id| h.state.index.projects.iter().find(|p| &p.project.id == id).unwrap().last_run();
+    let want = if ran(&alpha_id) < ran(&zeta) {
+        ["Beta", "Mfold", "Zfold", "Alpha"]
+    } else if ran(&alpha_id) < ran(&mid) {
+        ["Beta", "Mfold", "Alpha", "Zfold"]
+    } else {
+        ["Beta", "Alpha", "Mfold", "Zfold"]
+    };
+    assert_eq!(nodes(&h), want);
     h.send(Msg::ReviewOrder(ReviewOrder::Name));
     assert_eq!(tree(&h).1, ["Alpha", "Beta"]);
     // hidden, except the selected one
