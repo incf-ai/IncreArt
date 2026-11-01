@@ -131,6 +131,45 @@ fn section(ui: &mut egui::Ui, title: &str) {
     ui.label(RichText::new(title).strong());
 }
 
+/// A project's timing (DESIGN.md, Timing): per image and step, GPU time,
+/// each model's when there are several, and its time left while it
+/// generates; `None` with no timed images and nothing generating.
+fn project_timing(st: &AppState, p: &ProjectEntry) -> Option<Vec<(&'static str, String)>> {
+    use increart_gui_core::timing::{Timing, duration, left_text};
+    let mut rows = vec![];
+    if let Some(t) = Timing::of_runs(&p.runs) {
+        rows.push(("per image", duration(t.per_image)));
+        rows.push(("per step", t.step_text()));
+        rows.push(("GPU time", format!("{} for {} image(s)", duration(t.gpu_s), t.images)));
+        let mut models: Vec<&str> = p.runs.iter().map(|r| r.model.recipe.as_str()).collect();
+        models.sort();
+        models.dedup();
+        if models.len() > 1 {
+            let each: Vec<String> = models
+                .iter()
+                .filter_map(|m| {
+                    let t = Timing::of_runs(p.runs.iter().filter(|r| r.model.recipe == *m))?;
+                    Some(format!("{m}: {}/image · {} ({})", duration(t.per_image), t.step_text(), t.images))
+                })
+                .collect();
+            if each.len() > 1 {
+                rows.push(("by model", each.join("\n")));
+            }
+        }
+    }
+    let runs: Vec<_> = st.jobs().into_iter().filter(|j| j.project_id == p.project.id).collect();
+    if !runs.is_empty() {
+        let (done, total, _, eta) =
+            increart_gui_core::runs_progress(&runs.iter().collect::<Vec<_>>(), st.working_servers());
+        let mut now = format!("{done} / {total} seeds");
+        if let Some(s) = eta.filter(|s| *s > 0.0) {
+            now.push_str(&format!(" · {}", left_text(s)));
+        }
+        rows.push(("now", now));
+    }
+    (!rows.is_empty()).then_some(rows)
+}
+
 fn rows(ui: &mut egui::Ui, id: &str, rows: Vec<(&str, String)>) {
     egui::Grid::new(id).num_columns(2).spacing([10.0, 3.0]).show(ui, |ui| {
         for (k, v) in rows {
@@ -217,6 +256,11 @@ fn project(ui: &mut egui::Ui, st: &AppState, root: &Path, tex: &mut Textures, p:
             ui.weak("queued");
             ui.label(format!("{q} seed(s){}", if running { " · generating" } else { "" }));
         });
+    }
+
+    if let Some(t) = project_timing(st, p) {
+        section(ui, "Timing");
+        rows(ui, "pp_timing", t);
     }
 
     let sources: Vec<_> = p.project.sources.iter().filter_map(|id| st.idea(id)).collect();

@@ -1615,6 +1615,34 @@ fn job_progress() {
     let s = h.state.job_summary();
     assert_eq!((s.runs, s.done, s.total), (1, 0, 4));
     assert!((s.fraction - 0.125).abs() < 1e-6);
+
+    // an image done: its server's speed this session; one unreachable
+    // isn't working
+    let server = |name: &str, state: &str| ServerStatus {
+        config: None,
+        name: name.into(),
+        device: String::new(),
+        state: state.into(),
+        model: None,
+        idle_since: None,
+        worked: false,
+    };
+    h.state.servers = vec![server("gpu0", "ready"), server("gpu1", "unreachable, retrying")];
+    assert_eq!(h.state.working_servers(), 1);
+    h.send(Msg::Engine(increart_core::engine::Event::Output {
+        run: run.clone(),
+        rev: 0,
+        seed: 1,
+        image: increart_core::Id::new(increart_core::id::now(), 9),
+        link: PathBuf::from("r01_s1.png"),
+        server: 0,
+        elapsed_s: 40.0,
+        step_s: 0.0,
+    }));
+    let speed = h.state.server_speed("gpu0").unwrap();
+    assert_eq!(speed.text(), "≈2.00 s/it · 40.0 s/image · 90/h", "estimated: the run has 20 steps");
+    assert!(h.state.server_speed("gpu1").is_none());
+    assert_eq!(h.state.job_summary().per_hour, 90.0);
 }
 
 #[test]

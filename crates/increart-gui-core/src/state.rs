@@ -2928,6 +2928,9 @@ pub struct AppState {
     pub progress: HashMap<(Id, u64), (u32, u32)>,
     /// When their steps were seen, for the live seconds per step.
     pub sampling_times: HashMap<(Id, u64), crate::timing::Sampling>,
+    /// Each server's latest images this session (by its name), for its
+    /// speed in the server list.
+    pub server_speeds: HashMap<String, std::collections::VecDeque<crate::timing::Recent>>,
     /// Review scope: `None` all projects (or `review_folder`), else one project.
     pub review_scope: Option<Id>,
     /// Review scope: every project under this folder (relative to `projects/`).
@@ -3285,6 +3288,7 @@ impl AppState {
             finishing: BTreeSet::new(),
             progress: HashMap::new(),
             sampling_times: HashMap::new(),
+            server_speeds: HashMap::new(),
             review_scope: None,
             review_folder: None,
             review_sweep: None,
@@ -4887,6 +4891,10 @@ pub struct JobSummary {
     pub done: u64,
     pub total: u64,
     pub fraction: f32,
+    /// Roughly the time left, every run together ([`runs_progress`]).
+    pub eta_s: Option<f64>,
+    /// Images an hour, the servers working together at their latest speed.
+    pub per_hour: f64,
 }
 
 impl AppState {
@@ -4951,15 +4959,34 @@ impl AppState {
 
     pub fn job_summary(&self) -> JobSummary {
         let jobs = self.jobs();
-        let total: u64 = jobs.iter().map(|j| j.total).sum();
-        let weighted: f32 = jobs.iter().map(|j| j.fraction() * j.total as f32).sum();
-        JobSummary {
-            runs: jobs.len(),
-            done: jobs.iter().map(|j| j.done).sum(),
-            total,
-            fraction: if total == 0 { 0.0 } else { weighted / total as f32 },
-        }
+        let (done, total, fraction, eta_s) = runs_progress(&jobs.iter().collect::<Vec<_>>(), self.working_servers());
+        let per_hour = self
+            .servers
+            .iter()
+            .filter(|s| server_working(&s.state))
+            .filter_map(|s| self.server_speed(&s.name))
+            .map(|s| s.per_hour())
+            .sum();
+        JobSummary { runs: jobs.len(), done, total, fraction, eta_s, per_hour }
     }
+
+    /// The servers that are working or about to (not connecting or
+    /// unreachable), at least 1: how many images are made at once.
+    pub fn working_servers(&self) -> usize {
+        self.servers.iter().filter(|s| server_working(&s.state)).count().max(1)
+    }
+
+    /// A server's speed over its latest images this session.
+    pub fn server_speed(&self, name: &str) -> Option<crate::timing::Speed> {
+        let recent: Vec<_> = self.server_speeds.get(name)?.iter().copied().collect();
+        crate::timing::Speed::of(&recent)
+    }
+}
+
+/// Whether a server in this state makes images or is about to (ready,
+/// warming up, loading, draining).
+fn server_working(state: &str) -> bool {
+    !(state == "connecting" || state == "opening" || state.contains("unreachable") || state.contains("failed"))
 }
 
 /// Newest created first, last run first, or by name (any case); newest

@@ -730,6 +730,9 @@ fn jobs_indicator(ui: &mut egui::Ui, st: &AppState, out: &mut Vec<Msg>, force_op
             } else {
                 ui.add(egui::ProgressBar::new(sum.fraction).desired_width(140.0).desired_height(12.0));
                 let mut text = format!("{} run(s) · {} / {} seeds", sum.runs, sum.done, sum.total);
+                if let Some(s) = sum.eta_s.filter(|s| *s > 0.0) {
+                    text.push_str(&format!(" · {}", increart_gui_core::timing::left_text(s)));
+                }
                 if let Some(pe) = &pe {
                     text.push_str(&format!(" · {pe}"));
                 }
@@ -756,6 +759,9 @@ fn jobs_indicator(ui: &mut egui::Ui, st: &AppState, out: &mut Vec<Msg>, force_op
                 ui.add_space(12.0);
                 crate::projects::order_toggle(ui, st, out);
             });
+            if let Some(text) = crate::projects::jobs_total(st) {
+                ui.add(egui::Label::new(RichText::new(text).weak()).truncate());
+            }
             // the stops for all stay in view; the runs scroll
             crate::projects::stop_all_row(ui, st, out);
             let n = out.len();

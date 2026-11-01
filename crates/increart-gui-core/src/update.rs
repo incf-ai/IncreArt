@@ -9069,7 +9069,15 @@ fn engine_event(state: &mut AppState, e: Event) -> Vec<Effect> {
             state.progress.insert((run, seed), (step, total));
             vec![]
         }
-        Event::Output { run, seed, .. } => {
+        Event::Output { run, seed, server, elapsed_s, step_s, .. } => {
+            let steps = state.index.run(&run).map_or(0, |(_, r)| r.sample.steps);
+            if let (Some(s), true) = (state.servers.get(server), elapsed_s > 0.0) {
+                let recent = state.server_speeds.entry(s.name.clone()).or_default();
+                recent.push_back(crate::timing::Recent { elapsed_s, step_s, steps });
+                while recent.len() > crate::timing::RECENT {
+                    recent.pop_front();
+                }
+            }
             state.sampling_times.remove(&(run.clone(), seed));
             state.progress.remove(&(run, seed));
             vec![Effect::Rescan]

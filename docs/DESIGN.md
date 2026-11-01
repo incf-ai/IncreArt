@@ -3287,13 +3287,28 @@ timing existed have none).
   also counts encoding and decoding), GPU time (summed), wall clock (first
   image started → last stored, so runs sharing the GPUs and pauses count),
   server queue wait, and per device. Below it, the project's totals.
+- **Per project** (project pane, **Timing**): per image, per step, GPU time,
+  each model's per image and step when it has several, and while it
+  generates its seeds and time left.
 - **Live** (each run in Jobs, and "now" in its details): seconds per step of
   the images sampling now (from the GUI's own clock as their steps arrive),
   seconds per image, how many are done and in what time, and roughly the
   time left: the images left (partly sampled ones by their steps) at the
-  run's seconds per image, as many at once as are sampling now.
+  run's seconds per image, as many at once as are sampling now. A sweep's
+  runs show their time left at the end of their line.
+- **All together**: the status bar's jobs summary ends with the time left
+  of every run in the engine; the jobs popover has under its title the
+  seeds, the time left and the images an hour of the servers working (the
+  sum of theirs). A group's (project, sweep, everything) time left is its
+  images left at each run's seconds per image (else the others' mean), as
+  many at once as servers are working (not connecting or unreachable).
+- **Per server** (the server list, under its state): "1.74 s/it · 35.1
+  s/image · 103/h" over its latest 20 images this session (the engine's
+  `Output` event says which server made an image and how long it took).
 
-Durations read as "0.84 s", "34.2 s", "4 min 12 s", "2 h 05 min".
+Durations read as "0.84 s", "34.2 s", "4 min 12 s", "2 h 05 min". Time left
+reads "~4 min 12 s left"; from 10 minutes on, in whole minutes and with when
+by the clock, "~38 min left · ≈15:12" ("≈Tue 09:40" when it isn't today).
 
 ### Timeouts
 

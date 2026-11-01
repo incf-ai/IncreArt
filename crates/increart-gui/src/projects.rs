@@ -2345,6 +2345,16 @@ pub fn server_list(ui: &mut egui::Ui, st: &AppState, out: &mut Vec<Msg>) {
                 out,
             );
             ui.end_row();
+            // its speed this session, under its state
+            if let Some(speed) = st.server_speed(&s.name) {
+                ui.label("");
+                ui.label("");
+                state_cell(ui, RichText::new(speed.text()).weak().small())
+                    .on_hover_text(format!("its latest {} image(s) this session", speed.images));
+                ui.label("");
+                ui.label("");
+                ui.end_row();
+            }
         }
         ui.label(RichText::new("PE").strong()).on_hover_text("Prompt enhance");
         ui.label(pe_device(st))
@@ -2376,14 +2386,15 @@ pub fn log_button(ui: &mut egui::Ui, file: String, out: &mut Vec<Msg>) {
 
 /// A server's state in a fixed width, cut with "…" (whole on hover): it
 /// changes many times a second, and the list mustn't change width with it.
-fn state_cell(ui: &mut egui::Ui, text: RichText) {
+fn state_cell(ui: &mut egui::Ui, text: RichText) -> egui::Response {
     const W: f32 = 240.0;
     let h = ui.spacing().interact_size.y;
     ui.allocate_ui_with_layout(egui::vec2(W, h), egui::Layout::left_to_right(egui::Align::Center), |ui| {
         ui.set_width(W);
         // egui shows a cut label whole on hover
-        ui.add(egui::Label::new(text).truncate());
-    });
+        ui.add(egui::Label::new(text).truncate())
+    })
+    .inner
 }
 
 /// The prompt-enhance asks waiting, a block per batch: Stop, what it's for
@@ -2499,7 +2510,7 @@ pub fn run_list(ui: &mut egui::Ui, st: &AppState, out: &mut Vec<Msg>) {
         ui.weak("Nothing generating.");
         return;
     }
-    let servers = st.servers.len();
+    let servers = st.working_servers();
     for g in &groups {
         let runs = g.runs();
         let p = runs_progress(&runs, servers);
@@ -2603,6 +2614,10 @@ fn run_line(ui: &mut egui::Ui, st: &AppState, r: &increart_gui_core::RunProgress
             let now: Vec<String> = r.sampling.iter().map(|(seed, step, n)| format!("s{seed} {step}/{n}")).collect();
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 stop_buttons(ui, &r.run, finishing, r.sampling.len(), true, out);
+                // its time left, without the clock: the line is short
+                if let Some(s) = r.eta_s().filter(|s| *s > 0.0) {
+                    ui.weak(RichText::new(format!("~{}", increart_gui_core::timing::duration(s))).small());
+                }
                 ui.add(egui::Label::new(RichText::new(now.join(", ")).weak().small()).truncate());
             });
         });
@@ -2635,9 +2650,26 @@ fn fold(ui: &mut egui::Ui, id: egui::Id, header: impl FnOnce(&mut egui::Ui)) -> 
 fn group_text(runs: &str, (done, total, _, eta): (u64, u64, f32, Option<f64>)) -> String {
     let mut t = format!("{runs} · {done} / {total} seeds");
     if let Some(s) = eta.filter(|s| *s > 0.0) {
-        t.push_str(&format!(" · ~{} left", increart_gui_core::timing::duration(s)));
+        t.push_str(&format!(" · {}", increart_gui_core::timing::left_text(s)));
     }
     t
+}
+
+/// Every run together, for the top of Jobs: "46 / 120 seeds · ~38 min
+/// left · ≈15:12 · 205 images/h"; `None` with nothing generating.
+pub fn jobs_total(st: &AppState) -> Option<String> {
+    let sum = st.job_summary();
+    if sum.runs == 0 {
+        return None;
+    }
+    let mut parts = vec![format!("{} / {} seeds", sum.done, sum.total)];
+    if let Some(s) = sum.eta_s.filter(|s| *s > 0.0) {
+        parts.push(increart_gui_core::timing::left_text(s));
+    }
+    if sum.per_hour > 0.0 {
+        parts.push(format!("{:.0} images/h", sum.per_hour));
+    }
+    Some(parts.join(" · "))
 }
 
 /// A group's Finish & stop / Stop now (asked first), at the header's right;
@@ -2716,7 +2748,7 @@ fn live_timing(j: &increart_gui_core::RunProgress) -> Option<String> {
         parts.push(format!("{} done in {}", t.images, duration(t.wall_s)));
     }
     if let Some(s) = j.eta_s().filter(|s| *s > 0.0) {
-        parts.push(format!("~{} left", duration(s)));
+        parts.push(increart_gui_core::timing::left_text(s));
     }
     (!parts.is_empty()).then(|| parts.join(" · "))
 }
