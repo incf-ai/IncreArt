@@ -95,6 +95,7 @@ const EXTRA_SCENES: &[&str] = &[
     "33-check-rename-folder-view",
     "34-check-drag-tree",
     "35-check-drag-folder-view",
+    "35b-check-drag-grid-collection",
     "36-check-grid-hover",
     "37-check-width-rounding",
     "41-check-rubber-band",
@@ -1406,6 +1407,14 @@ impl Tour {
                 Msg::ProjectsTab(ProjectsTab::Grid),
                 Msg::SelectProjectFolder(Some(PathBuf::new())),
             ],
+            // a new collection (its rename closed by Esc in the scene) for
+            // the Grid's first image to be dragged onto
+            "35b-check-drag-grid-collection" => vec![
+                Msg::ContinueWithoutServers,
+                Msg::Tab(Tab::OutputLibrary),
+                Msg::OutputTab(OutputTab::Grid),
+                Msg::NewCollection(PathBuf::new(), vec![]),
+            ],
             "35-check-drag-folder-view" => vec![
                 Msg::Tab(Tab::Projects),
                 Msg::ProjectsTab(ProjectsTab::Folder),
@@ -1955,7 +1964,56 @@ impl Tour {
                 _ => {}
             }
         }
-        if name.contains("-check-drag") {
+        if name == "35b-check-drag-grid-collection" {
+            let coll = st.index.collection_folders.first().cloned().unwrap_or_default();
+            let a = ctx.data(|d| d.get_temp::<egui::Rect>(egui::Id::unique("tour_first_output")));
+            let b = ctx.data(|d| {
+                d.get_temp::<egui::Rect>(crate::widgets::dnd_rect_id(
+                    true,
+                    &std::path::Path::new("collections").join(&coll),
+                ))
+            });
+            let (a, b) = match (a, b) {
+                (Some(a), Some(b)) => (a.center(), b.center()),
+                _ => {
+                    if self.settled == 5 {
+                        eprintln!("CHECK {name}: FAILED (image or collection not drawn)");
+                    }
+                    (egui::Pos2::ZERO, egui::Pos2::ZERO)
+                }
+            };
+            let button = |pos, pressed| egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: Default::default(),
+            };
+            let key = |key, pressed| egui::Event::Key {
+                key,
+                physical_key: None,
+                pressed,
+                repeat: false,
+                modifiers: Default::default(),
+            };
+            match self.settled {
+                // the new collection's rename: kept as named
+                2 => self.inject = vec![key(egui::Key::Escape, true), key(egui::Key::Escape, false)],
+                5 => self.inject = vec![egui::Event::PointerMoved(a), button(a, true)],
+                6 => self.inject = vec![egui::Event::PointerMoved(a + egui::vec2(12.0, 6.0))],
+                7 => self.inject = vec![egui::Event::PointerMoved(a.lerp(b, 0.5))],
+                8..=10 => self.inject = vec![egui::Event::PointerMoved(b)],
+                11 => self.inject = vec![button(b, false)],
+                28 => {
+                    let n = st.index.collection_links.iter().filter(|l| l.folder == coll).count();
+                    let ok = !coll.as_os_str().is_empty() && n == 1;
+                    eprintln!("CHECK {name}: {}", if ok { "ok" } else { "FAILED" });
+                    if !ok {
+                        eprintln!("  collection {coll:?} holds {n} image(s)");
+                    }
+                }
+                _ => {}
+            }
+        } else if name.contains("-check-drag") {
             // drag the source onto the target over a few frames, then check
             let (src, dst) = match name {
                 "34-check-drag-tree" => ("projects/stickers", "projects/experiments"),

@@ -3160,7 +3160,9 @@ the keys and mouse buttons go through that view's own history instead.
   - **Collections**: your own folder tree of kept images, independent of
     projects (e.g. "Portfolio / animals", "Client picks / acme"). An image can
     be in several collections. Fill them by dragging images from Grid onto a
-    collection, or with **Add to collection ▸** in the right-click menus of
+    collection in this panel (the picks when the drag starts on one of them,
+    else that image; they're added, staying where they were), or with
+    **Add to collection ▸** in the right-click menus of
     the Output library, Review and the folder views (which also offers **New
     collection**). On disk: `collections/<folder>/…/<image-id>.png`, links into
     `output_images/`; removing an image from a collection removes only that
