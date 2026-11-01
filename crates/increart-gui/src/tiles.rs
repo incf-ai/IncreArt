@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use increart_gui_core::tile::{Geometry, NO_IMAGES, Tile, TileContent, TileImage, TileLayout, caption_fit, text_lines};
-use increart_gui_core::{AppState, CaptionFill, Msg, PickKind, SelectHow, TileDialog, TileTarget};
+use increart_gui_core::{AppState, CaptionFill, Msg, PickKind, RefTo, SelectHow, Tab, TileDialog, TileTarget};
 
 use crate::textures::Textures;
 use crate::widgets::{ACCENT, BAD, GOOD, NEUTRAL, checkerboard, dialog_buttons, ic, image_cover, image_fit_bg, ph};
@@ -188,6 +188,23 @@ pub fn menu(ui: &mut egui::Ui, st: &AppState, image: &ImageRef, out: &mut Vec<Ms
         out.push(Msg::TagImages(st.picked.clone()));
         ui.close();
     }
+    if st.tab == Tab::Review {
+        let project = st.project_entry().map(|p| p.name());
+        let label =
+            format!("Use the {n} as references in {}…   U", project.as_deref().unwrap_or("the current project"));
+        if ui
+            .add_enabled(project.is_some(), egui::Button::new(ic(ph::PLUS, &label)))
+            .on_disabled_hover_text("Select a project first (Projects tab)")
+            .clicked()
+        {
+            out.push(Msg::UseAsRef(st.picked.clone(), RefTo::Project));
+            ui.close();
+        }
+        if ui.button(ic(ph::BOOKS, &format!("The {n} to the input library as refs…   R"))).clicked() {
+            out.push(Msg::UseAsRef(st.picked.clone(), RefTo::InputLibrary));
+            ui.close();
+        }
+    }
     if ui.button(ic(ph::EXPORT, &format!("Export the {n} picked…"))).clicked() {
         out.push(Msg::OpenExport(st.picked.clone(), format!("{n} images")));
         ui.close();
@@ -205,7 +222,12 @@ pub fn menu(ui: &mut egui::Ui, st: &AppState, image: &ImageRef, out: &mut Vec<Ms
 /// picks, 1/2/3 (G/N/B) rate them all. True when the rating keys were
 /// taken.
 pub fn keys(ui: &egui::Ui, st: &AppState, out: &mut Vec<Msg>) -> bool {
-    if ui.ctx().egui_wants_keyboard_input() || st.preview.is_some() || st.tile.is_some() || st.tagging.is_some() {
+    if ui.ctx().egui_wants_keyboard_input()
+        || st.preview.is_some()
+        || st.tile.is_some()
+        || st.tagging.is_some()
+        || st.use_ref.is_some()
+    {
         return false;
     }
     ui.input(|i| {
@@ -222,6 +244,15 @@ pub fn keys(ui: &egui::Ui, st: &AppState, out: &mut Vec<Msg>) -> bool {
             out.push(Msg::OpenTile);
         }
         crate::review::tag_keys(i, st.picked.clone(), out);
+        // Review: U / R use them as references (the modal)
+        if st.tab == Tab::Review && !i.modifiers.command {
+            if i.key_pressed(Key::U) {
+                out.push(Msg::UseAsRef(st.picked.clone(), RefTo::Project));
+            }
+            if i.key_pressed(Key::R) {
+                out.push(Msg::UseAsRef(st.picked.clone(), RefTo::InputLibrary));
+            }
+        }
         for (keys, v) in [
             ([Key::Num1, Key::G], Verdict::Good),
             ([Key::Num2, Key::N], Verdict::Neutral),

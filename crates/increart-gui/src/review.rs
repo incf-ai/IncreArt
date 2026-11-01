@@ -11,7 +11,7 @@ use increart_core::config::ReviewOrder;
 use increart_core::scan::OutputLink;
 use increart_gui_core::{
     AppState, Confirm, GRID_CELL_MAX, GRID_CELL_MIN, InfoPanel, Msg, OutputPreset, OutputSource, OutputTab, Ratings,
-    ReviewNode, ReviewRun, ReviewView, Smart, Tab, UseTarget, ZoomGrid, counts,
+    RefTo, ReviewNode, ReviewRun, ReviewView, Smart, Tab, UseTarget, ZoomGrid, counts,
 };
 
 use crate::textures::Textures;
@@ -29,6 +29,7 @@ fn keys(ui: &egui::Ui, st: &AppState, out: &mut Vec<Msg>) {
         || st.ref_picker.is_some()
         || st.collect.is_some()
         || st.tagging.is_some()
+        || st.use_ref.is_some()
     {
         return;
     }
@@ -84,7 +85,8 @@ fn keys(ui: &egui::Ui, st: &AppState, out: &mut Vec<Msg>) {
                 (Key::E, Msg::UseImage(o.image.clone(), UseTarget::Edit)),
                 (Key::N, Msg::UseImage(o.image.clone(), UseTarget::NewProject)),
                 (Key::D, Msg::UseImage(o.image.clone(), UseTarget::DuplicateProject)),
-                (Key::R, Msg::ToInputLibrary(o.image.clone())),
+                (Key::R, Msg::UseAsRef(vec![o.image.clone()], RefTo::InputLibrary)),
+                (Key::U, Msg::UseAsRef(vec![o.image.clone()], RefTo::Project)),
                 (Key::I, Msg::NewIdeaFromImage(o.image.clone())),
             ] {
                 if i.key_pressed(key) {
@@ -542,7 +544,8 @@ fn key_hints(ui: &mut egui::Ui, sheet: bool) {
                 ("E", "edit this image"),
                 ("N", "new project from it"),
                 ("D", "duplicate its project"),
-                ("R", "→ input library"),
+                ("U", "use as a reference…"),
+                ("R", "→ input library…"),
                 ("I", "→ new idea"),
                 ("L", "tag…"),
                 ("Shift+L", "tag again"),
@@ -773,14 +776,21 @@ pub fn use_menu(ui: &mut egui::Ui, st: &AppState, root: &Path, image: &increart_
         ui.close();
     }
     ui.separator();
+    // Review: both ref uses ask first, with a rating (the modal)
+    let review = st.tab == Tab::Review && st.output_link(image).is_some();
     let current = st.project_entry().map(|p| p.name());
     let label = format!("Use as a reference in {}", current.as_deref().unwrap_or("the current project"));
+    let label = if review { format!("{label}…   U") } else { label };
     if ui
         .add_enabled(current.is_some(), egui::Button::new(ic(ph::PLUS, &label)))
         .on_disabled_hover_text("Select a project first (Projects tab)")
         .clicked()
     {
-        out.push(Msg::UseImage(image.clone(), UseTarget::CurrentProject));
+        out.push(if review {
+            Msg::UseAsRef(vec![image.clone()], RefTo::Project)
+        } else {
+            Msg::UseImage(image.clone(), UseTarget::CurrentProject)
+        });
         ui.close();
     }
     for (label, target) in [
@@ -794,8 +804,13 @@ pub fn use_menu(ui: &mut egui::Ui, st: &AppState, root: &Path, image: &increart_
         }
     }
     ui.separator();
-    if ui.button(ic(ph::BOOKS, "To the input library as a ref   R")).clicked() {
-        out.push(Msg::ToInputLibrary(image.clone()));
+    let label = if review { "To the input library as a ref…   R" } else { "To the input library as a ref   R" };
+    if ui.button(ic(ph::BOOKS, label)).clicked() {
+        out.push(if review {
+            Msg::UseAsRef(vec![image.clone()], RefTo::InputLibrary)
+        } else {
+            Msg::ToInputLibrary(image.clone())
+        });
         ui.close();
     }
     if ui.button(ic(ph::LIGHTBULB, "New idea from this image   I")).clicked() {
@@ -2439,18 +2454,7 @@ pub fn collect_window(ctx: &egui::Context, st: &AppState, tex: &mut Textures, ou
             problem = Some("Pick a collection, or make one with New collection…".into());
         }
         ui.add_space(8.0);
-        ui.horizontal(|ui| {
-            ui.label(RichText::new("Rate").strong());
-            ui.add_space(6.0);
-            if ui.selectable_label(d.verdict.is_none(), "don't rate").clicked() {
-                d.verdict = None;
-            }
-            for (label, v, c) in VERDICTS {
-                if ui.selectable_label(d.verdict == Some(v), RichText::new(label.to_lowercase()).color(c)).clicked() {
-                    d.verdict = Some(v);
-                }
-            }
-        });
+        rate_row(ui, &mut d.verdict);
         ui.weak(match d.verdict {
             Some(_) if st.review_view == ReviewView::Sheet => "Rated, it stays on the sheet with its new colour.",
             Some(_) => "Rated, it leaves Review's queue and the next image shows. Undo (4 / Ctrl+Z) takes both back.",
@@ -2700,19 +2704,7 @@ pub fn tag_window(ctx: &egui::Context, st: &AppState, tex: &mut Textures, out: &
         });
         if d.rate {
             ui.add_space(8.0);
-            ui.horizontal(|ui| {
-                ui.label(RichText::new("Rate").strong());
-                ui.add_space(6.0);
-                if ui.selectable_label(d.verdict.is_none(), "don't rate").clicked() {
-                    d.verdict = None;
-                }
-                for (label, v, c) in VERDICTS {
-                    if ui.selectable_label(d.verdict == Some(v), RichText::new(label.to_lowercase()).color(c)).clicked()
-                    {
-                        d.verdict = Some(v);
-                    }
-                }
-            });
+            rate_row(ui, &mut d.verdict);
             ui.weak(match d.verdict {
                 Some(_) if st.review_view == ReviewView::Sheet => "Rated, it stays on the sheet with its new colour.",
                 Some(_) => "Rated, it leaves Review's queue. Undo (4 / Ctrl+Z) takes back the tags and the rating.",
@@ -2773,6 +2765,148 @@ pub fn tag_window(ctx: &egui::Context, st: &AppState, tex: &mut Textures, out: &
         out.push(Msg::CancelTags);
     } else if confirm {
         out.push(Msg::ConfirmTags);
+    }
+}
+
+/// The Rate row of Review's modals: don't rate / good / neutral / bad.
+fn rate_row(ui: &mut egui::Ui, verdict: &mut Option<Verdict>) {
+    ui.horizontal(|ui| {
+        ui.label(RichText::new("Rate").strong());
+        ui.add_space(6.0);
+        if ui.selectable_label(verdict.is_none(), "don't rate").clicked() {
+            *verdict = None;
+        }
+        for (label, v, c) in VERDICTS {
+            if ui.selectable_label(*verdict == Some(v), RichText::new(label.to_lowercase()).color(c)).clicked() {
+                *verdict = Some(v);
+            }
+        }
+    });
+}
+
+/// "fox-cafe's", "stickers'".
+fn possessive(name: &str) -> String {
+    if name.ends_with('s') { format!("{name}'") } else { format!("{name}'s") }
+}
+
+/// Review's Use as a reference… modal (DESIGN.md, Review), from `U` (the
+/// selected project's Generate form) or `R` (the input library): the image
+/// or a stack of the picks, where they go (either, switched here), and the
+/// rating that goes with it (neutral to start). Enter confirms.
+pub fn ref_window(ctx: &egui::Context, st: &AppState, tex: &mut Textures, out: &mut Vec<Msg>) {
+    let (Some(d0), Some(root)) = (&st.use_ref, &st.library) else { return };
+    let Some(first) = d0.images.first() else { return };
+    let mut d = d0.clone();
+    let (mut confirm, mut cancel) = (false, false);
+    let n = d.images.len();
+    let project = st.project_entry().map(|p| p.name());
+    let enter = ctx.input(|i| i.key_pressed(Key::Enter));
+    let m = egui::Modal::new(egui::Id::unique("use_ref")).show(ctx, |ui| {
+        ui.set_width(520.0);
+        let what = if n == 1 { "1 image".to_string() } else { format!("{n} images") };
+        ui.heading(ic(ph::PLUS, &format!("Use {what} as a reference")));
+        ui.add_space(4.0);
+        ui.horizontal(|ui| {
+            let t = tex.thumb(root, first);
+            if n > 1 {
+                crate::widgets::stacked_thumb(ui, t.as_ref(), 64.0);
+            } else {
+                thumb(ui, t.as_ref(), 64.0, false, None);
+            }
+            ui.vertical(|ui| match st.output_link(first).filter(|_| n == 1) {
+                Some(o) => {
+                    let project = st.index.run(&o.name.run).map(|(p, _)| p.name()).unwrap_or_default();
+                    ui.weak(format!("{project} · seed {}", o.name.seed));
+                }
+                None if d.images == st.picked => {
+                    ui.weak(format!("the {n} picked"));
+                }
+                None => {}
+            });
+        });
+        ui.add_space(8.0);
+        ui.horizontal(|ui| {
+            ui.label(RichText::new("To").strong());
+            ui.add_space(6.0);
+            let form =
+                format!("{} Generate form   U", project.as_deref().map_or("the current project's".into(), possessive));
+            let r = ui.add_enabled(project.is_some(), egui::Button::selectable(d.to == RefTo::Project, form));
+            if r.on_disabled_hover_text("Select a project first (Projects tab)").clicked() {
+                d.to = RefTo::Project;
+            }
+            if ui.selectable_label(d.to == RefTo::InputLibrary, "the input library   R").clicked() {
+                d.to = RefTo::InputLibrary;
+            }
+        });
+        ui.weak(match d.to {
+            RefTo::Project if n == 1 => "Added to the form's references, after those there.",
+            RefTo::Project => "Added to the form's references in this order, after those there.",
+            RefTo::InputLibrary if n == 1 => "An image-only idea at the top of the input library.",
+            RefTo::InputLibrary => "An image-only idea each, at the top of the input library.",
+        });
+        ui.add_space(8.0);
+        rate_row(ui, &mut d.verdict);
+        ui.weak(match (d.verdict, d.to) {
+            (Some(_), _) if st.review_view == ReviewView::Sheet => "Rated, it stays on the sheet with its new colour.",
+            (Some(_), RefTo::Project) => {
+                "Rated, it leaves Review's queue. Undo (4 / Ctrl+Z) takes back the rating and the references."
+            }
+            (Some(_), RefTo::InputLibrary) => {
+                "Rated, it leaves Review's queue. Undo (4 / Ctrl+Z) takes back the rating and discards the ideas."
+            }
+            (None, _) => "It stays in Review's queue, unrated.",
+        });
+        ui.add_space(8.0);
+        let to = match d.to {
+            RefTo::Project => format!("{} form", project.as_deref().map_or("the project's".into(), possessive)),
+            RefTo::InputLibrary => "the input library".to_string(),
+        };
+        let rate = d.verdict.and_then(|v| VERDICTS.iter().find(|x| x.1 == v)).map(|x| x.0.to_lowercase());
+        let it = if n == 1 { String::new() } else { format!(" {n}") };
+        let label = match rate {
+            None => format!("Add{it} to {to}"),
+            Some(r) => format!("Add{it} to {to} and rate {r}"),
+        };
+        let ready = d.to == RefTo::InputLibrary || project.is_some();
+        crate::widgets::dialog_footer(
+            ui,
+            |_| {},
+            |ui| {
+                let r = ui.add_enabled(
+                    ready,
+                    egui::Button::new(RichText::new(ic(ph::PLUS, &format!("{label}   Enter"))).strong()),
+                );
+                if r.on_disabled_hover_text("Select a project first (Projects tab)").clicked() {
+                    confirm = true;
+                }
+                if ui.button("Cancel   Esc").clicked() {
+                    cancel = true;
+                }
+            },
+        );
+        // U / R switch where they go, as the keys that opened it
+        ctx.input(|i| {
+            if i.key_pressed(Key::U) && project.is_some() {
+                d.to = RefTo::Project;
+            }
+            if i.key_pressed(Key::R) {
+                d.to = RefTo::InputLibrary;
+            }
+        });
+        if enter && ready {
+            confirm = true;
+        }
+    });
+    if m.should_close() {
+        cancel = true;
+    }
+    if d != *d0 {
+        out.push(Msg::EditUseRef(d));
+    }
+    if cancel {
+        out.push(Msg::CancelUseRef);
+    } else if confirm {
+        out.push(Msg::ConfirmUseRef);
     }
 }
 

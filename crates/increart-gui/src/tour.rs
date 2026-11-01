@@ -55,6 +55,7 @@ const SCENES: &[&str] = &[
     "13e-review-collect",
     "13f-review-image-menu",
     "13g-review-tag",
+    "13h-review-use-ref",
     "14-output-library-rejected",
     "14b-output-library-compare",
     // after 13g (its tags)
@@ -1342,6 +1343,22 @@ impl Tour {
                 v.push(Msg::OutputSelect(tagged.map(|o| o.image.clone())));
                 v
             }
+            "13h-review-use-ref" => {
+                // Use as a reference… (U) on two picked images in Review
+                let mut v = vec![
+                    Msg::ContinueWithoutServers,
+                    Msg::Tab(Tab::Review),
+                    Msg::ReviewScope(None),
+                    Msg::ReviewView(ReviewView::Single),
+                ];
+                let q: Vec<_> = st.review_queue().iter().take(2).map(|o| o.image.clone()).collect();
+                v.extend([
+                    Msg::PickSet(q.clone()),
+                    Msg::UseAsRef(q, increart_gui_core::RefTo::Project),
+                    Msg::PickSet(vec![]),
+                ]);
+                v
+            }
             "13e-review-collect" => {
                 // Add to collection… on the first image in Review
                 let mut v = vec![
@@ -2003,6 +2020,7 @@ impl Tour {
                 Msg::CancelNewProject,
                 Msg::CancelCollect,
                 Msg::CancelTags,
+                Msg::CancelUseRef,
                 Msg::CancelMoveProject,
             ]);
             out.extend(self.msgs(name, st));

@@ -3193,7 +3193,7 @@ the keys and mouse buttons go through that view's own history instead.
   down (skipping cells with no image yet), and the selected cell follows.
   There (contact sheet included) the image can also be rated and used without
   closing: `1`/`2`/`3` (or `G`/`N`/`B`; `1` then no longer zooms), `4` or `Ctrl+Z` (undo),
-  `E`/`D`/`R`/`I`, the bar's right end (↶ undo · Good · Neutral · Bad, the
+  `E`/`D`/`R`/`I` (in Review `U` too), the bar's right end (↶ undo · Good · Neutral · Bad, the
   current verdict marked · ⋯ the use menu), or right-click (the verdicts over
   the use menu). In Review's queue the rated image leaves it and the preview
   goes on to the next one (closing after the last); on the contact sheet it
@@ -3207,8 +3207,10 @@ the keys and mouse buttons go through that view's own history instead.
   (on the contact sheet the row's first / last seed, with `Ctrl` the
   sheet's; Grid, the strip and the sheet scroll to the image moved to),
   `Space` = toggle grid/single, `C` =
-  compare with pinned, `E` = new edit run from this image, `R` = add to input
-  library as ref, `I` = new idea from this image, `L` = tag it (the picks:
+  compare with pinned, `E` = new edit run from this image, `U` = use as a
+  reference in the current project…, `R` = add to input library as ref…
+  (both the Use as a reference… modal; the picks: them), `I` = new idea
+  from this image, `L` = tag it (the picks:
   them), `Shift+L` = the last tags again, `4` / `Ctrl+Z` = undo last review
   action.
 - **Add to collection…** (Review's right-click on an image, in every view,
@@ -3230,6 +3232,22 @@ the keys and mouse buttons go through that view's own history instead.
   starts on "don't rate" every time (see Output library → **Tags**). Tagging
   alone doesn't review: the images stay in the queue. Rated, they leave it,
   and one undo takes back the tags and the rating.
+- **Use as a reference in ‹project›…** (`U`) and **To the input library as
+  a ref…** (`R`), from Review's keys, the preview, the right-click menus and
+  the picks menu, open the **Use as a reference** modal on the image or the
+  picks: the image (or a stack), **To** ‹project›'s Generate form / the
+  input library (switched there, or with `U` / `R`; the form only with a
+  project selected, else `U` says to select one), and a **Rate** row as in
+  Add to collection… that starts on neutral every time. Enter or the main
+  button ("Add 2 to fox-cafe's form and rate neutral") confirms. To the
+  form, the images join its references after those there (one already a
+  reference stays as it is); to the input library, each becomes an
+  image-only idea at its top level. Rated, they leave the queue, and one
+  undo takes back the rating, the references it added to the selected
+  project's form (another project's form, a draft by then, keeps them) and
+  the ideas it made (to Discarded); not rated, they stay in the queue and
+  there's nothing to undo. Elsewhere (the Output library, Compare) both
+  act at once, as before.
 - **Output library**: the place for finished work, as opposed to Projects
   (where images are made and triaged). Tabs **Grid** (default) · **Folder**
   · **Discarded**.

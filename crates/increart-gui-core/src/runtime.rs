@@ -25,7 +25,7 @@ use increart_core::request::GenOptions;
 use increart_core::sync::LockExt;
 use increart_core::{Id, IdeaLoc, ImageRef, Library, NewIdea, NewRun, Tree, Verdict, modelhash};
 
-use crate::state::{EntryKind, FvEntry, GenerateForm, PickKind};
+use crate::state::{EntryKind, FvEntry, GenerateForm, PickKind, ReviewUndo};
 use crate::update::{DraftSave, Effect, LibOp, Msg, OpOk, PeJob, TileTarget};
 
 /// The library and the image servers with the engine using them.
@@ -2073,7 +2073,7 @@ pub fn lib_op(lib: &mut Library, op: LibOp) -> Result<OpOk, String> {
             }
             Ok(OpOk::Done)
         }
-        LibOp::ReviewOutputs { links, undo } => review_outputs(lib, links, undo, vec![], vec![]),
+        LibOp::ReviewOutputs { links, undo } => review_outputs(lib, links, undo, ReviewUndo::default()),
         LibOp::CollectAndReview { folder, new, images, links } => {
             let folder = match new {
                 Some(name) => lib.create_folder(Tree::Collections, &folder, Some(&name)).map_err(err)?,
@@ -2086,7 +2086,7 @@ pub fn lib_op(lib: &mut Library, op: LibOp) -> Result<OpOk, String> {
                     collected.push(at);
                 }
             }
-            review_outputs(lib, links, false, collected, vec![])
+            review_outputs(lib, links, false, ReviewUndo { collected, ..Default::default() })
         }
         LibOp::TagAndReview { tags, links } => {
             let mut tagged = vec![];
@@ -2095,7 +2095,14 @@ pub fn lib_op(lib: &mut Library, op: LibOp) -> Result<OpOk, String> {
                     tagged.push((project.clone(), image, before));
                 }
             }
-            review_outputs(lib, links, false, vec![], tagged)
+            review_outputs(lib, links, false, ReviewUndo { tags: tagged, ..Default::default() })
+        }
+        LibOp::RefAndReview { ideas, refs, links } => {
+            let mut made = ReviewUndo { refs, ..Default::default() };
+            for image in ideas {
+                made.ideas.push(lib.idea_from_output(&image, false, IdeaLoc::top_library()).map_err(err)?);
+            }
+            review_outputs(lib, links, false, made)
         }
         LibOp::UndoReview(u) => {
             let mut by_project: crate::state::ProjectTags = vec![];
@@ -2116,20 +2123,26 @@ pub fn lib_op(lib: &mut Library, op: LibOp) -> Result<OpOk, String> {
                     lib.delete_node(Tree::Collections, rel).map_err(err)?;
                 }
             }
-            review_outputs(lib, u.links, true, vec![], vec![])
+            // the ideas made go to Discarded (restorable); one gone since is
+            // fine
+            for id in &u.ideas {
+                if lib.find_idea(id).is_ok() {
+                    lib.move_idea(id, &IdeaLoc::Discarded).map_err(err)?;
+                }
+            }
+            review_outputs(lib, u.links, true, ReviewUndo::default())
         }
     }
 }
 
 /// Rates output links (each to its own verdict) for `ReviewOutputs` and
-/// the like; `collected`, `tagged`: the collection links made and the tags
-/// set with it, for undo.
+/// the like; `made`: what was made with it (collection links, tags,
+/// references, ideas), for undo.
 fn review_outputs(
     lib: &mut Library,
     links: Vec<(PathBuf, Option<Verdict>)>,
     undo: bool,
-    collected: Vec<PathBuf>,
-    tagged: Vec<(Id, Id, Vec<String>)>,
+    made: ReviewUndo,
 ) -> Result<OpOk, String> {
     let mut done = vec![];
     for (link, verdict) in links {
@@ -2140,11 +2153,11 @@ fn review_outputs(
             Ok(new) => done.push((new, previous)),
             // nothing rated: an error as before (the collection links stay,
             // made); else keep what was
-            Err(e) if done.is_empty() && collected.is_empty() && tagged.is_empty() => return Err(err(e)),
-            Err(e) => return Ok(OpOk::Reviewed { done, collected, tagged, undo, error: Some(err(e)) }),
+            Err(e) if done.is_empty() && made == ReviewUndo::default() => return Err(err(e)),
+            Err(e) => return Ok(OpOk::Reviewed { done, made, undo, error: Some(err(e)) }),
         }
     }
-    Ok(OpOk::Reviewed { done, collected, tagged, undo, error: None })
+    Ok(OpOk::Reviewed { done, made, undo, error: None })
 }
 
 /// Keeps the ideas (inbox ones move to the top of the input library) and

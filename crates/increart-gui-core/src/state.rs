@@ -1663,6 +1663,29 @@ pub struct ReviewUndo {
     pub collected: Vec<PathBuf>,
     /// (project, image, its tags before) of each image tagged.
     pub tags: Vec<(Id, Id, Vec<String>)>,
+    /// (project, image) of each reference added to a project's Generate
+    /// form (not one that was there already).
+    pub refs: Vec<(Id, ImageRef)>,
+    /// The input library ideas made (image-only refs).
+    pub ideas: Vec<Id>,
+}
+
+/// Where Review's Use as a reference… modal puts the images.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RefTo {
+    /// The selected project's Generate form, as references.
+    Project,
+    /// `R`: the input library, each an image-only idea.
+    InputLibrary,
+}
+
+/// Review's Use as a reference… modal (DESIGN.md, Review): the images,
+/// where they go, the rating that goes with it (`None`: not rated).
+#[derive(Clone, Debug, PartialEq)]
+pub struct RefDialog {
+    pub images: Vec<ImageRef>,
+    pub to: RefTo,
+    pub verdict: Option<Verdict>,
 }
 
 /// Output images' tags to set, by project: (project, [(image, tags)]).
@@ -3368,6 +3391,8 @@ pub struct AppState {
     pub collect_last: (Option<PathBuf>, Option<Verdict>),
     /// The Tag… modal.
     pub tagging: Option<TagDialog>,
+    /// Review's Use as a reference… modal.
+    pub use_ref: Option<RefDialog>,
     /// The last tags applied, for Shift+L "tag again".
     pub tag_last: Option<TagChange>,
     /// Output links sent to be rated, until the index shows them moved (or
@@ -3648,6 +3673,7 @@ impl AppState {
             collect: None,
             collect_last: (None, Some(Verdict::Good)),
             tagging: None,
+            use_ref: None,
             tag_last: None,
             reviewing: HashSet::new(),
             renaming: None,

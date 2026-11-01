@@ -863,6 +863,14 @@ pub enum Msg {
     ConfirmTags,
     /// Shift+L: the last tags applied, on these images.
     TagAgain(Vec<ImageRef>),
+    /// Review's Use as a reference… modal on these output images, opening
+    /// on `to`.
+    UseAsRef(Vec<ImageRef>, crate::state::RefTo),
+    /// The modal as edited (where to, the rating).
+    EditUseRef(crate::state::RefDialog),
+    CancelUseRef,
+    /// Puts the images where the modal says and rates them.
+    ConfirmUseRef,
     /// A tag's chip ×: the tag off the image.
     RemoveTag(ImageRef, String),
     SetCover(Id, Option<ImageRef>),
@@ -1301,6 +1309,15 @@ pub enum LibOp {
         tags: crate::state::ProjectTags,
         links: Vec<(PathBuf, Option<Verdict>)>,
     },
+    /// Makes an image-only idea at the top of the input library of each
+    /// output image in `ideas`, then rates `links` as `ReviewOutputs` does,
+    /// both undone together; `refs`, the Generate form references added
+    /// with it, go along for the undo.
+    RefAndReview {
+        ideas: Vec<Id>,
+        refs: Vec<(Id, ImageRef)>,
+        links: Vec<(PathBuf, Option<Verdict>)>,
+    },
     /// Takes back a review action: its tags and collection links back as
     /// they were, its ratings too.
     UndoReview(crate::state::ReviewUndo),
@@ -1361,13 +1378,12 @@ pub enum OpOk {
         form: Box<GenerateForm>,
         then: StartRefs,
     },
-    /// (link path now, verdict before) of each rated link, the collection
-    /// links made, (project, image, tags before) of each image tagged;
-    /// `error`: why the rest weren't.
+    /// (link path now, verdict before) of each rated link, and what was
+    /// made with it (collection links, tags, references, ideas; its `links`
+    /// empty); `error`: why the rest weren't.
     Reviewed {
         done: Vec<(PathBuf, Option<Verdict>)>,
-        collected: Vec<PathBuf>,
-        tagged: Vec<(Id, Id, Vec<String>)>,
+        made: crate::state::ReviewUndo,
         undo: bool,
         error: Option<String>,
     },
@@ -5152,6 +5168,81 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
             state.review_cursor = state.review_cursor.min(state.review_queue().len().saturating_sub(1));
             fx
         }
+        Msg::UseAsRef(images, to) => {
+            let images: Vec<ImageRef> = images.into_iter().filter(|i| state.output_link(i).is_some()).collect();
+            if images.is_empty() || state.library.is_none() {
+                return vec![];
+            }
+            if to == crate::state::RefTo::Project && state.project_entry().is_none() {
+                state.messages_error("Select a project first (Projects tab)");
+                return vec![];
+            }
+            state.use_ref = Some(crate::state::RefDialog { images, to, verdict: Some(Verdict::Neutral) });
+            vec![]
+        }
+        Msg::EditUseRef(d) => {
+            if state.use_ref.is_some() {
+                state.use_ref = Some(d);
+            }
+            vec![]
+        }
+        Msg::CancelUseRef => {
+            state.use_ref = None;
+            vec![]
+        }
+        Msg::ConfirmUseRef => {
+            let Some(d) = state.use_ref.take() else { return vec![] };
+            let project = state.project_entry().cloned();
+            if d.to == crate::state::RefTo::Project && project.is_none() {
+                state.messages_error("Select a project first (Projects tab)");
+                return vec![];
+            }
+            let links: Vec<(PathBuf, Option<Verdict>)> = match d.verdict {
+                Some(v) => {
+                    d.images.iter().filter_map(|i| state.output_link(i)).map(|o| (o.path.clone(), Some(v))).collect()
+                }
+                None => vec![],
+            };
+            // rated, picks leave Review's queue (the sheet keeps them), as
+            // Rate does
+            if !links.is_empty() && d.images == state.picked && state.review_view != ReviewView::Sheet {
+                state.picked.clear();
+            }
+            let (mut fx, mut refs, mut ideas) = (vec![], vec![], vec![]);
+            match (d.to, project) {
+                (crate::state::RefTo::Project, Some(p)) => {
+                    let before = state.generate.refs();
+                    for i in &d.images {
+                        if !state.generate.images.iter().any(|x| x.image == *i && x.reference) {
+                            state.generate.add_reference(i.clone());
+                            refs.push((p.project.id.clone(), i.clone()));
+                        }
+                    }
+                    let tags: Vec<String> = d
+                        .images
+                        .iter()
+                        .filter_map(|i| state.generate.images.iter().position(|x| x.image == *i))
+                        .map(|at| format!("<image{}>", state.generate.tag_of(at).map_or("?".into(), |t| t.to_string())))
+                        .collect();
+                    state.messages_info(format!("Added to {}'s Generate form as {}", p.name(), tags.join(", ")));
+                    fx = images_changed(state, before);
+                }
+                _ => {
+                    ideas = d.images.iter().map(|i| i.id.clone()).collect();
+                    let n = ideas.len();
+                    state.messages_info(if n == 1 {
+                        "Added to the input library as a ref".to_string()
+                    } else {
+                        format!("Added {n} refs to the input library")
+                    });
+                }
+            }
+            if !links.is_empty() || !ideas.is_empty() {
+                fx.extend(lib(state, LibOp::RefAndReview { ideas, refs, links }));
+            }
+            state.review_cursor = state.review_cursor.min(state.review_queue().len().saturating_sub(1));
+            fx
+        }
         Msg::TagAgain(images) => {
             let Some(change) = state.tag_last.clone() else {
                 state.messages_info("Nothing to tag again yet: tag with L first");
@@ -6491,7 +6582,11 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
         }
         // the last rating, of one image or of all the picked at once
         Msg::UndoReview => match state.review_undo.pop() {
-            Some(u) => lib(state, LibOp::UndoReview(u)),
+            Some(u) => {
+                let mut fx = unref(state, &u.refs);
+                fx.extend(lib(state, LibOp::UndoReview(u)));
+                fx
+            }
             None => vec![],
         },
 
@@ -7253,6 +7348,25 @@ fn tag_images(
     lib(state, LibOp::TagAndReview { tags, links })
 }
 
+/// Takes back the Generate form references a review action added (to the
+/// selected project's form only: another's is a draft by now, and keeps
+/// them).
+fn unref(state: &mut AppState, refs: &[(Id, ImageRef)]) -> Vec<Effect> {
+    let mine: Vec<&ImageRef> = refs.iter().filter(|(p, _)| state.project.as_ref() == Some(p)).map(|(_, i)| i).collect();
+    if mine.is_empty() {
+        return vec![];
+    }
+    let before = state.generate.refs();
+    for x in &mut state.generate.images {
+        if mine.contains(&&x.image) {
+            x.reference = false;
+        }
+    }
+    // (the start image stays, as it was)
+    state.generate.images.retain(|x| x.reference || x.start || !mine.contains(&&x.image));
+    images_changed(state, before)
+}
+
 /// Why a new collection can't be named `name` in `parent` (relative to
 /// `collections/`), if it can't.
 pub fn collection_name_problem(state: &AppState, parent: &std::path::Path, name: &str) -> Option<String> {
@@ -7267,7 +7381,8 @@ fn lib(state: &mut AppState, op: LibOp) -> Vec<Effect> {
     state.busy += 1;
     if let LibOp::ReviewOutputs { links, undo: false }
     | LibOp::CollectAndReview { links, .. }
-    | LibOp::TagAndReview { links, .. } = &op
+    | LibOp::TagAndReview { links, .. }
+    | LibOp::RefAndReview { links, .. } = &op
     {
         state.reviewing.extend(links.iter().map(|(l, _)| l.clone()));
     }
@@ -9590,9 +9705,9 @@ fn op_done(state: &mut AppState, ok: OpOk) -> Vec<Effect> {
             state.messages_info("Run queued");
             return fx;
         }
-        OpOk::Reviewed { done, collected, tagged, undo, error } => {
-            if !undo && (!done.is_empty() || !tagged.is_empty()) {
-                state.review_undo.push(crate::state::ReviewUndo { links: done, collected, tags: tagged });
+        OpOk::Reviewed { done, made, undo, error } => {
+            if !undo && (!done.is_empty() || !made.tags.is_empty()) {
+                state.review_undo.push(crate::state::ReviewUndo { links: done, ..made });
             }
             if let Some(e) = error {
                 state.messages_error(e);
