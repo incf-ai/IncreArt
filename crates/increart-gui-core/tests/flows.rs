@@ -2235,6 +2235,7 @@ fn start_engine_with_pending_runs_does_not_hang() {
         shared: increart_core::config::SdServerConfig::default(),
         order: Default::default(),
         skip_ram_check: false,
+        random: None,
     });
     let msgs = h.rt.wait(Duration::from_secs(10));
     assert!(msgs.contains(&Msg::RunsQueued(vec![run])), "{msgs:?}");
@@ -3420,7 +3421,7 @@ fn style_sweeps_queue_review_on_a_contact_sheet_and_reuse_a_style() {
     assert!(h.state.project_entry().unwrap().runs.is_empty(), "cancelled");
     h.send(Msg::QueueGenerate);
     let fx = h.send(Msg::SweepOrderAnswer(Some(true)));
-    assert!(fx.iter().any(|f| matches!(f, Effect::SetJobOrder(increart_core::scheduler::Order::BySweep))));
+    assert!(fx.iter().any(|f| matches!(f, Effect::SetJobOrder(increart_core::scheduler::Order::BySweep, _))));
     assert_eq!(h.state.config.job_order, increart_core::scheduler::Order::BySweep);
     assert!(h.state.sweep_order_ask.is_none() && !h.state.sweep_order_asked);
     h.settle();
@@ -7816,4 +7817,21 @@ fn output_images_are_tagged_in_a_modal_filtered_and_undone() {
     assert!(!h.state.tagging.as_ref().unwrap().rate, "outside Review: no rating");
     h.send(Msg::CancelTags);
     assert!(h.state.tagging.is_none());
+}
+
+#[test]
+fn random_order_goes_to_the_engine_with_this_starts_salt() {
+    use increart_core::scheduler::Order;
+    let mut s = AppState::new(Config::default(), Some(PathBuf::from("config.rsn")));
+    s.job_salt = 42;
+    let fx = update(&mut s, Msg::JobRandom(true));
+    assert!(s.config.job_random);
+    assert!(fx.iter().any(|f| matches!(f, Effect::SetJobOrder(Order::Spread, Some(42)))), "{fx:?}");
+    assert!(fx.iter().any(|f| matches!(f, Effect::SaveConfig(..))), "saved: {fx:?}");
+    // a new order keeps it random
+    let fx = update(&mut s, Msg::JobOrder(Order::Sequential));
+    assert!(fx.iter().any(|f| matches!(f, Effect::SetJobOrder(Order::Sequential, Some(42)))), "{fx:?}");
+    assert!(update(&mut s, Msg::JobRandom(true)).is_empty(), "unchanged");
+    let fx = update(&mut s, Msg::JobRandom(false));
+    assert!(fx.iter().any(|f| matches!(f, Effect::SetJobOrder(Order::Sequential, None))), "{fx:?}");
 }

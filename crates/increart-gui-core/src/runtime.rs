@@ -1547,9 +1547,9 @@ fn work_on(ctx: &Ctx, fx: Effect) -> Vec<Msg> {
             drop(servers);
             vec![Msg::ServersStopped(names)]
         }
-        Effect::SetJobOrder(order) => {
+        Effect::SetJobOrder(order, random) => {
             if let Some(e) = &ctx.session.lock_or_recover().engine {
-                e.set_order(order);
+                e.set_order(order, random);
             }
             vec![]
         }
@@ -1563,7 +1563,7 @@ fn work_on(ctx: &Ctx, fx: Effect) -> Vec<Msg> {
             increart_core::traffic::set_on(on);
             vec![]
         }
-        Effect::StartEngine { shared: cfg, order, skip_ram_check } => {
+        Effect::StartEngine { shared: cfg, order, skip_ram_check, random } => {
             let Some(lib) = ctx.library() else { return vec![] };
             // Runs with seeds left, found before taking any other lock (the
             // library lock is held once, never nested). From one scan: the
@@ -1591,6 +1591,7 @@ fn work_on(ctx: &Ctx, fx: Effect) -> Vec<Msg> {
                 generation: GenOptions { preview: cfg.preview.clone(), ..Default::default() },
                 sdcpp: cfg.commit.clone(),
                 order,
+                random,
                 skip_ram_check,
                 ..Default::default()
             };

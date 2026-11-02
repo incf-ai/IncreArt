@@ -189,6 +189,8 @@ pub struct SimRun {
     pub recipe: String,
     /// Seeds not started.
     pub seeds: usize,
+    /// Some done or being made: with random order it goes first.
+    pub started: bool,
     /// How far each seed being sampled now is, 0..1.
     pub sampling: Vec<f64>,
     /// Seconds per image on each server.
@@ -233,13 +235,17 @@ fn key(recipe: &str) -> ModelKey {
 /// Runs the scheduler on a simulated clock: each server generates its
 /// jobs one after another (it holds `max_in_flight`), a seed being sampled
 /// now takes what's left of it, and a load takes its server's time.
-pub fn simulate(runs: &[SimRun], servers: &[SimServer], order: Order) -> Plan {
+pub fn simulate(runs: &[SimRun], servers: &[SimServer], order: Order, random: Option<u64>) -> Plan {
     let mut sched = Scheduler::new(servers.len());
     sched.order = order;
+    sched.random = random;
     for r in runs {
         let n = r.seeds + r.sampling.len();
         sched.add_seeds(&r.id, key(&r.recipe), (0..n as u64).map(|s| (0, s)));
         sched.set_group(&r.id, r.group.clone());
+        if r.started {
+            sched.mark_started(&r.id);
+        }
     }
     let index: HashMap<&Id, usize> = runs.iter().enumerate().map(|(i, r)| (&r.id, i)).collect();
     // what's left of the seeds sampling now, taken by the first submits
@@ -339,6 +345,7 @@ mod tests {
             group: id(n).to_string(),
             recipe: recipe.into(),
             seeds,
+            started: false,
             sampling: vec![],
             image_s: image_s.to_vec(),
         }
@@ -356,23 +363,39 @@ mod tests {
     fn spread_shares_the_servers_one_at_a_time_doesnt() {
         let runs = [run(1, "q", 4, &[10.0, 10.0]), run(2, "q", 4, &[10.0, 10.0])];
         let servers = [server("q"), server("q")];
-        let p = simulate(&runs, &servers, Order::Spread);
+        let p = simulate(&runs, &servers, Order::Spread, None);
         // 8 images on 2 servers, taking turns: both end at 40 s; each
         // server's first two go to both runs, so run 2's start after one
         assert_eq!(at(&p, 1), (Some(0.0), Some(40.0)));
         assert_eq!(at(&p, 2), (Some(10.0), Some(40.0)));
         assert_eq!(p.end(), Some(40.0));
-        let p = simulate(&runs, &servers, Order::Sequential);
+        let p = simulate(&runs, &servers, Order::Sequential, None);
         assert_eq!(at(&p, 1), (Some(0.0), Some(20.0)));
         // run 2's seeds were queued behind run 1's (2 in flight per server)
         assert_eq!(at(&p, 2).1, Some(40.0));
     }
 
     #[test]
+    fn random_one_at_a_time_starts_with_the_started_run() {
+        let mut runs: Vec<SimRun> = (1..=4).map(|n| run(n, "q", 2, &[10.0])).collect();
+        runs[3].started = true;
+        for salt in 0..4 {
+            let p = simulate(&runs, &[server("q")], Order::Sequential, Some(salt));
+            assert_eq!(at(&p, 4).0, Some(0.0), "salt {salt}");
+            // one at a time: each run's two images back to back
+            let mut spans: Vec<_> = (1..=4).map(|n| at(&p, n)).collect();
+            spans.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+            for w in spans.windows(2) {
+                assert!(w[0].1 <= w[1].0.map(|s| s + 10.0), "salt {salt}: {spans:?}");
+            }
+        }
+    }
+
+    #[test]
     fn a_partly_sampled_seed_takes_what_is_left_and_servers_keep_what_they_hold() {
         let mut r = run(1, "q", 5, &[10.0, 30.0]);
         r.sampling = vec![0.5];
-        let p = simulate(&[r], &[server("q"), server("q")], Order::Spread);
+        let p = simulate(&[r], &[server("q"), server("q")], Order::Spread, None);
         // 6 seeds, 2 held by each server: gpu0 half a seed (5 s) and one
         // (15 s), then 2 more (35 s); gpu1 its 2 at 30 s each, as the
         // engine would (no seed moves to a server once sent)
@@ -383,7 +406,7 @@ mod tests {
     fn a_model_no_server_has_waits_for_a_load() {
         let mut s = server("q");
         s.load_s.insert("k".into(), 50.0);
-        let p = simulate(&[run(1, "k", 2, &[10.0])], &[s], Order::Spread);
+        let p = simulate(&[run(1, "k", 2, &[10.0])], &[s], Order::Spread, None);
         // loads (50 s), then 2 × 10 s
         assert_eq!(at(&p, 1), (Some(50.0), Some(70.0)));
     }
@@ -392,10 +415,10 @@ mod tests {
     fn no_working_server_no_end() {
         let mut s = server("q");
         s.working = false;
-        let p = simulate(&[run(1, "q", 2, &[10.0])], &[s], Order::Spread);
+        let p = simulate(&[run(1, "q", 2, &[10.0])], &[s], Order::Spread, None);
         assert_eq!(at(&p, 1), (None, None));
         assert_eq!(p.end(), None);
-        assert_eq!(simulate(&[], &[server("q")], Order::Spread).end(), Some(0.0));
+        assert_eq!(simulate(&[], &[server("q")], Order::Spread, None).end(), Some(0.0));
     }
 
     #[test]
@@ -475,6 +498,7 @@ mod bench {
                 group: format!("g{}", n / 8),
                 recipe: if n % 3 == 0 { "k".into() } else { "q".into() },
                 seeds: 64,
+                started: false,
                 sampling: vec![],
                 image_s: vec![34.0, 36.0],
             })
@@ -483,7 +507,7 @@ mod bench {
             (0..2).map(|_| SimServer { working: true, recipe: Some("q".into()), load_s: HashMap::new() }).collect();
         for order in [Order::Spread, Order::BySweep, Order::Sequential] {
             let t = std::time::Instant::now();
-            let p = simulate(&runs, &servers, order);
+            let p = simulate(&runs, &servers, order, None);
             eprintln!("{order:?}: {:?}, end {:?}", t.elapsed(), p.end());
         }
     }

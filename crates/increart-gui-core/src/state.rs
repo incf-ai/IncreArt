@@ -3247,6 +3247,9 @@ pub struct AppState {
     pub sweep_order_ask: Option<bool>,
     /// Answered: the queueing it held goes on without asking again.
     pub sweep_order_asked: bool,
+    /// The salt of Random order (a new one each app start), shared by the
+    /// engine and the forecast so they pick alike.
+    pub job_salt: u64,
     /// Projects → Folder.
     /// The folder view of the tab showing; the other three wait in
     /// `parked_folder_views`, so each keeps its own location and history.
@@ -3653,6 +3656,9 @@ impl AppState {
             move_project: None,
             sweep_order_ask: None,
             sweep_order_asked: false,
+            job_salt: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| d.as_nanos() as u64),
             duplicate: None,
             prompt_presets: increart_core::prompts::builtin(),
             presets_path: None,
@@ -5534,6 +5540,7 @@ impl AppState {
                 group,
                 recipe: run.model.recipe.clone(),
                 seeds: (j.total.saturating_sub(j.done) as usize).saturating_sub(j.sampling.len()),
+                started: j.done > 0 || !j.sampling.is_empty(),
                 sampling: j.sampling.iter().map(|(_, s, n)| *s as f64 / (*n).max(1) as f64).collect(),
                 image_s: self.image_s_on(&crate::forecast::Shape::of(run), Some(run), j.image_s()),
             });
@@ -5556,10 +5563,15 @@ impl AppState {
             .collect()
     }
 
+    /// Random order's salt when it's on, as the engine takes it.
+    pub fn job_random(&self) -> Option<u64> {
+        self.config.job_random.then_some(self.job_salt)
+    }
+
     /// The runs in the engine on a simulated clock (DESIGN.md, Timing).
     pub fn make_plan(&self) -> Option<crate::forecast::Plan> {
         let runs = self.sim_runs();
-        Some(crate::forecast::simulate(&runs, &self.sim_servers(&runs), self.config.job_order))
+        Some(crate::forecast::simulate(&runs, &self.sim_servers(&runs), self.config.job_order, self.job_random()))
     }
 
     /// Seconds per image of this shape on the servers working (their mean;
@@ -5597,6 +5609,7 @@ impl AppState {
                     id,
                     recipe: shape.recipe.clone(),
                     seeds: *seeds as usize,
+                    started: false,
                     sampling: vec![],
                     image_s: self.image_s_on(shape, None, None),
                 }
@@ -5609,17 +5622,21 @@ impl AppState {
         let ends = |plan: &crate::forecast::Plan| {
             runs.iter().map(|r| plan.runs.get(&r.id).and_then(|p| p.1)).try_fold(0.0f64, |m, f| f.map(|f| m.max(f)))
         };
-        let alone = ends(&simulate(&runs, &servers, self.config.job_order))?;
+        let alone = ends(&simulate(&runs, &servers, self.config.job_order, self.job_random()))?;
         let mut all = self.sim_runs();
         let queued = !all.is_empty();
         all.extend(runs.iter().cloned());
-        let after = if queued { ends(&simulate(&all, &self.sim_servers(&all), self.config.job_order)) } else { None };
+        let after = if queued {
+            ends(&simulate(&all, &self.sim_servers(&all), self.config.job_order, self.job_random()))
+        } else {
+            None
+        };
         Some(NewEstimate { alone_s: alone, with_queue_s: after, servers: servers.iter().filter(|s| s.working).count() })
     }
 
     /// What the forecast is made of, hashed: the runs in the engine, their
     /// seeds done and whether they've a live speed yet, the servers' states
-    /// and models, and the order.
+    /// and models, and the order (random or not).
     pub fn plan_key(&self) -> u64 {
         use std::hash::{Hash, Hasher};
         let mut h = std::collections::hash_map::DefaultHasher::new();
@@ -5630,6 +5647,7 @@ impl AppState {
             (&s.state, &s.model).hash(&mut h);
         }
         format!("{:?}", self.config.job_order).hash(&mut h);
+        self.config.job_random.hash(&mut h);
         h.finish()
     }
 

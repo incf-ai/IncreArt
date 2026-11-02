@@ -44,7 +44,7 @@ size (regenerate it with `scripts/make-gui-gallery.sh`).
 | [06c-projects-pane-run](06c-projects-pane-run.webp) | Projects → Folder inside a run: the details pane shows the run (prompt, settings, input images, seeds, revisions; Open in Generate / Show outputs / Details) |
 | [07-projects-generate](07-projects-generate.webp) | Generate: the form, and the Images pane on the right (each image a `<imageN>` reference, the start image, both, or parked) |
 | [07b-generate-blanks](07b-generate-blanks.webp) | Generate, a single run whose prompt has blanks: the **Blanks** table under the prompt (a value each, prompt enhance's suggestions, Suggest for the empty ones), filled in when queued |
-| [08-projects-jobs](08-projects-jobs.webp) | Jobs: servers and running runs |
+| [08-projects-jobs](08-projects-jobs.webp) | Jobs: servers and running runs; the order (Spread all · Sweep by sweep · One at a time) and Random |
 | [09-review](09-review.webp) | Review: scope, image, recipe, verdicts, filmstrip |
 | [10-output-library](10-output-library.webp) | Output library: all projects, Kept tab (the Grid's preset tabs: Kept · Good · Rejected · Unreviewed · All); Grid · Folder · Discarded (deleted images, restorable) |
 | [11-jobs-popover](11-jobs-popover.webp) | Status bar jobs indicator and its popover (engine state simulated by the tour) |
