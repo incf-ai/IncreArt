@@ -883,6 +883,13 @@ Decisions:
   condition, and reading it back would cost about as much as the single step
   it saves. `qwen_image_2_1_prefix_cache_type=q8_0` is an option if VRAM is
   tight.
+- **The GUI loads images** off the UI thread (three loaders): the image on
+  screen first (Review, Compare, the preview; its thumbnail shows until it
+  arrives), then thumbnails, made into `thumbs/` when missing. A load that
+  fails is logged (`can't load image …`) and tried again: twice more 2 s
+  apart, then every 30 s while the image is still shown, so an image that
+  can be read again shows without a restart. A load not back within 30 s
+  (a read that hangs) is asked for again.
 
 ## Crates (same split as Yue2)
 
