@@ -440,6 +440,14 @@ impl Gen {
         source: V,
     ) -> &mut Idea {
         let id = self.new_id("idea", t);
+        // "library/<collection>": the idea in the library, in that collection
+        let at = match at.strip_prefix("library/") {
+            Some(collection) => {
+                self.write(&format!("input/collections/{collection}/{id}.idea"), "");
+                "library"
+            }
+            None => at,
+        };
         let dir = if at.is_empty() { format!("input/{id}") } else { format!("input/{at}/{id}") };
         let images: Vec<_> = imgs.iter().map(|i| self.store_input(i, t)).collect();
         for (n, (name, image_id)) in imgs.iter().zip(&images).enumerate() {

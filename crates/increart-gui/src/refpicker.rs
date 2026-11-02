@@ -300,14 +300,11 @@ fn sources(
         }
     };
     let inputs_in = |folder: Option<&Path>| -> usize {
+        let ids = folder.map(|f| st.index.ideas_in_collection(Some(f)));
         st.index
             .ideas
             .iter()
-            .filter(|e| match (&e.loc, folder) {
-                (IdeaLoc::Library(_), None) => true,
-                (IdeaLoc::Library(f), Some(sel)) => f.starts_with(sel),
-                _ => false,
-            })
+            .filter(|e| e.loc == IdeaLoc::Library && ids.as_ref().is_none_or(|ids| ids.contains(&e.idea.id)))
             .map(|e| e.idea.images.len())
             .sum()
     };
@@ -340,7 +337,7 @@ fn sources(
     ui.add_space(8.0);
     ui.label(RichText::new("Input library").strong());
     pick(ui, out, RefSource::Inputs(None), ic(ph::BOOKS, &format!("All ideas ({})", inputs_in(None))));
-    folder_tree(ui, &st.index.library_folders, Path::new(""), "ref_inputs", &mut |ui, f| {
+    folder_tree(ui, &st.index.input_collection_folders, Path::new(""), "ref_inputs", &mut |ui, f| {
         let n = inputs_in(Some(f));
         let name = f.file_name().unwrap_or_default().to_string_lossy();
         pick(ui, out, RefSource::Inputs(Some(f.to_path_buf())), ic(ph::FOLDER, &format!("{name} ({n})")));

@@ -270,7 +270,7 @@ fn project(ui: &mut egui::Ui, st: &AppState, root: &Path, tex: &mut Textures, p:
                 let img = e.idea.images.first().map(|i| ImageRef::input(i.clone()));
                 let t = img.as_ref().and_then(|i| tex.thumb(root, i));
                 let title = if e.idea.title.is_empty() { "(untitled)".to_string() } else { short(&e.idea.title, 30) };
-                let in_library = matches!(e.loc, IdeaLoc::Library(_));
+                let in_library = matches!(e.loc, IdeaLoc::Library);
                 let tip = if in_library { "open it in the Input library" } else { "not in the Input library" };
                 let r = thumb(ui, t.as_ref(), 40.0, false, None).on_hover_text(tip);
                 let l = ui.add_enabled(in_library, egui::Link::new(title)).on_hover_text(tip);

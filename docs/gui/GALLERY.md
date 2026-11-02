@@ -30,7 +30,7 @@ Idea inbox grid: each card's Save / Discard, keys panel, card-size zoom, the dro
 
 ## 03c-idea-inbox-save-dialog
 
-Idea inbox → Save to input library… (`1` / `2` / `S`): the library's folders on the left (a filter, the tree, New folder under it), the idea's name and where it's saved on the right; Save & new project
+Idea inbox → Save to input library… (`1` / `2` / `S`): the input collections on the left (a filter, the tree, New collection under it), the idea's name and where it's saved on the right; Save & new project
 
 ![03c-idea-inbox-save-dialog](03c-idea-inbox-save-dialog.webp)
 
@@ -48,9 +48,21 @@ New idea → Add & save to input library…: the save dialog on the new idea
 
 ## 05-input-library
 
-Input library: folder tree, selection actions, cards
+Input library: search, filters and the ideas' tags with counts, collections tree, selection actions, cards
 
 ![05-input-library](05-input-library.webp)
+
+## 05c-input-library-add-to-collection
+
+Input library → Add to collection… on two selected ideas (also from their right-click menu, the selection's actions, or by dragging the cards onto a collection on the left): the input collections (a filter, the tree, New collection under it), where they go
+
+![05c-input-library-add-to-collection](05c-input-library-add-to-collection.webp)
+
+## 05d-input-library-smart
+
+Input library → Smart folders → not in a collection: the ideas in no collection; by date, by source, by project, by tag, with images, starred and not in a collection below the Collections, each with its count
+
+![05d-input-library-smart](05d-input-library-smart.webp)
 
 ## 06-projects-grid
 
@@ -288,9 +300,15 @@ Output library → Folder: `smart › by project` (copy images from here into a 
 
 ## 42-input-library-folder
 
-Input library → Folder: folders and ideas (purple, titled; their images behind)
+Input library → Folder: a collection's ideas (purple, titled; their images behind)
 
 ![42-input-library-folder](42-input-library-folder.webp)
+
+## 42b-input-library-folder-smart
+
+Input library → Folder → `smart/`: the smart folders as a virtual, read-only folder at the top of the collections (ideas copied or dragged out go in a collection)
+
+![42b-input-library-folder-smart](42b-input-library-folder-smart.webp)
 
 ## 43-idea-inbox-folder
 

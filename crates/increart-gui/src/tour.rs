@@ -38,6 +38,8 @@ const SCENES: &[&str] = &[
     "04b-idea-inbox-new-idea-save-dialog",
     "05-input-library",
     "05b-input-library-tile",
+    "05c-input-library-add-to-collection",
+    "05d-input-library-smart",
     "06-projects-grid",
     "06b-projects-pane",
     "06c-projects-pane-run",
@@ -82,6 +84,7 @@ const SCENES: &[&str] = &[
     "39-output-library-folder",
     "40-output-library-smart-folder",
     "42-input-library-folder",
+    "42b-input-library-folder-smart",
     "43-idea-inbox-folder",
     "44-projects-folder-compact",
     "45-reference-preview",
@@ -913,7 +916,7 @@ impl Tour {
             }
             "74d-snooze-dialog" => vec![],
             "75-new-project-from-ideas-in-folder" => {
-                let idea = st.index.ideas.iter().find(|e| matches!(e.loc, increart_core::IdeaLoc::Library(_)));
+                let idea = st.index.ideas.iter().find(|e| matches!(e.loc, increart_core::IdeaLoc::Library));
                 let mut v = vec![Msg::ContinueWithoutServers, Msg::Settings(false), Msg::Tab(Tab::InputLibrary)];
                 if let Some(e) = idea {
                     v.push(Msg::NewProjectFromIdeas(vec![e.idea.id.clone()]));
@@ -1165,8 +1168,37 @@ impl Tour {
                     Msg::TileSelect(Some(0)),
                 ]
             }
+            "05c-input-library-add-to-collection" => {
+                // two ideas without a collection, into "places"
+                let ids: Vec<_> = st
+                    .library_ideas()
+                    .iter()
+                    .filter(|e| st.index.idea_collections(&e.idea.id).is_empty())
+                    .take(2)
+                    .map(|e| e.idea.id.clone())
+                    .collect();
+                let d = increart_gui_core::CollectIdeasDialog {
+                    ideas: ids.clone(),
+                    folder: PathBuf::from("places"),
+                    ..Default::default()
+                };
+                vec![
+                    Msg::CloseTile,
+                    Msg::LibSelectSet(ids.clone()),
+                    Msg::CollectIdeasAsk(ids),
+                    Msg::EditCollectIdeas(d),
+                ]
+            }
+            "05d-input-library-smart" => vec![
+                Msg::CancelCollectIdeas,
+                Msg::LibClearSelection,
+                Msg::LibSmart(increart_gui_core::IdeaSmart::Uncollected),
+            ],
             "06-projects-grid" => vec![
-                // 05b's tiling closed, its cell size back to auto
+                // 05b's tiling closed, its cell size back to auto; 05c's
+                // dialog; 05d's smart folder
+                Msg::CancelCollectIdeas,
+                Msg::LibFolder(None),
                 Msg::CloseTile,
                 Msg::LibClearSelection,
                 Msg::TileSettings(increart_core::config::TileSettings { cell: None, ..st.config.tile.clone() }),
@@ -1579,8 +1611,9 @@ impl Tour {
                 Msg::Tab(Tab::InputLibrary),
                 Msg::LibTab(increart_gui_core::LibTab::Folder),
                 Msg::FvMode(increart_gui_core::FvMode::Icons),
-                Msg::FvGo(PathBuf::from("input/library")),
+                Msg::FvGo(PathBuf::from("input/collections/places")),
             ],
+            "42b-input-library-folder-smart" => vec![Msg::FvGo(PathBuf::from("input/collections/smart"))],
             "43-idea-inbox-folder" => vec![
                 Msg::Tab(Tab::IdeaInbox),
                 Msg::InboxTab(InboxTab::Folder),
@@ -2783,7 +2816,7 @@ fn tour_input(st: &AppState) -> Option<increart_core::ImageRef> {
         .index
         .ideas
         .iter()
-        .filter(|e| matches!(e.loc, increart_core::IdeaLoc::Library(_)) && !e.idea.images.is_empty())
+        .filter(|e| matches!(e.loc, increart_core::IdeaLoc::Library) && !e.idea.images.is_empty())
         .collect();
     ideas.sort_by_key(|e| e.idea.title.is_empty());
     ideas.first().map(|e| increart_core::ImageRef::input(e.idea.images[0].clone()))

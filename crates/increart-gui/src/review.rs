@@ -2007,12 +2007,7 @@ fn sources_panel(ui: &mut egui::Ui, st: &AppState, out: &mut Vec<Msg>) {
     search_panel(ui, st, out);
     ui.separator();
 
-    ui.horizontal(|ui| {
-        ui.label(RichText::new("Collections").strong());
-        if ui.small_button(ph::FOLDER_PLUS).on_hover_text("New collection").clicked() {
-            out.push(Msg::NewCollection(Default::default(), vec![]));
-        }
-    });
+    crate::pane::collections_heading(ui, Tree::Collections, out);
     let n = st.source_images_in(&OutputSource::AllProjects, st.output_filter.ratings).len();
     let all = ui.selectable_label(
         st.output_source == OutputSource::AllProjects,
@@ -2021,57 +2016,16 @@ fn sources_panel(ui: &mut egui::Ui, st: &AppState, out: &mut Vec<Msg>) {
     if all.on_hover_text("every project's images (a collection of everything)").clicked() {
         out.push(Msg::OutputSource(OutputSource::AllProjects));
     }
-    let n_all = st.index.collection_links.len();
-    pick(
-        ui,
-        st,
-        out,
-        OutputSource::Collection(Default::default()),
-        ic(ph::FOLDERS, &format!("All collections ({n_all})")),
-    );
-    let mut folders = st.index.collection_folders.clone();
-    folders.sort();
-    for f in folders {
-        let n = st.index.collection_links.iter().filter(|l| l.folder.starts_with(&f)).count();
-        ui.horizontal(|ui| {
-            ui.add_space(12.0 * f.components().count() as f32);
-            let name = f.file_name().unwrap_or_default().to_string_lossy();
-            let src = OutputSource::Collection(f.clone());
-            let r = ui.selectable_label(st.output_source == src, ic(ph::FOLDER, &format!("{name} ({n})")));
-            if r.clicked() {
-                out.push(Msg::OutputSource(src));
-            }
-            crate::widgets::collection_drop_target(ui, &r, &f, out);
-            r.context_menu(|ui| {
-                if ui.button(ic(ph::FOLDER_PLUS, "New collection inside")).clicked() {
-                    out.push(Msg::NewCollection(f.clone(), vec![]));
-                    ui.close();
-                }
-                if ui.button(ic(ph::PENCIL_SIMPLE, "Rename")).clicked() {
-                    out.push(Msg::StartRename(Tree::Collections, f.clone()));
-                    ui.close();
-                }
-                if ui.button(ic(ph::FOLDER_OPEN, "Open in file manager")).clicked() {
-                    out.push(Msg::ShowInFileManager(Path::new("collections").join(&f)));
-                    ui.close();
-                }
-                if ui.button(ic(ph::TRASH, "Delete…")).clicked() {
-                    let text = format!("Delete collection {name}? {}.", st.delete_summary(Tree::Collections, &f));
-                    out.push(Msg::Ask(Confirm::new(text, "Delete", Msg::DeleteNode(Tree::Collections, f.clone()))));
-                    ui.close();
-                }
-            });
-        });
-    }
+    crate::pane::collection_rows(ui, st, Tree::Collections, out);
 
-    ui.add_space(6.0);
-    ui.label(RichText::new("Smart folders").strong());
-    ui.collapsing("by date", |ui| {
+    crate::pane::smart_heading(ui);
+    let showing = |f: fn(&Smart) -> bool| matches!(&st.output_source, OutputSource::Smart(s) if f(s));
+    crate::pane::smart_group(ui, "by date", showing(|s| matches!(s, Smart::Day(_))), |ui| {
         for (day, n) in st.kept_days() {
             pick(ui, st, out, OutputSource::Smart(Smart::Day(day.clone())), format!("{day} ({n})"));
         }
     });
-    ui.collapsing("by source idea", |ui| {
+    crate::pane::smart_group(ui, "by source idea", showing(|s| matches!(s, Smart::Idea(_))), |ui| {
         for (id, n) in st.kept_source_ideas() {
             let title =
                 st.idea(&id).map(|e| e.idea.title.clone()).filter(|t| !t.is_empty()).unwrap_or_else(|| id.to_string());
@@ -2098,8 +2052,7 @@ fn sources_panel(ui: &mut egui::Ui, st: &AppState, out: &mut Vec<Msg>) {
     });
     let at = shown.header_response.rect;
     ui.ctx().data_mut(|d| d.insert_temp(egui::Id::unique("tour_by_project_header"), at));
-    let by_tag = matches!(st.output_source, OutputSource::Smart(Smart::Tag(_)));
-    egui::CollapsingHeader::new("by tag").default_open(by_tag).show(ui, |ui| {
+    crate::pane::smart_group(ui, "by tag", showing(|s| matches!(s, Smart::Tag(_))), |ui| {
         let tags = st.kept_tags();
         if tags.is_empty() {
             ui.weak("No kept image has a tag yet.");

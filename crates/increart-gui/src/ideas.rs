@@ -11,8 +11,8 @@ use increart_gui_core::{
 };
 
 use crate::folder_pick;
+use crate::pane;
 use crate::textures::Textures;
-use crate::tree;
 use crate::widgets::{ACCENT, NEUTRAL, card, cover_buttons, dialog_footer, ic, ph, short, single_click, thumb};
 
 /// Idea cards (Idea inbox and Input library): all one size (the Input
@@ -797,6 +797,9 @@ fn picks_menu(ui: &mut egui::Ui, st: &AppState, picks: &[increart_core::Id], inb
         out.push(Msg::AddRefs(images));
         ui.close();
     }
+    if !inbox {
+        collection_items(ui, st, picks, out);
+    }
     if inbox {
         if ui.button(ic(ph::BOOKMARK_SIMPLE, "Save them to input library…")).clicked() {
             out.push(Msg::SaveIdeas(picks.to_vec()));
@@ -805,6 +808,29 @@ fn picks_menu(ui: &mut egui::Ui, st: &AppState, picks: &[increart_core::Id], inb
         if ui.button(ic(ph::TRASH, "Discard them")).clicked() {
             out.push(Msg::ReviewPickedIdeas(Verdict::Bad));
             ui.close();
+        }
+    }
+}
+
+/// Add to collection… and, in a collection's view, Remove from this
+/// collection (when any of the ideas is in it or one inside it).
+fn collection_items(ui: &mut egui::Ui, st: &AppState, ids: &[increart_core::Id], out: &mut Vec<Msg>) {
+    if ui.button(ic(ph::FOLDER_PLUS, "Add to collection…")).clicked() {
+        out.push(Msg::CollectIdeasAsk(ids.to_vec()));
+        ui.close();
+    }
+    if let Some(f) = st.lib_folder.as_ref().filter(|f| !f.as_os_str().is_empty()) {
+        let inside = st.index.ideas_in_collection(Some(f));
+        if ids.iter().any(|id| inside.contains(id)) {
+            let name = f.file_name().unwrap_or_default().to_string_lossy();
+            if ui
+                .button(ic(ph::MINUS_CIRCLE, "Remove from this collection"))
+                .on_hover_text(format!("from {name} (and the collections inside it); the ideas stay"))
+                .clicked()
+            {
+                out.push(Msg::UncollectIdeas(f.clone(), ids.to_vec()));
+                ui.close();
+            }
         }
     }
 }
@@ -827,6 +853,9 @@ fn picks_bar(ui: &mut egui::Ui, st: &AppState, picks: &[increart_core::Id], inbo
         }
         if ui.button(ic(ph::ROCKET_LAUNCH, "New project…")).on_hover_text("from the picked ideas (P)").clicked() {
             out.push(Msg::NewProjectFromIdeas(picks.to_vec()));
+        }
+        if !inbox && ui.button(ic(ph::FOLDER_PLUS, "Add to collection…")).clicked() {
+            out.push(Msg::CollectIdeasAsk(picks.to_vec()));
         }
         if inbox {
             if ui.button(ic(ph::BOOKMARK_SIMPLE, "Save to input library…")).on_hover_text("1 / 2 / S").clicked() {
@@ -981,7 +1010,7 @@ fn discarded(ui: &mut egui::Ui, st: &AppState, tex: &mut Textures, out: &mut Vec
                             ui.close();
                         }
                         if ui.button(ic(ph::BOOKS, "Restore to the input library")).clicked() {
-                            out.push(Msg::Restore(id.clone(), IdeaLoc::top_library()));
+                            out.push(Msg::Restore(id.clone(), IdeaLoc::Library));
                             ui.close();
                         }
                         ui.separator();
@@ -1029,83 +1058,79 @@ pub fn input_library(ui: &mut egui::Ui, st: &AppState, tex: &mut Textures, out: 
                     }
                 });
         });
-        let mut f = st.lib_filter.clone();
-        crate::widgets::search_field(ui, &mut f.text, "Search titles, text and tags");
-        ui.horizontal_wrapped(|ui| {
-            ui.checkbox(&mut f.starred_only, ic(ph::STAR, "starred"));
-            ui.checkbox(&mut f.with_images_only, ic(ph::IMAGE, "with images"));
-            ui.checkbox(&mut f.show_hidden, ic(ph::PENCIL_SIMPLE, "edited copies")).on_hover_text(
-                "the cropped and marked copies (Crop / mark…), hidden otherwise; with no folder selected",
-            );
-        });
-        ui.horizontal(|ui| {
-            ui.label("used in a project:");
-            for (v, l) in [(None, "any"), (Some(true), "yes"), (Some(false), "no")] {
-                if ui.selectable_label(f.used_in_project == v, l).clicked() {
-                    f.used_in_project = v;
+        // above the keys; scrolls when the collections and smart folders are many
+        ScrollArea::vertical().auto_shrink([false, true]).id_salt("lib_side_scroll").show(ui, |ui| {
+            let mut f = st.lib_filter.clone();
+            crate::widgets::search_field(ui, &mut f.text, "Search titles, text and tags");
+            ui.horizontal_wrapped(|ui| {
+                ui.checkbox(&mut f.starred_only, ic(ph::STAR, "starred"));
+                ui.checkbox(&mut f.with_images_only, ic(ph::IMAGE, "with images"));
+                ui.checkbox(&mut f.show_hidden, ic(ph::PENCIL_SIMPLE, "edited copies")).on_hover_text(
+                    "the cropped and marked copies (Crop / mark…), hidden otherwise; with no folder selected",
+                );
+            });
+            ui.horizontal(|ui| {
+                ui.label("used in a project:");
+                for (v, l) in [(None, "any"), (Some(true), "yes"), (Some(false), "no")] {
+                    if ui.selectable_label(f.used_in_project == v, l).clicked() {
+                        f.used_in_project = v;
+                    }
                 }
-            }
-        });
-        ui.horizontal(|ui| {
-            ui.label("order:");
-            for (v, l, tip) in [
-                (false, "newest", "newest first"),
-                (true, "most used", "most runs using its images (as ref or start image) first"),
-            ] {
-                if ui.selectable_label(f.most_used == v, l).on_hover_text(tip).clicked() {
-                    f.most_used = v;
+            });
+            ui.horizontal(|ui| {
+                ui.label("order:");
+                for (v, l, tip) in [
+                    (false, "newest", "newest first"),
+                    (true, "most used", "most runs using its images (as ref or start image) first"),
+                ] {
+                    if ui.selectable_label(f.most_used == v, l).on_hover_text(tip).clicked() {
+                        f.most_used = v;
+                    }
                 }
+            });
+            let tags = st.idea_tag_counts(st.lib_source_ideas());
+            let (none, tip) =
+                ("No tags here yet: Edit an idea to tag it.", "only ideas with this tag (several: all of them)");
+            crate::widgets::tag_chips(ui, "lib_tag_filter", tags, &mut f.tags, none, tip);
+            if f != st.lib_filter {
+                out.push(Msg::LibFilter(f));
             }
-        });
-        let tags = st.idea_tag_counts(st.lib_source_ideas());
-        let (none, tip) =
-            ("No tags here yet: Edit an idea to tag it.", "only ideas with this tag (several: all of them)");
-        crate::widgets::tag_chips(ui, "lib_tag_filter", tags, &mut f.tags, none, tip);
-        if f != st.lib_filter {
-            out.push(Msg::LibFilter(f));
-        }
-        ui.separator();
-        ui.label(RichText::new("Folders").strong());
-        if ui
-            .selectable_label(st.lib_folder.is_none(), ic(ph::BOOKS, &format!("All ideas ({})", lib_count(st, None))))
-            .clicked()
-        {
-            out.push(Msg::LibFolder(None));
-        }
-        tree::folders(ui, st, Tree::InputLibrary, &st.index.library_folders, st.lib_folder.as_deref(), out, |p| {
-            Msg::LibFolder(Some(p.to_path_buf()))
-        });
-        ui.add_space(8.0);
-        if ui.button(ic(ph::FOLDER_PLUS, "New folder")).clicked() {
-            out.push(Msg::NewFolder(Tree::InputLibrary, st.lib_folder.clone().unwrap_or_default()));
-        }
-        ui.separator();
-        let sel: Vec<_> = st.lib_selected.iter().cloned().collect();
-        ui.label(format!("{} selected", sel.len()));
-        ui.add_enabled_ui(!sel.is_empty(), |ui| {
-            if ui.button(ic(ph::ROCKET_LAUNCH, "New project from selection…")).clicked() {
-                out.push(Msg::NewProjectFromIdeas(sel.clone()));
-            }
-            if ui
-                .button(ic(ph::IMAGES, "Add images as refs"))
-                .on_hover_text("to the Generate panel of the current project")
-                .clicked()
-            {
-                let refs = sel
-                    .iter()
-                    .filter_map(|id| st.idea(id))
-                    .flat_map(|e| e.idea.images.iter().cloned().map(ImageRef::input))
-                    .collect();
-                out.push(Msg::AddRefs(refs));
-            }
-            if ui.button(ic(ph::SQUARES_FOUR, "Tile their images…")).on_hover_text("T, with several selected").clicked()
-            {
-                let view: Vec<_> = st.library_ideas().iter().map(|e| e.idea.id.clone()).collect();
-                out.push(Msg::TileIdeas(view.into_iter().filter(|id| st.lib_selected.contains(id)).collect()));
-            }
-            if ui.button(ic(ph::X, "Clear selection")).clicked() {
-                out.push(Msg::LibClearSelection);
-            }
+            ui.separator();
+            collections_panel(ui, st, out);
+            ui.separator();
+            let sel: Vec<_> = st.lib_selected.iter().cloned().collect();
+            ui.label(format!("{} selected", sel.len()));
+            ui.add_enabled_ui(!sel.is_empty(), |ui| {
+                if ui.button(ic(ph::ROCKET_LAUNCH, "New project from selection…")).clicked() {
+                    out.push(Msg::NewProjectFromIdeas(sel.clone()));
+                }
+                if ui
+                    .button(ic(ph::IMAGES, "Add images as refs"))
+                    .on_hover_text("to the Generate panel of the current project")
+                    .clicked()
+                {
+                    let refs = sel
+                        .iter()
+                        .filter_map(|id| st.idea(id))
+                        .flat_map(|e| e.idea.images.iter().cloned().map(ImageRef::input))
+                        .collect();
+                    out.push(Msg::AddRefs(refs));
+                }
+                if ui.button(ic(ph::FOLDER_PLUS, "Add to collection…")).clicked() {
+                    out.push(Msg::CollectIdeasAsk(sel.clone()));
+                }
+                if ui
+                    .button(ic(ph::SQUARES_FOUR, "Tile their images…"))
+                    .on_hover_text("T, with several selected")
+                    .clicked()
+                {
+                    let view: Vec<_> = st.library_ideas().iter().map(|e| e.idea.id.clone()).collect();
+                    out.push(Msg::TileIdeas(view.into_iter().filter(|id| st.lib_selected.contains(id)).collect()));
+                }
+                if ui.button(ic(ph::X, "Clear selection")).clicked() {
+                    out.push(Msg::LibClearSelection);
+                }
+            });
         });
     });
     Panel::top("lib_tabs").show(ui, |ui| {
@@ -1130,7 +1155,8 @@ pub fn input_library(ui: &mut egui::Ui, st: &AppState, tex: &mut Textures, out: 
             group(ui, "open", |ui| {
                 ui.separator();
                 if ui.button(ic(ph::FOLDER_OPEN, "Open in file manager")).clicked() {
-                    let dir = std::path::Path::new("input/library").join(st.lib_folder.clone().unwrap_or_default());
+                    let dir = std::path::Path::new(increart_core::scan::INPUT_COLLECTIONS)
+                        .join(st.lib_folder.clone().unwrap_or_default());
                     out.push(Msg::ShowInFileManager(dir));
                 }
             });
@@ -1196,6 +1222,12 @@ pub fn input_library(ui: &mut egui::Ui, st: &AppState, tex: &mut Textures, out: 
                 for (i, e) in ideas.iter().enumerate() {
                     let id = e.idea.id.clone();
                     let r = idea_card(ui, st, &root, tex, e, w, st.lib_selected.contains(&id), CardButtons::Library, out);
+                    // dragged onto a collection: the selection when it's in
+                    // it, else just this one
+                    let r = crate::widgets::idea_drag_source(&r, &e.dir, || match sel.contains(&id) {
+                        true => sel.clone(),
+                        false => vec![id.clone()],
+                    });
                     rects.push((id.clone(), r.rect));
                     if lib_current(st).as_ref() == Some(&id) {
                         crate::widgets::reveal_cursor(ui, "library", id.clone(), &r);
@@ -1246,6 +1278,9 @@ pub fn input_library(ui: &mut egui::Ui, st: &AppState, tex: &mut Textures, out: 
                             out.push(Msg::SetStar(id.clone(), !e.idea.starred));
                             ui.close();
                         }
+                        if !(sel.len() > 1 && sel.contains(&id)) {
+                            collection_items(ui, st, std::slice::from_ref(&id), out);
+                        }
                         ui.separator();
                         if ui.button(ic(ph::TRAY, "Back to the Idea inbox")).clicked() {
                             out.push(Msg::Restore(id.clone(), IdeaLoc::Unreviewed));
@@ -1283,7 +1318,7 @@ fn lib_current(st: &AppState) -> Option<increart_core::Id> {
 /// The Input library Grid's keys: move (selecting the idea and showing it
 /// in the side panel), select all, new project, edit.
 fn library_keys(ui: &egui::Ui, st: &AppState, out: &mut Vec<Msg>) {
-    if ui.ctx().egui_wants_keyboard_input() || st.preview.is_some() {
+    if ui.ctx().egui_wants_keyboard_input() || st.preview.is_some() || st.collect_ideas.is_some() {
         return;
     }
     let ideas: Vec<_> = st.library_ideas().into_iter().map(|e| e.idea.id.clone()).collect();
@@ -1361,6 +1396,9 @@ fn library_actions(ui: &mut egui::Ui, e: &IdeaEntry, out: &mut Vec<Msg>) {
                 .clicked()
         {
             out.push(Msg::AddRefs(e.idea.images.iter().cloned().map(ImageRef::input).collect()));
+        }
+        if ui.button(ic(ph::FOLDER_PLUS, "Add to collection…")).clicked() {
+            out.push(Msg::CollectIdeasAsk(vec![id.clone()]));
         }
         if ui.button(ic(ph::COPY, "Copy text")).clicked() {
             ui.ctx().copy_text(e.idea.text.clone());
@@ -1458,8 +1496,14 @@ fn idea_details(ui: &mut egui::Ui, st: &AppState, root: &Path, tex: &mut Texture
                 IdeaLoc::Unreviewed => "Idea inbox".to_string(),
                 IdeaLoc::Discarded => "Discarded".to_string(),
                 IdeaLoc::Edited => "Edited copies (hidden)".to_string(),
-                IdeaLoc::Library(f) if f.as_os_str().is_empty() => "Input library".to_string(),
-                IdeaLoc::Library(f) => format!("Input library › {}", f.display()),
+                IdeaLoc::Library => "Input library".to_string(),
+            };
+            let place = match st.index.idea_collections(&e.idea.id).as_slice() {
+                [] => place,
+                cs => {
+                    let cs: Vec<String> = cs.iter().map(|c| c.display().to_string()).collect();
+                    format!("{place} · in {}", cs.join(", "))
+                }
             };
             kv(ui, "where", &place);
             ui.weak("folder");
@@ -1755,16 +1799,85 @@ fn image_meta(ui: &mut egui::Ui, st: &AppState, root: &Path, tex: &mut Textures,
     });
 }
 
-fn lib_count(st: &AppState, folder: Option<&Path>) -> usize {
-    st.index
-        .ideas
-        .iter()
-        .filter(|e| match (&e.loc, folder) {
-            (IdeaLoc::Library(_), None) => true,
-            (IdeaLoc::Library(f), Some(sel)) => f.starts_with(sel),
-            _ => false,
-        })
-        .count()
+/// The input library's smart folders, as the Output library's: by date,
+/// by source, by project, by tag (each a list, open while one of it is
+/// shown), then with images, starred, not in a collection.
+fn smart_panel(ui: &mut egui::Ui, st: &AppState, out: &mut Vec<Msg>) {
+    use increart_gui_core::IdeaSmart;
+    pane::smart_heading(ui);
+    let pick = |ui: &mut egui::Ui, out: &mut Vec<Msg>, s: IdeaSmart, label: String| {
+        if ui.selectable_label(st.lib_smart.as_ref() == Some(&s), label).clicked() {
+            out.push(Msg::LibSmart(s));
+        }
+    };
+    let showing = |f: fn(&IdeaSmart) -> bool| st.lib_smart.as_ref().is_some_and(f);
+    pane::smart_group(ui, "by date", showing(|s| matches!(s, IdeaSmart::Day(_))), |ui| {
+        for (day, n) in st.idea_days() {
+            pick(ui, out, IdeaSmart::Day(day.clone()), format!("{day} ({n})"));
+        }
+    });
+    pane::smart_group(ui, "by source", showing(|s| matches!(s, IdeaSmart::Origin(_))), |ui| {
+        for (o, n) in st.idea_origins() {
+            pick(ui, out, IdeaSmart::Origin(o), format!("{} ({n})", o.label()));
+        }
+    });
+    pane::smart_group(ui, "by project", showing(|s| matches!(s, IdeaSmart::Project(_))), |ui| {
+        let projects = st.idea_projects();
+        if projects.is_empty() {
+            ui.weak("No idea has been used in a project yet.");
+        }
+        for (p, n) in projects {
+            let name = st.index.project(&p).map(|e| e.name()).unwrap_or_default();
+            pick(ui, out, IdeaSmart::Project(p), ic(ph::ROCKET_LAUNCH, &format!("{} ({n})", short(&name, 26))));
+        }
+    });
+    pane::smart_group(ui, "by tag", showing(|s| matches!(s, IdeaSmart::Tag(_))), |ui| {
+        let tags = st.idea_tags();
+        if tags.is_empty() {
+            ui.weak("No idea has a tag yet.");
+        }
+        for (t, n) in tags {
+            pick(ui, out, IdeaSmart::Tag(t.clone()), ic(ph::TAG, &format!("{} ({n})", short(&t, 26))));
+        }
+    });
+    for (s, name) in IdeaSmart::FLAT {
+        let n = st.smart_ideas(&s).len();
+        let icon = match s {
+            IdeaSmart::WithImages => ph::IMAGE,
+            IdeaSmart::Starred => ph::STAR,
+            _ => ph::FOLDER_DASHED,
+        };
+        pick(ui, out, s, ic(icon, &format!("{name} ({n})")));
+    }
+}
+
+/// The input collections, as the Output library's: New collection, All
+/// ideas, then the collections (pane::collection_rows); idea cards drop
+/// onto them.
+fn collections_panel(ui: &mut egui::Ui, st: &AppState, out: &mut Vec<Msg>) {
+    pane::collections_heading(ui, Tree::InputCollections, out);
+    let all = ui.selectable_label(
+        st.lib_folder.is_none() && st.lib_smart.is_none(),
+        ic(ph::BOOKS, &format!("All ideas ({})", lib_count(st, None))),
+    );
+    if all.on_hover_text("every idea in the input library").clicked() {
+        out.push(Msg::LibFolder(None));
+    }
+    pane::collection_rows(ui, st, Tree::InputCollections, out);
+    smart_panel(ui, st, out);
+}
+
+/// How many ideas are in the input library (None) or in collection `f`
+/// and the ones inside it ("": any).
+pub fn lib_count(st: &AppState, folder: Option<&Path>) -> usize {
+    let lib = st.index.ideas.iter().filter(|e| e.loc == IdeaLoc::Library);
+    match folder {
+        None => lib.count(),
+        Some(f) => {
+            let ids = st.index.ideas_in_collection(Some(f));
+            lib.filter(|e| ids.contains(&e.idea.id)).count()
+        }
+    }
 }
 
 /// Ctrl+N from anywhere: the New idea form.
@@ -1776,7 +1889,7 @@ pub fn global_keys(ctx: &egui::Context, out: &mut Vec<Msg>) {
 }
 
 /// Save to input library, from the Idea inbox or the New idea form: the
-/// library folders on the left (a filter, the tree, New folder under it),
+/// input collections on the left (a filter, the tree, New collection under it),
 /// the idea's name on the right (one idea or the draft; several keep their
 /// titles), where it goes, Save and Save & new project.
 pub fn save_window(ctx: &egui::Context, st: &AppState, out: &mut Vec<Msg>) {
@@ -1797,12 +1910,13 @@ pub fn save_window(ctx: &egui::Context, st: &AppState, out: &mut Vec<Msg>) {
                 ui.set_width(300.0);
                 let picker = folder_pick::Picker {
                     id: "save_idea",
-                    folders: &st.index.library_folders,
+                    folders: &st.index.input_collection_folders,
                     root: (ph::BOOKS, "input library"),
                     selected: &d.folder,
                     filter: &d.filter,
                     new_folder: d.new_folder.as_deref(),
                     new_name: "",
+                    noun: "collection",
                 };
                 let picked = folder_pick::show(ui, &picker, 280.0);
                 field_enter |= picked.field_enter;
@@ -1845,9 +1959,13 @@ pub fn save_window(ctx: &egui::Context, st: &AppState, out: &mut Vec<Msg>) {
                 ui.label(RichText::new("Saved in").strong());
                 let (at, exists) = increart_gui_core::save_idea_folder(st, &d);
                 ui.horizontal_wrapped(|ui| {
-                    ui.label(RichText::new(Path::new("input/library").join(&at).display().to_string()).monospace());
+                    ui.label(RichText::new(Path::new("input/library").display().to_string()).monospace());
+                    if !at.as_os_str().is_empty() {
+                        ui.label("in the collection");
+                        ui.label(RichText::new(at.display().to_string()).monospace());
+                    }
                     if !exists {
-                        ui.weak("(new folder)");
+                        ui.weak("(new collection)");
                     }
                 });
                 if let Some(e) = increart_gui_core::save_idea_problem(&d) {
@@ -1883,5 +2001,82 @@ pub fn save_window(ctx: &egui::Context, st: &AppState, out: &mut Vec<Msg>) {
     });
     if m.should_close() {
         out.push(Msg::CancelSaveIdea);
+    }
+}
+
+/// Add to collection… for input library ideas: the input collections (a
+/// filter, the tree, New collection under it), what goes where, Add.
+pub fn collect_window(ctx: &egui::Context, st: &AppState, out: &mut Vec<Msg>) {
+    folder_pick::opening(ctx, "collect_ideas", st.collect_ideas.is_some());
+    let Some(d0) = &st.collect_ideas else { return };
+    let mut d = d0.clone();
+    let mut field_enter = false;
+    let m = egui::Modal::new(egui::Id::unique("collect_ideas")).show(ctx, |ui| {
+        ui.set_width(420.0);
+        let n = d.ideas.len();
+        let what = match d.ideas.as_slice() {
+            [one] => st.idea(one).map(|e| e.idea.title.clone()).filter(|t| !t.is_empty()).unwrap_or("1 idea".into()),
+            _ => format!("{n} ideas"),
+        };
+        ui.heading(ic(ph::FOLDER_PLUS, "Add to collection"));
+        ui.weak(short(&what, 60));
+        ui.add_space(4.0);
+        let picker = folder_pick::Picker {
+            id: "collect_ideas",
+            folders: &st.index.input_collection_folders,
+            root: (ph::FOLDERS, "the top level"),
+            selected: &d.folder,
+            filter: &d.filter,
+            new_folder: d.new_folder.as_deref(),
+            new_name: "",
+            noun: "collection",
+        };
+        let picked = folder_pick::show(ui, &picker, 240.0);
+        field_enter = picked.field_enter;
+        if let Some(f) = picked.filter {
+            d.filter = f;
+        }
+        if let Some(f) = picked.select {
+            d.folder = f;
+        }
+        if let Some(f) = picked.new_folder {
+            d.new_folder = f;
+        }
+        ui.add_space(6.0);
+        let problem = d.problem(st);
+        match (&problem, d.target(st)) {
+            (Some(p), _) => {
+                ui.colored_label(crate::widgets::BAD, p);
+            }
+            (None, Some((to, exists))) => {
+                let already = st.index.ideas_in_collection(Some(&to));
+                let there = d.ideas.iter().filter(|id| already.contains(id)).count();
+                let mut s = format!("Into {}", to.display());
+                if !exists {
+                    s.push_str(" (new collection)");
+                }
+                if there > 0 {
+                    s.push_str(&format!("; {there} of them in it already"));
+                }
+                ui.label(s);
+            }
+            (None, None) => {}
+        }
+        let enter = ui.input(|i| i.key_pressed(egui::Key::Enter));
+        crate::widgets::dialog_buttons(ui, |ui| {
+            let add = egui::Button::new(RichText::new(ic(ph::FOLDER_PLUS, "Add   Enter")).strong());
+            if ui.add_enabled(problem.is_none(), add).clicked() || enter && !field_enter && problem.is_none() {
+                out.push(Msg::EditCollectIdeas(d.clone()));
+                out.push(Msg::ConfirmCollectIdeas);
+            }
+            if ui.button("Cancel   Esc").clicked() {
+                out.push(Msg::CancelCollectIdeas);
+            }
+        });
+    });
+    if m.should_close() {
+        out.push(Msg::CancelCollectIdeas);
+    } else if d != *d0 && !out.iter().any(|m| matches!(m, Msg::ConfirmCollectIdeas)) {
+        out.push(Msg::EditCollectIdeas(d));
     }
 }

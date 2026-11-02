@@ -423,7 +423,14 @@ impl Runtime {
             Effect::FolderPreviews { root, dir, names } => self.answer("folder previews", move || {
                 let found = names
                     .into_iter()
-                    .map(|n| (n.clone(), previews(&root.join(&dir).join(n), store_of(&dir))))
+                    .map(|n| {
+                        // a collection's idea entry: the idea's images
+                        let path = match increart_core::scan::idea_link_id(Path::new(&n)) {
+                            Some(id) => linked_idea_dir(&root, &id).unwrap_or_default(),
+                            None => root.join(&dir).join(&n),
+                        };
+                        (n.clone(), previews(&path, store_of(&dir)))
+                    })
                     .collect();
                 Msg::FvPreviews(dir, found)
             }),
@@ -1306,6 +1313,15 @@ fn list_dir(root: &Path, rel: &Path) -> Vec<FvEntry> {
             } else {
                 (EntryKind::Folder, n, "folder".to_string())
             }
+        } else if let Some(id) = increart_core::scan::idea_link_id(&path) {
+            // an input collection's entry: the idea it names
+            let idea = linked_idea_dir(root, &id);
+            let n = idea.as_ref().and_then(|d| std::fs::read_dir(d).ok()).map_or(0, |r| r.count() as u64);
+            let title = idea
+                .and_then(|d| increart_core::rsnfmt::read::<increart_core::model::Idea>(&d.join("idea.rsn")).ok())
+                .map(|i| if i.title.is_empty() { "idea".to_string() } else { i.title })
+                .unwrap_or_else(|| "idea (not found)".into());
+            (EntryKind::Idea(id), n, title)
         } else if name.ends_with(".rsn") || name.ends_with(".jsonl") {
             (EntryKind::Meta, meta.map_or(0, |m| m.len()), "metadata".to_string())
         } else if StoreFormat::of_name(&name).is_some() {
@@ -1322,6 +1338,16 @@ fn list_dir(root: &Path, rel: &Path) -> Vec<FvEntry> {
         out.push(FvEntry { name, kind, size, modified, info });
     }
     out
+}
+
+/// The folder of the idea an input collection's entry names, wherever the
+/// idea is now (edited copies and discarded ideas keep their entries).
+fn linked_idea_dir(root: &Path, id: &increart_core::Id) -> Option<std::path::PathBuf> {
+    use increart_core::scan::{DISCARDED_IDEAS, EDITED_IDEAS, INPUT_LIBRARY, UNREVIEWED_IDEAS};
+    [INPUT_LIBRARY, EDITED_IDEAS, DISCARDED_IDEAS, UNREVIEWED_IDEAS]
+        .into_iter()
+        .map(|d| root.join(d).join(id.as_str()))
+        .find(|d| d.join("idea.rsn").is_file())
 }
 
 /// Up to three images for a folder's icon: a project's cover first, then the
@@ -1912,18 +1938,9 @@ fn verdict_of(link: &Path) -> Option<Verdict> {
 
 pub fn lib_op(lib: &mut Library, op: LibOp) -> Result<OpOk, String> {
     match op {
-        LibOp::NewIdea(n) => {
-            // Add & save to input library may name a new folder
-            if let IdeaLoc::Library(folder) = &n.loc {
-                lib.make_library_folder(folder).map_err(err)?;
-            }
-            lib.new_idea(n).map(OpOk::Idea).map_err(err)
-        }
+        // new_idea makes a new collection the idea is saved to
+        LibOp::NewIdea(n) => lib.new_idea(n).map(OpOk::Idea).map_err(err),
         LibOp::NewIdeaNewProject(n, folder, name) => {
-            // Save & new project may name a new library folder
-            if let IdeaLoc::Library(f) = &n.loc {
-                lib.make_library_folder(f).map_err(err)?;
-            }
             let id = lib.new_idea(n).map_err(err)?;
             new_project_from_ideas(lib, &[id], &folder, &name)
         }
@@ -2024,7 +2041,7 @@ pub fn lib_op(lib: &mut Library, op: LibOp) -> Result<OpOk, String> {
             let mut png = std::io::Cursor::new(vec![]);
             image.0.write_to(&mut png, image::ImageFormat::Png).map_err(|e| e.to_string())?;
             let title = format!("Tiled {} images", sources.len());
-            lib.idea_from_tiles(png.get_ref(), sources, &title, IdeaLoc::top_library()).map(OpOk::Tiled).map_err(err)
+            lib.idea_from_tiles(png.get_ref(), sources, &title, IdeaLoc::Library).map(OpOk::Tiled).map_err(err)
         }
         LibOp::IdeaFromOutput { image, with_prompt, loc } => {
             lib.idea_from_output(&image, with_prompt, loc).map(OpOk::Idea).map_err(err)
@@ -2041,6 +2058,17 @@ pub fn lib_op(lib: &mut Library, op: LibOp) -> Result<OpOk, String> {
         LibOp::AddToCollection(folder, images) => {
             for img in images.iter().filter(|i| i.store == increart_core::Store::Output) {
                 lib.add_to_collection(&folder, &img.id).map_err(err)?;
+            }
+            Ok(OpOk::Done)
+        }
+        LibOp::CollectIdeas(folder, ids) => {
+            // a new collection is made first
+            lib.make_input_collection(&folder).map_err(err)?;
+            lib.collect_ideas(&folder, &ids).map(|_| OpOk::Done).map_err(err)
+        }
+        LibOp::UnlinkIdeas(links) => {
+            for (folder, id) in links {
+                lib.unlink_idea(&id, &folder).map_err(err)?;
             }
             Ok(OpOk::Done)
         }
@@ -2101,7 +2129,7 @@ pub fn lib_op(lib: &mut Library, op: LibOp) -> Result<OpOk, String> {
         LibOp::RefAndReview { ideas, refs, links } => {
             let mut made = ReviewUndo { refs, ..Default::default() };
             for image in ideas {
-                made.ideas.push(lib.idea_from_output(&image, false, IdeaLoc::top_library()).map_err(err)?);
+                made.ideas.push(lib.idea_from_output(&image, false, IdeaLoc::Library).map_err(err)?);
             }
             review_outputs(lib, links, false, made)
         }
@@ -2180,7 +2208,7 @@ fn new_project_from_ideas(lib: &mut Library, ids: &[Id], folder: &Path, name: &s
     let mut ideas = vec![];
     for id in ids {
         if let (IdeaLoc::Unreviewed | IdeaLoc::Discarded, _) = lib.find_idea(id).map_err(err)? {
-            lib.move_idea(id, &IdeaLoc::top_library()).map_err(err)?;
+            lib.move_idea(id, &IdeaLoc::Library).map_err(err)?;
         }
         ideas.push(lib.load_idea(id).map_err(err)?);
     }

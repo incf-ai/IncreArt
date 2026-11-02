@@ -798,7 +798,7 @@ impl FvPlace {
         match self {
             FvPlace::Projects => "projects",
             FvPlace::Collections => "collections",
-            FvPlace::InputLibrary => "input/library",
+            FvPlace::InputLibrary => "input/collections",
             FvPlace::Inbox => "input",
         }
     }
@@ -808,7 +808,7 @@ impl FvPlace {
         match self {
             FvPlace::Projects => Some(Tree::Projects),
             FvPlace::Collections => Some(Tree::Collections),
-            FvPlace::InputLibrary => Some(Tree::InputLibrary),
+            FvPlace::InputLibrary => Some(Tree::InputCollections),
             FvPlace::Inbox => None,
         }
     }
@@ -828,7 +828,8 @@ pub enum EntryKind {
     File,
     /// A folder of the Output library's virtual, read-only `smart/` tree.
     Smart,
-    /// An idea's folder (`idea.rsn` and links to its images).
+    /// An idea's folder (`idea.rsn` and links to its images), or an input
+    /// collection's entry naming it (`<idea-id>.idea`).
     Idea(Id),
 }
 
@@ -844,7 +845,41 @@ pub const SMART_DIR: &str = "collections/smart";
 /// Whether `path` (relative to the library root) is in the virtual
 /// `smart/` tree.
 pub fn is_smart(path: &Path) -> bool {
-    path.starts_with(SMART_DIR)
+    path.starts_with(SMART_DIR) || path.starts_with(INPUT_SMART_DIR)
+}
+
+/// The Input library folder view's virtual folder of smart folders.
+pub const INPUT_SMART_DIR: &str = "input/collections/smart";
+
+/// Whether `path` is in the Input library's virtual `smart/` tree.
+pub fn is_input_smart(path: &Path) -> bool {
+    path.starts_with(INPUT_SMART_DIR)
+}
+
+/// An Input library smart folder: the library's ideas that match.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum IdeaSmart {
+    /// Added that day (`YYYY.MM.DD`, from the idea's ID).
+    Day(String),
+    /// Where it came from.
+    Origin(IdeaOrigin),
+    /// Used in that project.
+    Project(Id),
+    /// With this tag (any case).
+    Tag(String),
+    WithImages,
+    Starred,
+    /// In no input collection.
+    Uncollected,
+}
+
+impl IdeaSmart {
+    /// The single smart folders' names, as the pane and `smart/` show them.
+    pub const FLAT: [(IdeaSmart, &str); 3] = [
+        (IdeaSmart::WithImages, "with images"),
+        (IdeaSmart::Starred, "starred"),
+        (IdeaSmart::Uncollected, "not in a collection"),
+    ];
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -1909,13 +1944,58 @@ pub struct SaveIdeaDialog {
     pub ideas: Vec<Id>,
     /// Starts as the idea's title.
     pub name: String,
-    /// Relative to `input/library/` (empty: the top level).
+    /// The input collection it's also put in, relative to
+    /// `input/collections/` (empty: none).
     pub folder: PathBuf,
-    /// A new folder to make in `folder` and save into (an existing one of
-    /// that name, any case, is used).
+    /// A new collection to make in `folder` and put it in (an existing one
+    /// of that name, any case, is used).
     pub new_folder: Option<String>,
     /// The folder tree's filter.
     pub filter: String,
+}
+
+/// Add to collection… for input library ideas: the collection (or a new
+/// one in it) they go in.
+#[derive(Clone, Debug, PartialEq, Default)]
+pub struct CollectIdeasDialog {
+    pub ideas: Vec<Id>,
+    /// Relative to `input/collections/` (empty: the top level, only for a
+    /// new one).
+    pub folder: PathBuf,
+    /// A new collection to make in `folder` (an existing one of that name,
+    /// any case, is used).
+    pub new_folder: Option<String>,
+    /// The tree's filter.
+    pub filter: String,
+}
+
+impl CollectIdeasDialog {
+    /// The collection the ideas go in and whether it's there already
+    /// (`None`: none picked).
+    pub fn target(&self, state: &AppState) -> Option<(PathBuf, bool)> {
+        let Some(new) = &self.new_folder else {
+            return (!self.folder.as_os_str().is_empty()).then(|| (self.folder.clone(), true));
+        };
+        let at = self.folder.join(new.trim());
+        let same = |f: &&PathBuf| f.to_string_lossy().to_lowercase() == at.to_string_lossy().to_lowercase();
+        Some(match state.index.input_collection_folders.iter().find(same) {
+            Some(f) => (f.clone(), true),
+            None => (at, false),
+        })
+    }
+
+    /// Why it can't add yet.
+    pub fn problem(&self, state: &AppState) -> Option<String> {
+        if let Some(new) = &self.new_folder
+            && let Err(e) = increart_core::library::validate_name(new.trim())
+        {
+            return Some(format!("new collection: {e}"));
+        }
+        if self.target(state).is_none() {
+            return Some("Pick a collection, or make one with New collection".into());
+        }
+        None
+    }
 }
 
 impl SaveIdeaDialog {
@@ -1924,7 +2004,7 @@ impl SaveIdeaDialog {
         let folder = state
             .save_idea_last
             .clone()
-            .filter(|f| f.as_os_str().is_empty() || state.index.library_folders.contains(f))
+            .filter(|f| f.as_os_str().is_empty() || state.index.input_collection_folders.contains(f))
             .unwrap_or_default();
         SaveIdeaDialog { ideas, name, folder, new_folder: None, filter: String::new() }
     }
@@ -3002,6 +3082,7 @@ pub struct Place {
     pub inbox_tab: InboxTab,
     pub lib_tab: LibTab,
     pub lib_folder: Option<PathBuf>,
+    pub lib_smart: Option<IdeaSmart>,
     pub projects_tab: ProjectsTab,
     pub project: Option<Id>,
     pub proj_folder: Option<PathBuf>,
@@ -3121,8 +3202,11 @@ pub struct AppState {
     pub inbox_filter: InboxFilter,
     /// Details panels hidden this session (all are shown at start).
     pub info_hidden: BTreeSet<InfoPanel>,
-    /// Input library folder shown (`None`: all ideas).
+    /// Input library collection shown (`None`: all ideas, empty: the ideas
+    /// in any).
     pub lib_folder: Option<PathBuf>,
+    /// Input library smart folder shown, in place of a collection.
+    pub lib_smart: Option<IdeaSmart>,
     pub lib_selected: BTreeSet<Id>,
     /// The idea in the Input library's side panel.
     pub lib_info: Option<Id>,
@@ -3360,6 +3444,11 @@ pub struct AppState {
     /// Where the last Save to input library went (this session), the next
     /// one's first folder.
     pub save_idea_last: Option<PathBuf>,
+    /// Putting input library ideas in a collection.
+    pub collect_ideas: Option<CollectIdeasDialog>,
+    /// The input collection the last Add to collection went to (this
+    /// session), the next one's first.
+    pub collect_ideas_last: Option<PathBuf>,
     /// The prompt presets (shared by every library).
     pub prompt_presets: PromptPresets,
     /// The `prompt-presets` folder they are saved in (`None`: not saved,
@@ -3547,6 +3636,7 @@ impl AppState {
             inbox_filter: InboxFilter::default(),
             info_hidden: BTreeSet::new(),
             lib_folder: None,
+            lib_smart: None,
             lib_selected: BTreeSet::new(),
             inbox_picked: vec![],
             lib_info: None,
@@ -3642,6 +3732,8 @@ impl AppState {
             from_ideas_last: None,
             save_idea: None,
             save_idea_last: None,
+            collect_ideas: None,
+            collect_ideas_last: None,
             job_info: None,
             job_log: vec![],
             server_jobs: HashMap::new(),
@@ -3836,6 +3928,7 @@ impl AppState {
             inbox_tab: self.inbox_tab,
             lib_tab: self.lib_tab,
             lib_folder: self.lib_folder.clone(),
+            lib_smart: self.lib_smart.clone(),
             projects_tab: self.projects_tab,
             project: self.project.clone(),
             proj_folder: self.proj_folder.clone(),
@@ -4086,14 +4179,19 @@ impl AppState {
                     .collect()
             }
             RefSource::Inputs(_) | RefSource::Inbox | RefSource::Edited => {
+                let sel = match &p.source {
+                    RefSource::Inputs(Some(sel)) => Some(sel.as_path()),
+                    _ => None,
+                };
+                let in_sel = sel.map(|s| self.index.ideas_in_collection(Some(s))).unwrap_or_default();
                 let mut ideas: Vec<&IdeaEntry> = self
                     .index
                     .ideas
                     .iter()
                     .filter(|e| match (&e.loc, &p.source) {
                         (IdeaLoc::Unreviewed, RefSource::Inbox) | (IdeaLoc::Edited, RefSource::Edited) => true,
-                        (IdeaLoc::Library(_), RefSource::Inputs(None)) => true,
-                        (IdeaLoc::Library(f), RefSource::Inputs(Some(sel))) => f.starts_with(sel),
+                        (IdeaLoc::Library, RefSource::Inputs(None)) => true,
+                        (IdeaLoc::Library, RefSource::Inputs(Some(_))) => in_sel.contains(&e.idea.id),
                         _ => false,
                     })
                     .filter(|e| {
@@ -4618,12 +4716,16 @@ impl AppState {
     /// The input library Grid's ideas before its filters: the folder's (all
     /// of the library's with none), and the edited copies when shown.
     pub fn lib_source_ideas(&self) -> Vec<&IdeaEntry> {
+        if let Some(smart) = &self.lib_smart {
+            return self.smart_ideas(smart);
+        }
+        let in_sel = self.lib_folder.as_deref().map(|s| self.index.ideas_in_collection(Some(s))).unwrap_or_default();
         self.index
             .ideas
             .iter()
             .filter(|e| match (&e.loc, &self.lib_folder) {
-                (IdeaLoc::Library(_), None) => true,
-                (IdeaLoc::Library(f), Some(sel)) => f.starts_with(sel),
+                (IdeaLoc::Library, None) => true,
+                (IdeaLoc::Library, Some(_)) => in_sel.contains(&e.idea.id),
                 (IdeaLoc::Edited, None) => self.lib_filter.show_hidden,
                 _ => false,
             })
@@ -4959,6 +5061,174 @@ impl AppState {
         self.index.projects.iter().find(|p| p.dir == dir)
     }
 
+    /// The input library's ideas in a smart folder, newest first.
+    pub fn smart_ideas(&self, smart: &IdeaSmart) -> Vec<&IdeaEntry> {
+        let collected = matches!(smart, IdeaSmart::Uncollected).then(|| self.index.ideas_in_collection(None));
+        let mut v: Vec<&IdeaEntry> = self
+            .index
+            .ideas
+            .iter()
+            .filter(|e| e.loc == IdeaLoc::Library)
+            .filter(|e| {
+                let i = &e.idea;
+                match smart {
+                    IdeaSmart::Day(d) => i.id.as_str().starts_with(d.as_str()),
+                    IdeaSmart::Origin(o) => IdeaOrigin::of(&i.source) == *o,
+                    IdeaSmart::Project(p) => i.projects.contains(p),
+                    IdeaSmart::Tag(t) => i.tags.iter().any(|x| x.eq_ignore_ascii_case(t)),
+                    IdeaSmart::WithImages => !i.images.is_empty(),
+                    IdeaSmart::Starred => i.starred,
+                    IdeaSmart::Uncollected => !collected.as_ref().is_some_and(|c| c.contains(&i.id)),
+                }
+            })
+            .collect();
+        v.sort_by(|a, b| b.idea.id.cmp(&a.idea.id));
+        v
+    }
+
+    /// The input library's ideas: days they were added (newest first),
+    /// where they came from, the projects they were used in (by name) and
+    /// their tags (by name), with counts.
+    pub fn idea_days(&self) -> Vec<(String, usize)> {
+        let mut days: BTreeMap<String, usize> = BTreeMap::new();
+        for e in self.index.ideas.iter().filter(|e| e.loc == IdeaLoc::Library) {
+            *days.entry(e.idea.id.as_str()[..10].to_string()).or_default() += 1;
+        }
+        days.into_iter().rev().collect()
+    }
+
+    pub fn idea_origins(&self) -> Vec<(IdeaOrigin, usize)> {
+        IdeaOrigin::ALL
+            .into_iter()
+            .map(|o| (o, self.smart_ideas(&IdeaSmart::Origin(o)).len()))
+            .filter(|(_, n)| *n > 0)
+            .collect()
+    }
+
+    pub fn idea_projects(&self) -> Vec<(Id, usize)> {
+        let mut counts: BTreeMap<Id, usize> = BTreeMap::new();
+        for e in self.index.ideas.iter().filter(|e| e.loc == IdeaLoc::Library) {
+            for p in e.idea.projects.iter().filter(|p| self.index.project(p).is_some()) {
+                *counts.entry(p.clone()).or_default() += 1;
+            }
+        }
+        let mut v: Vec<(Id, usize)> = counts.into_iter().collect();
+        v.sort_by_key(|(p, _)| self.smart_project_name(p).to_lowercase());
+        v
+    }
+
+    pub fn idea_tags(&self) -> Vec<(String, usize)> {
+        let mut v = self.idea_tag_counts(self.index.ideas.iter().filter(|e| e.loc == IdeaLoc::Library));
+        v.sort_by_key(|(t, _)| t.to_lowercase());
+        v
+    }
+
+    /// A project's name in the input `smart/by project/` (with its ID when
+    /// another project has the name).
+    fn smart_project_name(&self, id: &Id) -> String {
+        let Some(p) = self.index.project(id) else { return id.to_string() };
+        let name = p.name();
+        let twins = self.index.projects.iter().filter(|q| q.name() == name).count();
+        if twins > 1 { format!("{name} · {id}") } else { name }
+    }
+
+    /// The smart folder a folder of the input `smart/` tree is, if it holds
+    /// ideas.
+    pub fn input_smart_source(&self, rel: &Path) -> Option<IdeaSmart> {
+        let parts: Vec<String> = rel.iter().map(|c| c.to_string_lossy().into_owned()).collect();
+        Some(match parts.iter().map(String::as_str).collect::<Vec<_>>().as_slice() {
+            ["by date", day] => IdeaSmart::Day(day.to_string()),
+            ["by source", o] => IdeaSmart::Origin(IdeaOrigin::ALL.into_iter().find(|x| x.label() == *o)?),
+            ["by project", name] => IdeaSmart::Project(
+                self.idea_projects().into_iter().map(|(p, _)| p).find(|p| self.smart_project_name(p) == *name)?,
+            ),
+            ["by tag", tag] => IdeaSmart::Tag(tag.to_string()),
+            [one] => IdeaSmart::FLAT.into_iter().find(|(_, n)| n == one)?.0,
+            _ => return None,
+        })
+    }
+
+    /// Where a smart folder is in the input `smart/` tree.
+    pub fn input_smart_path(&self, smart: &IdeaSmart) -> PathBuf {
+        let rel = match smart {
+            IdeaSmart::Day(d) => Path::new("by date").join(d),
+            IdeaSmart::Origin(o) => Path::new("by source").join(o.label()),
+            IdeaSmart::Project(p) => Path::new("by project").join(self.smart_project_name(p)),
+            IdeaSmart::Tag(t) => Path::new("by tag").join(t),
+            flat => PathBuf::from(IdeaSmart::FLAT.iter().find(|(s, _)| s == flat).map_or("", |(_, n)| *n)),
+        };
+        Path::new(INPUT_SMART_DIR).join(rel)
+    }
+
+    /// The folders in a folder of the input `smart/` tree (`None`: it holds
+    /// ideas).
+    fn input_smart_children(&self, rel: &Path) -> Option<Vec<String>> {
+        let parts: Vec<String> = rel.iter().map(|c| c.to_string_lossy().into_owned()).collect();
+        Some(match parts.iter().map(String::as_str).collect::<Vec<_>>().as_slice() {
+            [] => ["by date", "by source", "by project", "by tag"]
+                .into_iter()
+                .chain(IdeaSmart::FLAT.iter().map(|(_, n)| *n))
+                .map(String::from)
+                .collect(),
+            ["by date"] => self.idea_days().into_iter().map(|(d, _)| d).collect(),
+            ["by source"] => self.idea_origins().into_iter().map(|(o, _)| o.label().to_string()).collect(),
+            ["by project"] => self.idea_projects().iter().map(|(p, _)| self.smart_project_name(p)).collect(),
+            ["by tag"] => self.idea_tags().into_iter().map(|(t, _)| t).collect(),
+            _ => return None,
+        })
+    }
+
+    /// Every idea in a folder of the input `smart/` tree and the ones
+    /// inside it, newest first.
+    pub fn input_smart_ideas(&self, rel: &Path) -> Vec<&IdeaEntry> {
+        if let Some(smart) = self.input_smart_source(rel) {
+            return self.smart_ideas(&smart);
+        }
+        match self.input_smart_children(rel) {
+            Some(children) => {
+                let mut seen = BTreeSet::new();
+                let mut v: Vec<&IdeaEntry> = children
+                    .iter()
+                    .flat_map(|c| self.input_smart_ideas(&rel.join(c)))
+                    .filter(|e| seen.insert(e.idea.id.clone()))
+                    .collect();
+                v.sort_by(|a, b| b.idea.id.cmp(&a.idea.id));
+                v
+            }
+            None => vec![],
+        }
+    }
+
+    /// A folder of the input `smart/` tree as folder-view entries: smart
+    /// folders, or ideas' entries (`<idea-id>.idea`, titled).
+    pub fn input_smart_listing(&self, rel: &Path) -> Vec<FvEntry> {
+        if let Some(children) = self.input_smart_children(rel) {
+            return children
+                .into_iter()
+                .map(|name| {
+                    let n = self.input_smart_ideas(&rel.join(&name)).len();
+                    FvEntry {
+                        info: format!("{n} idea(s)"),
+                        name,
+                        kind: EntryKind::Smart,
+                        size: n as u64,
+                        modified: None,
+                    }
+                })
+                .collect();
+        }
+        self.input_smart_ideas(rel)
+            .into_iter()
+            .map(|e| FvEntry {
+                name: format!("{}.{}", e.idea.id, increart_core::scan::IDEA_LINK_EXT),
+                kind: EntryKind::Idea(e.idea.id.clone()),
+                size: e.idea.images.len() as u64,
+                modified: None,
+                info: if e.idea.title.is_empty() { "idea".into() } else { e.idea.title.clone() },
+            })
+            .collect()
+    }
+
     /// The subfolders of a folder of the virtual `smart/` tree (`rel` is
     /// the path under it), if it has subfolders rather than images.
     pub fn smart_children(&self, rel: &Path) -> Option<Vec<String>> {
@@ -5195,14 +5465,9 @@ impl AppState {
                 }
                 s
             }
-            Tree::InputLibrary => {
-                let n = self
-                    .index
-                    .ideas
-                    .iter()
-                    .filter(|e| matches!(&e.loc, IdeaLoc::Library(f) if f.starts_with(path)))
-                    .count();
-                format!("{n} idea(s) inside will be discarded (restorable)")
+            Tree::InputCollections => {
+                let n = self.index.ideas_in_collection(Some(path)).len();
+                format!("{n} idea(s); the ideas stay in the input library")
             }
             Tree::Collections => {
                 let n = self.index.collection_links.iter().filter(|l| l.folder.starts_with(path)).count();

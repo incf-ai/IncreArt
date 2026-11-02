@@ -22,7 +22,14 @@ pub const IDEA_DRAFT: &str = "input/draft.rsn";
 pub const INBOX_DROP: &str = "input/inbox_drop";
 pub const IMPORTED: &str = "input/inbox_drop/imported";
 pub const UNREVIEWED_IDEAS: &str = "input/unreviewed";
+/// Every library idea, one folder each (`<idea-id>/`), side by side.
 pub const INPUT_LIBRARY: &str = "input/library";
+/// The input library's collections: nested folders holding a
+/// [`IDEA_LINK_EXT`] file per idea in it.
+pub const INPUT_COLLECTIONS: &str = "input/collections";
+/// An idea's entry in an input collection: `<idea-id>.idea`, empty (the
+/// name is the link; it stays while its idea is discarded or edited).
+pub const IDEA_LINK_EXT: &str = "idea";
 pub const DISCARDED_IDEAS: &str = "input/discarded";
 /// Cropped and marked copies (Crop / mark…), out of the input library's
 /// lists unless asked for.
@@ -40,24 +47,19 @@ pub const COLLECTIONS: &str = "collections";
 pub enum IdeaLoc {
     /// The Idea inbox, `input/unreviewed/`.
     Unreviewed,
-    /// A folder of the input library, relative to `input/library/` (empty =
-    /// top level).
-    Library(PathBuf),
+    /// The input library, `input/library/` (its collections hold links).
+    Library,
     Discarded,
     /// A cropped and marked copy, `input/edited/`.
     Edited,
 }
 
 impl IdeaLoc {
-    pub fn top_library() -> IdeaLoc {
-        IdeaLoc::Library(PathBuf::new())
-    }
-
     /// The directory holding idea folders, relative to the library root.
     pub fn dir(&self) -> PathBuf {
         match self {
             IdeaLoc::Unreviewed => PathBuf::from(UNREVIEWED_IDEAS),
-            IdeaLoc::Library(folder) => Path::new(INPUT_LIBRARY).join(folder),
+            IdeaLoc::Library => PathBuf::from(INPUT_LIBRARY),
             IdeaLoc::Discarded => PathBuf::from(DISCARDED_IDEAS),
             IdeaLoc::Edited => PathBuf::from(EDITED_IDEAS),
         }
@@ -174,6 +176,14 @@ pub struct CollectionLink {
     pub image: ImageRef,
 }
 
+/// An idea in an input collection (its `<idea-id>.idea` file).
+#[derive(Clone, Debug, PartialEq)]
+pub struct IdeaLink {
+    /// Relative to `input/collections/`.
+    pub folder: PathBuf,
+    pub idea: crate::Id,
+}
+
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Index {
     pub ideas: Vec<IdeaEntry>,
@@ -183,8 +193,10 @@ pub struct Index {
     /// Discarded projects (`discarded_projects/`), newest first; not in
     /// `projects`, so nothing generates, reviews or shows them elsewhere.
     pub discarded_projects: Vec<DiscardedEntry>,
-    /// Folders of the input library, relative to `input/library/`.
-    pub library_folders: Vec<PathBuf>,
+    /// Input collection folders, relative to `input/collections/`.
+    pub input_collection_folders: Vec<PathBuf>,
+    /// The ideas in each input collection.
+    pub idea_links: Vec<IdeaLink>,
     /// Collection folders, relative to `collections/`.
     pub collection_folders: Vec<PathBuf>,
     pub collection_links: Vec<CollectionLink>,
@@ -222,6 +234,17 @@ impl Index {
         self.projects.iter().map(|p| p.runs.iter().map(|r| p.pending_seeds(r).count()).sum::<usize>()).sum()
     }
 
+    /// The input collections an idea is in.
+    pub fn idea_collections(&self, id: &crate::Id) -> Vec<&Path> {
+        self.idea_links.iter().filter(|l| &l.idea == id).map(|l| l.folder.as_path()).collect()
+    }
+
+    /// The ideas in an input collection or the ones inside it (`None`: in
+    /// any).
+    pub fn ideas_in_collection(&self, folder: Option<&Path>) -> std::collections::HashSet<&crate::Id> {
+        self.idea_links.iter().filter(|l| folder.is_none_or(|f| l.folder.starts_with(f))).map(|l| &l.idea).collect()
+    }
+
     pub fn idea(&self, id: &crate::Id) -> Option<&IdeaEntry> {
         self.ideas.iter().find(|e| &e.idea.id == id)
     }
@@ -251,6 +274,7 @@ pub fn scan(root: &Path) -> Result<Index> {
     scan_projects(root, Path::new(""), &mut ix)?;
     scan_discarded_projects(root, &mut ix)?;
     scan_collections(root, &mut ix)?;
+    scan_input_collections(root, &mut ix)?;
     let idea_draft = root.join(IDEA_DRAFT);
     if idea_draft.is_file() {
         match rsnfmt::read::<IdeaDraftFile>(&idea_draft) {
@@ -289,15 +313,37 @@ fn read_idea(root: &Path, dir: &Path, loc: IdeaLoc, ix: &mut Index) {
     }
 }
 
+/// The library's ideas; ones still in folders (a library from before
+/// collections, upgraded when opened) are found too.
 fn scan_library(root: &Path, folder: &Path, ix: &mut Index) -> Result<()> {
     for dir in fsutil::subdirs(&root.join(INPUT_LIBRARY).join(folder))? {
-        let name = dir.name()?;
         if dir.join(IDEA_FILE).exists() {
-            read_idea(root, &dir, IdeaLoc::Library(folder.to_path_buf()), ix);
+            read_idea(root, &dir, IdeaLoc::Library, ix);
         } else {
-            let sub = folder.join(name);
-            ix.library_folders.push(sub.clone());
-            scan_library(root, &sub, ix)?;
+            scan_library(root, &folder.join(dir.name()?), ix)?;
+        }
+    }
+    Ok(())
+}
+
+/// The idea named by an input collection entry, `<idea-id>.idea`.
+pub fn idea_link_id(p: &Path) -> Option<crate::Id> {
+    (p.extension()? == IDEA_LINK_EXT).then_some(())?;
+    p.file_stem()?.to_str()?.parse().ok()
+}
+
+fn scan_input_collections(root: &Path, ix: &mut Index) -> Result<()> {
+    let base = root.join(INPUT_COLLECTIONS);
+    for p in fsutil::walk(&base)? {
+        if fs::symlink_metadata(&p).is_ok_and(|m| m.is_dir()) {
+            ix.input_collection_folders.push(p.relative_to(&base)?.to_path_buf());
+        } else if !fsutil::hidden(&p) {
+            match idea_link_id(&p) {
+                Some(idea) => {
+                    ix.idea_links.push(IdeaLink { folder: p.parent_dir()?.relative_to(&base)?.to_path_buf(), idea })
+                }
+                None => ix.problems.push(format!("{}: not an idea's entry (<idea-id>.idea)", p.display())),
+            }
         }
     }
     Ok(())

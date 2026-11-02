@@ -8,6 +8,7 @@ use std::path::PathBuf;
 use increart_core::config::{Config, MODEL_SLOTS, RecipePreset, SdServerConfig, ServerConfig, ServerPreset};
 use increart_core::engine::{Event, Stop};
 use increart_core::launcher::device_name;
+use increart_core::scan::INPUT_COLLECTIONS;
 use increart_core::scheduler::Order;
 use increart_core::{Id, IdeaLoc, ImageRef, Index, NewIdea, Tree, Verdict};
 
@@ -287,6 +288,8 @@ pub enum Msg {
     EmptyDiscardedProjects,
     // ---- input library
     LibFolder(Option<PathBuf>),
+    /// An Input library smart folder, in place of a collection.
+    LibSmart(IdeaSmart),
     /// The idea in the Input library's side panel (`None` closes it).
     LibInfo(Option<Id>),
     LibSelect {
@@ -846,6 +849,16 @@ pub enum Msg {
     DismissOutputNotice,
     OutputSelect(Option<ImageRef>),
     AddToCollection(PathBuf, Vec<ImageRef>),
+    /// Puts ideas in an input collection (inbox ideas are saved to the
+    /// input library too).
+    CollectIdeas(PathBuf, Vec<Id>),
+    /// Add to collection… for input library ideas: asks which.
+    CollectIdeasAsk(Vec<Id>),
+    EditCollectIdeas(CollectIdeasDialog),
+    ConfirmCollectIdeas,
+    CancelCollectIdeas,
+    /// Takes ideas out of an input collection and the ones inside it.
+    UncollectIdeas(PathBuf, Vec<Id>),
     /// A new collection (opened for rename) holding these images.
     NewCollection(PathBuf, Vec<ImageRef>),
     /// Review's Add to collection… modal on these images.
@@ -1298,6 +1311,9 @@ pub enum LibOp {
     },
     ImportInboxDrop,
     AddToCollection(PathBuf, Vec<ImageRef>),
+    CollectIdeas(PathBuf, Vec<Id>),
+    /// Entries to remove: (collection, idea).
+    UnlinkIdeas(Vec<(PathBuf, Id)>),
     NewCollection(PathBuf, Vec<ImageRef>),
     /// Adds the images to the collection `folder` (or to a new one named
     /// `new` in it), then rates `links` as `ReviewOutputs` does, both undone
@@ -1915,8 +1931,13 @@ fn go_to(state: &mut AppState, p: Place) -> Vec<Effect> {
     fx.extend(update(state, Msg::LibTab(p.lib_tab)));
     fx.extend(update(state, Msg::ProjectsTab(p.projects_tab)));
     fx.extend(update(state, Msg::OutputTab(p.output_tab)));
-    if p.lib_folder != state.lib_folder {
-        fx.extend(update(state, Msg::LibFolder(p.lib_folder)));
+    match p.lib_smart {
+        Some(s) if state.lib_smart.as_ref() != Some(&s) => fx.extend(update(state, Msg::LibSmart(s))),
+        Some(_) => {}
+        None if p.lib_folder != state.lib_folder || state.lib_smart.is_some() => {
+            fx.extend(update(state, Msg::LibFolder(p.lib_folder)))
+        }
+        None => {}
     }
     match p.project {
         Some(id) if state.project.as_ref() != Some(&id) && state.index.project(&id).is_some() => {
@@ -3425,8 +3446,19 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
         // ------------------------------------------------ input library
         Msg::LibFolder(f) => {
             // on the Folder tab, the folder view goes there too
-            let path = std::path::Path::new("input/library").join(f.clone().unwrap_or_default());
+            let path = std::path::Path::new(INPUT_COLLECTIONS).join(f.clone().unwrap_or_default());
             state.lib_folder = f;
+            state.lib_smart = None;
+            state.lib_selected.clear();
+            if state.tab == Tab::InputLibrary && state.lib_tab == LibTab::Folder {
+                return fv_go(state, path, true);
+            }
+            vec![]
+        }
+        Msg::LibSmart(smart) => {
+            let path = state.input_smart_path(&smart);
+            state.lib_folder = None;
+            state.lib_smart = Some(smart);
             state.lib_selected.clear();
             if state.tab == Tab::InputLibrary && state.lib_tab == LibTab::Folder {
                 return fv_go(state, path, true);
@@ -3564,7 +3596,7 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
         Msg::RefPicker(true) => {
             let source = state.ref_picker_source.clone().unwrap_or_else(|| {
                 let inputs =
-                    state.index.ideas.iter().any(|e| matches!(e.loc, IdeaLoc::Library(_)) && !e.idea.images.is_empty());
+                    state.index.ideas.iter().any(|e| matches!(e.loc, IdeaLoc::Library) && !e.idea.images.is_empty());
                 if inputs { RefSource::Inputs(None) } else { RefSource::Outputs(OutputSource::AllProjects) }
             });
             // the Tile window's inputs mean nothing to Generate
@@ -3792,7 +3824,7 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
         }
         Msg::UseImage(image, target) => use_image(state, image, target),
         Msg::ToInputLibrary(image) => {
-            lib(state, LibOp::IdeaFromOutput { image: image.id, with_prompt: false, loc: IdeaLoc::top_library() })
+            lib(state, LibOp::IdeaFromOutput { image: image.id, with_prompt: false, loc: IdeaLoc::Library })
         }
         Msg::NewIdeaFromImage(image) => {
             lib(state, LibOp::IdeaFromOutput { image: image.id, with_prompt: true, loc: IdeaLoc::Unreviewed })
@@ -5537,6 +5569,55 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
             fx
         }
         Msg::AddToCollection(folder, images) => lib(state, LibOp::AddToCollection(folder, images)),
+        Msg::CollectIdeas(folder, ids) => {
+            if ids.is_empty() {
+                return vec![];
+            }
+            state.collect_ideas_last = Some(folder.clone());
+            lib(state, LibOp::CollectIdeas(folder, ids))
+        }
+        Msg::CollectIdeasAsk(ideas) => {
+            if !ideas.is_empty() {
+                let last =
+                    state.collect_ideas_last.clone().filter(|f| state.index.input_collection_folders.contains(f));
+                state.collect_ideas =
+                    Some(CollectIdeasDialog { ideas, folder: last.unwrap_or_default(), ..Default::default() });
+            }
+            vec![]
+        }
+        Msg::EditCollectIdeas(d) => {
+            if state.collect_ideas.is_some() {
+                state.collect_ideas = Some(d);
+            }
+            vec![]
+        }
+        Msg::ConfirmCollectIdeas => {
+            let Some(d) = state.collect_ideas.clone() else { return vec![] };
+            if let Some(p) = d.problem(state) {
+                state.messages_info(p);
+                return vec![];
+            }
+            let Some((to, _)) = d.target(state) else { return vec![] };
+            state.collect_ideas = None;
+            update(state, Msg::CollectIdeas(to, d.ideas))
+        }
+        Msg::CancelCollectIdeas => {
+            state.collect_ideas = None;
+            vec![]
+        }
+        Msg::UncollectIdeas(folder, ids) => {
+            let links: Vec<(PathBuf, Id)> = state
+                .index
+                .idea_links
+                .iter()
+                .filter(|l| l.folder.starts_with(&folder) && ids.contains(&l.idea))
+                .map(|l| (l.folder.clone(), l.idea.clone()))
+                .collect();
+            if links.is_empty() {
+                return vec![];
+            }
+            lib(state, LibOp::UnlinkIdeas(links))
+        }
         Msg::NewCollection(parent, images) => lib(state, LibOp::NewCollection(parent, images)),
         Msg::SetCover(p, img) => lib(state, LibOp::SetCover(p, img)),
         Msg::TitleDialog(Some(image)) => {
@@ -6997,10 +7078,15 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
                 let info = "smart folders (read-only)".to_string();
                 entries.push(FvEntry { name: "smart".into(), kind: EntryKind::Smart, size: n, modified: None, info });
             }
+            if path == std::path::Path::new(INPUT_COLLECTIONS) && !entries.iter().any(|e| e.name == "smart") {
+                let n = state.input_smart_ideas(std::path::Path::new("")).len() as u64;
+                let info = "smart folders (read-only)".to_string();
+                entries.push(FvEntry { name: "smart".into(), kind: EntryKind::Smart, size: n, modified: None, info });
+            }
             let smart = is_smart(&path);
             let fv = fv_for(state, &path);
             if fv.place == FvPlace::Inbox && path == std::path::Path::new("input") {
-                entries.retain(|e| e.name != "library"); // the Input library tab's
+                entries.retain(|e| e.name != "library" && e.name != "collections"); // the Input library tab's
             }
             if path == fv.path {
                 // smart folders keep their own order (newest day first, …)
@@ -7055,8 +7141,18 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
             let found: Vec<(String, Vec<ImageRef>)> = smart
                 .into_iter()
                 .map(|n| {
-                    let rel = dir.join(&n).strip_prefix(SMART_DIR).map(PathBuf::from).unwrap_or_default();
-                    let imgs = state.smart_images(&rel).into_iter().take(3).map(|o| o.image.clone()).collect();
+                    let path = dir.join(&n);
+                    let imgs = if let Ok(rel) = path.strip_prefix(INPUT_SMART_DIR) {
+                        // an idea's entry: its images; a folder: its ideas'
+                        let ideas = match increart_core::scan::idea_link_id(&path).and_then(|id| state.idea(&id)) {
+                            Some(e) => vec![e],
+                            None => state.input_smart_ideas(rel),
+                        };
+                        ideas.iter().flat_map(|e| e.idea.images.iter().cloned().map(ImageRef::input)).take(3).collect()
+                    } else {
+                        let rel = path.strip_prefix(SMART_DIR).map(PathBuf::from).unwrap_or_default();
+                        state.smart_images(&rel).into_iter().take(3).map(|o| o.image.clone()).collect()
+                    };
                     (n, imgs)
                 })
                 .collect();
@@ -7178,8 +7274,8 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
             let mut skipped = false;
             for e in fv.shown().into_iter().filter(|e| fv.selected.contains(&e.name)) {
                 let ok = match (fv.place, &e.kind) {
-                    // smart images can be copied into a collection
-                    _ if smart => !cut && matches!(e.kind, EntryKind::Image(_)),
+                    // smart images and ideas can be copied into a collection
+                    _ if smart => !cut && matches!(e.kind, EntryKind::Image(_) | EntryKind::Idea(_)),
                     (FvPlace::Collections, k) => matches!(k, EntryKind::Folder | EntryKind::Image(_)),
                     (FvPlace::InputLibrary, k) => matches!(k, EntryKind::Folder | EntryKind::Idea(_)),
                     (FvPlace::Inbox, _) => false,
@@ -7195,7 +7291,7 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
             }
             if skipped {
                 state.messages_info(match (fv.place, cut) {
-                    _ if smart => "Smart folders are read-only: copy their images into a collection",
+                    _ if smart => "Smart folders are read-only: copy what's in them into a collection",
                     (FvPlace::Collections, _) => "Only collections and their images can be copied or cut",
                     (FvPlace::InputLibrary, _) => "Only folders and ideas can be copied or cut",
                     (FvPlace::Inbox, _) => "Inbox ideas are saved to the input library or discarded from the Grid",
@@ -7239,7 +7335,7 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
             }
             let text = if place == FvPlace::InputLibrary {
                 format!(
-                    "Discard {} item(s)? Ideas go to Discarded (restore them from there); folders go to the trash.",
+                    "Remove {} item(s)? Ideas leave the collection and stay in the input library; collections go to the trash with their entries.",
                     targets.len()
                 )
             } else if place == FvPlace::Collections {
@@ -7253,7 +7349,7 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
                     targets.len()
                 )
             };
-            let verb = if place == FvPlace::Collections { "Remove" } else { "Delete" };
+            let verb = if matches!(place, FvPlace::Collections | FvPlace::InputLibrary) { "Remove" } else { "Delete" };
             update(state, Msg::Ask(Confirm::new(text, verb, Msg::FvDeleteConfirmed(targets))))
         }
         Msg::FvDeleteConfirmed(targets) => {
@@ -7262,8 +7358,8 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
                 let is_link = StoreFormat::of_path(&t).is_some();
                 if let Ok(rel) = t.strip_prefix("collections") {
                     fx.extend(update(state, Msg::DeleteNode(Tree::Collections, rel.to_path_buf())));
-                } else if let Ok(rel) = t.strip_prefix("input/library") {
-                    fx.extend(update(state, Msg::DeleteNode(Tree::InputLibrary, rel.to_path_buf())));
+                } else if let Ok(rel) = t.strip_prefix(INPUT_COLLECTIONS) {
+                    fx.extend(update(state, Msg::DeleteNode(Tree::InputCollections, rel.to_path_buf())));
                 } else if is_link {
                     fx.extend(update(state, Msg::DeleteOutput(t)));
                 } else if let Ok(rel) = t.strip_prefix("projects") {
@@ -7426,12 +7522,13 @@ fn add_idea(
     state.idea_dirty = None;
     let text_for_history = (d.text.clone(), d.title.clone());
     let tags = d.tag_list();
-    let loc = match how {
-        AddIdea::Inbox => IdeaLoc::Unreviewed,
-        AddIdea::Keep => IdeaLoc::Library(parent.clone()),
-        AddIdea::NewProject => saved_in.map_or_else(IdeaLoc::top_library, IdeaLoc::Library),
+    let (loc, collection) = match how {
+        AddIdea::Inbox => (IdeaLoc::Unreviewed, PathBuf::new()),
+        AddIdea::Keep => (IdeaLoc::Library, parent.clone()),
+        AddIdea::NewProject => (IdeaLoc::Library, saved_in.unwrap_or_default()),
     };
-    let idea = NewIdea { title: d.title, text: d.text, tags, images: d.images, loc, ..NewIdea::text("", "") };
+    let idea =
+        NewIdea { title: d.title, text: d.text, tags, images: d.images, loc, collection, ..NewIdea::text("", "") };
     state.busy += 1;
     let add = match how {
         AddIdea::NewProject => Effect::Lib(Box::new(LibOp::NewIdeaNewProject(idea, parent, name))),
@@ -7464,7 +7561,7 @@ pub fn save_idea_folder(state: &AppState, d: &SaveIdeaDialog) -> (PathBuf, bool)
     };
     let at = d.folder.join(new.trim());
     let same = |f: &&PathBuf| f.to_string_lossy().to_lowercase() == at.to_string_lossy().to_lowercase();
-    match state.index.library_folders.iter().find(same) {
+    match state.index.input_collection_folders.iter().find(same) {
         Some(f) => (f.clone(), true),
         None => (at, false),
     }
@@ -9169,7 +9266,7 @@ fn fv_activate(state: &mut AppState, place: FvPlace) {
 }
 
 /// The place a path is in: the view with the longest root it's under
-/// (`input/library/…` is the library's, not the inbox's).
+/// (`input/collections/…` is the input library's, not the inbox's).
 fn place_of(path: &std::path::Path) -> Option<FvPlace> {
     FvPlace::ALL.into_iter().filter(|p| path.starts_with(p.root())).max_by_key(|p| p.root().len())
 }
@@ -9189,6 +9286,11 @@ fn fv_for<'a>(state: &'a mut AppState, path: &std::path::Path) -> &'a mut Folder
 /// Lists a folder: the virtual smart folders from the index, the rest from
 /// disk.
 fn fv_list(state: &mut AppState, path: PathBuf) -> Vec<Effect> {
+    if is_input_smart(&path) {
+        let rel = path.strip_prefix(INPUT_SMART_DIR).map(PathBuf::from).unwrap_or_default();
+        let entries = state.input_smart_listing(&rel);
+        return update(state, Msg::FvListed(path, entries));
+    }
     if is_smart(&path) {
         let rel = path.strip_prefix(SMART_DIR).map(PathBuf::from).unwrap_or_default();
         let entries = state.smart_listing(&rel);
@@ -9316,6 +9418,8 @@ fn fv_open(state: &mut AppState, name: &str) -> Vec<Effect> {
     let Some(e) = fv.entries.iter().find(|e| e.name == name).cloned() else { return vec![] };
     let path = fv.path.join(name);
     match e.kind {
+        // a collection's entry: the idea's Edit idea window
+        EntryKind::Idea(id) if increart_core::scan::idea_link_id(&path).is_some() => update(state, Msg::OpenIdea(id)),
         k if k.is_dir() => fv_go(state, path, true),
         // a collection's or smart folder's image: the Output library Grid,
         // showing that collection / smart folder, with it selected
@@ -9380,21 +9484,29 @@ fn transfer(state: &mut AppState, paths: &[PathBuf], cut: bool, dest: &std::path
             state.messages_error("Smart folders are read-only");
             continue;
         }
-        if let Ok(to) = dest.strip_prefix("input/library") {
-            let Ok(from) = src.strip_prefix("input/library") else {
-                state.messages_error("Only folders and ideas of the input library can go here");
+        if let Ok(to) = dest.strip_prefix(INPUT_COLLECTIONS) {
+            if is_input_smart(src) {
+                // an idea from a smart folder: added to the collection
+                match increart_core::scan::idea_link_id(src) {
+                    Some(id) => fx.extend(lib(state, LibOp::CollectIdeas(to.to_path_buf(), vec![id]))),
+                    None => state.messages_error("Only ideas can be copied out of smart folders"),
+                }
+                continue;
+            }
+            let Ok(from) = src.strip_prefix(INPUT_COLLECTIONS) else {
+                state.messages_error("Only collections and their ideas can go here");
                 continue;
             };
             if dest.starts_with(src) {
                 state.messages_error(format!("Can't put {} inside itself", src.display()));
                 continue;
             }
-            if state.index.ideas.iter().any(|i| dest.starts_with(&i.dir)) {
-                state.messages_error("Folders and ideas can't go inside an idea");
+            if increart_core::scan::idea_link_id(&dest).is_some() {
+                state.messages_error("Collections and ideas can't go inside an idea");
                 continue;
             }
             let (from, to) = (from.to_path_buf(), to.to_path_buf());
-            let t = Tree::InputLibrary;
+            let t = Tree::InputCollections;
             fx.extend(lib(state, if cut { LibOp::MoveNode(t, from, to) } else { LibOp::CopyNode(t, from, to) }));
             continue;
         }

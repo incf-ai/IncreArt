@@ -885,6 +885,7 @@ pub fn new_project_window(ctx: &egui::Context, st: &AppState, tex: &mut Textures
                     filter: &d.filter,
                     new_folder: d.new_folder.as_deref(),
                     new_name: d.name.trim(),
+                    noun: "folder",
                 };
                 let picked = folder_pick::show(ui, &picker, 280.0);
                 field_enter |= picked.field_enter;
@@ -998,6 +999,7 @@ pub fn move_project_window(ctx: &egui::Context, st: &AppState, out: &mut Vec<Msg
                     filter: &d.filter,
                     new_folder: d.new_folder.as_deref(),
                     new_name: "new folder",
+                    noun: "folder",
                 };
                 let picked = folder_pick::show(ui, &picker, 280.0);
                 field_enter |= picked.field_enter;
@@ -1201,6 +1203,7 @@ pub fn from_ideas_window(ctx: &egui::Context, st: &AppState, out: &mut Vec<Msg>)
                     filter: &d.filter,
                     new_folder: d.new_folder.as_deref(),
                     new_name: d.name.trim(),
+                    noun: "folder",
                 };
                 let picked = folder_pick::show(ui, &picker, 280.0);
                 field_enter |= picked.field_enter;

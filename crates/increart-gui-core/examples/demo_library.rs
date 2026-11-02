@@ -80,13 +80,10 @@ fn create(spec: &Value, sources: &Path, library: &Path) -> (Ideas, Projects) {
                     .image
             })
             .collect();
-        let loc = match s(i, "in") {
-            "inbox" => IdeaLoc::Unreviewed,
-            "discarded" => IdeaLoc::Discarded,
-            folder => {
-                make_folders(&lib, Tree::InputLibrary, Path::new(folder));
-                IdeaLoc::Library(PathBuf::from(folder))
-            }
+        let (loc, collection) = match s(i, "in") {
+            "inbox" => (IdeaLoc::Unreviewed, PathBuf::new()),
+            "discarded" => (IdeaLoc::Discarded, PathBuf::new()),
+            folder => (IdeaLoc::Library, PathBuf::from(folder)),
         };
         let id = lib
             .new_idea(NewIdea {
@@ -97,6 +94,7 @@ fn create(spec: &Value, sources: &Path, library: &Path) -> (Ideas, Projects) {
                 images: images.clone(),
                 starred: i["starred"].as_bool().unwrap_or(false),
                 loc,
+                collection,
             })
             .expect("new idea");
         ideas.insert(s(i, "key").to_string(), (id, images));
