@@ -981,7 +981,7 @@ fn discarded(ui: &mut egui::Ui, st: &AppState, tex: &mut Textures, out: &mut Vec
                             ui.close();
                         }
                         if ui.button(ic(ph::BOOKS, "Restore to the input library")).clicked() {
-                            out.push(Msg::Restore(id.clone(), IdeaLoc::top_library()));
+                            out.push(Msg::Restore(id.clone(), IdeaLoc::Library));
                             ui.close();
                         }
                         ui.separator();
@@ -1065,19 +1065,25 @@ pub fn input_library(ui: &mut egui::Ui, st: &AppState, tex: &mut Textures, out: 
             out.push(Msg::LibFilter(f));
         }
         ui.separator();
-        ui.label(RichText::new("Folders").strong());
+        ui.label(RichText::new("Collections").strong());
         if ui
             .selectable_label(st.lib_folder.is_none(), ic(ph::BOOKS, &format!("All ideas ({})", lib_count(st, None))))
             .clicked()
         {
             out.push(Msg::LibFolder(None));
         }
-        tree::folders(ui, st, Tree::InputLibrary, &st.index.library_folders, st.lib_folder.as_deref(), out, |p| {
-            Msg::LibFolder(Some(p.to_path_buf()))
-        });
+        tree::folders(
+            ui,
+            st,
+            Tree::InputCollections,
+            &st.index.input_collection_folders,
+            st.lib_folder.as_deref(),
+            out,
+            |p| Msg::LibFolder(Some(p.to_path_buf())),
+        );
         ui.add_space(8.0);
-        if ui.button(ic(ph::FOLDER_PLUS, "New folder")).clicked() {
-            out.push(Msg::NewFolder(Tree::InputLibrary, st.lib_folder.clone().unwrap_or_default()));
+        if ui.button(ic(ph::FOLDER_PLUS, "New collection")).clicked() {
+            out.push(Msg::NewFolder(Tree::InputCollections, st.lib_folder.clone().unwrap_or_default()));
         }
         ui.separator();
         let sel: Vec<_> = st.lib_selected.iter().cloned().collect();
@@ -1130,7 +1136,8 @@ pub fn input_library(ui: &mut egui::Ui, st: &AppState, tex: &mut Textures, out: 
             group(ui, "open", |ui| {
                 ui.separator();
                 if ui.button(ic(ph::FOLDER_OPEN, "Open in file manager")).clicked() {
-                    let dir = std::path::Path::new("input/library").join(st.lib_folder.clone().unwrap_or_default());
+                    let dir = std::path::Path::new(increart_core::scan::INPUT_COLLECTIONS)
+                        .join(st.lib_folder.clone().unwrap_or_default());
                     out.push(Msg::ShowInFileManager(dir));
                 }
             });
@@ -1458,8 +1465,14 @@ fn idea_details(ui: &mut egui::Ui, st: &AppState, root: &Path, tex: &mut Texture
                 IdeaLoc::Unreviewed => "Idea inbox".to_string(),
                 IdeaLoc::Discarded => "Discarded".to_string(),
                 IdeaLoc::Edited => "Edited copies (hidden)".to_string(),
-                IdeaLoc::Library(f) if f.as_os_str().is_empty() => "Input library".to_string(),
-                IdeaLoc::Library(f) => format!("Input library › {}", f.display()),
+                IdeaLoc::Library => "Input library".to_string(),
+            };
+            let place = match st.index.idea_collections(&e.idea.id).as_slice() {
+                [] => place,
+                cs => {
+                    let cs: Vec<String> = cs.iter().map(|c| c.display().to_string()).collect();
+                    format!("{place} · in {}", cs.join(", "))
+                }
             };
             kv(ui, "where", &place);
             ui.weak("folder");
@@ -1756,15 +1769,14 @@ fn image_meta(ui: &mut egui::Ui, st: &AppState, root: &Path, tex: &mut Textures,
 }
 
 fn lib_count(st: &AppState, folder: Option<&Path>) -> usize {
-    st.index
-        .ideas
-        .iter()
-        .filter(|e| match (&e.loc, folder) {
-            (IdeaLoc::Library(_), None) => true,
-            (IdeaLoc::Library(f), Some(sel)) => f.starts_with(sel),
-            _ => false,
-        })
-        .count()
+    let lib = st.index.ideas.iter().filter(|e| e.loc == IdeaLoc::Library);
+    match folder {
+        None => lib.count(),
+        Some(f) => {
+            let ids = st.index.ideas_in_collection(Some(f));
+            lib.filter(|e| ids.contains(&e.idea.id)).count()
+        }
+    }
 }
 
 /// Ctrl+N from anywhere: the New idea form.
@@ -1776,7 +1788,7 @@ pub fn global_keys(ctx: &egui::Context, out: &mut Vec<Msg>) {
 }
 
 /// Save to input library, from the Idea inbox or the New idea form: the
-/// library folders on the left (a filter, the tree, New folder under it),
+/// input collections on the left (a filter, the tree, New collection under it),
 /// the idea's name on the right (one idea or the draft; several keep their
 /// titles), where it goes, Save and Save & new project.
 pub fn save_window(ctx: &egui::Context, st: &AppState, out: &mut Vec<Msg>) {
@@ -1797,12 +1809,13 @@ pub fn save_window(ctx: &egui::Context, st: &AppState, out: &mut Vec<Msg>) {
                 ui.set_width(300.0);
                 let picker = folder_pick::Picker {
                     id: "save_idea",
-                    folders: &st.index.library_folders,
+                    folders: &st.index.input_collection_folders,
                     root: (ph::BOOKS, "input library"),
                     selected: &d.folder,
                     filter: &d.filter,
                     new_folder: d.new_folder.as_deref(),
                     new_name: "",
+                    noun: "collection",
                 };
                 let picked = folder_pick::show(ui, &picker, 280.0);
                 field_enter |= picked.field_enter;
@@ -1845,9 +1858,13 @@ pub fn save_window(ctx: &egui::Context, st: &AppState, out: &mut Vec<Msg>) {
                 ui.label(RichText::new("Saved in").strong());
                 let (at, exists) = increart_gui_core::save_idea_folder(st, &d);
                 ui.horizontal_wrapped(|ui| {
-                    ui.label(RichText::new(Path::new("input/library").join(&at).display().to_string()).monospace());
+                    ui.label(RichText::new(Path::new("input/library").display().to_string()).monospace());
+                    if !at.as_os_str().is_empty() {
+                        ui.label("in the collection");
+                        ui.label(RichText::new(at.display().to_string()).monospace());
+                    }
                     if !exists {
-                        ui.weak("(new folder)");
+                        ui.weak("(new collection)");
                     }
                 });
                 if let Some(e) = increart_gui_core::save_idea_problem(&d) {

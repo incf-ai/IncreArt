@@ -112,7 +112,7 @@ fn folder_menu(ui: &mut egui::Ui, st: &AppState, tree: Tree, path: &Path, out: &
             ui.close();
         }
         let what = match tree {
-            Tree::InputLibrary => "Delete… (discards its ideas)",
+            Tree::InputCollections => "Delete… (its ideas stay)",
             Tree::Projects => "Delete… (discards its projects)",
             Tree::Collections => "Delete… (to the trash)",
         };

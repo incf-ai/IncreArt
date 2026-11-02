@@ -59,8 +59,8 @@ ideas ──► INPUT QUEUE ──review──► INPUT LIBRARY ──new projec
   differs: it makes a project from an idea in the Idea inbox and toggles grid / single in
   Review.) (On the
   input side the folder records keep vs. discard; the star is a flag in
-  `idea.rsn`, so kept ideas can live in user folders — see Input library
-  folders.)
+  `idea.rsn`, so kept ideas can be filed in collections — see Input
+  collections.)
 - The output queue (Review) is worked oldest-first by default (the Idea
   inbox grid shows the newest first); the output queue can also be
   filtered to one run. **newest ›** jumps to its last image once;
@@ -1143,7 +1143,7 @@ import it twice and the original is still there until you clear it out.
 
 Input review uses the same keys as output review, but the verdicts mean
 something different. Good and neutral both move the idea into the input
-library (top level of `input/library/`), differing only in `starred`; bad
+library (`input/library/`, in no collection), differing only in `starred`; bad
 moves it to `input/discarded/`:
 
 | Key | Output queue | Input queue |
@@ -1605,7 +1605,8 @@ costs ~4% speed and frees ~21 GiB: see Measurements so far).
     unreviewed/<idea-id>/             Idea inbox
       idea.rsn
       1-glaze.png                     link → ../../../input_images/<image-id>.png
-    library/<folder>/…/<idea-id>/     input library: folder tree of kept ideas
+    library/<idea-id>/                input library: every kept idea, flat
+    collections/<folder>/…/<idea-id>.idea  input collections: empty files naming ideas
     discarded/<idea-id>/              discarded ideas (recoverable)
     edited/<idea-id>/                 cropped and marked copies (Crop / mark…), hidden
   projects/                           folder tree (see Project folders)
@@ -1622,8 +1623,9 @@ costs ~4% speed and frees ~21 GiB: see Measurements so far).
 ```
 
 The output library is the union of every project's `reviewed/` folders; the
-input library is every idea under `input/library/`. Both are made of links;
-the images themselves are in the stores.
+input library is every idea in `input/library/`, filed into input
+collections by name (see Input collections). Both are made of links; the
+images themselves are in the stores.
 
 Output links are named `<run-id>_r<rev>_s<seed>.png`, e.g.
 `2026.10.19-09.00-0000_r0_s0003.png`: run `2026.10.19-09.00-0000`, revision
@@ -2802,8 +2804,8 @@ real directories under `projects/`, so it looks the same in a file manager.
     it with what it holds (runs, images and links; a folder's folders and
     projects); a new folder picked is made first. The folder it is in, and
     a folder into itself or one under it, are refused (Move disabled); a
-    taken name gets a number. (Input library and collection folders keep
-    **Move to the top level**.)
+    taken name gets a number. (Input and output collections keep **Move to
+    the top level**.)
   - **Discard…** (a project) / **Delete…** (a folder): confirmation
     showing the folders, projects and images inside and how many pending
     seeds won't be generated. Each project moves to `discarded_projects/`
@@ -2838,29 +2840,42 @@ real directories under `projects/`, so it looks the same in a file manager.
 - New projects from ideas land, unless another folder is chosen, in a
   folder of their own name where the last one went, else at the top level.
 
-### Input library folders
+### Input collections
 
-The input library has the same kind of folder tree as projects, stored as
-directories under `input/library/`, with the same tree operations, drag and
-drop and shortcuts (see Project folders). The differences:
+The input library's ideas live flat in `input/library/<idea-id>/`. Input
+collections file them, as the Output library's collections file images: a
+tree of directories under `input/collections/`, nested like folders, with the
+same tree operations, drag and drop and shortcuts (see Project folders). An
+idea can be in any number of collections, or in none. The differences:
 
-- Leaves are ideas. An idea's directory is its ID, so folder names must be
-  unique among sibling folders but idea titles may repeat. Renaming an idea
-  edits its title (free text, may be empty).
-- Kept ideas from the Idea inbox land at the top level; filing them is a
-  separate step.
-- **Copy** duplicates an idea (new ID, same text, variants and tags;
-  new links to the same store images, nothing is copied; `projects` starts empty). Copying a
-  folder copies its subtree.
-- **Delete** on an idea discards it (to `input/discarded/`, undoable with
-  `Ctrl+Z`), with no confirmation. Deleting a folder asks first, then removes
-  the folder and discards every idea inside; `Ctrl+Z` brings those ideas back
-  at the top level.
-- Cards in the grid are drag sources too: dragging a selected card carries
-  the whole selection, so several ideas can be filed at once. With several
-  cards selected, `Delete` and `Ctrl+C`/`Ctrl+X` act on all of them.
-- Selecting a folder limits the card grid to that folder and its subfolders;
-  the other filters (text, starred, has images) apply on top.
+- An idea's entry in a collection is an empty file named `<idea-id>.idea`
+  (not a symlink: archive export would read a link to a folder as a file, and
+  directory links need extra rights on Windows). Membership is by name, so an
+  entry survives the idea being edited or discarded and restored. The scan
+  reports any other file in the tree.
+- Input and output collections are separate trees (`input/collections/` and
+  `collections/`).
+- Kept ideas from the Idea inbox go into the input library; the Save dialog
+  can also put them in a collection (a new one if named), and Save & new
+  project does the same.
+- Putting an inbox idea in a collection saves it to the input library first;
+  a discarded idea can't be put in one (restore it first).
+- **Copy** of an entry adds the idea to the destination collection (the same
+  idea, not a duplicate); copying a collection copies its subtree of
+  entries. **Move** moves entries or collections; an entry already in the
+  destination just leaves the source.
+- **Delete** on an entry takes the idea out of the collection; on a
+  collection, it goes to the trash with its entries. Ideas are never
+  discarded by either: discarding stays a Grid action (`Ctrl+Z` undoes it).
+- An idea can't be renamed from a collection: its title is edited in the
+  Edit idea window.
+- Selecting a collection limits the card grid to the ideas in it and in the
+  collections inside it; the other filters (search, starred, with images,
+  tags) apply on top.
+- A library from before collections (ideas in folders under
+  `input/library/`) is converted once, when opened: each folder becomes a
+  collection holding its ideas' entries, and the ideas move to the top of
+  `input/library/` (their links rewritten).
 
 ## GUI
 
@@ -2946,23 +2961,23 @@ the keys and mouse buttons go through that view's own history instead.
   - **Save to input library** (the card's Save, the side panel's button,
     the menus, `1`/`2`/`S`; the New idea form's **Add & save to input
     library…**, for the draft) always asks first, in a modal. Left, the
-    **Folder**: a filterable tree of the input library's folders, **New
-    folder** under it (named in the folder chosen; an existing one of that
-    name, any case, is used). Right, the **Name** (the idea's title to start
+    **Collection**: a filterable tree of the input collections (none: the
+    library only), **New collection** under it (named in the one chosen; an
+    existing one of that name, any case, is used). Right, the **Name** (the idea's title to start
     with; renames it; several picked ideas keep theirs and the field is
     hidden), and where it's **Saved in**. The name has the focus as it
-    opens, a new folder's name once asked for; neither takes it back from a
-    field clicked since. It starts in the folder the last save went to (this
-    session). **Save** (`Enter`) moves the ideas there unstarred, making the
-    folder; **Save & new project** saves them, then makes a project
+    opens, a new collection's name once asked for; neither takes it back from
+    a field clicked since. It starts in the collection the last save went to
+    (this session). **Save** (`Enter`) moves the ideas to the input library
+    unstarred and puts them in the collection, making it; **Save & new
+    project** saves them, then makes a project
     from them at once, named as the idea (the first valid title of several),
     where the last project from ideas went, in its own folder (the New project dialog asks
-    when that name won't do; the draft is saved in the folder chosen, not
-    the top level); **Cancel** (`Esc`) leaves them in the inbox (the draft in
+    when that name won't do; the draft is put in the collection chosen); **Cancel** (`Esc`) leaves them in the inbox (the draft in
     the form). Discard doesn't ask.
   - **New idea** (`Ctrl+N` from anywhere): title, text, tags, images (drop /
     paste / browse), **Rewrite with PE**. **Add to inbox** (review it later),
-    **Add & save to input library…** (asks the name and folder, as below),
+    **Add & save to input library…** (asks the name and collection, as below),
     **Add & new project…** (keep it and start a project). The draft is kept while
     switching tabs.
   - **Folder**: the file-manager view (see Projects → Folder) rooted at the
@@ -2991,10 +3006,10 @@ the keys and mouse buttons go through that view's own history instead.
   Grid, the left panel is laid out as the Output library's: the search box
   (titles, text and tags; ✕ or `Esc` clears it), the filters (starred /
   with images / edited copies, **used in a project** or not, the order),
-  then **Tags**: the tags of the folder's ideas with their counts as chips
+  then **Tags**: the tags of the collection's ideas with their counts as chips
   (any case counts as one), a click showing only the ideas with it
   (several: all of them), again letting go, **clear** dropping them; then
-  the library folder tree (see Input library folders) and the selection
+  the input collections tree (see Input collections) and the selection
   actions; the grid shows the selected folder's
   ideas, newest first (or most used first); cards show PE rewrite state like the inbox's. Multi-select → new project
   (button or `P`/`Space`); ← → ↑ ↓ and `Home`/`End` select the previous /
@@ -3078,8 +3093,10 @@ the keys and mouse buttons go through that view's own history instead.
 - **Projects → Folder**, and the same as **Input library → Folder**: a
   file-manager view (like Thunar) of the tree's on-disk layout. For projects
   that includes each project's `runs/`, `unreviewed/` and
-  `reviewed/{good,neutral,bad}/` with the image links; in the library an idea
-  is a folder holding its image links.
+  `reviewed/{good,neutral,bad}/` with the image links. The Input library's
+  is its collections (`input/collections/`): an idea's entry shows its title
+  and images, opening it opens the Edit idea window, and Delete takes it out
+  of the collection.
   - Toolbar: back / forward / up (`Alt+←/→`, `Backspace`), a path bar of
     clickable segments that turns into an editable path with `Ctrl+L`, a
     metadata toggle (`Ctrl+H`, shows `project.rsn` / `run.rsn` / `idea.rsn`),
@@ -3122,7 +3139,7 @@ the keys and mouse buttons go through that view's own history instead.
   (chips tagged `<image1>`…, "N / 9"), with **Add image file…** (system file
   picker; imported into the input store), **From library…** (a picker over
   nearly the whole window, browsing like the library screens: a source tree
-  with the input library and its folders, and the output library's
+  with the input library and its collections, and the output library's
   projects, collections and smart folders (by project as a tree, by date,
   by source idea, transparent); a text filter (idea title, text and tags, or
   the run's prompt); Kept / Good / All for outputs; a thumbnail size slider.

@@ -128,7 +128,7 @@ fn create_library_then_ideas_review_new_project_generate() {
 
     // restore the discarded one to the library, then make a project from both
     let lighthouse = h.state.discarded_ideas()[0].idea.id.clone();
-    h.send(Msg::Restore(lighthouse.clone(), IdeaLoc::top_library()));
+    h.send(Msg::Restore(lighthouse.clone(), IdeaLoc::Library));
     h.settle();
     let fox = h.state.library_ideas()[1].idea.id.clone(); // newest first: Lighthouse, Fox
     h.send(Msg::NewProjectFromIdeas(vec![fox.clone(), lighthouse]));
@@ -336,9 +336,9 @@ fn save_to_input_library_asks_the_name_and_folder() {
     h.settle();
     assert!(h.state.save_idea.is_none());
     let e = h.state.idea(&fox).unwrap();
-    assert_eq!((e.idea.title.as_str(), &e.loc), ("Red fox", &IdeaLoc::Library("Animals".into())));
+    assert_eq!((e.idea.title.as_str(), &e.loc), ("Red fox", &IdeaLoc::Library));
     assert!(!e.idea.starred);
-    assert!(h.state.index.library_folders.contains(&std::path::PathBuf::from("Animals")));
+    assert_eq!(h.state.index.idea_collections(&fox), [Path::new("Animals")], "and in the new collection");
 
     // several: they keep their titles; the folder starts where the last went
     let (owl, sea) = (id(&h, "Owl"), id(&h, "Sea"));
@@ -352,7 +352,8 @@ fn save_to_input_library_asks_the_name_and_folder() {
     assert!(h.state.inbox_queue().is_empty() && h.state.inbox_picked.is_empty());
     for (i, t) in [(&owl, "Owl"), (&sea, "Sea")] {
         let e = h.state.idea(i).unwrap();
-        assert_eq!((e.idea.title.as_str(), &e.loc), (t, &IdeaLoc::Library("Animals/night".into())));
+        assert_eq!((e.idea.title.as_str(), &e.loc), (t, &IdeaLoc::Library));
+        assert_eq!(h.state.index.idea_collections(i), [Path::new("Animals/night")]);
     }
 
     // the New idea form's Add & save asks too; the draft waits for it
@@ -371,7 +372,8 @@ fn save_to_input_library_asks_the_name_and_folder() {
     h.settle();
     assert_eq!(h.state.draft, IdeaDraft::default(), "draft cleared");
     let e = h.state.index.ideas.iter().find(|e| e.idea.title == "Luna moth").unwrap();
-    assert_eq!(e.loc, IdeaLoc::Library("Animals/insects".into()));
+    assert_eq!(e.loc, IdeaLoc::Library);
+    assert_eq!(h.state.index.idea_collections(&e.idea.id), [Path::new("Animals/insects")]);
 }
 
 #[test]
@@ -390,7 +392,7 @@ fn save_and_make_a_project_in_one_step() {
     h.settle();
     assert!(h.state.save_idea.is_none() && h.state.from_ideas.is_none(), "no dialog left");
     let e = h.state.idea(&fox).unwrap();
-    assert_eq!((e.idea.title.as_str(), &e.loc), ("Red fox", &IdeaLoc::Library("Animals".into())));
+    assert_eq!((e.idea.title.as_str(), &e.loc), ("Red fox", &IdeaLoc::Library));
     let dirs: Vec<_> = h.state.index.projects.iter().map(|p| p.dir.clone()).collect();
     assert_eq!(dirs, [Path::new("projects/Red fox/Red fox")]);
 
@@ -403,7 +405,8 @@ fn save_and_make_a_project_in_one_step() {
     h.settle();
     assert_eq!(h.state.draft, IdeaDraft::default(), "draft cleared");
     let e = h.state.index.ideas.iter().find(|e| e.idea.title == "Luna moth").unwrap();
-    assert_eq!(e.loc, IdeaLoc::Library("Animals/insects".into()));
+    assert_eq!(e.loc, IdeaLoc::Library);
+    assert_eq!(h.state.index.idea_collections(&e.idea.id), [Path::new("Animals/insects")]);
     assert!(h.state.index.projects.iter().any(|p| p.dir == Path::new("projects/Luna moth/Luna moth")));
 
     // a name that won't do for a project: the New project dialog asks
@@ -2895,47 +2898,66 @@ fn input_library_and_inbox_folder_views_and_selection_keys() {
     let shown =
         |h: &Harness| h.state.folder_view.shown().iter().map(|e| (e.name.clone(), e.info.clone())).collect::<Vec<_>>();
 
-    // Input library → Folder: ideas are folders, titled in their info
+    // Input library → Folder: its collections, ideas in none aren't there
     h.send(Msg::Tab(Tab::InputLibrary));
     h.send(Msg::LibTab(LibTab::Folder));
     h.settle();
     assert_eq!(h.state.folder_view.place, FvPlace::InputLibrary);
-    let ideas = shown(&h);
-    assert_eq!(ideas.iter().map(|(_, info)| info.as_str()).collect::<Vec<_>>(), ["Fox", "Fern"]);
-    assert!(h.state.folder_view.shown().iter().all(|e| matches!(e.kind, EntryKind::Idea(_))));
+    assert_eq!(h.state.folder_view.path, PathBuf::from("input/collections"));
+    assert!(shown(&h).is_empty());
+    let id =
+        |h: &Harness, title: &str| h.state.index.ideas.iter().find(|e| e.idea.title == title).unwrap().idea.id.clone();
+    let (fox, fern) = (id(&h, "Fox"), id(&h, "Fern"));
 
-    // a folder; drag (move) the Fox idea into it
-    h.send(Msg::FvNewFolder);
+    // two collections; an idea entry copied from one to the other
+    for name in ["animals", "red things"] {
+        h.send(Msg::FvGo(PathBuf::from("input/collections")));
+        h.settle();
+        h.send(Msg::FvNewFolder);
+        h.settle();
+        h.send(Msg::EditRename(name.into()));
+        h.send(Msg::CommitRename);
+        h.settle();
+    }
+    h.send(Msg::CollectIdeas("animals".into(), vec![fox.clone(), fern.clone()]));
     h.settle();
-    h.send(Msg::EditRename("animals".into()));
-    h.send(Msg::CommitRename);
-    h.settle();
-    let fox = ideas.iter().find(|(_, i)| i == "Fox").unwrap().0.clone();
+    let entry = format!("{fox}.idea");
     h.send(Msg::DropInto {
-        paths: vec![PathBuf::from("input/library").join(&fox)],
-        dest: PathBuf::from("input/library/animals"),
-        copy: false,
+        paths: vec![PathBuf::from("input/collections/animals").join(&entry)],
+        dest: PathBuf::from("input/collections/red things"),
+        copy: true,
     });
     h.settle();
-    let loc =
-        |h: &Harness, title: &str| h.state.index.ideas.iter().find(|e| e.idea.title == title).unwrap().loc.clone();
-    assert_eq!(loc(&h, "Fox"), IdeaLoc::Library(PathBuf::from("animals")));
-    // the tree's folders drive the view on this tab
+    assert_eq!(h.state.index.idea_collections(&fox), [Path::new("animals"), Path::new("red things")]);
+    // the tree's collections drive the view on this tab; ideas are
+    // titled in their info
     h.send(Msg::LibFolder(Some(PathBuf::from("animals"))));
     h.settle();
-    assert_eq!(h.state.folder_view.path, PathBuf::from("input/library/animals"));
-    assert_eq!(shown(&h).len(), 1);
-    // ideas can't be renamed here; discarding one asks first
-    h.send(Msg::FvSelectAll);
+    assert_eq!(h.state.folder_view.path, PathBuf::from("input/collections/animals"));
+    let mut infos: Vec<String> = shown(&h).into_iter().map(|(_, i)| i).collect();
+    infos.sort();
+    assert_eq!(infos, ["Fern", "Fox"]);
+    assert!(h.state.folder_view.shown().iter().all(|e| matches!(e.kind, EntryKind::Idea(_))));
+    // opening one opens the idea, not a folder
+    h.send(Msg::FvOpen(entry.clone()));
+    h.settle();
+    assert_eq!(h.state.idea_edit.as_ref().map(|e| &e.id), Some(&fox));
+    assert_eq!(h.state.folder_view.path, PathBuf::from("input/collections/animals"));
+    h.send(Msg::CloseIdea);
+    h.settle();
+    // ideas can't be renamed here; removing one asks first, and the idea stays
+    h.send(Msg::FvSelectSet([entry.clone()].into()));
     h.send(Msg::FvRename);
     assert!(h.state.renaming.is_none());
     h.send(Msg::FvDelete);
     h.send(Msg::ConfirmYes);
     h.settle();
-    assert_eq!(loc(&h, "Fox"), IdeaLoc::Discarded);
+    assert_eq!(h.state.idea(&fox).unwrap().loc, IdeaLoc::Library);
+    assert_eq!(h.state.index.idea_collections(&fox), [Path::new("red things")]);
+    assert_eq!(shown(&h).len(), 1);
 
     // keys: type-ahead, arrows, rubber band (a set)
-    h.send(Msg::FvGo(PathBuf::from("input/library")));
+    h.send(Msg::FvGo(PathBuf::from("input/collections")));
     h.settle();
     let names: Vec<String> = h.state.folder_view.shown().iter().map(|e| e.name.clone()).collect();
     assert_eq!(names[0], "animals", "folders first");
@@ -2950,8 +2972,8 @@ fn input_library_and_inbox_folder_views_and_selection_keys() {
     h.send(Msg::FvTypeAhead("n".into()));
     assert_eq!(h.state.folder_view.selected, ["animals".to_string()].into());
     h.state.now = 102.0; // after a pause, typing starts over
-    h.send(Msg::FvTypeAhead("f".into()));
-    assert_eq!(h.state.folder_view.selected, [names[1].clone()].into(), "an idea by its title (Fern)");
+    h.send(Msg::FvTypeAhead("r".into()));
+    assert_eq!(h.state.folder_view.selected, [names[1].clone()].into());
     h.send(Msg::FvSelectSet(names.iter().cloned().collect()));
     assert_eq!(h.state.folder_view.selected.len(), names.len());
 
@@ -2961,7 +2983,12 @@ fn input_library_and_inbox_folder_views_and_selection_keys() {
     h.settle();
     assert_eq!(h.state.folder_view.place, FvPlace::Inbox);
     let top: Vec<String> = shown(&h).into_iter().map(|(n, _)| n).collect();
-    assert!(top.contains(&"unreviewed".to_string()) && !top.contains(&"library".to_string()), "{top:?}");
+    assert!(
+        top.contains(&"unreviewed".to_string())
+            && !top.contains(&"library".to_string())
+            && !top.contains(&"collections".to_string()),
+        "{top:?}"
+    );
     h.send(Msg::FvOpen("unreviewed".into()));
     h.settle();
     assert_eq!(shown(&h).iter().map(|(_, i)| i.as_str()).collect::<Vec<_>>(), ["Lighthouse"]);
@@ -2981,7 +3008,7 @@ fn input_library_and_inbox_folder_views_and_selection_keys() {
     assert!(h.errors().iter().any(|e| e.contains("reserved")), "{:?}", h.errors());
     // each view kept its place
     h.send(Msg::Tab(Tab::InputLibrary));
-    assert_eq!(h.state.folder_view.path, PathBuf::from("input/library"));
+    assert_eq!(h.state.folder_view.path, PathBuf::from("input/collections"));
 }
 
 #[test]

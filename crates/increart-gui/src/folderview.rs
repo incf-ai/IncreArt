@@ -458,7 +458,8 @@ fn entry_menu(ui: &mut egui::Ui, st: &AppState, e: &FvEntry, out: &mut Vec<Msg>)
         ui.separator();
         let label = match (fv.place, &e.kind) {
             (FvPlace::Collections, EntryKind::Image(_)) => "Remove from collection…   Del",
-            (FvPlace::InputLibrary, _) => "Discard…   Del",
+            (FvPlace::InputLibrary, EntryKind::Idea(_)) => "Remove from collection…   Del",
+            (FvPlace::InputLibrary, _) => "Remove…   Del",
             _ => "Delete…   Del",
         };
         item(ui, out, ic(ph::TRASH, label), Msg::FvDelete);
@@ -495,7 +496,11 @@ fn background_menu(ui: &mut egui::Ui, st: &AppState, out: &mut Vec<Msg>) {
             ui.close();
         }
     } else if !in_project && !in_idea {
-        let label = if fv.place == FvPlace::Collections { "New collection" } else { "New folder" };
+        let label = if matches!(fv.place, FvPlace::Collections | FvPlace::InputLibrary) {
+            "New collection"
+        } else {
+            "New folder"
+        };
         if ui.button(ic(ph::FOLDER_PLUS, label)).clicked() {
             out.push(Msg::FvNewFolder);
             ui.close();
@@ -571,7 +576,7 @@ pub fn view(ui: &mut egui::Ui, st: &AppState, tex: &mut Textures, out: &mut Vec<
             ui.weak(match fv.place {
                 _ if is_smart(&fv.path) => "No images here.",
                 FvPlace::Collections => "Empty. Right-click for New collection; paste or drag images here.",
-                FvPlace::InputLibrary => "Empty folder. Right-click for New folder; drag ideas here.",
+                FvPlace::InputLibrary => "Empty. Right-click for New collection; paste or drag ideas here.",
                 FvPlace::Inbox => "Nothing here.",
                 FvPlace::Projects => "Empty folder. Right-click for New folder / New project.",
             });

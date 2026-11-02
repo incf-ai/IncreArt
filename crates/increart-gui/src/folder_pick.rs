@@ -21,6 +21,8 @@ pub struct Picker<'a> {
     pub new_folder: Option<&'a str>,
     /// New folder's name to start with.
     pub new_name: &'a str,
+    /// What its folders are called: "folder", "collection".
+    pub noun: &'static str,
 }
 
 /// What changed this frame.
@@ -39,12 +41,14 @@ pub struct Picked {
 pub fn show(ui: &mut egui::Ui, p: &Picker, height: f32) -> Picked {
     let mut out = Picked::default();
     let asked = egui::Id::unique(("folder_pick_new_asked", p.id));
-    ui.label(RichText::new("Folder").strong());
+    let mut heading = p.noun.to_string();
+    heading[..1].make_ascii_uppercase();
+    ui.label(RichText::new(heading).strong());
     let mut filter = p.filter.to_string();
     ui.horizontal(|ui| {
         ui.label(ph::MAGNIFYING_GLASS);
         let r =
-            ui.add(egui::TextEdit::singleline(&mut filter).hint_text("filter folders").desired_width(f32::INFINITY));
+            ui.add(egui::TextEdit::singleline(&mut filter).hint_text(format!("filter {}s", p.noun)).desired_width(f32::INFINITY));
         out.field_enter |= r.lost_focus();
         ui.ctx().data_mut(|d| d.insert_temp(egui::Id::unique(("tour_filter", p.id)), r.rect));
     });
@@ -104,17 +108,23 @@ pub fn show(ui: &mut egui::Ui, p: &Picker, height: f32) -> Picked {
     };
     match p.new_folder {
         None => {
-            if ui.button(ic(ph::FOLDER_PLUS, "New folder")).on_hover_text(format!("in “{here}”")).clicked() {
+            if ui
+                .button(ic(ph::FOLDER_PLUS, &format!("New {}", p.noun)))
+                .on_hover_text(format!("in “{here}”"))
+                .clicked()
+            {
                 ui.ctx().data_mut(|m| m.insert_temp(asked, ()));
                 out.new_folder = Some(Some(p.new_name.to_string()));
             }
         }
         Some(new) => {
-            ui.weak(format!("New folder in “{here}”"));
+            ui.weak(format!("New {} in “{here}”", p.noun));
             ui.horizontal(|ui| {
                 ui.label(ph::FOLDER_PLUS);
                 let mut name = new.to_string();
-                let r = ui.add(egui::TextEdit::singleline(&mut name).hint_text("folder name").desired_width(220.0));
+                let r = ui.add(
+                    egui::TextEdit::singleline(&mut name).hint_text(format!("{} name", p.noun)).desired_width(220.0),
+                );
                 if ui.ctx().data_mut(|m| m.remove_temp::<()>(asked)).is_some() {
                     r.request_focus();
                 }

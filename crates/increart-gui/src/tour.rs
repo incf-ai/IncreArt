@@ -913,7 +913,7 @@ impl Tour {
             }
             "74d-snooze-dialog" => vec![],
             "75-new-project-from-ideas-in-folder" => {
-                let idea = st.index.ideas.iter().find(|e| matches!(e.loc, increart_core::IdeaLoc::Library(_)));
+                let idea = st.index.ideas.iter().find(|e| matches!(e.loc, increart_core::IdeaLoc::Library));
                 let mut v = vec![Msg::ContinueWithoutServers, Msg::Settings(false), Msg::Tab(Tab::InputLibrary)];
                 if let Some(e) = idea {
                     v.push(Msg::NewProjectFromIdeas(vec![e.idea.id.clone()]));
@@ -1579,7 +1579,7 @@ impl Tour {
                 Msg::Tab(Tab::InputLibrary),
                 Msg::LibTab(increart_gui_core::LibTab::Folder),
                 Msg::FvMode(increart_gui_core::FvMode::Icons),
-                Msg::FvGo(PathBuf::from("input/library")),
+                Msg::FvGo(PathBuf::from("input/collections/places")),
             ],
             "43-idea-inbox-folder" => vec![
                 Msg::Tab(Tab::IdeaInbox),
@@ -2783,7 +2783,7 @@ fn tour_input(st: &AppState) -> Option<increart_core::ImageRef> {
         .index
         .ideas
         .iter()
-        .filter(|e| matches!(e.loc, increart_core::IdeaLoc::Library(_)) && !e.idea.images.is_empty())
+        .filter(|e| matches!(e.loc, increart_core::IdeaLoc::Library) && !e.idea.images.is_empty())
         .collect();
     ideas.sort_by_key(|e| e.idea.title.is_empty());
     ideas.first().map(|e| increart_core::ImageRef::input(e.idea.images[0].clone()))

@@ -1043,7 +1043,7 @@ pub trait Counts {
 
 impl Counts for AppState {
     fn library_ideas_all(&self) -> usize {
-        self.index.ideas.iter().filter(|e| matches!(e.loc, increart_core::IdeaLoc::Library(_))).count()
+        self.index.ideas.iter().filter(|e| matches!(e.loc, increart_core::IdeaLoc::Library)).count()
     }
 }
 

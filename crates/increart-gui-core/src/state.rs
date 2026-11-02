@@ -798,7 +798,7 @@ impl FvPlace {
         match self {
             FvPlace::Projects => "projects",
             FvPlace::Collections => "collections",
-            FvPlace::InputLibrary => "input/library",
+            FvPlace::InputLibrary => "input/collections",
             FvPlace::Inbox => "input",
         }
     }
@@ -808,7 +808,7 @@ impl FvPlace {
         match self {
             FvPlace::Projects => Some(Tree::Projects),
             FvPlace::Collections => Some(Tree::Collections),
-            FvPlace::InputLibrary => Some(Tree::InputLibrary),
+            FvPlace::InputLibrary => Some(Tree::InputCollections),
             FvPlace::Inbox => None,
         }
     }
@@ -828,7 +828,8 @@ pub enum EntryKind {
     File,
     /// A folder of the Output library's virtual, read-only `smart/` tree.
     Smart,
-    /// An idea's folder (`idea.rsn` and links to its images).
+    /// An idea's folder (`idea.rsn` and links to its images), or an input
+    /// collection's entry naming it (`<idea-id>.idea`).
     Idea(Id),
 }
 
@@ -1909,10 +1910,11 @@ pub struct SaveIdeaDialog {
     pub ideas: Vec<Id>,
     /// Starts as the idea's title.
     pub name: String,
-    /// Relative to `input/library/` (empty: the top level).
+    /// The input collection it's also put in, relative to
+    /// `input/collections/` (empty: none).
     pub folder: PathBuf,
-    /// A new folder to make in `folder` and save into (an existing one of
-    /// that name, any case, is used).
+    /// A new collection to make in `folder` and put it in (an existing one
+    /// of that name, any case, is used).
     pub new_folder: Option<String>,
     /// The folder tree's filter.
     pub filter: String,
@@ -1924,7 +1926,7 @@ impl SaveIdeaDialog {
         let folder = state
             .save_idea_last
             .clone()
-            .filter(|f| f.as_os_str().is_empty() || state.index.library_folders.contains(f))
+            .filter(|f| f.as_os_str().is_empty() || state.index.input_collection_folders.contains(f))
             .unwrap_or_default();
         SaveIdeaDialog { ideas, name, folder, new_folder: None, filter: String::new() }
     }
@@ -4086,14 +4088,19 @@ impl AppState {
                     .collect()
             }
             RefSource::Inputs(_) | RefSource::Inbox | RefSource::Edited => {
+                let sel = match &p.source {
+                    RefSource::Inputs(Some(sel)) => Some(sel.as_path()),
+                    _ => None,
+                };
+                let in_sel = sel.map(|s| self.index.ideas_in_collection(Some(s))).unwrap_or_default();
                 let mut ideas: Vec<&IdeaEntry> = self
                     .index
                     .ideas
                     .iter()
                     .filter(|e| match (&e.loc, &p.source) {
                         (IdeaLoc::Unreviewed, RefSource::Inbox) | (IdeaLoc::Edited, RefSource::Edited) => true,
-                        (IdeaLoc::Library(_), RefSource::Inputs(None)) => true,
-                        (IdeaLoc::Library(f), RefSource::Inputs(Some(sel))) => f.starts_with(sel),
+                        (IdeaLoc::Library, RefSource::Inputs(None)) => true,
+                        (IdeaLoc::Library, RefSource::Inputs(Some(_))) => in_sel.contains(&e.idea.id),
                         _ => false,
                     })
                     .filter(|e| {
@@ -4618,12 +4625,13 @@ impl AppState {
     /// The input library Grid's ideas before its filters: the folder's (all
     /// of the library's with none), and the edited copies when shown.
     pub fn lib_source_ideas(&self) -> Vec<&IdeaEntry> {
+        let in_sel = self.lib_folder.as_deref().map(|s| self.index.ideas_in_collection(Some(s))).unwrap_or_default();
         self.index
             .ideas
             .iter()
             .filter(|e| match (&e.loc, &self.lib_folder) {
-                (IdeaLoc::Library(_), None) => true,
-                (IdeaLoc::Library(f), Some(sel)) => f.starts_with(sel),
+                (IdeaLoc::Library, None) => true,
+                (IdeaLoc::Library, Some(_)) => in_sel.contains(&e.idea.id),
                 (IdeaLoc::Edited, None) => self.lib_filter.show_hidden,
                 _ => false,
             })
@@ -5195,14 +5203,9 @@ impl AppState {
                 }
                 s
             }
-            Tree::InputLibrary => {
-                let n = self
-                    .index
-                    .ideas
-                    .iter()
-                    .filter(|e| matches!(&e.loc, IdeaLoc::Library(f) if f.starts_with(path)))
-                    .count();
-                format!("{n} idea(s) inside will be discarded (restorable)")
+            Tree::InputCollections => {
+                let n = self.index.ideas_in_collection(Some(path)).len();
+                format!("{n} idea(s); the ideas stay in the input library")
             }
             Tree::Collections => {
                 let n = self.index.collection_links.iter().filter(|l| l.folder.starts_with(path)).count();

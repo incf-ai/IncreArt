@@ -28,6 +28,7 @@ const LAYOUT: &[&str] = &[
     IMPORTED,
     UNREVIEWED_IDEAS,
     INPUT_LIBRARY,
+    INPUT_COLLECTIONS,
     DISCARDED_IDEAS,
     EDITED_IDEAS,
     PROJECTS,
@@ -56,13 +57,14 @@ pub enum Disposal {
     Directory(PathBuf),
 }
 
-/// The three folder trees (DESIGN.md, Project folders, Input library folders,
+/// The three folder trees (DESIGN.md, Project folders, Input collections,
 /// collections). Paths into a tree are relative to its base; empty is the top
 /// level.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Tree {
     Projects,
-    InputLibrary,
+    /// The input library's collections: folders of idea entries.
+    InputCollections,
     Collections,
 }
 
@@ -70,7 +72,7 @@ impl Tree {
     pub fn base(self) -> &'static str {
         match self {
             Tree::Projects => PROJECTS,
-            Tree::InputLibrary => INPUT_LIBRARY,
+            Tree::InputCollections => INPUT_COLLECTIONS,
             Tree::Collections => COLLECTIONS,
         }
     }
@@ -93,6 +95,9 @@ pub struct NewIdea {
     pub images: Vec<Id>,
     pub starred: bool,
     pub loc: IdeaLoc,
+    /// In the input library, the input collection it goes in (relative to
+    /// `input/collections/`, its missing folders made; empty: none).
+    pub collection: PathBuf,
 }
 
 impl NewIdea {
@@ -105,6 +110,7 @@ impl NewIdea {
             images: vec![],
             starred: false,
             loc: IdeaLoc::Unreviewed,
+            collection: PathBuf::new(),
         }
     }
 }
@@ -240,6 +246,7 @@ impl Library {
             disposal: Disposal::SystemTrash,
             problems: Vec::new(),
         };
+        lib.upgrade_input_folders()?;
         let ix = lib.scan()?;
         if lib.meta.metadata < 2 {
             lib.record_deleted_outputs(&ix)?;
@@ -783,6 +790,11 @@ impl Library {
         if !base.is_dir() {
             return Err(Error::NotFound(format!("folder {}", self.rel(&base).display())));
         }
+        let collection =
+            (new.loc == IdeaLoc::Library && !new.collection.as_os_str().is_empty()).then_some(new.collection);
+        if let Some(c) = &collection {
+            self.make_input_collection(c)?;
+        }
         let now = self.now();
         let id = self.ids.allocate(IdKind::Idea, now);
         let idea = Idea {
@@ -800,6 +812,9 @@ impl Library {
         let dir = base.join(id.as_str());
         fs::create_dir(&dir).at(&dir)?;
         self.write_idea_dir(&dir, &idea)?;
+        if let Some(c) = &collection {
+            self.link_idea(&id, c)?;
+        }
         Ok(id)
     }
 
@@ -847,10 +862,14 @@ impl Library {
             }
         }
         let lib = self.root.join(INPUT_LIBRARY);
+        let dir = lib.join(id.as_str());
+        if dir.join(IDEA_FILE).is_file() {
+            return Ok((IdeaLoc::Library, dir));
+        }
+        // still in a folder (a library from before collections)
         for p in fsutil::walk(&lib)? {
             if p.file_name().is_some_and(|n| n == id.as_str()) && p.join(IDEA_FILE).is_file() {
-                let folder = p.parent_dir()?.relative_to(&lib)?.to_path_buf();
-                return Ok((IdeaLoc::Library(folder), p));
+                return Ok((IdeaLoc::Library, p));
             }
         }
         Err(Error::NotFound(format!("idea {id}")))
@@ -885,32 +904,32 @@ impl Library {
         if !target.is_dir() {
             return Err(Error::NotFound(format!("folder {}", to.dir().display())));
         }
-        if &loc == to {
+        let dest = target.join(id.as_str());
+        if &loc == to && dir == dest {
             return Ok(self.rel(&dir));
         }
-        let dest = target.join(id.as_str());
         link::move_with_links(&self.root, &dir, &dest)?;
         Ok(self.rel(&dest))
     }
 
     /// Input review: good keeps and stars, neutral keeps, bad discards. Kept
-    /// ideas land at the top of the input library.
+    /// ideas go to the input library (in no collection).
     pub fn review_idea(&self, id: &Id, verdict: Verdict) -> Result<PathBuf> {
         let to = match verdict {
             Verdict::Bad => IdeaLoc::Discarded,
             Verdict::Good | Verdict::Neutral => {
                 self.update_idea(id, |i| i.starred = verdict == Verdict::Good)?;
-                IdeaLoc::top_library()
+                IdeaLoc::Library
             }
         };
         self.move_idea(id, &to)
     }
 
     /// Saves an inbox idea to the input library: retitled (when `title` is
-    /// given), unstarred, into `folder` (relative to `input/library/`; its
-    /// missing folders are made).
-    pub fn save_to_library(&self, id: &Id, title: Option<&str>, folder: &Path) -> Result<PathBuf> {
-        self.make_library_folder(folder)?;
+    /// given), unstarred, and into `collection` (relative to
+    /// `input/collections/`, its missing folders made; empty: none).
+    pub fn save_to_library(&self, id: &Id, title: Option<&str>, collection: &Path) -> Result<PathBuf> {
+        self.make_input_collection(collection)?;
         let title = title.map(str::trim);
         if let Some(t) = title
             && t.is_empty()
@@ -923,13 +942,17 @@ impl Library {
                 i.title = t.to_string();
             }
         })?;
-        self.move_idea(id, &IdeaLoc::Library(folder.to_path_buf()))
+        let at = self.move_idea(id, &IdeaLoc::Library)?;
+        if !collection.as_os_str().is_empty() {
+            self.link_idea(id, collection)?;
+        }
+        Ok(at)
     }
 
-    /// Makes `folder` of the input library (relative to `input/library/`)
-    /// and its missing parents, checking each name.
-    pub fn make_library_folder(&self, folder: &Path) -> Result<()> {
-        let mut dir = self.root.join(INPUT_LIBRARY);
+    /// Makes `folder` of the input collections (relative to
+    /// `input/collections/`) and its missing parents, checking each name.
+    pub fn make_input_collection(&self, folder: &Path) -> Result<()> {
+        let mut dir = self.root.join(INPUT_COLLECTIONS);
         for c in folder.components() {
             validate_name(&c.as_os_str().to_string_lossy())?;
             dir.push(c);
@@ -961,6 +984,7 @@ impl Library {
             images: src.images.clone(),
             starred: src.starred,
             loc: to.clone(),
+            collection: PathBuf::new(),
         })?;
         self.update_idea(&new, |i| i.variants = src.variants)?;
         Ok(new)
@@ -987,6 +1011,7 @@ impl Library {
             images: vec![imported.image],
             starred: false,
             loc,
+            collection: PathBuf::new(),
         })
     }
 
@@ -1007,6 +1032,7 @@ impl Library {
             images: vec![imported.image.clone()],
             starred: false,
             loc: IdeaLoc::Edited,
+            collection: PathBuf::new(),
         })?;
         Ok(imported)
     }
@@ -1022,6 +1048,7 @@ impl Library {
             images: vec![imported.image],
             starred: false,
             loc,
+            collection: PathBuf::new(),
         })
     }
 }
@@ -1114,8 +1141,7 @@ impl Library {
         let meta = fs::symlink_metadata(abs).map_err(|_| Error::NotFound(self.rel(abs).display().to_string()))?;
         Ok(match tree {
             Tree::Projects if abs.join(PROJECT_FILE).is_file() => Node::Leaf,
-            Tree::InputLibrary if abs.join(IDEA_FILE).is_file() => Node::Leaf,
-            Tree::Collections if !meta.is_dir() => Node::Leaf,
+            Tree::InputCollections | Tree::Collections if !meta.is_dir() => Node::Leaf,
             _ if meta.is_dir() => Node::Folder,
             _ => return Err(Error::Refused(format!("{} is not a folder", self.rel(abs).display()))),
         })
@@ -1160,7 +1186,7 @@ impl Library {
         if path.as_os_str().is_empty() {
             return Err(Error::Refused("can't rename the top level".into()));
         }
-        if tree == Tree::InputLibrary && self.node(tree, &abs)? == Node::Leaf {
+        if tree == Tree::InputCollections && self.node(tree, &abs)? == Node::Leaf {
             return Err(Error::Refused("an idea is renamed by editing its title".into()));
         }
         self.node(tree, &abs)?;
@@ -1191,6 +1217,11 @@ impl Library {
             return Ok(path.to_path_buf());
         }
         reserved(tree, new_parent, &path.name()?.to_string_lossy())?;
+        // an idea's entry is its id: one there already, this one just goes
+        if tree == Tree::InputCollections && fsutil::exists(&dest_dir.join(path.name()?)) && !abs.is_dir() {
+            fs::remove_file(&abs).at(&abs)?;
+            return Ok(new_parent.join(path.name()?));
+        }
         let name = free_name_in(&dest_dir, &path.name()?.to_string_lossy())?;
         link::move_with_links(&self.root, &abs, &dest_dir.join(&name))?;
         Ok(new_parent.join(name))
@@ -1198,7 +1229,8 @@ impl Library {
 
     /// Copies a node into a folder (copy + paste). Projects copy their setup
     /// (new project and run IDs, runs as unqueued templates) but no images;
-    /// ideas get a new ID and new links; collection links are re-linked.
+    /// an idea's entry puts the same idea in that collection too; collection
+    /// links are re-linked.
     /// Folders copy their subtree the same way.
     pub fn copy_node(&mut self, tree: Tree, path: &Path, new_parent: &Path) -> Result<PathBuf> {
         let abs = self.tree_path(tree, path)?;
@@ -1212,10 +1244,11 @@ impl Library {
         reserved(tree, new_parent, &path.name()?.to_string_lossy())?;
         let dest_dir = self.folder(tree, new_parent)?;
         match (tree, kind) {
-            (Tree::InputLibrary, Node::Leaf) => {
-                let id: Id = path.name()?.to_string_lossy().parse()?;
-                let new = self.copy_idea(&id, &IdeaLoc::Library(new_parent.to_path_buf()))?;
-                Ok(new_parent.join(new.as_str()))
+            (Tree::InputCollections, Node::Leaf) => {
+                let id =
+                    idea_link_id(&abs).ok_or_else(|| Error::Refused(format!("{} is not an idea", path.display())))?;
+                self.link_idea(&id, new_parent)?;
+                Ok(new_parent.join(path.name()?))
             }
             (Tree::Projects, Node::Leaf) => {
                 let name = free_name_in(&dest_dir, &path.name()?.to_string_lossy())?;
@@ -1235,7 +1268,7 @@ impl Library {
                 fs::create_dir(dest_dir.join(&name)).at(dest_dir.join(&name))?;
                 for child in fs::read_dir(&abs).at(&abs)? {
                     let child = child.at(&abs)?.path();
-                    if fsutil::hidden(&child) || (tree != Tree::Collections && !child.is_dir()) {
+                    if fsutil::hidden(&child) || (tree == Tree::Projects && !child.is_dir()) {
                         continue;
                     }
                     let child_rel = path.join(child.name()?);
@@ -1294,10 +1327,9 @@ impl Library {
     }
 
     /// Deletes a node. Projects and collection folders go to the trash (only
-    /// links: store images stay until Clean up); a collection link is
-    /// removed. In the input library an idea is discarded, and a folder is
-    /// removed after discarding every idea inside. Returns the discarded
-    /// ideas (for undo).
+    /// links: store images stay until Clean up, ideas in the input library);
+    /// a collection link or idea entry is removed. Returns the discarded
+    /// ideas (for undo; none now).
     pub fn delete_node(&self, tree: Tree, path: &Path) -> Result<Vec<Id>> {
         let abs = self.tree_path(tree, path)?;
         let kind = self.node(tree, &abs)?;
@@ -1305,26 +1337,7 @@ impl Library {
             return Err(Error::Refused("can't delete the top level".into()));
         }
         match (tree, kind) {
-            (Tree::InputLibrary, _) => {
-                let mut ideas = Vec::new();
-                let mut dirs = vec![abs.clone()];
-                dirs.extend(fsutil::walk(&abs)?);
-                for d in dirs {
-                    if d.join(IDEA_FILE).is_file()
-                        && let Some(Ok(id)) = d.file_name().map(|n| n.to_string_lossy().parse::<Id>())
-                    {
-                        ideas.push(id);
-                    }
-                }
-                for id in &ideas {
-                    self.move_idea(id, &IdeaLoc::Discarded)?;
-                }
-                if kind == Node::Folder {
-                    self.dispose(&abs)?;
-                }
-                Ok(ideas)
-            }
-            (Tree::Collections, Node::Leaf) => {
+            (Tree::Collections | Tree::InputCollections, Node::Leaf) => {
                 fs::remove_file(&abs).at(&abs)?;
                 Ok(vec![])
             }
@@ -1895,6 +1908,103 @@ impl Library {
     /// Returns the link path.
     pub fn add_to_collection(&self, folder: &Path, image: &Id) -> Result<PathBuf> {
         self.collect(folder, image).map(|(at, _)| at)
+    }
+
+    /// Puts an idea in an input collection (its `<idea-id>.idea` there;
+    /// unchanged if it is). Returns whether it is new.
+    pub fn link_idea(&self, id: &Id, folder: &Path) -> Result<bool> {
+        let dir = self.folder(Tree::InputCollections, folder)?;
+        let at = dir.join(format!("{id}.{IDEA_LINK_EXT}"));
+        if fsutil::exists(&at) {
+            return Ok(false);
+        }
+        fs::write(&at, b"").at(&at)?;
+        Ok(true)
+    }
+
+    /// Takes an idea out of an input collection (the idea stays). Returns
+    /// whether it was in it.
+    pub fn unlink_idea(&self, id: &Id, folder: &Path) -> Result<bool> {
+        let at = self.tree_path(Tree::InputCollections, folder)?.join(format!("{id}.{IDEA_LINK_EXT}"));
+        if !fsutil::exists(&at) {
+            return Ok(false);
+        }
+        fs::remove_file(&at).at(&at)?;
+        Ok(true)
+    }
+
+    /// Puts ideas in an input collection; one in the Idea inbox is saved
+    /// to the input library first (as Save to input library, its title
+    /// kept). A discarded idea is refused. Returns the ideas that went in
+    /// (not there yet) and the ones saved from the inbox.
+    pub fn collect_ideas(&self, folder: &Path, ids: &[Id]) -> Result<(Vec<Id>, Vec<Id>)> {
+        self.folder(Tree::InputCollections, folder)?;
+        let (mut added, mut filed) = (vec![], vec![]);
+        for id in ids {
+            match self.find_idea(id)?.0 {
+                IdeaLoc::Discarded => return Err(Error::Refused(format!("idea {id} is discarded"))),
+                IdeaLoc::Unreviewed => {
+                    self.save_to_library(id, None, Path::new(""))?;
+                    filed.push(id.clone());
+                }
+                IdeaLoc::Library | IdeaLoc::Edited => {}
+            }
+            if self.link_idea(id, folder)? {
+                added.push(id.clone());
+            }
+        }
+        Ok((added, filed))
+    }
+
+    /// Upgrades a library from before input collections, once: each idea
+    /// filed in a folder of `input/library/` moves to its top and goes in
+    /// the input collection of that path (made, with the folders that held
+    /// none); the emptied folders go. Returns how many ideas moved.
+    fn upgrade_input_folders(&mut self) -> Result<usize> {
+        fn find(dir: &Path, rel: &Path, folders: &mut Vec<PathBuf>, ideas: &mut Vec<(PathBuf, PathBuf)>) -> Result<()> {
+            for d in fsutil::subdirs(dir)? {
+                if d.join(IDEA_FILE).is_file() {
+                    if !rel.as_os_str().is_empty() {
+                        ideas.push((rel.to_path_buf(), d));
+                    }
+                } else {
+                    let sub = rel.join(d.name()?);
+                    folders.push(sub.clone());
+                    find(&d, &sub, folders, ideas)?;
+                }
+            }
+            Ok(())
+        }
+        let lib = self.root.join(INPUT_LIBRARY);
+        let (mut folders, mut ideas) = (vec![], vec![]);
+        find(&lib, Path::new(""), &mut folders, &mut ideas)?;
+        for f in &folders {
+            let dir = self.root.join(INPUT_COLLECTIONS).join(f);
+            fs::create_dir_all(&dir).at(&dir)?;
+        }
+        let mut moved = 0;
+        for (folder, dir) in &ideas {
+            let Some(Ok(id)) = dir.file_name().map(|n| n.to_string_lossy().parse::<Id>()) else {
+                self.problems.push(format!("{}: not named by its idea's id, left in its folder", dir.display()));
+                continue;
+            };
+            let dest = lib.join(id.as_str());
+            if fsutil::exists(&dest) {
+                self.problems.push(format!("{}: idea {id} is in the input library twice", dir.display()));
+                continue;
+            }
+            self.link_idea(&id, folder)?;
+            link::move_with_links(&self.root, dir, &dest)?;
+            moved += 1;
+        }
+        // deepest first, so a folder is empty once its subfolders are gone
+        for f in folders.iter().rev() {
+            let dir = lib.join(f);
+            if fs::remove_dir(&dir).is_err() {
+                self.problems.push(format!("{}: left as it is, not empty", dir.display()));
+            }
+        }
+        Ok(moved)
     }
 
     /// [`Self::add_to_collection`], and whether the link is new (false: the

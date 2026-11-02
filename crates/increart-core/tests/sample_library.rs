@@ -35,10 +35,11 @@ fn opens_and_scans() {
     let count = |pred: fn(&IdeaLoc) -> bool| ix.ideas.iter().filter(|e| pred(&e.loc)).count();
     assert_eq!(count(|l| *l == IdeaLoc::Unreviewed), 5);
     assert_eq!(count(|l| *l == IdeaLoc::Discarded), 1);
-    assert_eq!(count(|l| matches!(l, IdeaLoc::Library(_))), 6);
+    assert_eq!(count(|l| *l == IdeaLoc::Library), 6);
     let papercut = ix.ideas.iter().find(|e| e.idea.title == "Ref: paper cut style").unwrap();
-    assert_eq!(papercut.loc, IdeaLoc::Library("styles/paper".into()));
-    assert_eq!(ix.library_folders, ["places", "styles", "styles/paper"].map(std::path::PathBuf::from));
+    assert_eq!(papercut.loc, IdeaLoc::Library);
+    assert_eq!(ix.idea_collections(&papercut.idea.id), [std::path::Path::new("styles/paper")]);
+    assert_eq!(ix.input_collection_folders, ["places", "styles", "styles/paper"].map(std::path::PathBuf::from));
     assert_eq!(ix.project_folders, ["clients", "clients/acme", "experiments"].map(std::path::PathBuf::from));
 
     assert_eq!(ix.projects.len(), 3);

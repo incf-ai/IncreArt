@@ -215,27 +215,53 @@ fn whole_library_through_the_api() {
     assert!(!lib.load_idea(&hut).unwrap().starred);
     assert_eq!(lib.find_idea(&junk).unwrap().0, IdeaLoc::Discarded);
 
-    // ---- input library folders
-    let places = lib.create_folder(Tree::InputLibrary, Path::new(""), Some("places")).unwrap();
+    // ---- input collections: ideas stay put, collections hold their entries
+    let places = lib.create_folder(Tree::InputCollections, Path::new(""), Some("places")).unwrap();
     assert!(matches!(
-        lib.create_folder(Tree::InputLibrary, Path::new(""), Some("Places")),
+        lib.create_folder(Tree::InputCollections, Path::new(""), Some("Places")),
         Err(Error::InvalidName { .. })
     ));
-    let deep = lib.create_folder(Tree::InputLibrary, &places, None).unwrap();
+    let deep = lib.create_folder(Tree::InputCollections, &places, None).unwrap();
     assert_eq!(deep, Path::new("places/new folder"));
-    let moved = lib.move_node(Tree::InputLibrary, Path::new(hut.as_str()), &deep).unwrap();
-    assert_eq!(lib.find_idea(&hut).unwrap().0, IdeaLoc::Library(deep.clone()));
-    resolves(&lib, &Path::new("input/library").join(&moved).join("1-hut.png"), Store::Input);
-    let renamed = lib.rename_node(Tree::InputLibrary, &deep, "alpine").unwrap();
+    assert_eq!(lib.collect_ideas(&deep, std::slice::from_ref(&hut)).unwrap(), (vec![hut.clone()], vec![]));
+    assert_eq!(lib.collect_ideas(&deep, std::slice::from_ref(&hut)).unwrap(), (vec![], vec![]), "in it already");
+    let (loc, dir) = lib.find_idea(&hut).unwrap();
+    assert_eq!((loc, dir), (IdeaLoc::Library, lib.path(Path::new("input/library").join(hut.as_str()))));
+    resolves(&lib, &Path::new("input/library").join(hut.as_str()).join("1-hut.png"), Store::Input);
+    let entry = format!("{hut}.idea");
+    let renamed = lib.rename_node(Tree::InputCollections, &deep, "alpine").unwrap();
     assert_eq!(renamed, Path::new("places/alpine"));
+    assert!(matches!(lib.rename_node(Tree::InputCollections, &renamed.join(&entry), "x"), Err(Error::Refused(_))));
     assert!(matches!(
-        lib.move_node(Tree::InputLibrary, Path::new("places"), Path::new("places/alpine")),
+        lib.move_node(Tree::InputCollections, Path::new("places"), Path::new("places/alpine")),
         Err(Error::Refused(_))
     ));
-    let copy = lib.copy_node(Tree::InputLibrary, Path::new("places"), Path::new("")).unwrap();
+    // a copied collection holds the same ideas, not copies of them
+    let copy = lib.copy_node(Tree::InputCollections, Path::new("places"), Path::new("")).unwrap();
     assert_eq!(copy, Path::new("places 2"));
     let ix = lib.scan().unwrap();
-    assert_eq!(ix.ideas.iter().filter(|e| e.idea.title == "Hut").count(), 2);
+    assert_eq!(ix.ideas.iter().filter(|e| e.idea.title == "Hut").count(), 1);
+    assert_eq!(ix.idea_collections(&hut), [Path::new("places/alpine"), Path::new("places 2/alpine")]);
+    assert_eq!(ix.ideas_in_collection(Some(Path::new("places"))).len(), 1);
+    // an entry moved where the idea is already: the one there stays
+    lib.copy_node(Tree::InputCollections, &renamed.join(&entry), &places).unwrap();
+    lib.move_node(Tree::InputCollections, &renamed.join(&entry), &places).unwrap();
+    assert_eq!(lib.scan().unwrap().idea_collections(&hut), [Path::new("places"), Path::new("places 2/alpine")]);
+    // deleting a collection leaves its ideas in the library
+    assert_eq!(lib.delete_node(Tree::InputCollections, Path::new("places 2")).unwrap(), vec![]);
+    assert_eq!(lib.find_idea(&hut).unwrap().0, IdeaLoc::Library);
+    assert!(lib.unlink_idea(&hut, &places).unwrap());
+    assert!(lib.scan().unwrap().idea_collections(&hut).is_empty());
+    // an inbox idea is saved to the library on the way; a discarded one isn't taken
+    let inbox = lib.new_idea(NewIdea::text("Inbox", "")).unwrap();
+    assert_eq!(
+        lib.collect_ideas(&places, std::slice::from_ref(&inbox)).unwrap(),
+        (vec![inbox.clone()], vec![inbox.clone()])
+    );
+    assert_eq!(lib.find_idea(&inbox).unwrap().0, IdeaLoc::Library);
+    assert!(matches!(lib.collect_ideas(&places, std::slice::from_ref(&junk)), Err(Error::Refused(_))));
+    lib.delete_node(Tree::InputCollections, &places.join(format!("{inbox}.idea"))).unwrap();
+    lib.review_idea(&inbox, Verdict::Bad).unwrap();
 
     // ---- projects, runs, outputs
     lib.create_folder(Tree::Projects, Path::new(""), Some("clients")).unwrap();
@@ -456,6 +482,41 @@ fn same_pixels(lib: &Library, rel: &Path, store: Store) -> ImageRef {
     let px = |p: &Path| import::decode_pixels(&fs::read(p).unwrap()).unwrap().hash();
     assert_eq!(px(&abs), px(&lib.image_path(&r)), "{}", rel.display());
     r
+}
+
+#[test]
+fn input_folders_become_collections_when_opened() {
+    let (tmp, mut lib) = setup(None);
+    let photo =
+        lib.import_bytes(&png_bytes(DynamicImage::ImageRgb8(picture(8, 8, 1))), &original("a.png")).unwrap().image;
+    let mut ids = vec![];
+    for t in ["Top", "Old", "Deeper"] {
+        let id = lib.new_idea(NewIdea { images: vec![photo.clone()], ..NewIdea::text(t, "") }).unwrap();
+        lib.review_idea(&id, Verdict::Neutral).unwrap();
+        ids.push(id);
+    }
+    // as filed in folders before collections: input/library/old/deeper/…
+    let root = tmp.path().join("lib");
+    let base = root.join("input/library");
+    for (id, folder) in ids[1..].iter().zip(["old", "old/deeper"]) {
+        link::move_with_links(&root, &base.join(id.as_str()), &base.join(folder).join(id.as_str())).unwrap();
+    }
+    fs::create_dir_all(base.join("empty")).unwrap();
+    drop(lib);
+    let lib = Library::open(&root).unwrap();
+    assert!(lib.problems().is_empty(), "{:?}", lib.problems());
+    for id in &ids {
+        let (loc, dir) = lib.find_idea(id).unwrap();
+        assert_eq!((loc, dir), (IdeaLoc::Library, base.join(id.as_str())));
+        resolves(&lib, &Path::new("input/library").join(id.as_str()).join("1-a.png"), Store::Input);
+    }
+    assert!(!base.join("old").exists() && !base.join("empty").exists(), "the folders go");
+    let ix = lib.scan().unwrap();
+    assert!(ix.problems.is_empty(), "{:?}", ix.problems);
+    assert!(ix.idea_collections(&ids[0]).is_empty(), "one at the top is in no collection");
+    assert_eq!(ix.idea_collections(&ids[1]), [Path::new("old")]);
+    assert_eq!(ix.idea_collections(&ids[2]), [Path::new("old/deeper")]);
+    assert_eq!(ix.input_collection_folders, ["empty", "old", "old/deeper"].map(PathBuf::from));
 }
 
 #[test]
@@ -819,11 +880,10 @@ fn names_and_refusals() {
     assert_eq!(lib.move_node(Tree::Projects, &p, Path::new("alpha")).unwrap(), p, "same place: no-op");
     let idea = lib.new_idea(NewIdea::text("x", "")).unwrap();
     lib.review_idea(&idea, Verdict::Neutral).unwrap();
-    assert!(matches!(lib.rename_node(Tree::InputLibrary, Path::new(idea.as_str()), "y"), Err(Error::Refused(_))));
     assert!(matches!(lib.delete_discarded_idea(&idea), Err(Error::Refused(_))));
-    let discarded = lib.delete_node(Tree::InputLibrary, Path::new(idea.as_str())).unwrap();
-    assert_eq!(discarded, std::slice::from_ref(&idea));
-    assert_eq!(lib.find_idea(&idea).unwrap().0, IdeaLoc::Discarded);
+    lib.move_idea(&idea, &IdeaLoc::Discarded).unwrap();
+    lib.delete_discarded_idea(&idea).unwrap();
+    assert!(lib.find_idea(&idea).is_err());
     assert!(matches!(Library::create(lib.root(), None), Err(Error::Refused(_))), "not empty");
 }
 

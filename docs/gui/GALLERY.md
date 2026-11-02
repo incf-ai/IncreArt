@@ -30,7 +30,7 @@ Idea inbox grid: each card's Save / Discard, keys panel, card-size zoom, the dro
 
 ## 03c-idea-inbox-save-dialog
 
-Idea inbox → Save to input library… (`1` / `2` / `S`): the library's folders on the left (a filter, the tree, New folder under it), the idea's name and where it's saved on the right; Save & new project
+Idea inbox → Save to input library… (`1` / `2` / `S`): the input collections on the left (a filter, the tree, New collection under it), the idea's name and where it's saved on the right; Save & new project
 
 ![03c-idea-inbox-save-dialog](03c-idea-inbox-save-dialog.webp)
 
@@ -288,7 +288,7 @@ Output library → Folder: `smart › by project` (copy images from here into a 
 
 ## 42-input-library-folder
 
-Input library → Folder: folders and ideas (purple, titled; their images behind)
+Input library → Folder: a collection's ideas (purple, titled; their images behind)
 
 ![42-input-library-folder](42-input-library-folder.webp)
 
