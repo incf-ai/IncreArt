@@ -2235,6 +2235,7 @@ fn start_engine_with_pending_runs_does_not_hang() {
         shared: increart_core::config::SdServerConfig::default(),
         order: Default::default(),
         skip_ram_check: false,
+        random: None,
     });
     let msgs = h.rt.wait(Duration::from_secs(10));
     assert!(msgs.contains(&Msg::RunsQueued(vec![run])), "{msgs:?}");
@@ -2453,8 +2454,8 @@ fn edit_idea_window_and_its_history() {
 #[test]
 fn library_filters_and_output_sources() {
     let mut h = Harness::new();
-    for (t, x, star) in [("Fox", "a fox", true), ("Hut", "alpine hut", false)] {
-        h.send(Msg::Draft(IdeaDraft { title: t.into(), text: x.into(), ..Default::default() }));
+    for (t, x, star, tags) in [("Fox", "a fox", true, "animals, photo"), ("Hut", "alpine hut", false, "Photo")] {
+        h.send(Msg::Draft(IdeaDraft { title: t.into(), text: x.into(), tags: tags.into(), ..Default::default() }));
         h.send(Msg::AddIdea(AddIdea::Keep));
         h.send(Msg::ConfirmSaveIdea);
         h.settle();
@@ -2470,6 +2471,13 @@ fn library_filters_and_output_sources() {
     assert_eq!(h.state.library_ideas()[0].idea.title, "Hut");
     h.send(Msg::LibFilter(LibFilter { used_in_project: Some(true), ..Default::default() }));
     assert!(h.state.library_ideas().is_empty());
+    // tags: any case counts as one; several picked, ideas with all of them
+    let counts = h.state.idea_tag_counts(h.state.lib_source_ideas());
+    assert_eq!(counts, [("photo".to_string(), 2), ("animals".to_string(), 1)]);
+    h.send(Msg::LibFilter(LibFilter { tags: vec!["PHOTO".into()], ..Default::default() }));
+    assert_eq!(h.state.library_ideas().len(), 2);
+    h.send(Msg::LibFilter(LibFilter { tags: vec!["photo".into(), "animals".into()], ..Default::default() }));
+    assert_eq!(h.state.library_ideas().iter().map(|e| e.idea.title.as_str()).collect::<Vec<_>>(), ["Fox"]);
     h.send(Msg::LibFilter(LibFilter::default()));
 
     // outputs: collections, smart folders, cover, export
@@ -3420,7 +3428,7 @@ fn style_sweeps_queue_review_on_a_contact_sheet_and_reuse_a_style() {
     assert!(h.state.project_entry().unwrap().runs.is_empty(), "cancelled");
     h.send(Msg::QueueGenerate);
     let fx = h.send(Msg::SweepOrderAnswer(Some(true)));
-    assert!(fx.iter().any(|f| matches!(f, Effect::SetJobOrder(increart_core::scheduler::Order::BySweep))));
+    assert!(fx.iter().any(|f| matches!(f, Effect::SetJobOrder(increart_core::scheduler::Order::BySweep, _))));
     assert_eq!(h.state.config.job_order, increart_core::scheduler::Order::BySweep);
     assert!(h.state.sweep_order_ask.is_none() && !h.state.sweep_order_asked);
     h.settle();
@@ -7816,4 +7824,21 @@ fn output_images_are_tagged_in_a_modal_filtered_and_undone() {
     assert!(!h.state.tagging.as_ref().unwrap().rate, "outside Review: no rating");
     h.send(Msg::CancelTags);
     assert!(h.state.tagging.is_none());
+}
+
+#[test]
+fn random_order_goes_to_the_engine_with_this_starts_salt() {
+    use increart_core::scheduler::Order;
+    let mut s = AppState::new(Config::default(), Some(PathBuf::from("config.rsn")));
+    s.job_salt = 42;
+    let fx = update(&mut s, Msg::JobRandom(true));
+    assert!(s.config.job_random);
+    assert!(fx.iter().any(|f| matches!(f, Effect::SetJobOrder(Order::Spread, Some(42)))), "{fx:?}");
+    assert!(fx.iter().any(|f| matches!(f, Effect::SaveConfig(..))), "saved: {fx:?}");
+    // a new order keeps it random
+    let fx = update(&mut s, Msg::JobOrder(Order::Sequential));
+    assert!(fx.iter().any(|f| matches!(f, Effect::SetJobOrder(Order::Sequential, Some(42)))), "{fx:?}");
+    assert!(update(&mut s, Msg::JobRandom(true)).is_empty(), "unchanged");
+    let fx = update(&mut s, Msg::JobRandom(false));
+    assert!(fx.iter().any(|f| matches!(f, Effect::SetJobOrder(Order::Sequential, None))), "{fx:?}");
 }

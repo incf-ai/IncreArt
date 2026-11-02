@@ -346,6 +346,8 @@ pub enum Msg {
     QueueSweep(bool),
     /// Jobs: how the queue shares the servers (saved in the config).
     JobOrder(Order),
+    /// Jobs: Random order on or off (saved in the config).
+    JobRandom(bool),
     /// The sweep's "one at a time" question: `Some(true)` switches to
     /// sweep by sweep and queues, `Some(false)` queues as is, `None` doesn't.
     SweepOrderAnswer(Option<bool>),
@@ -1011,9 +1013,12 @@ pub enum Effect {
         shared: SdServerConfig,
         order: Order,
         skip_ram_check: bool,
+        /// Random order's salt, when on.
+        random: Option<u64>,
     },
-    /// Spread the servers over the queued runs, or finish them one by one.
-    SetJobOrder(Order),
+    /// Spread the servers over the queued runs, or finish them one by one;
+    /// in queue order, or random with a salt.
+    SetJobOrder(Order, Option<u64>),
     /// Loads stop (or start again) waiting for free RAM.
     SetSkipRamCheck(bool),
     /// The image servers' traffic log goes on or off.
@@ -2043,6 +2048,7 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
                     fx.push(Effect::StartEngine {
                         shared: state.config.programs.sd_server.clone(),
                         order: state.config.job_order,
+                        random: state.job_random(),
                         skip_ram_check: state.config.skip_ram_check,
                     });
                 }
@@ -2099,6 +2105,7 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
                 return vec![Effect::StartEngine {
                     shared: state.config.programs.sd_server.clone(),
                     order: state.config.job_order,
+                    random: state.job_random(),
                     skip_ram_check: state.config.skip_ram_check,
                 }];
             }
@@ -2632,6 +2639,7 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
                 return vec![Effect::StartEngine {
                     shared: state.config.programs.sd_server.clone(),
                     order: state.config.job_order,
+                    random: state.job_random(),
                     skip_ram_check: state.config.skip_ram_check,
                 }];
             }
@@ -2678,6 +2686,7 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
             vec![Effect::StartEngine {
                 shared: state.config.programs.sd_server.clone(),
                 order: state.config.job_order,
+                random: state.job_random(),
                 skip_ram_check: state.config.skip_ram_check,
             }]
         }
@@ -6056,7 +6065,16 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
             }
             state.config.job_order = order;
             let mut fx = save_config(state);
-            fx.push(Effect::SetJobOrder(order));
+            fx.push(Effect::SetJobOrder(order, state.job_random()));
+            fx
+        }
+        Msg::JobRandom(on) => {
+            if state.config.job_random == on {
+                return vec![];
+            }
+            state.config.job_random = on;
+            let mut fx = save_config(state);
+            fx.push(Effect::SetJobOrder(state.config.job_order, state.job_random()));
             fx
         }
         Msg::SweepOrderAnswer(answer) => {
@@ -8866,6 +8884,7 @@ fn start_with_up(state: &mut AppState, progress: &[ServerProgress]) -> Vec<Effec
     vec![Effect::StartEngine {
         shared: state.config.programs.sd_server.clone(),
         order: state.config.job_order,
+        random: state.job_random(),
         skip_ram_check: state.config.skip_ram_check,
     }]
 }

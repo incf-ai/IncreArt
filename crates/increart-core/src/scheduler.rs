@@ -12,6 +12,11 @@
 //!   earliest queued run with seeds left, so runs finish one after another.
 //! - Ties: among equally due runs, the one that got a seed longest ago (so a
 //!   round goes through the runs in queue order every time).
+//! - Random ([`Scheduler::random`]): within the order, a random pick takes
+//!   the place of queue order: a round goes through the runs shuffled anew
+//!   each time, and the next sweep or run is picked at random once the ones
+//!   started are done (they always go first). A server still takes only its
+//!   own model's work while there is some: randomness makes no extra loads.
 //! - Model switching: work for a model no server has makes one server
 //!   *drain* (no new jobs) and then load it, but never the last server of a
 //!   model that still has work; a server with no work for its model switches
@@ -139,6 +144,10 @@ struct RunQueue {
     /// The ticket of its last dispatched seed (`None`: none yet).
     last: Option<Ticket>,
     in_flight: usize,
+    /// Has had a seed dispatched, or was partly done when queued
+    /// ([`Scheduler::mark_started`]): with [`Scheduler::random`] it goes
+    /// before the runs not started.
+    started: bool,
 }
 
 #[derive(Debug)]
@@ -155,6 +164,9 @@ pub struct Scheduler {
     pub backoff_base: Duration,
     pub backoff_max: Duration,
     pub order: Order,
+    /// Random within the order, with this salt (a new one each app start);
+    /// `None`: queue order.
+    pub random: Option<u64>,
 }
 
 impl Scheduler {
@@ -178,6 +190,7 @@ impl Scheduler {
             backoff_base: Duration::from_secs(2),
             backoff_max: Duration::from_secs(60),
             order: Order::Spread,
+            random: None,
         }
     }
 
@@ -289,6 +302,7 @@ impl Scheduler {
                     dispatched: 0,
                     last: None,
                     in_flight: 0,
+                    started: false,
                 });
                 self.runs.len() - 1
             }
@@ -308,6 +322,14 @@ impl Scheduler {
             r.pending.clear();
         }
         self.add_seeds(run, model, seeds);
+    }
+
+    /// Marks a queued run as started (partly done before it was queued, as
+    /// after a restart): with [`Self::random`] it goes first.
+    pub fn mark_started(&mut self, run: &Id) {
+        if let Some(r) = self.runs.iter_mut().find(|r| &r.id == run) {
+            r.started = true;
+        }
     }
 
     /// Puts a queued run in a group: the runs of one sweep share one.
@@ -504,15 +526,34 @@ impl Scheduler {
 
     /// How due run `i` is (lowest first): its group's place in the queue
     /// ([`Order::BySweep`]) or its own ([`Order::Sequential`]), then the
-    /// round-robin's fewest dispatched, longest ago.
-    fn due(&self, i: usize, r: &RunQueue) -> (usize, u64, Option<Ticket>, usize) {
+    /// round-robin's fewest dispatched, longest ago. With [`Self::random`],
+    /// started groups or runs first (in queue order), then the others by a
+    /// random key; a round goes by a key drawn anew each round.
+    fn due(&self, i: usize, r: &RunQueue) -> (u64, u64, u64, u64, Option<Ticket>, usize) {
+        let first = || self.runs.iter().position(|q| q.group == r.group).unwrap_or(i) as u64;
+        let Some(salt) = self.random else {
+            return match self.order {
+                Order::Spread => (0, 0, r.dispatched, 0, r.last, i),
+                Order::BySweep => (0, first(), r.dispatched, 0, r.last, i),
+                Order::Sequential => (0, i as u64, 0, 0, None, i),
+            };
+        };
+        let round = shuffle_key(salt, &r.id.to_string(), r.dispatched);
         match self.order {
-            Order::Spread => (0, r.dispatched, r.last, i),
+            Order::Spread => (0, 0, r.dispatched, round, None, i),
             Order::BySweep => {
-                let first = self.runs.iter().position(|q| q.group == r.group).unwrap_or(i);
-                (first, r.dispatched, r.last, i)
+                let (unstarted, place) = if self.runs.iter().any(|q| q.group == r.group && q.started) {
+                    (0, first())
+                } else {
+                    (1, shuffle_key(salt, &r.group, 0))
+                };
+                (unstarted, place, r.dispatched, round, None, i)
             }
-            Order::Sequential => (i, 0, None, i),
+            Order::Sequential => {
+                let (unstarted, place) =
+                    if r.started { (0, i as u64) } else { (1, shuffle_key(salt, &r.id.to_string(), 0)) };
+                (unstarted, place, 0, 0, None, i)
+            }
         }
     }
 
@@ -600,6 +641,7 @@ impl Scheduler {
         let ticket = self.next_ticket;
         self.next_ticket += 1;
         r.dispatched += 1;
+        r.started = true;
         r.last = Some(ticket);
         r.in_flight += 1;
         let seed = SeedRef { run: r.id.clone(), rev, seed };
@@ -607,6 +649,20 @@ impl Scheduler {
         srv.in_flight.push((ticket, seed.clone()));
         Some(Action::Submit { server: s, ticket, seed })
     }
+}
+
+/// A random key for `key`'s `n`th draw under `salt`: FNV-1a, then a
+/// splitmix64 finish. The same each time, so the forecast's simulation
+/// picks as the engine does.
+fn shuffle_key(salt: u64, key: &str, n: u64) -> u64 {
+    let mut h = salt ^ 0xCBF2_9CE4_8422_2325;
+    for b in key.bytes() {
+        h = (h ^ b as u64).wrapping_mul(0x0000_0100_0000_01B3);
+    }
+    let mut z = h ^ n.wrapping_mul(0x9E37_79B9_7F4A_7C15);
+    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    z ^ (z >> 31)
 }
 
 #[cfg(test)]
@@ -794,6 +850,110 @@ mod tests {
         // equally due again: the longest waiting run first
         let second = submits(&s.poll(now));
         assert_eq!(second.iter().map(|x| x.2.run.clone()).collect::<Vec<_>>(), [run(0), run(1)]);
+    }
+
+    /// Runs one server's seeds to the end, one at a time: the runs in the
+    /// order they went out.
+    fn drain(s: &mut Scheduler, now: Instant) -> Vec<Id> {
+        let mut order = vec![];
+        while let Some((_, t, seed)) = submits(&s.poll(now)).first().cloned() {
+            order.push(seed.run);
+            s.finished(t, Outcome::Done);
+        }
+        order
+    }
+
+    #[test]
+    fn random_spread_shuffles_every_round() {
+        let mut shuffled = false;
+        for salt in 0..8 {
+            let go = || {
+                let (mut s, now) = up(&[Some("a")]);
+                s.max_in_flight = 1;
+                s.random = Some(salt);
+                for r in 0..4 {
+                    s.add_seeds(&run(r), model("a"), seeds(3));
+                }
+                drain(&mut s, now)
+            };
+            let order = go();
+            assert_eq!(order, go(), "the same salt, the same order");
+            let rounds: Vec<&[Id]> = order.chunks(4).collect();
+            for round in &rounds {
+                let mut sorted = round.to_vec();
+                sorted.sort();
+                assert_eq!(sorted, (0..4).map(run).collect::<Vec<_>>(), "every run once a round");
+            }
+            shuffled |= rounds.windows(2).any(|w| w[0] != w[1]);
+        }
+        assert!(shuffled, "rounds are shuffled anew");
+    }
+
+    #[test]
+    fn random_sequential_picks_the_next_run_and_finishes_it() {
+        let mut orders = HashSet::new();
+        for salt in 0..8 {
+            let (mut s, now) = up(&[Some("a")]);
+            s.max_in_flight = 1;
+            s.order = Order::Sequential;
+            s.random = Some(salt);
+            for r in 0..4 {
+                s.add_seeds(&run(r), model("a"), seeds(2));
+            }
+            // partly done before: it goes first
+            s.mark_started(&run(3));
+            let order = drain(&mut s, now);
+            assert_eq!(order[..2], [run(3), run(3)]);
+            for pair in order.chunks(2) {
+                assert_eq!(pair[0], pair[1], "one run at a time: {order:?}");
+            }
+            orders.insert(order);
+        }
+        assert!(orders.len() > 1, "the next run is a random pick");
+    }
+
+    #[test]
+    fn random_by_sweep_finishes_each_sweep() {
+        let mut orders = HashSet::new();
+        for salt in 0..8 {
+            let (mut s, now) = up(&[Some("a")]);
+            s.max_in_flight = 1;
+            s.order = Order::BySweep;
+            s.random = Some(salt);
+            for (r, group) in [(0, "s1"), (1, "s1"), (2, "s2"), (3, "s2"), (4, "s3"), (5, "s3")] {
+                s.add_seeds(&run(r), model("a"), seeds(2));
+                s.set_group(&run(r), group);
+            }
+            let order = drain(&mut s, now);
+            let sweep = |id: &Id| (0..6).position(|r| run(r) == *id).unwrap() / 2;
+            for four in order.chunks(4) {
+                assert!(four.iter().all(|r| sweep(r) == sweep(&four[0])), "one sweep at a time: {order:?}");
+            }
+            orders.insert(order.iter().map(sweep).collect::<Vec<_>>());
+        }
+        assert!(orders.len() > 1, "the next sweep is a random pick");
+    }
+
+    #[test]
+    fn random_takes_the_loaded_model_first() {
+        for order in [Order::Spread, Order::BySweep, Order::Sequential] {
+            for salt in 0..8 {
+                let (mut s, now) = up(&[Some("a")]);
+                s.max_in_flight = 1;
+                s.order = order;
+                s.random = Some(salt);
+                s.add_seeds(&run(0), model("b"), seeds(2));
+                s.add_seeds(&run(1), model("a"), seeds(2));
+                s.add_seeds(&run(2), model("a"), seeds(2));
+                let mut went = vec![];
+                for _ in 0..4 {
+                    let (_, t, seed) = submits(&s.poll(now))[0].clone();
+                    went.push(seed.run);
+                    s.finished(t, Outcome::Done);
+                }
+                assert!(!went.contains(&run(0)), "{order:?} {salt}: model a's work before loading b");
+            }
+        }
     }
 
     #[test]

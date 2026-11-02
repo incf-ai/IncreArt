@@ -66,6 +66,8 @@ pub struct EngineOptions {
     /// before that's said.
     pub stall_warning: Duration,
     pub order: Order,
+    /// Random within the order, with this salt ([`Scheduler::random`]).
+    pub random: Option<u64>,
     /// Loads on this machine don't wait for free RAM (see
     /// [`Engine::set_skip_ram_check`]).
     pub skip_ram_check: bool,
@@ -83,6 +85,7 @@ impl Default for EngineOptions {
             warm_up_limit: Duration::from_secs(20 * 60),
             stall_warning: Duration::from_secs(10 * 60),
             order: Order::Spread,
+            random: None,
             skip_ram_check: false,
         }
     }
@@ -128,7 +131,7 @@ pub enum Stop {
 enum Msg {
     Queue(Id),
     Cancel(Id, Stop),
-    Order(Order),
+    Order(Order, Option<u64>),
     Report(ServerIdx, Report),
     Shutdown,
 }
@@ -253,6 +256,7 @@ impl Engine {
         sched.max_in_flight = opts.max_in_flight;
         sched.backoff_base = opts.backoff_base;
         sched.order = opts.order;
+        sched.random = opts.random;
         let mut co = Coordinator {
             lib,
             servers,
@@ -291,9 +295,10 @@ impl Engine {
         let _ = self.tx.send(Msg::Cancel(run.clone(), how));
     }
 
-    /// Spread the servers over the queued runs, or finish them one by one.
-    pub fn set_order(&self, order: Order) {
-        let _ = self.tx.send(Msg::Order(order));
+    /// Spread the servers over the queued runs, or finish them one by one;
+    /// in queue order, or random with a salt ([`Scheduler::random`]).
+    pub fn set_order(&self, order: Order, random: Option<u64>) {
+        let _ = self.tx.send(Msg::Order(order, random));
     }
 
     /// Loads on this machine stop (or start again) waiting for free RAM;
@@ -583,7 +588,7 @@ impl Coordinator {
                 self.queue(&run);
                 self.relist = true;
             }
-            Msg::Order(order) => self.sched.order = order,
+            Msg::Order(order, random) => (self.sched.order, self.sched.random) = (order, random),
             Msg::Cancel(run, how) => {
                 let (dropped, in_flight) = self.sched.cancel_run(&run);
                 let mut seeds: Vec<u64> = dropped.iter().map(|(_, s)| *s).collect();
@@ -822,6 +827,8 @@ impl Coordinator {
         for i in 0..self.servers.len() {
             queued.extend(self.sched.in_flight(i).filter(|(_, r)| &r.run == run_id).map(|(_, r)| r.seed));
         }
+        // some generated already (as after a restart): started, it goes first
+        let partly_done = pending.len() < run.live_seeds().count();
         let fresh: Vec<_> = pending.into_iter().filter(|(_, s)| !queued.contains(s)).collect();
         let model = ModelKey::from(&run.model);
         self.logs.insert(run_id.clone(), run_log(&project, run_id));
@@ -838,6 +845,9 @@ impl Coordinator {
         let group = run.sweep.as_ref().map(|t| format!("{}/{}", project.display(), t.name));
         self.runs.insert(run_id.clone(), run);
         self.sched.set_pending(run_id, model, fresh);
+        if partly_done {
+            self.sched.mark_started(run_id);
+        }
         if let Some(g) = group {
             self.sched.set_group(run_id, g);
         }

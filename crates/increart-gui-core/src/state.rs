@@ -54,6 +54,9 @@ pub struct LibFilter {
     pub most_used: bool,
     /// The edited copies (Crop / mark…) too, from `input/edited/`.
     pub show_hidden: bool,
+    /// Only ideas with all of these tags (any case), picked in the tag
+    /// filter.
+    pub tags: Vec<String>,
 }
 
 /// An input image's metadata from its file: where it was imported from, and
@@ -3247,6 +3250,9 @@ pub struct AppState {
     pub sweep_order_ask: Option<bool>,
     /// Answered: the queueing it held goes on without asking again.
     pub sweep_order_asked: bool,
+    /// The salt of Random order (a new one each app start), shared by the
+    /// engine and the forecast so they pick alike.
+    pub job_salt: u64,
     /// Projects → Folder.
     /// The folder view of the tab showing; the other three wait in
     /// `parked_folder_views`, so each keeps its own location and history.
@@ -3653,6 +3659,9 @@ impl AppState {
             move_project: None,
             sweep_order_ask: None,
             sweep_order_asked: false,
+            job_salt: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| d.as_nanos() as u64),
             duplicate: None,
             prompt_presets: increart_core::prompts::builtin(),
             presets_path: None,
@@ -3719,17 +3728,7 @@ impl AppState {
 
     /// Kept ideas in the selected folder and its subfolders, newest first.
     pub fn library_ideas(&self) -> Vec<&IdeaEntry> {
-        let mut v: Vec<_> = self
-            .index
-            .ideas
-            .iter()
-            .filter(|e| match (&e.loc, &self.lib_folder) {
-                (IdeaLoc::Library(_), None) => true,
-                (IdeaLoc::Library(f), Some(sel)) => f.starts_with(sel),
-                (IdeaLoc::Edited, None) => self.lib_filter.show_hidden,
-                _ => false,
-            })
-            .collect();
+        let mut v = self.lib_source_ideas();
         let f = &self.lib_filter;
         let q = f.text.to_lowercase();
         v.retain(|e| {
@@ -3738,6 +3737,7 @@ impl AppState {
                 || i.title.to_lowercase().contains(&q)
                 || i.text.to_lowercase().contains(&q)
                 || i.tags.iter().any(|t| t.to_lowercase().contains(&q)))
+                && f.tags.iter().all(|t| i.tags.iter().any(|x| x.to_lowercase() == t.to_lowercase()))
                 && (!f.starred_only || i.starred)
                 && (!f.with_images_only || !i.images.is_empty())
                 && f.used_in_project.is_none_or(|p| p == !i.projects.is_empty())
@@ -4606,15 +4606,28 @@ impl AppState {
     /// (then by name).
     pub fn tag_counts<'a>(&self, images: impl IntoIterator<Item = &'a ImageRef>) -> Vec<(String, usize)> {
         let all = self.output_tags();
-        let mut n: std::collections::BTreeMap<String, (String, usize)> = Default::default();
-        for i in images {
-            for t in all.get(&i.id).copied().unwrap_or_default() {
-                n.entry(t.to_lowercase()).or_insert((t.clone(), 0)).1 += 1;
-            }
-        }
-        let mut v: Vec<(String, usize)> = n.into_values().collect();
-        v.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.to_lowercase().cmp(&b.0.to_lowercase())));
-        v
+        count_tags(images.into_iter().map(|i| all.get(&i.id).copied().unwrap_or_default()))
+    }
+
+    /// The ideas' tags with how many have each, most first (the input
+    /// library's tag filter).
+    pub fn idea_tag_counts<'a>(&self, ideas: impl IntoIterator<Item = &'a IdeaEntry>) -> Vec<(String, usize)> {
+        count_tags(ideas.into_iter().map(|e| e.idea.tags.as_slice()))
+    }
+
+    /// The input library Grid's ideas before its filters: the folder's (all
+    /// of the library's with none), and the edited copies when shown.
+    pub fn lib_source_ideas(&self) -> Vec<&IdeaEntry> {
+        self.index
+            .ideas
+            .iter()
+            .filter(|e| match (&e.loc, &self.lib_folder) {
+                (IdeaLoc::Library(_), None) => true,
+                (IdeaLoc::Library(f), Some(sel)) => f.starts_with(sel),
+                (IdeaLoc::Edited, None) => self.lib_filter.show_hidden,
+                _ => false,
+            })
+            .collect()
     }
 
     /// Every tag in the library, output images' and ideas', with how many
@@ -5534,6 +5547,7 @@ impl AppState {
                 group,
                 recipe: run.model.recipe.clone(),
                 seeds: (j.total.saturating_sub(j.done) as usize).saturating_sub(j.sampling.len()),
+                started: j.done > 0 || !j.sampling.is_empty(),
                 sampling: j.sampling.iter().map(|(_, s, n)| *s as f64 / (*n).max(1) as f64).collect(),
                 image_s: self.image_s_on(&crate::forecast::Shape::of(run), Some(run), j.image_s()),
             });
@@ -5556,10 +5570,15 @@ impl AppState {
             .collect()
     }
 
+    /// Random order's salt when it's on, as the engine takes it.
+    pub fn job_random(&self) -> Option<u64> {
+        self.config.job_random.then_some(self.job_salt)
+    }
+
     /// The runs in the engine on a simulated clock (DESIGN.md, Timing).
     pub fn make_plan(&self) -> Option<crate::forecast::Plan> {
         let runs = self.sim_runs();
-        Some(crate::forecast::simulate(&runs, &self.sim_servers(&runs), self.config.job_order))
+        Some(crate::forecast::simulate(&runs, &self.sim_servers(&runs), self.config.job_order, self.job_random()))
     }
 
     /// Seconds per image of this shape on the servers working (their mean;
@@ -5597,6 +5616,7 @@ impl AppState {
                     id,
                     recipe: shape.recipe.clone(),
                     seeds: *seeds as usize,
+                    started: false,
                     sampling: vec![],
                     image_s: self.image_s_on(shape, None, None),
                 }
@@ -5609,17 +5629,21 @@ impl AppState {
         let ends = |plan: &crate::forecast::Plan| {
             runs.iter().map(|r| plan.runs.get(&r.id).and_then(|p| p.1)).try_fold(0.0f64, |m, f| f.map(|f| m.max(f)))
         };
-        let alone = ends(&simulate(&runs, &servers, self.config.job_order))?;
+        let alone = ends(&simulate(&runs, &servers, self.config.job_order, self.job_random()))?;
         let mut all = self.sim_runs();
         let queued = !all.is_empty();
         all.extend(runs.iter().cloned());
-        let after = if queued { ends(&simulate(&all, &self.sim_servers(&all), self.config.job_order)) } else { None };
+        let after = if queued {
+            ends(&simulate(&all, &self.sim_servers(&all), self.config.job_order, self.job_random()))
+        } else {
+            None
+        };
         Some(NewEstimate { alone_s: alone, with_queue_s: after, servers: servers.iter().filter(|s| s.working).count() })
     }
 
     /// What the forecast is made of, hashed: the runs in the engine, their
     /// seeds done and whether they've a live speed yet, the servers' states
-    /// and models, and the order.
+    /// and models, and the order (random or not).
     pub fn plan_key(&self) -> u64 {
         use std::hash::{Hash, Hasher};
         let mut h = std::collections::hash_map::DefaultHasher::new();
@@ -5630,6 +5654,7 @@ impl AppState {
             (&s.state, &s.model).hash(&mut h);
         }
         format!("{:?}", self.config.job_order).hash(&mut h);
+        self.config.job_random.hash(&mut h);
         h.finish()
     }
 
@@ -5734,6 +5759,20 @@ pub fn cover(p: &ProjectEntry) -> Option<ImageRef> {
         .iter()
         .max_by(|a, b| (rank(a.verdict), &a.image.id).cmp(&(rank(b.verdict), &b.image.id)))
         .map(|o| o.image.clone())
+}
+
+/// Tags (one list per image or idea) with how many lists have each, any
+/// case counting as one (the first spelling met), most first, then A–Z.
+fn count_tags<'a>(lists: impl IntoIterator<Item = &'a [String]>) -> Vec<(String, usize)> {
+    let mut n: BTreeMap<String, (String, usize)> = Default::default();
+    for tags in lists {
+        for t in tags {
+            n.entry(t.to_lowercase()).or_insert((t.clone(), 0)).1 += 1;
+        }
+    }
+    let mut v: Vec<(String, usize)> = n.into_values().collect();
+    v.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.to_lowercase().cmp(&b.0.to_lowercase())));
+    v
 }
 
 #[cfg(test)]

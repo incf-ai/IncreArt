@@ -2732,7 +2732,7 @@ fn order_combo(ui: &mut egui::Ui, id: &str, what: &str, order: TreeOrder, tip: &
 }
 
 /// Spread all · Sweep by sweep · One at a time: how the queued runs share
-/// the servers.
+/// the servers; Random: within that, random picks instead of queue order.
 pub fn order_toggle(ui: &mut egui::Ui, st: &AppState, out: &mut Vec<Msg>) {
     use increart_core::scheduler::Order;
     ui.horizontal(|ui| {
@@ -2746,18 +2746,25 @@ pub fn order_toggle(ui: &mut egui::Ui, st: &AppState, out: &mut Vec<Msg>) {
             (
                 Order::BySweep,
                 ic(ph::STACK, "Sweep by sweep"),
-                "the oldest sweep's runs get a seed in turn (its contact sheet fills row by row) and it \
-                 finishes before the next sweep starts; a lone run counts as a sweep of one",
+                "a sweep's runs get a seed in turn (its contact sheet fills row by row) and it finishes \
+                 before the next sweep starts, the oldest first; a lone run counts as a sweep of one",
             ),
             (
                 Order::Sequential,
                 ic(ph::LIST_NUMBERS, "One at a time"),
-                "each run finishes before the next starts, in queue order",
+                "each run finishes before the next starts, the oldest first",
             ),
         ] {
             if ui.selectable_label(st.config.job_order == o, label).on_hover_text(tip).clicked() {
                 out.push(Msg::JobOrder(o));
             }
+        }
+        let mut random = st.config.job_random;
+        let tip = "within the order, random picks instead of queue order: each round's runs are shuffled \
+                   anew, the next sweep or run is picked at random, and ones started finish first; a server \
+                   keeps to its model while it has work for it";
+        if ui.checkbox(&mut random, ic(ph::DICE_FIVE, "Random")).on_hover_text(tip).changed() {
+            out.push(Msg::JobRandom(random));
         }
     });
 }

@@ -1470,13 +1470,41 @@ its details window, and for every run at once in the Jobs header:
   by column). There is no per-server affinity: with sd-server's conditioning
   cache at 32 entries, alternating between runs rarely costs a re-encode.
 - **Order**: the toggle in the jobs popover and Projects → Jobs picks
-  **Spread evenly** (the round-robin above; the default) or **One at a
-  time** (every free slot goes to the earliest queued run with seeds left,
-  so runs finish one after another in queue order). It is saved in the
-  config (`job_order`) and applies to the running queue at once. Queueing a
-  style sweep while it is One at a time asks first: **Spread evenly &
-  queue**, **Keep one at a time & queue** or Cancel (one at a time would
-  fill the contact sheet a style at a time).
+  **Spread all** (the round-robin above; the default), **Sweep by sweep**
+  (the round-robin within the oldest sweep with seeds left, a lone run
+  counting as a sweep of one, so sweeps finish one after another) or **One
+  at a time** (every free slot goes to the earliest queued run with seeds
+  left, so runs finish one after another in queue order). It is saved in
+  the config (`job_order`) and applies to the running queue at once.
+  Queueing a style sweep while it is One at a time asks first: **Sweep by
+  sweep & queue**, **Keep one at a time & queue** or Cancel (one at a time
+  would fill the contact sheet a style at a time).
+- **Random** (a checkbox beside the order, `job_random`): within the order,
+  a random pick takes the place of queue order. What the order promises
+  stays; started work always goes first, and randomness only picks what
+  starts next.
+
+  | Order | Random off | Random on |
+  |---|---|---|
+  | Spread all | every round, a seed per run in queue order | every round, a seed per run, shuffled anew each round |
+  | Sweep by sweep | sweeps in queue order, a sweep's runs spread in queue order | a sweep started finishes first, then the next sweep is a random pick; its runs spread, shuffled each round |
+  | One at a time | runs in queue order | a run started finishes first, then the next run is a random pick |
+
+  - *Started*: a run that has had a seed dispatched, or that was partly
+    done when queued (after a restart the engine queues again what's
+    left; a run with images already counts as started).
+  - *The loaded model first*: a server takes only its own model's work
+    while there is some, as without Random, so randomness makes no extra
+    loads; the next model is picked when a server's runs out.
+  - *A new run* in Spread all has had no seeds yet and goes first until it
+    catches up, as without Random; in the other two it joins the pick and
+    doesn't overtake started work.
+  - *The salt*: the random keys come from a salt made at each app start
+    (the shuffle differs from one start to the next) and the run's or
+    sweep's id and round, so the forecast, given the same salt, picks as
+    the engine does.
+  - Switching it on or off applies at the next pick; seeds in flight stay.
+  - Within a run, seeds always go out in order.
 - **Model switching**: a run whose model selection differs from a server's
   loaded model marks that server *draining*. It gets no new submissions; once
   its in-flight jobs finish, it calls `models/load` (409 means "not drained
@@ -2960,9 +2988,14 @@ the keys and mouse buttons go through that view's own history instead.
     all. Restores can be undone with `Ctrl+Z`.
 - **Input library**: tabs **Grid** (default) · **Folder** (see Projects →
   Folder) · **Discarded** (the same Discarded view as in the Idea inbox). In
-  Grid, the left panel holds the filters (tag / starred / text /
-  has-images / **used in a project** or not), selection actions, and the library folder
-  tree (see Input library folders); the grid shows the selected folder's
+  Grid, the left panel is laid out as the Output library's: the search box
+  (titles, text and tags; ✕ or `Esc` clears it), the filters (starred /
+  with images / edited copies, **used in a project** or not, the order),
+  then **Tags**: the tags of the folder's ideas with their counts as chips
+  (any case counts as one), a click showing only the ideas with it
+  (several: all of them), again letting go, **clear** dropping them; then
+  the library folder tree (see Input library folders) and the selection
+  actions; the grid shows the selected folder's
   ideas, newest first (or most used first); cards show PE rewrite state like the inbox's. Multi-select → new project
   (button or `P`/`Space`); ← → ↑ ↓ and `Home`/`End` select the previous /
   next / first / last idea and show it in the panel, `Ctrl+A` selects all,
@@ -3127,7 +3160,7 @@ the keys and mouse buttons go through that view's own history instead.
   discarded…** (asks first) does it for all of them.
 - **Jobs**: per-run progress and per-server state (loading / draining /
   generating), with a live preview frame from `jobs/{id}`. Under **Runs**,
-  the order toggle and **Finish & stop all** / **Stop all now** stay put
+  the order toggle with **Random** and **Finish & stop all** / **Stop all now** stay put
   (always shown, greyed out with nothing generating); the runs scroll
   under them, by project: a project is a box in the order its first run is
   in the queue, folded until opened (▸, for the session), its header the
@@ -3456,7 +3489,8 @@ timing existed have none).
 **The forecast** (`forecast.rs`): when each run in the engine starts and is
 done. It runs the engine's own scheduler (`scheduler.rs`, a pure state
 machine) on a simulated clock: the runs in queue order with their seeds
-left, the order (Spread evenly, Sweep by sweep, One at a time), the servers
+left, the order (Spread all, Sweep by sweep, One at a time; Random with
+the engine's salt, a run with images done counting as started), the servers
 working with their loaded models (by recipe), 2 jobs held per server and
 generated one after another, a seed being sampled now taking what's left
 of it, and a model switch its load. So a run waiting behind others, or for
@@ -3478,7 +3512,7 @@ load (any server is taken to load any model), warm-ups, failures.
   else 60 s.
 - **When**: made again when what it's made of changes (a run's seeds done,
   a run queued or stopped, a run's first live speed, a server's state or
-  model, the order), and every 30 s anyway; in between its times count
+  model, the order or Random), and every 30 s anyway; in between its times count
   down. At most once a second (a queue of 2,500 seeds takes 2–25 ms).
   Each time moves a third of the way to the new plan's, or all the way
   when they differ by more than half, so it doesn't jump with each image.

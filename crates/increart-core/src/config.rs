@@ -68,6 +68,10 @@ pub struct Config {
     /// sweep / one at a time).
     #[serde(skip_serializing_if = "is_default")]
     pub job_order: crate::scheduler::Order,
+    /// Within the job order, the next run (or sweep, or a round's order) is
+    /// a random pick instead of queue order (Jobs: Random order).
+    #[serde(skip_serializing_if = "is_default")]
+    pub job_random: bool,
     /// Loads on this machine don't wait for free RAM (a KoboldCpp that
     /// offloads its weights otherwise waits until they fit, 8 GiB to spare).
     #[serde(skip_serializing_if = "is_default")]
