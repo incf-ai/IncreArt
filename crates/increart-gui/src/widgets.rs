@@ -15,6 +15,10 @@ pub struct Dragged(pub Vec<PathBuf>);
 /// collection.
 pub struct DraggedImages(pub Vec<increart_core::ImageRef>);
 
+/// Drag and drop payload: input library ideas, to put in an input
+/// collection.
+pub struct DraggedIdeas(pub Vec<increart_core::Id>);
+
 /// Megapixels, e.g. "1.05 MP".
 pub fn mp(w: u32, h: u32) -> String {
     format!("{:.2} MP", w as f64 * h as f64 / 1e6)
@@ -168,12 +172,44 @@ pub fn collection_drop_target(ui: &egui::Ui, resp: &egui::Response, folder: &Pat
     true
 }
 
+/// Makes an idea card draggable (with `key` for the tour to find it);
+/// `ideas` is called when a drag starts.
+pub fn idea_drag_source(
+    resp: &egui::Response,
+    key: &Path,
+    ideas: impl FnOnce() -> Vec<increart_core::Id>,
+) -> egui::Response {
+    let r = resp.interact(Sense::drag());
+    r.ctx.data_mut(|d| d.insert_temp(dnd_rect_id(false, key), r.rect));
+    if r.drag_started() {
+        egui::DragAndDrop::set_payload(&r.ctx, DraggedIdeas(ideas()));
+    }
+    r
+}
+
+/// An input collection's row as a drop target for idea cards.
+pub fn idea_collection_drop_target(ui: &egui::Ui, resp: &egui::Response, folder: &Path, out: &mut Vec<Msg>) -> bool {
+    let key = Path::new(increart_core::scan::INPUT_COLLECTIONS).join(folder);
+    ui.ctx().data_mut(|d| d.insert_temp(dnd_rect_id(true, &key), resp.rect));
+    if resp.dnd_hover_payload::<DraggedIdeas>().is_some() {
+        ui.painter().rect_stroke(resp.rect.expand(1.0), 3.0, Stroke::new(2.0, ACCENT), egui::StrokeKind::Outside);
+    }
+    let Some(d) = resp.dnd_release_payload::<DraggedIdeas>() else { return false };
+    out.push(Msg::CollectIdeas(folder.to_path_buf(), d.0.clone()));
+    true
+}
+
 /// While dragging: what will happen, next to the pointer.
 pub fn drag_overlay(ctx: &egui::Context) {
     let text = if let Some(d) = egui::DragAndDrop::payload::<DraggedImages>(ctx) {
         match d.0.len() {
             1 => "Add 1 image to a collection".to_string(),
             n => format!("Add {n} images to a collection"),
+        }
+    } else if let Some(d) = egui::DragAndDrop::payload::<DraggedIdeas>(ctx) {
+        match d.0.len() {
+            1 => "Add 1 idea to a collection".to_string(),
+            n => format!("Add {n} ideas to a collection"),
         }
     } else {
         let Some(d) = egui::DragAndDrop::payload::<Dragged>(ctx) else { return };

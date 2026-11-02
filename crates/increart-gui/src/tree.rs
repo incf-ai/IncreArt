@@ -1,5 +1,5 @@
 //! Folder trees with right-click actions (DESIGN.md,
-//! Project folders, Input library folders).
+//! Project folders).
 
 use std::path::{Path, PathBuf};
 
@@ -9,12 +9,6 @@ use increart_gui_core::{AppState, Confirm, Msg, OutputSource, ProjectsTab, Revie
 
 use crate::widgets::{ACCENT, BAD, dialog_buttons, drag_source, drop_target, focus_until_done, ic, ph};
 
-fn children<'a>(folders: &'a [PathBuf], parent: &Path) -> Vec<&'a PathBuf> {
-    let mut v: Vec<_> = folders.iter().filter(|f| f.parent() == Some(parent)).collect();
-    v.sort_by_key(|f| f.to_string_lossy().to_lowercase());
-    v
-}
-
 /// Names a folder, project or collection being renamed (from a tree, a
 /// folder view, F2, or right after New folder / New project).
 pub fn rename_window(ctx: &egui::Context, st: &AppState, out: &mut Vec<Msg>) {
@@ -23,7 +17,7 @@ pub fn rename_window(ctx: &egui::Context, st: &AppState, out: &mut Vec<Msg>) {
         r.creating || r.tree == Tree::Projects && st.index.projects.iter().any(|p| p.dir == tree_dir(r.tree, &r.path));
     let what = match r.tree {
         _ if project => "project",
-        Tree::Collections => "collection",
+        Tree::Collections | Tree::InputCollections => "collection",
         _ => "folder",
     };
     let m = egui::Modal::new(egui::Id::unique("rename")).show(ctx, |ui| {
@@ -123,43 +117,6 @@ fn folder_menu(ui: &mut egui::Ui, st: &AppState, tree: Tree, path: &Path, out: &
             ui.close();
         }
     }
-}
-
-/// A tree of folders only (the input library: ideas show in the grid).
-pub fn folders(
-    ui: &mut egui::Ui,
-    st: &AppState,
-    tree: Tree,
-    all: &[PathBuf],
-    selected: Option<&Path>,
-    out: &mut Vec<Msg>,
-    select: impl Fn(&Path) -> Msg + Copy,
-) {
-    #[allow(clippy::too_many_arguments)]
-    fn rec(
-        ui: &mut egui::Ui,
-        st: &AppState,
-        tree: Tree,
-        all: &[PathBuf],
-        parent: &Path,
-        selected: Option<&Path>,
-        out: &mut Vec<Msg>,
-        select: impl Fn(&Path) -> Msg + Copy,
-    ) {
-        for f in children(all, parent) {
-            ui.horizontal(|ui| {
-                ui.add_space(14.0 * (f.components().count() - 1) as f32);
-                let name = f.file_name().unwrap_or_default().to_string_lossy();
-                let r = ui.selectable_label(selected == Some(f.as_path()), ic(ph::FOLDER, &name));
-                if r.clicked() {
-                    out.push(select(f));
-                }
-                r.context_menu(|ui| folder_menu(ui, st, tree, f, out));
-            });
-            rec(ui, st, tree, all, f, selected, out, select);
-        }
-    }
-    rec(ui, st, tree, all, Path::new(""), selected, out, select);
 }
 
 /// The project tree: folders and projects (with unreviewed counts).

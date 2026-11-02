@@ -2061,7 +2061,17 @@ pub fn lib_op(lib: &mut Library, op: LibOp) -> Result<OpOk, String> {
             }
             Ok(OpOk::Done)
         }
-        LibOp::CollectIdeas(folder, ids) => lib.collect_ideas(&folder, &ids).map(|_| OpOk::Done).map_err(err),
+        LibOp::CollectIdeas(folder, ids) => {
+            // a new collection is made first
+            lib.make_input_collection(&folder).map_err(err)?;
+            lib.collect_ideas(&folder, &ids).map(|_| OpOk::Done).map_err(err)
+        }
+        LibOp::UnlinkIdeas(links) => {
+            for (folder, id) in links {
+                lib.unlink_idea(&id, &folder).map_err(err)?;
+            }
+            Ok(OpOk::Done)
+        }
         LibOp::NewCollection(parent, images) => {
             let path = lib.create_folder(Tree::Collections, &parent, None).map_err(err)?;
             for img in images.iter().filter(|i| i.store == increart_core::Store::Output) {

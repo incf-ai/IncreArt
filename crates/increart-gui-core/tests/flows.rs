@@ -377,6 +377,77 @@ fn save_to_input_library_asks_the_name_and_folder() {
 }
 
 #[test]
+fn input_collections_add_drop_show_and_remove() {
+    let mut h = Harness::new();
+    for t in ["Fox", "Owl", "Fern"] {
+        h.send(Msg::Draft(IdeaDraft { title: t.into(), text: t.to_lowercase(), ..Default::default() }));
+        h.send(Msg::AddIdea(AddIdea::Keep));
+        h.send(Msg::ConfirmSaveIdea);
+        h.settle();
+    }
+    let id = |h: &Harness, t: &str| h.state.index.ideas.iter().find(|e| e.idea.title == t).unwrap().idea.id.clone();
+    let (fox, owl, fern) = (id(&h, "Fox"), id(&h, "Owl"), id(&h, "Fern"));
+    let shown = |h: &Harness| {
+        let mut v: Vec<String> = h.state.library_ideas().iter().map(|e| e.idea.title.clone()).collect();
+        v.sort();
+        v
+    };
+    h.send(Msg::Tab(Tab::InputLibrary));
+
+    // Add to collection…: a collection must be picked or named
+    h.send(Msg::CollectIdeasAsk(vec![fox.clone(), owl.clone()]));
+    let d = h.state.collect_ideas.clone().unwrap();
+    assert!(d.problem(&h.state).is_some(), "nothing picked");
+    h.send(Msg::EditCollectIdeas(CollectIdeasDialog { new_folder: Some("animals".into()), ..d }));
+    h.send(Msg::ConfirmCollectIdeas);
+    h.settle();
+    assert!(h.state.collect_ideas.is_none());
+    assert!(h.errors().is_empty(), "{:?}", h.errors());
+    assert_eq!(h.state.index.idea_collections(&fox), [Path::new("animals")]);
+    // the next one starts in it; a new one inside it
+    h.send(Msg::CollectIdeasAsk(vec![owl.clone()]));
+    let d = h.state.collect_ideas.clone().unwrap();
+    assert_eq!(d.folder, Path::new("animals"));
+    h.send(Msg::EditCollectIdeas(CollectIdeasDialog { new_folder: Some("night".into()), ..d }));
+    h.send(Msg::ConfirmCollectIdeas);
+    h.settle();
+    assert_eq!(h.state.index.idea_collections(&owl), [Path::new("animals"), Path::new("animals/night")]);
+
+    // a card dropped on a collection's row
+    h.send(Msg::NewFolder(increart_core::Tree::InputCollections, PathBuf::new()));
+    h.settle();
+    h.send(Msg::EditRename("plants".into()));
+    h.send(Msg::CommitRename);
+    h.settle();
+    h.send(Msg::CollectIdeas("plants".into(), vec![fern.clone()]));
+    h.settle();
+    assert_eq!(h.state.index.idea_collections(&fern), [Path::new("plants")]);
+
+    // the views: a collection holds the ones inside it; All collections, any
+    h.send(Msg::LibFolder(Some("animals".into())));
+    assert_eq!(shown(&h), ["Fox", "Owl"]);
+    h.send(Msg::LibFolder(Some("animals/night".into())));
+    assert_eq!(shown(&h), ["Owl"]);
+    h.send(Msg::LibFolder(Some(PathBuf::new())));
+    assert_eq!(shown(&h), ["Fern", "Fox", "Owl"]);
+
+    // Remove from this collection: from it and the ones inside; the ideas stay
+    h.send(Msg::LibFolder(Some("animals".into())));
+    h.send(Msg::UncollectIdeas("animals".into(), vec![owl.clone()]));
+    h.settle();
+    assert!(h.state.index.idea_collections(&owl).is_empty());
+    assert_eq!(h.state.idea(&owl).unwrap().loc, IdeaLoc::Library);
+    assert_eq!(shown(&h), ["Fox"]);
+
+    // deleting a collection leaves its ideas in the library
+    h.send(Msg::DeleteNode(increart_core::Tree::InputCollections, "animals".into()));
+    h.settle();
+    assert!(h.state.index.idea_collections(&fox).is_empty());
+    assert_eq!(h.state.idea(&fox).unwrap().loc, IdeaLoc::Library);
+    assert!(h.errors().is_empty(), "{:?}", h.errors());
+}
+
+#[test]
 fn save_and_make_a_project_in_one_step() {
     let mut h = Harness::new();
     h.send(Msg::Draft(IdeaDraft { title: "Fox".into(), text: "a red fox".into(), ..Default::default() }));

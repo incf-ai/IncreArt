@@ -47,8 +47,11 @@ pub fn show(ui: &mut egui::Ui, p: &Picker, height: f32) -> Picked {
     let mut filter = p.filter.to_string();
     ui.horizontal(|ui| {
         ui.label(ph::MAGNIFYING_GLASS);
-        let r =
-            ui.add(egui::TextEdit::singleline(&mut filter).hint_text(format!("filter {}s", p.noun)).desired_width(f32::INFINITY));
+        let r = ui.add(
+            egui::TextEdit::singleline(&mut filter)
+                .hint_text(format!("filter {}s", p.noun))
+                .desired_width(f32::INFINITY),
+        );
         out.field_enter |= r.lost_focus();
         ui.ctx().data_mut(|d| d.insert_temp(egui::Id::unique(("tour_filter", p.id)), r.rect));
     });

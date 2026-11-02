@@ -39,6 +39,7 @@ size (regenerate it with `scripts/make-gui-gallery.sh`).
 | [04-idea-inbox-new-idea](04-idea-inbox-new-idea.webp) | New idea form |
 | [04b-idea-inbox-new-idea-save-dialog](04b-idea-inbox-new-idea-save-dialog.webp) | New idea → Add & save to input library…: the save dialog on the new idea |
 | [05-input-library](05-input-library.webp) | Input library: search, filters and the ideas' tags with counts, collections tree, selection actions, cards |
+| [05c-input-library-add-to-collection](05c-input-library-add-to-collection.webp) | Input library → Add to collection… on two selected ideas (also from their right-click menu, the selection's actions, or by dragging the cards onto a collection on the left): the input collections (a filter, the tree, New collection under it), where they go |
 | [06-projects-grid](06-projects-grid.webp) | Projects: tree and project tiles (cover, counts); the details pane on the right with the folder's totals |
 | [06b-projects-pane](06b-projects-pane.webp) | Projects → Grid, a project selected: the details pane (cover, counts, source ideas, latest run, recent runs, best outputs; Generate / Review / Show outputs / Open folder pinned at the bottom) |
 | [06c-projects-pane-run](06c-projects-pane-run.webp) | Projects → Folder inside a run: the details pane shows the run (prompt, settings, input images, seeds, revisions; Open in Generate / Show outputs / Details) |

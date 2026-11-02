@@ -1920,6 +1920,50 @@ pub struct SaveIdeaDialog {
     pub filter: String,
 }
 
+/// Add to collection… for input library ideas: the collection (or a new
+/// one in it) they go in.
+#[derive(Clone, Debug, PartialEq, Default)]
+pub struct CollectIdeasDialog {
+    pub ideas: Vec<Id>,
+    /// Relative to `input/collections/` (empty: the top level, only for a
+    /// new one).
+    pub folder: PathBuf,
+    /// A new collection to make in `folder` (an existing one of that name,
+    /// any case, is used).
+    pub new_folder: Option<String>,
+    /// The tree's filter.
+    pub filter: String,
+}
+
+impl CollectIdeasDialog {
+    /// The collection the ideas go in and whether it's there already
+    /// (`None`: none picked).
+    pub fn target(&self, state: &AppState) -> Option<(PathBuf, bool)> {
+        let Some(new) = &self.new_folder else {
+            return (!self.folder.as_os_str().is_empty()).then(|| (self.folder.clone(), true));
+        };
+        let at = self.folder.join(new.trim());
+        let same = |f: &&PathBuf| f.to_string_lossy().to_lowercase() == at.to_string_lossy().to_lowercase();
+        Some(match state.index.input_collection_folders.iter().find(same) {
+            Some(f) => (f.clone(), true),
+            None => (at, false),
+        })
+    }
+
+    /// Why it can't add yet.
+    pub fn problem(&self, state: &AppState) -> Option<String> {
+        if let Some(new) = &self.new_folder
+            && let Err(e) = increart_core::library::validate_name(new.trim())
+        {
+            return Some(format!("new collection: {e}"));
+        }
+        if self.target(state).is_none() {
+            return Some("Pick a collection, or make one with New collection".into());
+        }
+        None
+    }
+}
+
 impl SaveIdeaDialog {
     /// Starting in the folder the last save went to, if it's still there.
     pub fn new(state: &AppState, ideas: Vec<Id>, name: String) -> SaveIdeaDialog {
@@ -3362,6 +3406,11 @@ pub struct AppState {
     /// Where the last Save to input library went (this session), the next
     /// one's first folder.
     pub save_idea_last: Option<PathBuf>,
+    /// Putting input library ideas in a collection.
+    pub collect_ideas: Option<CollectIdeasDialog>,
+    /// The input collection the last Add to collection went to (this
+    /// session), the next one's first.
+    pub collect_ideas_last: Option<PathBuf>,
     /// The prompt presets (shared by every library).
     pub prompt_presets: PromptPresets,
     /// The `prompt-presets` folder they are saved in (`None`: not saved,
@@ -3644,6 +3693,8 @@ impl AppState {
             from_ideas_last: None,
             save_idea: None,
             save_idea_last: None,
+            collect_ideas: None,
+            collect_ideas_last: None,
             job_info: None,
             job_log: vec![],
             server_jobs: HashMap::new(),

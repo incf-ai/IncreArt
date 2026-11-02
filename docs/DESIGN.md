@@ -2871,7 +2871,8 @@ idea can be in any number of collections, or in none. The differences:
   Edit idea window.
 - Selecting a collection limits the card grid to the ideas in it and in the
   collections inside it; the other filters (search, starred, with images,
-  tags) apply on top.
+  tags) apply on top. Cards dragged onto a collection go in it; Remove
+  from this collection takes them out of it and the ones inside it.
 - A library from before collections (ideas in folders under
   `input/library/`) is converted once, when opened: each folder becomes a
   collection holding its ideas' entries, and the ideas move to the top of
@@ -3009,23 +3010,32 @@ the keys and mouse buttons go through that view's own history instead.
   then **Tags**: the tags of the collection's ideas with their counts as chips
   (any case counts as one), a click showing only the ideas with it
   (several: all of them), again letting go, **clear** dropping them; then
-  the input collections tree (see Input collections) and the selection
-  actions; the grid shows the selected folder's
-  ideas, newest first (or most used first); cards show PE rewrite state like the inbox's. Multi-select → new project
+  **Collections** as the Output library's: **＋** (New collection), **All
+  ideas**, **All collections** (the ideas in any), then each collection,
+  indented under its parent, with how many ideas are in it and the ones
+  inside it; right-click one for New collection inside, Rename, Move to
+  the top level, Open in file manager, Delete… (its ideas stay). Then the
+  selection actions (with **Add to collection…**); the grid shows the
+  selected collection's ideas, newest first (or most used first); cards show PE rewrite state like the inbox's. Multi-select → new project
   (button or `P`/`Space`); ← → ↑ ↓ and `Home`/`End` select the previous /
   next / first / last idea and show it in the panel, `Ctrl+A` selects all,
   `Enter`/`T` edits; a **Keys** list is pinned at the bottom left; drag an image into a project's reference strip; drag
-  cards onto a folder to file them. Right-click a card, in groups as in the
+  cards onto a collection on the left to add them to it (a selected card
+  carries the selection). Right-click a card, in groups as in the
   inbox: new project, edit, rewrite with PE, add its images as refs to the
-  current project, star/unstar · back to the Idea inbox, discard · copy
+  current project, star/unstar, **Add to collection…** (a modal: the
+  collections with a filter and New collection, starting in the last one
+  used this session), and in a collection's view **Remove from this
+  collection** (from it and the ones inside; the idea stays) · back to the
+  Idea inbox, discard · copy
   text, copy image, describe image with PE · open folder in file manager.
   (Planned: accept all ready rewrites.) When the card is part of a multi-selection, the
   bulk actions (star, new project, rewrite, back to inbox, discard) apply to the
   whole selection. A plain click on a card opens the **idea panel** on the
   right: the idea's images (double-click: full size), text, tags, created
-  date and folder, what its images were used for, the projects it was
-  **used in** (links), and Edit…, New project, Add as refs, Copy text, Open
-  folder pinned to its bottom (the details scroll above them); × closes it. While the panel is closed it opens a moment after
+  date, its collections and folder, what its images were used for, the
+  projects it was **used in** (links), and Edit…, New project, Add as refs,
+  Add to collection…, Copy text, Open folder pinned to its bottom (the details scroll above them); × closes it. While the panel is closed it opens a moment after
   the click, so a double-click (full size) doesn't open it; while it's
   open, a click shows the clicked idea at once. Ctrl/Shift+click only
   selects.

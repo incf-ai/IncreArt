@@ -48,9 +48,15 @@ New idea → Add & save to input library…: the save dialog on the new idea
 
 ## 05-input-library
 
-Input library: folder tree, selection actions, cards
+Input library: search, filters and the ideas' tags with counts, collections tree, selection actions, cards
 
 ![05-input-library](05-input-library.webp)
+
+## 05c-input-library-add-to-collection
+
+Input library → Add to collection… on two selected ideas (also from their right-click menu, the selection's actions, or by dragging the cards onto a collection on the left): the input collections (a filter, the tree, New collection under it), where they go
+
+![05c-input-library-add-to-collection](05c-input-library-add-to-collection.webp)
 
 ## 06-projects-grid
 

@@ -38,6 +38,7 @@ const SCENES: &[&str] = &[
     "04b-idea-inbox-new-idea-save-dialog",
     "05-input-library",
     "05b-input-library-tile",
+    "05c-input-library-add-to-collection",
     "06-projects-grid",
     "06b-projects-pane",
     "06c-projects-pane-run",
@@ -1165,8 +1166,30 @@ impl Tour {
                     Msg::TileSelect(Some(0)),
                 ]
             }
+            "05c-input-library-add-to-collection" => {
+                // two ideas without a collection, into "places"
+                let ids: Vec<_> = st
+                    .library_ideas()
+                    .iter()
+                    .filter(|e| st.index.idea_collections(&e.idea.id).is_empty())
+                    .take(2)
+                    .map(|e| e.idea.id.clone())
+                    .collect();
+                let d = increart_gui_core::CollectIdeasDialog {
+                    ideas: ids.clone(),
+                    folder: PathBuf::from("places"),
+                    ..Default::default()
+                };
+                vec![
+                    Msg::CloseTile,
+                    Msg::LibSelectSet(ids.clone()),
+                    Msg::CollectIdeasAsk(ids),
+                    Msg::EditCollectIdeas(d),
+                ]
+            }
             "06-projects-grid" => vec![
-                // 05b's tiling closed, its cell size back to auto
+                // 05b's tiling closed, its cell size back to auto; 05c's dialog
+                Msg::CancelCollectIdeas,
                 Msg::CloseTile,
                 Msg::LibClearSelection,
                 Msg::TileSettings(increart_core::config::TileSettings { cell: None, ..st.config.tile.clone() }),

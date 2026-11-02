@@ -850,6 +850,13 @@ pub enum Msg {
     /// Puts ideas in an input collection (inbox ideas are saved to the
     /// input library too).
     CollectIdeas(PathBuf, Vec<Id>),
+    /// Add to collection… for input library ideas: asks which.
+    CollectIdeasAsk(Vec<Id>),
+    EditCollectIdeas(CollectIdeasDialog),
+    ConfirmCollectIdeas,
+    CancelCollectIdeas,
+    /// Takes ideas out of an input collection and the ones inside it.
+    UncollectIdeas(PathBuf, Vec<Id>),
     /// A new collection (opened for rename) holding these images.
     NewCollection(PathBuf, Vec<ImageRef>),
     /// Review's Add to collection… modal on these images.
@@ -1303,6 +1310,8 @@ pub enum LibOp {
     ImportInboxDrop,
     AddToCollection(PathBuf, Vec<ImageRef>),
     CollectIdeas(PathBuf, Vec<Id>),
+    /// Entries to remove: (collection, idea).
+    UnlinkIdeas(Vec<(PathBuf, Id)>),
     NewCollection(PathBuf, Vec<ImageRef>),
     /// Adds the images to the collection `folder` (or to a new one named
     /// `new` in it), then rates `links` as `ReviewOutputs` does, both undone
@@ -5542,7 +5551,55 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
             fx
         }
         Msg::AddToCollection(folder, images) => lib(state, LibOp::AddToCollection(folder, images)),
-        Msg::CollectIdeas(folder, ids) => lib(state, LibOp::CollectIdeas(folder, ids)),
+        Msg::CollectIdeas(folder, ids) => {
+            if ids.is_empty() {
+                return vec![];
+            }
+            state.collect_ideas_last = Some(folder.clone());
+            lib(state, LibOp::CollectIdeas(folder, ids))
+        }
+        Msg::CollectIdeasAsk(ideas) => {
+            if !ideas.is_empty() {
+                let last =
+                    state.collect_ideas_last.clone().filter(|f| state.index.input_collection_folders.contains(f));
+                state.collect_ideas =
+                    Some(CollectIdeasDialog { ideas, folder: last.unwrap_or_default(), ..Default::default() });
+            }
+            vec![]
+        }
+        Msg::EditCollectIdeas(d) => {
+            if state.collect_ideas.is_some() {
+                state.collect_ideas = Some(d);
+            }
+            vec![]
+        }
+        Msg::ConfirmCollectIdeas => {
+            let Some(d) = state.collect_ideas.clone() else { return vec![] };
+            if let Some(p) = d.problem(state) {
+                state.messages_info(p);
+                return vec![];
+            }
+            let Some((to, _)) = d.target(state) else { return vec![] };
+            state.collect_ideas = None;
+            update(state, Msg::CollectIdeas(to, d.ideas))
+        }
+        Msg::CancelCollectIdeas => {
+            state.collect_ideas = None;
+            vec![]
+        }
+        Msg::UncollectIdeas(folder, ids) => {
+            let links: Vec<(PathBuf, Id)> = state
+                .index
+                .idea_links
+                .iter()
+                .filter(|l| l.folder.starts_with(&folder) && ids.contains(&l.idea))
+                .map(|l| (l.folder.clone(), l.idea.clone()))
+                .collect();
+            if links.is_empty() {
+                return vec![];
+            }
+            lib(state, LibOp::UnlinkIdeas(links))
+        }
         Msg::NewCollection(parent, images) => lib(state, LibOp::NewCollection(parent, images)),
         Msg::SetCover(p, img) => lib(state, LibOp::SetCover(p, img)),
         Msg::TitleDialog(Some(image)) => {

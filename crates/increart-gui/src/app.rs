@@ -1159,6 +1159,7 @@ impl eframe::App for App {
             crate::home::start_project_window(&ctx, &self.st, &mut out);
             crate::projects::from_ideas_window(&ctx, &self.st, &mut out);
             crate::ideas::save_window(&ctx, &self.st, &mut out);
+            crate::ideas::collect_window(&ctx, &self.st, &mut out);
             crate::projects::sweep_order_window(&ctx, &self.st, &mut out);
             crate::tree::rename_window(&ctx, &self.st, &mut out);
             if self.st.tab == Tab::Projects && self.st.projects_tab == ProjectsTab::Generate {
