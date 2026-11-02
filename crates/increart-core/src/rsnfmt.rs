@@ -33,10 +33,32 @@ fn lf(text: &str) -> Cow<'_, str> {
     if text.contains('\r') { Cow::Owned(text.replace("\r\n", "\n")) } else { Cow::Borrowed(text) }
 }
 
+/// `value` as RSN on one line (newlines in strings escaped), for RSN Lines
+/// (`*.rsnl`): one value per line, appended.
+pub fn to_line<T: Serialize>(value: &T) -> Result<String, String> {
+    let mut config = rsn::ser::Config::new();
+    config.writer = rsn::writer::Config::Compact;
+    config.serialize(value).map_err(|e| e.to_string())
+}
+
 /// Writes `value` atomically (temporary file + rename).
 pub fn write<T: Serialize>(path: &Path, value: &T) -> Result<()> {
     let text = to_string(value).map_err(|e| Error::encode(path.display(), e))?;
     fsutil::write_atomic(path, format!("{text}\n").as_bytes())
+}
+
+/// A file IncreArt wrote as JSON before it wrote RSN (`path` with the
+/// extension `json`) written as RSN at `path`, the JSON removed. Nothing
+/// when `path` exists already or there's no JSON (or it can't be read).
+pub fn convert_json<T: Serialize + DeserializeOwned>(path: &Path) {
+    let old = path.with_extension("json");
+    if path.exists() || !old.is_file() {
+        return;
+    }
+    let Some(value) = fs::read(&old).ok().and_then(|b| serde_json::from_slice::<T>(&b).ok()) else { return };
+    if write(path, &value).is_ok() {
+        let _ = fs::remove_file(&old);
+    }
 }
 
 /// `line:col: error` for an RSN parse error.

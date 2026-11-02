@@ -823,7 +823,7 @@ pub enum EntryKind {
     Run,
     /// A link to a store image.
     Image(ImageRef),
-    /// `*.rsn`, `*.jsonl` (shown with Ctrl+H).
+    /// `*.rsn`, `*.rsnl` (shown with Ctrl+H).
     Meta,
     File,
     /// A folder of the Output library's virtual, read-only `smart/` tree.

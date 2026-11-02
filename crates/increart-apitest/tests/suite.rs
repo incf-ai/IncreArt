@@ -206,7 +206,7 @@ fn light_only_loads_nothing() {
         cases: vec![],
         light: true,
         basic: false,
-        stamps: Some(dir.path().join("validated.json")),
+        stamps: Some(dir.path().join("validated.rsn")),
         out: dir.path().join("r"),
     };
     let _one = ONE.lock().unwrap_or_else(|e| e.into_inner());
@@ -215,7 +215,7 @@ fn light_only_loads_nothing() {
     assert_eq!(a.count("/models/load"), 0);
     assert_eq!(a.count("/img_gen"), 0);
     // not all the basic cases: nothing noted
-    assert!(!dir.path().join("validated.json").exists());
+    assert!(!dir.path().join("validated.rsn").exists());
 }
 
 #[test]
@@ -225,7 +225,7 @@ fn the_basic_cases_note_the_preset_validated() {
     let preset = ServerPreset { name: "One".into(), servers: vec![connect("a", &a.url)] };
     let config = config(std::slice::from_ref(&preset));
     let dir = tempfile::tempdir().unwrap();
-    let stamps = dir.path().join("validated.json");
+    let stamps = dir.path().join("validated.rsn");
     let opts = Options {
         config: config.clone(),
         config_path: None,

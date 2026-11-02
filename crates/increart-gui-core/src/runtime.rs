@@ -1322,7 +1322,7 @@ fn list_dir(root: &Path, rel: &Path) -> Vec<FvEntry> {
                 .map(|i| if i.title.is_empty() { "idea".to_string() } else { i.title })
                 .unwrap_or_else(|| "idea (not found)".into());
             (EntryKind::Idea(id), n, title)
-        } else if name.ends_with(".rsn") || name.ends_with(".jsonl") {
+        } else if name.ends_with(".rsn") || name.ends_with(".rsnl") {
             (EntryKind::Meta, meta.map_or(0, |m| m.len()), "metadata".to_string())
         } else if StoreFormat::of_name(&name).is_some() {
             match link::read_ref(&path, store) {

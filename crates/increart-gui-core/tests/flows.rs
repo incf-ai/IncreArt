@@ -4090,7 +4090,7 @@ fn generate_history_keeps_settings_and_runs() {
     h.send(Msg::CloseHistory);
 
     // older entries (prompt only) find their runs by label and time
-    let file = h.root.join("projects/new project/prompt-history.jsonl");
+    let file = h.root.join("projects/new project/prompt-history.rsnl");
     let now = increart_core::id::now();
     std::fs::remove_file(&file).unwrap();
     for (kind, text) in [(HistoryKind::Queued("r02".into()), "x"), (HistoryKind::Edit, "y")] {
@@ -7317,7 +7317,7 @@ fn opening_a_preset_not_validated_asks_once_to_validate_it_first() {
     update(&mut s, Msg::OpenPreset(0));
     assert!(s.confirm.is_none());
     let mut s = dialog_state(vec![preset("Sd", 1234), preset("Checked", 1240)], Some("Sd"));
-    let path = tmp.path().join("validated.json");
+    let path = tmp.path().join("validated.rsn");
     s.validations_path = Some(path.clone());
     s.suite_found = true;
     // one validated with the settings it has
@@ -7385,7 +7385,7 @@ fn a_basic_validation_ends_on_its_summary_and_continues_to_the_preset() {
     let tmp = tempfile::tempdir().unwrap();
     let preset = |name: &str, port| ServerPreset { name: name.into(), servers: vec![start("gpu0", port)] };
     let mut s = dialog_state(vec![preset("Sd", 1234)], Some("Sd"));
-    let path = tmp.path().join("validated.json");
+    let path = tmp.path().join("validated.rsn");
     s.validations_path = Some(path.clone());
     s.suite_found = true;
     assert!(!s.api_test_advanced, "the basic view first");

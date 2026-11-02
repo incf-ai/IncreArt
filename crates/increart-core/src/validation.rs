@@ -1,6 +1,6 @@
 //! Which server presets passed the server validation suite's basic cases
 //! (DESIGN.md, Validating servers): a stamp per run of them, in
-//! `validated.json` in the app's state folder, written by
+//! `validated.rsn` in the app's state folder, written by
 //! `increart-apitest` and read by the app (its **Servers** screen marks
 //! each preset; opening one never validated asks once to validate it).
 //!
@@ -19,7 +19,7 @@ use sha2::{Digest, Sha256};
 use crate::apitest::{Counts, Outcome};
 use crate::config::{Config, ServerConfig, ServerPreset};
 
-pub const FILE: &str = "validated.json";
+pub const FILE: &str = "validated.rsn";
 
 /// Stamps kept per preset (the newest).
 const KEEP: usize = 5;
@@ -43,7 +43,7 @@ pub fn is_basic(id: &str) -> bool {
     BASIC.iter().any(|b| id.ends_with(&format!("/{b}")))
 }
 
-/// `validated.json` in the app's state folder.
+/// `validated.rsn` in the app's state folder.
 pub fn path() -> Option<PathBuf> {
     crate::config::user_dir("XDG_STATE_HOME", ".local/state", "LOCALAPPDATA").map(|d| d.join(FILE))
 }
@@ -91,6 +91,7 @@ pub struct Stamp {
     /// The SHA-256 of the run's `report.json`.
     pub report_sha256: String,
     /// The run's zipped report.
+    #[serde(default, serialize_with = "crate::rsnfmt::bare")]
     pub zip: Option<PathBuf>,
     pub seal: String,
 }
@@ -156,18 +157,15 @@ pub struct Validations {
 }
 
 impl Validations {
-    /// The file at `path`; none (or unreadable): empty.
+    /// The file at `path`; none (or unreadable): empty. A
+    /// `validated.json` from before RSN becomes `validated.rsn` first.
     pub fn load(path: &Path) -> Validations {
-        std::fs::read(path).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default()
+        crate::rsnfmt::convert_json::<Validations>(path);
+        crate::rsnfmt::read(path).unwrap_or_default()
     }
 
     fn save(&self, path: &Path) -> std::io::Result<()> {
-        if let Some(dir) = path.parent() {
-            std::fs::create_dir_all(dir)?;
-        }
-        let tmp = path.with_extension("json.tmp");
-        std::fs::write(&tmp, serde_json::to_vec_pretty(self).map_err(std::io::Error::other)?)?;
-        std::fs::rename(&tmp, path)
+        crate::rsnfmt::write(path, self).map_err(std::io::Error::other)
     }
 
     /// What the stamps say of `preset` as it is in `config` (the newest
@@ -279,9 +277,27 @@ mod tests {
         let config = Config::default();
         let p = preset("http://10.0.0.2:7860");
         record(&path, stamp(&config, &p, Outcome::Fail)).unwrap();
-        let text = std::fs::read_to_string(&path).unwrap().replace("\"fail\"", "\"pass\"");
-        std::fs::write(&path, text).unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        let edited = text.replace("outcome: fail", "outcome: pass");
+        assert_ne!(edited, text);
+        std::fs::write(&path, edited).unwrap();
         assert_eq!(Validations::load(&path).status(&config, &p), Status::Never);
+    }
+
+    #[test]
+    fn a_validated_json_from_before_rsn_carries_over() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join(FILE);
+        let config = Config::default();
+        let p = preset("http://10.0.0.2:7860");
+        let mut s = stamp(&config, &p, Outcome::Pass);
+        s.zip = Some("/logs/apitest-1.zip".into());
+        let old = Validations { stamps: vec![s], asked: vec!["f".into()] };
+        let json = tmp.path().join("validated.json");
+        std::fs::write(&json, serde_json::to_vec_pretty(&old).unwrap()).unwrap();
+        assert_eq!(Validations::load(&path), old);
+        assert!(path.is_file() && !json.exists());
+        assert!(matches!(Validations::load(&path).status(&config, &p), Status::Passed(_)));
     }
 
     #[test]

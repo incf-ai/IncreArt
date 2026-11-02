@@ -87,8 +87,9 @@ fn write_zip(r: &Report, dest: &Path) -> std::io::Result<u64> {
     match r.validations.as_deref().filter(|p| p.is_file()) {
         None => contents.push("validation: no server preset validated yet".into()),
         Some(path) => {
-            put("validation/validated.json", &fs::read(path)?)?;
-            contents.push("validation/validated.json".into());
+            let name = format!("validation/{}", crate::validation::FILE);
+            put(&name, &fs::read(path)?)?;
+            contents.push(name);
             let v = crate::validation::Validations::load(path);
             let mut zips: Vec<&Path> = vec![];
             for s in v.newest_each() {
@@ -378,7 +379,7 @@ mod tests {
                 "logs/koboldcpp-k.log",
                 "model-directories.txt",
                 "validation/apitest-1.zip",
-                "validation/validated.json"
+                "validation/validated.rsn"
             ]
             .map(|n| format!("{t}/{n}"))
         );

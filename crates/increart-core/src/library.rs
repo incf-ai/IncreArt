@@ -1812,9 +1812,9 @@ impl Library {
     /// Where a text history lives (see [`crate::history`]).
     pub fn history_path(&self, key: &HistoryKey) -> Result<PathBuf> {
         Ok(match key {
-            HistoryKey::Project(id) => self.find_project(id)?.join("prompt-history.jsonl"),
-            HistoryKey::NewIdea => self.root.join("input/new-idea-history.jsonl"),
-            HistoryKey::Idea(id) => self.find_idea(id)?.1.join("text-history.jsonl"),
+            HistoryKey::Project(id) => self.find_project(id)?.join("prompt-history.rsnl"),
+            HistoryKey::NewIdea => self.root.join("input/new-idea-history.rsnl"),
+            HistoryKey::Idea(id) => self.find_idea(id)?.1.join("text-history.rsnl"),
         })
     }
 

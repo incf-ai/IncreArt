@@ -895,9 +895,11 @@ Decisions:
 
 ## File format: RSN
 
-Every structured file IncreArt writes (`config.rsn`, `library.rsn`,
-`idea.rsn`, `project.rsn`, `run.rsn`, `cache/pixel-index.rsn`) and the
-`increart:recipe` PNG chunk use [RSN](https://github.com/khonsulabs/rsn)
+Every structured file IncreArt writes for itself (`config.rsn`,
+`library.rsn`, `idea.rsn`, `project.rsn`, `run.rsn`,
+`cache/pixel-index.rsn`, the histories' `*.rsnl`, and in the app's state
+folder `validated.rsn` and `load-times.rsn`) and the `increart:recipe` PNG
+chunk use [RSN](https://github.com/khonsulabs/rsn)
 (the `rsn` crate, a Rust-like object notation) through serde. It reads like Rust
 literals: `Name { field: value }` structs (the name is optional when read,
 and checked when present), unit and struct enum variants (`Generate`,
@@ -905,9 +907,16 @@ and checked when present), unit and struct enum variants (`Generate`,
 maps, `//` comments. IncreArt writes 4-space indentation and `Option`
 values bare (`source_idea: "…"` or `None`); `Some(…)` is also accepted on
 read. Unknown fields are ignored on read, so older builds can open files
-written by newer ones. The one exception is
-`increart:source`, which is JSON (it describes a foreign file and may be
-read by other tools).
+written by newer ones. A file only ever appended to is **RSN Lines**
+(`*.rsnl`): one value per line, written compact (no spaces or indentation,
+newlines in strings escaped). `validated.rsn` and `load-times.rsn` written
+as JSON by older builds (`*.json`) are converted when first read, the JSON
+removed.
+
+JSON is kept only where another program reads or writes it: the servers'
+APIs, `increart:source` (it describes a foreign file and may be read by
+other tools), and the validation suite's `report.json` and its `--jsonl`
+events (what the app reads of `increart-apitest`).
 
 ## Config file
 
@@ -1739,21 +1748,25 @@ quitting:
 ### Generate history (prompt history)
 
 The last **1000** substantial edits are kept and can be viewed and restored
-(`increart_core::history`), as JSON lines next to what they belong to:
+(`increart_core::history`), as RSN Lines (`*.rsnl`, one entry per line, see
+File format: RSN) next to what they belong to:
 
-- a project's Generate form: `projects/<project>/prompt-history.jsonl` (the
+- a project's Generate form: `projects/<project>/prompt-history.rsnl` (the
   name from when it held only the prompt; a duplicated project starts with an
-  empty history). Each entry has the prompt and negative and, as `form`, the
-  whole form as the autosaved draft has it: size, model preset, steps, cfg,
+  empty history). Each entry has, as `form`, the whole form as the autosaved
+  draft has it: prompt and negative (written only there), size, model preset, steps, cfg,
   flow shift, seeds, the image list with each image's roles, strength,
   source idea and sweep settings. A **queued** checkpoint has `runs`, the
   IDs of the runs it made (a sweep's all). Every entry has `after`, the
   project's newest run before it (an edit "since r05"). Entries from before
-  this have only the texts: their runs are found by the label in "queued
-  r05" (or the sweep's name), and `after` by time;
-- the New idea form (text and title): `input/new-idea-history.jsonl`;
-- an idea's text (Edit idea): `<idea folder>/text-history.jsonl` (moves with
+  this have only the texts (`text`, `extra`): their runs are found by the
+  label in "queued r05" (or the sweep's name), and `after` by time;
+- the New idea form (text and title): `input/new-idea-history.rsnl`;
+- an idea's text (Edit idea): `<idea folder>/text-history.rsnl` (moves with
   the idea).
+
+Histories written as JSON lines (`*.jsonl`, before RSN) are converted when
+first read, the old file kept beside it as `*.jsonl.before-rsnl`.
 
 When an entry is made:
 
@@ -2592,7 +2605,7 @@ ends, is stopped, or loses the app (its stdin closing).
   image per image server), `prompt-enhance.answers`, `together.routing`
   and `together.end-to-end`: a few minutes, the first image the longest.
   A run with all of a preset's basic cases (`--basic`, **Basic only**,
-  **Run all**) notes it in `validated.json` in the app's state folder: a
+  **Run all**) notes it in `validated.rsn` in the app's state folder: a
   stamp with the preset, its settings' fingerprint (a hash of its servers
   and, for a started sd-server, the sd-server binary, model folders and
   arguments; not its name, nor the model presets), the time, passed
@@ -2604,14 +2617,14 @@ ends, is stopped, or loses the app (its stdin closing).
   a started one uses, makes it not validated again. Its seal (a hash of its
   fields) catches a stamp edited by hand; it's no secret (the source is
   public), so what shows a setup was validated is the report the stamp
-  names, with its hash: a bug report carries `validated.json` and each
+  names, with its hash: a bug report carries `validated.rsn` and each
   preset's newest report zip (up to 16 MB each).
 - On the Servers screen each preset has a mark: **validated** (green, the
   date and any warnings on hover), **validation failed** (red), or **not
   validated** (never, or not since its settings changed). With no servers
   open, clicking it validates the preset: the window opens on it and runs
   its basic cases. Opening a preset not validated asks once per settings
-  (the fingerprints asked are noted in `validated.json` too) **Validate
+  (the fingerprints asked are noted in `validated.rsn` too) **Validate
   these servers first?**, strongly recommending it: **Validate now** (the
   same as the mark), **Open without**, or Cancel. Not asked while servers
   are open (the suite can't run then), when the suite isn't beside the
@@ -3552,7 +3565,7 @@ load (any server is taken to load any model), warm-ups, failures.
   passes and megapixels (the model on that device, the model anywhere, the
   device with any model, anything); else the rough formula for one R9700.
 - **Load times**: each load the engine does (its `ModelLoaded` event) is
-  kept in `load-times.json` in the app's state folder, by server and
+  kept in `load-times.rsn` in the app's state folder, by server and
   recipe, as the mean with the last; a load not timed yet takes the
   model's mean on the other servers, else the server's for other models,
   else 60 s.

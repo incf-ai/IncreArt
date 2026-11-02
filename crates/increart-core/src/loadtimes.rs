@@ -1,5 +1,5 @@
 //! How long each server took to load each model (DESIGN.md, Timing), in
-//! `load-times.json` in the app's state folder, for the time-left
+//! `load-times.rsn` in the app's state folder, for the time-left
 //! estimates: a run whose model no server has waits for a load. Kept per
 //! machine, not per library: it's the servers' and disks' speed.
 
@@ -8,9 +8,9 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-pub const FILE: &str = "load-times.json";
+pub const FILE: &str = "load-times.rsn";
 
-/// `load-times.json` in the app's state folder.
+/// `load-times.rsn` in the app's state folder.
 pub fn path() -> Option<PathBuf> {
     crate::config::user_dir("XDG_STATE_HOME", ".local/state", "LOCALAPPDATA").map(|d| d.join(FILE))
 }
@@ -22,15 +22,15 @@ pub struct LoadTimes {
 }
 
 impl LoadTimes {
-    /// Empty when there's none or it can't be read.
+    /// Empty when there's none or it can't be read. A `load-times.json`
+    /// from before RSN becomes `load-times.rsn` first.
     pub fn load(path: &Path) -> LoadTimes {
-        std::fs::read(path).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default()
+        crate::rsnfmt::convert_json::<LoadTimes>(path);
+        crate::rsnfmt::read(path).unwrap_or_default()
     }
 
     pub fn save(&self, path: &Path) -> crate::error::Result<()> {
-        use crate::error::IoContext;
-        let bytes = serde_json::to_vec_pretty(self).map_err(std::io::Error::other).at(path)?;
-        crate::fsutil::write_atomic(path, &bytes)
+        crate::rsnfmt::write(path, self)
     }
 
     /// A load that took `s` seconds: the mean with the last one, so one
@@ -76,6 +76,6 @@ mod tests {
         let p = dir.path().join(FILE);
         t.save(&p).unwrap();
         assert_eq!(LoadTimes::load(&p), t);
-        assert_eq!(LoadTimes::load(&dir.path().join("none.json")), LoadTimes::default());
+        assert_eq!(LoadTimes::load(&dir.path().join("none.rsn")), LoadTimes::default());
     }
 }

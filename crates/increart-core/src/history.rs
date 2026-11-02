@@ -1,10 +1,15 @@
 //! Prompt history (DESIGN.md, Prompt history): the last [`MAX`] substantial
-//! edits of a text, as JSON lines next to what they belong to.
+//! edits of a text, as RSN Lines (one entry per line) next to what they
+//! belong to.
 //!
 //! - a project's Generate form (the prompt and every setting, and the runs
-//!   queued from it): `projects/<project>/prompt-history.jsonl`
-//! - the New idea form: `input/new-idea-history.jsonl`
-//! - an idea's text: `<idea folder>/text-history.jsonl` (moves with the idea)
+//!   queued from it): `projects/<project>/prompt-history.rsnl`
+//! - the New idea form: `input/new-idea-history.rsnl`
+//! - an idea's text: `<idea folder>/text-history.rsnl` (moves with the idea)
+//!
+//! A history still in JSON lines (`*.jsonl`, before RSN) is converted when
+//! first read or added to, the old file kept beside it as
+//! `*.jsonl.before-rsnl`.
 
 use std::fs::{self, OpenOptions};
 use std::io::Write;
@@ -16,6 +21,7 @@ use crate::error::{Error, IoContext, Result};
 use crate::fsutil;
 use crate::id::{Id, Timestamp};
 use crate::model::GenerateDraft;
+use crate::rsnfmt;
 
 /// Entries kept per history.
 pub const MAX: usize = 1000;
@@ -52,19 +58,22 @@ impl HistoryKind {
 pub struct HistoryEntry {
     pub time: Timestamp,
     pub kind: HistoryKind,
+    /// The text, or with a `form` its prompt (not written: the form's is).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub text: String,
-    /// The negative prompt (Generate) or the title (ideas).
+    /// The negative prompt (Generate) or the title (ideas); with a `form`,
+    /// its negative prompt (not written either).
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub extra: String,
     /// Generate: the whole form (older entries have only the prompt).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, serialize_with = "rsnfmt::bare", skip_serializing_if = "Option::is_none")]
     pub form: Option<Box<GenerateDraft>>,
     /// Queued: the runs it made (several for a sweep).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub runs: Vec<Id>,
     /// Generate: the project's newest run before this entry (edits made
     /// "since r05").
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, serialize_with = "rsnfmt::bare", skip_serializing_if = "Option::is_none")]
     pub after: Option<Id>,
 }
 
@@ -95,9 +104,48 @@ pub fn settings_eq(a: Option<&GenerateDraft>, b: Option<&GenerateDraft>) -> bool
 
 /// All entries, oldest first (unreadable lines are skipped).
 pub fn read(path: &Path) -> Vec<HistoryEntry> {
+    convert_jsonl(path);
     fs::read_to_string(path)
-        .map(|s| s.lines().filter_map(|l| serde_json::from_str(l).ok()).collect())
+        .map(|s| s.lines().filter_map(|l| rsnfmt::from_str(l).ok()).map(loaded).collect())
         .unwrap_or_default()
+}
+
+/// An entry as read: with a form, its texts are the form's.
+fn loaded(mut e: HistoryEntry) -> HistoryEntry {
+    if let Some(f) = &e.form {
+        e.text = f.prompt.clone();
+        e.extra = f.negative_prompt.clone();
+    }
+    e
+}
+
+/// An entry's line: with a form, its texts only there.
+fn line(path: &Path, e: &HistoryEntry) -> Result<String> {
+    let stored;
+    let e = if e.form.is_some() {
+        stored = HistoryEntry { text: String::new(), extra: String::new(), ..e.clone() };
+        &stored
+    } else {
+        e
+    };
+    rsnfmt::to_line(e).map_err(|err| Error::encode(path.display(), err))
+}
+
+/// A history still in JSON lines (`path` with the extension `jsonl`)
+/// written as RSN Lines at `path`, the old file kept beside it as
+/// `*.jsonl.before-rsnl`. Nothing when `path` exists already.
+fn convert_jsonl(path: &Path) {
+    let old = path.with_extension("jsonl");
+    if path.exists() || !old.is_file() {
+        return;
+    }
+    let Ok(text) = fs::read_to_string(&old) else { return };
+    let all: Vec<HistoryEntry> = text.lines().filter_map(|l| serde_json::from_str(l).ok()).collect();
+    if write_all(path, &all).is_ok() {
+        let mut backup = old.clone().into_os_string();
+        backup.push(".before-rsnl");
+        let _ = fs::rename(&old, backup);
+    }
 }
 
 /// Keeps the newest [`MAX`], dropping the oldest plain edits first.
@@ -117,7 +165,7 @@ pub fn trim(entries: &mut Vec<HistoryEntry>) {
 fn write_all(path: &Path, entries: &[HistoryEntry]) -> Result<()> {
     let mut text = String::new();
     for e in entries {
-        text += &serde_json::to_string(e).map_err(|e| Error::encode(path.display(), e))?;
+        text += &line(path, e)?;
         text.push('\n');
     }
     fsutil::write_atomic(path, text.as_bytes())
@@ -154,8 +202,8 @@ pub fn record(path: &Path, entry: &HistoryEntry, replace_last: bool) -> Result<(
     if let Some(dir) = path.parent() {
         fs::create_dir_all(dir).at(dir)?;
     }
+    let line = line(path, entry)?;
     let mut f = OpenOptions::new().create(true).append(true).open(path).at(path)?;
-    let line = serde_json::to_string(entry).map_err(|e| Error::encode(path.display(), e))?;
     writeln!(f, "{line}").at(path)?;
     drop(f);
     if fs::read_to_string(path).map(|s| s.lines().count()).unwrap_or(0) >= COMPACT_AT {
@@ -177,7 +225,7 @@ mod tests {
     #[test]
     fn append_merge_and_compact() {
         let d = tempfile::tempdir().unwrap();
-        let p = d.path().join("h.jsonl");
+        let p = d.path().join("h.rsnl");
         record(&p, &e(HistoryKind::Edit, "a fox"), false).unwrap();
         record(&p, &e(HistoryKind::Edit, "a red fox"), true).unwrap();
         // the edit becomes the checkpoint when its text is queued unchanged
@@ -199,5 +247,31 @@ mod tests {
         assert!((MAX..COMPACT_AT).contains(&all.len()), "{}", all.len());
         assert_eq!(all[0].kind, HistoryKind::Queued("r01".into()), "checkpoints are trimmed last");
         assert_eq!(all.last().unwrap().text, format!("edit {}", COMPACT_AT - 1));
+    }
+
+    #[test]
+    fn jsonl_becomes_rsn_lines_with_the_texts_in_the_form() {
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("prompt-history.rsnl");
+        let old = d.path().join("prompt-history.jsonl");
+        // as an older build wrote it: the prompt and negative twice
+        let queued = r#"{"time":"2026-10-28T19:18:49Z","kind":{"Queued":"r44"},"text":"a fox\nin \"snow\"","extra":"blur","form":{"label":"r44","prompt":"a fox\nin \"snow\"","negative_prompt":"blur","width":800,"height":608,"preset":"Qwen-Image","steps":20,"cfg":2.5,"flow_shift":3.0,"seeds":10,"first_seed":398,"alpha":false,"refs":[],"images":[{"image":{"id":"2026.10.28-13.56-0000","store":"Input"},"reference":true,"start":false}]},"runs":["2026.10.28-19.18-0000"],"after":"2026.10.28-18.55-0000"}"#;
+        let text = r#"{"time":"2026-10-28T19:20:00Z","kind":"Edit","text":"only text"}"#;
+        fs::write(&old, format!("{queued}\n{text}\nnot json\n")).unwrap();
+        let want: Vec<HistoryEntry> = [queued, text].map(|l| serde_json::from_str(l).unwrap()).into();
+
+        assert_eq!(read(&p), want);
+        assert!(!old.exists());
+        assert!(d.path().join("prompt-history.jsonl.before-rsnl").is_file());
+        let lines = fs::read_to_string(&p).unwrap();
+        assert_eq!(lines.lines().count(), 2, "{lines}");
+        assert_eq!(lines.matches("a fox").count(), 1, "the prompt only in the form: {lines}");
+        assert_eq!(lines.matches("blur").count(), 1, "{lines}");
+
+        // appended in RSN too, and read back the same
+        let mut next = want[0].clone();
+        next.kind = HistoryKind::BeforeClear;
+        record(&p, &next, false).unwrap();
+        assert_eq!(read(&p), [want.clone(), vec![next]].concat());
     }
 }
