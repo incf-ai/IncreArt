@@ -17,6 +17,7 @@ mod home;
 mod ideas;
 mod logs;
 mod markup;
+mod pane;
 mod pe_settings;
 mod presets;
 mod project_pane;

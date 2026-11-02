@@ -3350,10 +3350,15 @@ the keys and mouse buttons go through that view's own history instead.
     collection**), or Review's **Add to collection…**, which can rate too. On disk: `collections/<folder>/…/<image-id>.png`, links into
     `output_images/`; removing an image from a collection removes only that
     link, deleting a collection removes its links (asks first), the images
-    keep their rating and project.
+    keep their rating and project. In the side panel collections nest,
+    each with how many images are in it and the ones inside it;
+    right-click one for New collection inside, Rename, Move to the top
+    level, Open in file manager, Delete… (the Input library's collections
+    are drawn by the same code).
   - **Smart folders** (virtual, read-only, computed): by date (per day, from
     the image IDs), by source idea, by project, by tag (one folder per tag
-    of a kept image, by name), transparent. **By project**
+    of a kept image, by name), transparent; each list starts closed, open
+    while one of it is shown. **By project**
     follows the project tree: folders and subfolders (each a source of its
     own, its projects' kept images together) down to the projects, showing
     only what has kept images; in the side panel a folder holding the

@@ -1,17 +1,17 @@
 //! Idea inbox (New idea · Grid · Discarded) and Input library (Grid with the
 //! folder tree).
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use eframe::egui::{self, Align2, Color32, FontId, Key, Panel, RichText, ScrollArea, Sense, Stroke};
 use increart_core::scan::IdeaEntry;
 use increart_core::{IdeaLoc, ImageRef, Tree, Verdict};
 use increart_gui_core::{
-    AddIdea, AppState, Confirm, IdeaAge, IdeaOrigin, InboxFilter, InboxTab, InfoPanel, LibTab, Msg, PickKind, Tab,
-    ZoomGrid,
+    AddIdea, AppState, IdeaAge, IdeaOrigin, InboxFilter, InboxTab, InfoPanel, LibTab, Msg, PickKind, Tab, ZoomGrid,
 };
 
 use crate::folder_pick;
+use crate::pane;
 use crate::textures::Textures;
 use crate::widgets::{ACCENT, NEUTRAL, card, cover_buttons, dialog_footer, ic, ph, short, single_click, thumb};
 
@@ -1804,38 +1804,34 @@ fn image_meta(ui: &mut egui::Ui, st: &AppState, root: &Path, tex: &mut Textures,
 /// shown), then with images, starred, not in a collection.
 fn smart_panel(ui: &mut egui::Ui, st: &AppState, out: &mut Vec<Msg>) {
     use increart_gui_core::IdeaSmart;
-    ui.add_space(6.0);
-    ui.label(RichText::new("Smart folders").strong());
+    pane::smart_heading(ui);
     let pick = |ui: &mut egui::Ui, out: &mut Vec<Msg>, s: IdeaSmart, label: String| {
         if ui.selectable_label(st.lib_smart.as_ref() == Some(&s), label).clicked() {
             out.push(Msg::LibSmart(s));
         }
     };
-    let open = |f: fn(&IdeaSmart) -> bool| st.lib_smart.as_ref().is_some_and(f);
-    egui::CollapsingHeader::new("by date").default_open(open(|s| matches!(s, IdeaSmart::Day(_)))).show(ui, |ui| {
+    let showing = |f: fn(&IdeaSmart) -> bool| st.lib_smart.as_ref().is_some_and(f);
+    pane::smart_group(ui, "by date", showing(|s| matches!(s, IdeaSmart::Day(_))), |ui| {
         for (day, n) in st.idea_days() {
             pick(ui, out, IdeaSmart::Day(day.clone()), format!("{day} ({n})"));
         }
     });
-    egui::CollapsingHeader::new("by source").default_open(open(|s| matches!(s, IdeaSmart::Origin(_)))).show(ui, |ui| {
+    pane::smart_group(ui, "by source", showing(|s| matches!(s, IdeaSmart::Origin(_))), |ui| {
         for (o, n) in st.idea_origins() {
             pick(ui, out, IdeaSmart::Origin(o), format!("{} ({n})", o.label()));
         }
     });
-    egui::CollapsingHeader::new("by project").default_open(open(|s| matches!(s, IdeaSmart::Project(_)))).show(
-        ui,
-        |ui| {
-            let projects = st.idea_projects();
-            if projects.is_empty() {
-                ui.weak("No idea has been used in a project yet.");
-            }
-            for (p, n) in projects {
-                let name = st.index.project(&p).map(|e| e.name()).unwrap_or_default();
-                pick(ui, out, IdeaSmart::Project(p), ic(ph::ROCKET_LAUNCH, &format!("{} ({n})", short(&name, 26))));
-            }
-        },
-    );
-    egui::CollapsingHeader::new("by tag").default_open(open(|s| matches!(s, IdeaSmart::Tag(_)))).show(ui, |ui| {
+    pane::smart_group(ui, "by project", showing(|s| matches!(s, IdeaSmart::Project(_))), |ui| {
+        let projects = st.idea_projects();
+        if projects.is_empty() {
+            ui.weak("No idea has been used in a project yet.");
+        }
+        for (p, n) in projects {
+            let name = st.index.project(&p).map(|e| e.name()).unwrap_or_default();
+            pick(ui, out, IdeaSmart::Project(p), ic(ph::ROCKET_LAUNCH, &format!("{} ({n})", short(&name, 26))));
+        }
+    });
+    pane::smart_group(ui, "by tag", showing(|s| matches!(s, IdeaSmart::Tag(_))), |ui| {
         let tags = st.idea_tags();
         if tags.is_empty() {
             ui.weak("No idea has a tag yet.");
@@ -1846,21 +1842,20 @@ fn smart_panel(ui: &mut egui::Ui, st: &AppState, out: &mut Vec<Msg>) {
     });
     for (s, name) in IdeaSmart::FLAT {
         let n = st.smart_ideas(&s).len();
-        pick(ui, out, s, format!("{name} ({n})"));
+        let icon = match s {
+            IdeaSmart::WithImages => ph::IMAGE,
+            IdeaSmart::Starred => ph::STAR,
+            _ => ph::FOLDER_DASHED,
+        };
+        pick(ui, out, s, ic(icon, &format!("{name} ({n})")));
     }
 }
 
 /// The input collections, as the Output library's: New collection, All
-/// ideas, All collections (the ideas in any), then each collection with
-/// how many ideas are in it and in the ones inside it; idea cards drop
+/// ideas, then the collections (pane::collection_rows); idea cards drop
 /// onto them.
 fn collections_panel(ui: &mut egui::Ui, st: &AppState, out: &mut Vec<Msg>) {
-    ui.horizontal(|ui| {
-        ui.label(RichText::new("Collections").strong());
-        if ui.small_button(ph::FOLDER_PLUS).on_hover_text("New collection").clicked() {
-            out.push(Msg::NewFolder(Tree::InputCollections, PathBuf::new()));
-        }
-    });
+    pane::collections_heading(ui, Tree::InputCollections, out);
     let all = ui.selectable_label(
         st.lib_folder.is_none() && st.lib_smart.is_none(),
         ic(ph::BOOKS, &format!("All ideas ({})", lib_count(st, None))),
@@ -1868,61 +1863,13 @@ fn collections_panel(ui: &mut egui::Ui, st: &AppState, out: &mut Vec<Msg>) {
     if all.on_hover_text("every idea in the input library").clicked() {
         out.push(Msg::LibFolder(None));
     }
-    let any = Path::new("");
-    let r = ui.selectable_label(
-        st.lib_folder.as_deref() == Some(any),
-        ic(ph::FOLDERS, &format!("All collections ({})", lib_count(st, Some(any)))),
-    );
-    if r.on_hover_text("the ideas in any collection").clicked() {
-        out.push(Msg::LibFolder(Some(PathBuf::new())));
-    }
-    let mut folders = st.index.input_collection_folders.clone();
-    folders.sort();
-    for f in folders {
-        let n = lib_count(st, Some(&f));
-        ui.horizontal(|ui| {
-            ui.add_space(12.0 * f.components().count() as f32);
-            let name = f.file_name().unwrap_or_default().to_string_lossy();
-            let r = ui.selectable_label(st.lib_folder.as_ref() == Some(&f), ic(ph::FOLDER, &format!("{name} ({n})")));
-            if r.clicked() {
-                out.push(Msg::LibFolder(Some(f.clone())));
-            }
-            crate::widgets::idea_collection_drop_target(ui, &r, &f, out);
-            r.context_menu(|ui| {
-                if ui.button(ic(ph::FOLDER_PLUS, "New collection inside")).clicked() {
-                    out.push(Msg::NewFolder(Tree::InputCollections, f.clone()));
-                    ui.close();
-                }
-                if ui.button(ic(ph::PENCIL_SIMPLE, "Rename")).clicked() {
-                    out.push(Msg::StartRename(Tree::InputCollections, f.clone()));
-                    ui.close();
-                }
-                if f.parent().is_some_and(|p| !p.as_os_str().is_empty())
-                    && ui.button(ic(ph::ARROW_UP, "Move to the top level")).clicked()
-                {
-                    out.push(Msg::MoveNode(Tree::InputCollections, f.clone(), PathBuf::new()));
-                    ui.close();
-                }
-                if ui.button(ic(ph::FOLDER_OPEN, "Open in file manager")).clicked() {
-                    out.push(Msg::ShowInFileManager(Path::new(increart_core::scan::INPUT_COLLECTIONS).join(&f)));
-                    ui.close();
-                }
-                if ui.button(ic(ph::TRASH, "Delete…")).clicked() {
-                    let text = format!("Delete collection {name}? {}.", st.delete_summary(Tree::InputCollections, &f));
-                    out.push(Msg::Ask(Confirm::new(
-                        text,
-                        "Delete",
-                        Msg::DeleteNode(Tree::InputCollections, f.clone()),
-                    )));
-                    ui.close();
-                }
-            });
-        });
-    }
+    pane::collection_rows(ui, st, Tree::InputCollections, out);
     smart_panel(ui, st, out);
 }
 
-fn lib_count(st: &AppState, folder: Option<&Path>) -> usize {
+/// How many ideas are in the input library (None) or in collection `f`
+/// and the ones inside it ("": any).
+pub fn lib_count(st: &AppState, folder: Option<&Path>) -> usize {
     let lib = st.index.ideas.iter().filter(|e| e.loc == IdeaLoc::Library);
     match folder {
         None => lib.count(),
