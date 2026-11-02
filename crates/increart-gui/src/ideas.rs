@@ -1030,11 +1030,14 @@ pub fn input_library(ui: &mut egui::Ui, st: &AppState, tex: &mut Textures, out: 
                 });
         });
         let mut f = st.lib_filter.clone();
-        ui.add(egui::TextEdit::singleline(&mut f.text).hint_text("text or tag").desired_width(f32::INFINITY));
-        ui.checkbox(&mut f.starred_only, ic(ph::STAR, "starred only"));
-        ui.checkbox(&mut f.with_images_only, ic(ph::IMAGE, "with images only"));
-        ui.checkbox(&mut f.show_hidden, ic(ph::PENCIL_SIMPLE, "show edited copies"))
-            .on_hover_text("the cropped and marked copies (Crop / mark…), hidden otherwise; with no folder selected");
+        crate::widgets::search_field(ui, &mut f.text, "Search titles, text and tags");
+        ui.horizontal_wrapped(|ui| {
+            ui.checkbox(&mut f.starred_only, ic(ph::STAR, "starred"));
+            ui.checkbox(&mut f.with_images_only, ic(ph::IMAGE, "with images"));
+            ui.checkbox(&mut f.show_hidden, ic(ph::PENCIL_SIMPLE, "edited copies")).on_hover_text(
+                "the cropped and marked copies (Crop / mark…), hidden otherwise; with no folder selected",
+            );
+        });
         ui.horizontal(|ui| {
             ui.label("used in a project:");
             for (v, l) in [(None, "any"), (Some(true), "yes"), (Some(false), "no")] {
@@ -1054,6 +1057,10 @@ pub fn input_library(ui: &mut egui::Ui, st: &AppState, tex: &mut Textures, out: 
                 }
             }
         });
+        let tags = st.idea_tag_counts(st.lib_source_ideas());
+        let (none, tip) =
+            ("No tags here yet: Edit an idea to tag it.", "only ideas with this tag (several: all of them)");
+        crate::widgets::tag_chips(ui, "lib_tag_filter", tags, &mut f.tags, none, tip);
         if f != st.lib_filter {
             out.push(Msg::LibFilter(f));
         }

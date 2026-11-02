@@ -38,7 +38,7 @@ size (regenerate it with `scripts/make-gui-gallery.sh`).
 | [03c-idea-inbox-save-dialog](03c-idea-inbox-save-dialog.webp) | Idea inbox → Save to input library… (`1` / `2` / `S`): the library's folders on the left (a filter, the tree, New folder under it), the idea's name and where it's saved on the right; Save & new project |
 | [04-idea-inbox-new-idea](04-idea-inbox-new-idea.webp) | New idea form |
 | [04b-idea-inbox-new-idea-save-dialog](04b-idea-inbox-new-idea-save-dialog.webp) | New idea → Add & save to input library…: the save dialog on the new idea |
-| [05-input-library](05-input-library.webp) | Input library: folder tree, selection actions, cards |
+| [05-input-library](05-input-library.webp) | Input library: search, filters and the ideas' tags with counts, folder tree, selection actions, cards |
 | [06-projects-grid](06-projects-grid.webp) | Projects: tree and project tiles (cover, counts); the details pane on the right with the folder's totals |
 | [06b-projects-pane](06b-projects-pane.webp) | Projects → Grid, a project selected: the details pane (cover, counts, source ideas, latest run, recent runs, best outputs; Generate / Review / Show outputs / Open folder pinned at the bottom) |
 | [06c-projects-pane-run](06c-projects-pane-run.webp) | Projects → Folder inside a run: the details pane shows the run (prompt, settings, input images, seeds, revisions; Open in Generate / Show outputs / Details) |
@@ -64,7 +64,7 @@ size (regenerate it with `scripts/make-gui-gallery.sh`).
 | [17-prompt-history](17-prompt-history.webp) | Generate history: entries newest first with the settings changed and the runs they led to, word diff and settings against the current form, Restore all / prompt only / Copy |
 | [18-edit-idea](18-edit-idea.webp) | Edit idea window (title, tags, text with history, images, variants) |
 | [19-idea-inbox-import](19-idea-inbox-import.webp) | Idea inbox → Import: waiting files, Import now, recent imports with conversions |
-| [20-input-library-filters](20-input-library-filters.webp) | Input library: filters (starred only), Grid · Folder · Discarded |
+| [20-input-library-filters](20-input-library-filters.webp) | Input library: filters (starred, the tag "photo" picked), Grid · Folder · Discarded |
 | [21-resolutions](21-resolutions.webp) | Resolutions editor (aspect, MP, time estimate, row actions) |
 | [21b-model-presets](21b-model-presets.webp) | Model presets editor (the gear beside Generate's Model preset): which open servers run each, its recipe, files, steps, CFG, flow shift and sigmas |
 | [22-output-library-lineage](22-output-library-lineage.webp) | Output library: sources (collections, smart folders), filters, lineage and recipe of an edited image |

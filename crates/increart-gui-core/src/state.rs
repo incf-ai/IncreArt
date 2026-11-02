@@ -54,6 +54,9 @@ pub struct LibFilter {
     pub most_used: bool,
     /// The edited copies (Crop / mark…) too, from `input/edited/`.
     pub show_hidden: bool,
+    /// Only ideas with all of these tags (any case), picked in the tag
+    /// filter.
+    pub tags: Vec<String>,
 }
 
 /// An input image's metadata from its file: where it was imported from, and
@@ -3725,17 +3728,7 @@ impl AppState {
 
     /// Kept ideas in the selected folder and its subfolders, newest first.
     pub fn library_ideas(&self) -> Vec<&IdeaEntry> {
-        let mut v: Vec<_> = self
-            .index
-            .ideas
-            .iter()
-            .filter(|e| match (&e.loc, &self.lib_folder) {
-                (IdeaLoc::Library(_), None) => true,
-                (IdeaLoc::Library(f), Some(sel)) => f.starts_with(sel),
-                (IdeaLoc::Edited, None) => self.lib_filter.show_hidden,
-                _ => false,
-            })
-            .collect();
+        let mut v = self.lib_source_ideas();
         let f = &self.lib_filter;
         let q = f.text.to_lowercase();
         v.retain(|e| {
@@ -3744,6 +3737,7 @@ impl AppState {
                 || i.title.to_lowercase().contains(&q)
                 || i.text.to_lowercase().contains(&q)
                 || i.tags.iter().any(|t| t.to_lowercase().contains(&q)))
+                && f.tags.iter().all(|t| i.tags.iter().any(|x| x.to_lowercase() == t.to_lowercase()))
                 && (!f.starred_only || i.starred)
                 && (!f.with_images_only || !i.images.is_empty())
                 && f.used_in_project.is_none_or(|p| p == !i.projects.is_empty())
@@ -4612,15 +4606,28 @@ impl AppState {
     /// (then by name).
     pub fn tag_counts<'a>(&self, images: impl IntoIterator<Item = &'a ImageRef>) -> Vec<(String, usize)> {
         let all = self.output_tags();
-        let mut n: std::collections::BTreeMap<String, (String, usize)> = Default::default();
-        for i in images {
-            for t in all.get(&i.id).copied().unwrap_or_default() {
-                n.entry(t.to_lowercase()).or_insert((t.clone(), 0)).1 += 1;
-            }
-        }
-        let mut v: Vec<(String, usize)> = n.into_values().collect();
-        v.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.to_lowercase().cmp(&b.0.to_lowercase())));
-        v
+        count_tags(images.into_iter().map(|i| all.get(&i.id).copied().unwrap_or_default()))
+    }
+
+    /// The ideas' tags with how many have each, most first (the input
+    /// library's tag filter).
+    pub fn idea_tag_counts<'a>(&self, ideas: impl IntoIterator<Item = &'a IdeaEntry>) -> Vec<(String, usize)> {
+        count_tags(ideas.into_iter().map(|e| e.idea.tags.as_slice()))
+    }
+
+    /// The input library Grid's ideas before its filters: the folder's (all
+    /// of the library's with none), and the edited copies when shown.
+    pub fn lib_source_ideas(&self) -> Vec<&IdeaEntry> {
+        self.index
+            .ideas
+            .iter()
+            .filter(|e| match (&e.loc, &self.lib_folder) {
+                (IdeaLoc::Library(_), None) => true,
+                (IdeaLoc::Library(f), Some(sel)) => f.starts_with(sel),
+                (IdeaLoc::Edited, None) => self.lib_filter.show_hidden,
+                _ => false,
+            })
+            .collect()
     }
 
     /// Every tag in the library, output images' and ideas', with how many
@@ -5752,6 +5759,20 @@ pub fn cover(p: &ProjectEntry) -> Option<ImageRef> {
         .iter()
         .max_by(|a, b| (rank(a.verdict), &a.image.id).cmp(&(rank(b.verdict), &b.image.id)))
         .map(|o| o.image.clone())
+}
+
+/// Tags (one list per image or idea) with how many lists have each, any
+/// case counting as one (the first spelling met), most first, then A–Z.
+fn count_tags<'a>(lists: impl IntoIterator<Item = &'a [String]>) -> Vec<(String, usize)> {
+    let mut n: BTreeMap<String, (String, usize)> = Default::default();
+    for tags in lists {
+        for t in tags {
+            n.entry(t.to_lowercase()).or_insert((t.clone(), 0)).1 += 1;
+        }
+    }
+    let mut v: Vec<(String, usize)> = n.into_values().collect();
+    v.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.to_lowercase().cmp(&b.0.to_lowercase())));
+    v
 }
 
 #[cfg(test)]

@@ -2988,9 +2988,14 @@ the keys and mouse buttons go through that view's own history instead.
     all. Restores can be undone with `Ctrl+Z`.
 - **Input library**: tabs **Grid** (default) · **Folder** (see Projects →
   Folder) · **Discarded** (the same Discarded view as in the Idea inbox). In
-  Grid, the left panel holds the filters (tag / starred / text /
-  has-images / **used in a project** or not), selection actions, and the library folder
-  tree (see Input library folders); the grid shows the selected folder's
+  Grid, the left panel is laid out as the Output library's: the search box
+  (titles, text and tags; ✕ or `Esc` clears it), the filters (starred /
+  with images / edited copies, **used in a project** or not, the order),
+  then **Tags**: the tags of the folder's ideas with their counts as chips
+  (any case counts as one), a click showing only the ideas with it
+  (several: all of them), again letting go, **clear** dropping them; then
+  the library folder tree (see Input library folders) and the selection
+  actions; the grid shows the selected folder's
   ideas, newest first (or most used first); cards show PE rewrite state like the inbox's. Multi-select → new project
   (button or `P`/`Space`); ← → ↑ ↓ and `Home`/`End` select the previous /
   next / first / last idea and show it in the panel, `Ctrl+A` selects all,

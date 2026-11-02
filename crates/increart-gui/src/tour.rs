@@ -1436,7 +1436,11 @@ impl Tour {
             "20-input-library-filters" => vec![
                 Msg::Tab(Tab::InputLibrary),
                 Msg::LibTab(increart_gui_core::LibTab::Grid),
-                Msg::LibFilter(increart_gui_core::LibFilter { starred_only: true, ..Default::default() }),
+                Msg::LibFilter(increart_gui_core::LibFilter {
+                    starred_only: true,
+                    tags: vec!["photo".into()],
+                    ..Default::default()
+                }),
             ],
             "21-resolutions" => vec![
                 Msg::LibFilter(Default::default()),

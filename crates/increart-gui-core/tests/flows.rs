@@ -2454,8 +2454,8 @@ fn edit_idea_window_and_its_history() {
 #[test]
 fn library_filters_and_output_sources() {
     let mut h = Harness::new();
-    for (t, x, star) in [("Fox", "a fox", true), ("Hut", "alpine hut", false)] {
-        h.send(Msg::Draft(IdeaDraft { title: t.into(), text: x.into(), ..Default::default() }));
+    for (t, x, star, tags) in [("Fox", "a fox", true, "animals, photo"), ("Hut", "alpine hut", false, "Photo")] {
+        h.send(Msg::Draft(IdeaDraft { title: t.into(), text: x.into(), tags: tags.into(), ..Default::default() }));
         h.send(Msg::AddIdea(AddIdea::Keep));
         h.send(Msg::ConfirmSaveIdea);
         h.settle();
@@ -2471,6 +2471,13 @@ fn library_filters_and_output_sources() {
     assert_eq!(h.state.library_ideas()[0].idea.title, "Hut");
     h.send(Msg::LibFilter(LibFilter { used_in_project: Some(true), ..Default::default() }));
     assert!(h.state.library_ideas().is_empty());
+    // tags: any case counts as one; several picked, ideas with all of them
+    let counts = h.state.idea_tag_counts(h.state.lib_source_ideas());
+    assert_eq!(counts, [("photo".to_string(), 2), ("animals".to_string(), 1)]);
+    h.send(Msg::LibFilter(LibFilter { tags: vec!["PHOTO".into()], ..Default::default() }));
+    assert_eq!(h.state.library_ideas().len(), 2);
+    h.send(Msg::LibFilter(LibFilter { tags: vec!["photo".into(), "animals".into()], ..Default::default() }));
+    assert_eq!(h.state.library_ideas().iter().map(|e| e.idea.title.as_str()).collect::<Vec<_>>(), ["Fox"]);
     h.send(Msg::LibFilter(LibFilter::default()));
 
     // outputs: collections, smart folders, cover, export

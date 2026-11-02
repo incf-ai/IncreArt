@@ -1941,27 +1941,14 @@ fn kept_match(st: &AppState, folder: &Path, q: &str) -> bool {
 fn search_panel(ui: &mut egui::Ui, st: &AppState, out: &mut Vec<Msg>) {
     let mut f = st.output_filter.clone();
     let projects = st.output_search_projects;
-    // right to left: the clear button, then the field takes what's left
-    let row = egui::vec2(ui.available_width(), ui.spacing().interact_size.y);
-    ui.allocate_ui_with_layout(row, egui::Layout::right_to_left(egui::Align::Center), |ui| {
-        let mut q = if projects { st.output_project_search.clone() } else { f.text.clone() };
-        let mut clear = !q.is_empty() && ui.small_button(ph::X).on_hover_text("clear").clicked();
-        let hint = if projects { "Search project names" } else { "Search titles, tags and prompts" };
-        let r = ui.add(
-            egui::TextEdit::singleline(&mut q)
-                .hint_text(ic(ph::MAGNIFYING_GLASS, hint))
-                .desired_width(ui.available_width()),
-        );
-        clear |= r.lost_focus() && ui.input(|i| i.key_pressed(Key::Escape));
-        if clear {
-            q.clear();
-        }
-        if projects && q != st.output_project_search {
+    if projects {
+        let mut q = st.output_project_search.clone();
+        if crate::widgets::search_field(ui, &mut q, "Search project names") {
             out.push(Msg::OutputProjectSearch(q));
-        } else if !projects {
-            f.text = q;
         }
-    });
+    } else {
+        crate::widgets::search_field(ui, &mut f.text, "Search titles, tags and prompts");
+    }
     ui.horizontal(|ui| {
         ui.weak("in");
         let images =
@@ -1994,39 +1981,9 @@ fn search_panel(ui: &mut egui::Ui, st: &AppState, out: &mut Vec<Msg>) {
 /// shows only the images with it (several: all of them), again lets go.
 fn tag_filter(ui: &mut egui::Ui, st: &AppState, f: &mut increart_gui_core::OutputFilter) {
     let images = st.source_images_in(&st.output_source, f.ratings);
-    let mut tags = st.tag_counts(images.iter().map(|o| &o.image));
-    // one picked that none of these have stays, to let go of it
-    for t in &f.tags {
-        if !tags.iter().any(|(x, _)| x.to_lowercase() == t.to_lowercase()) {
-            tags.push((t.clone(), 0));
-        }
-    }
-    ui.horizontal(|ui| {
-        ui.label(ic(ph::TAG, "Tags"));
-        if !f.tags.is_empty() && ui.small_button("clear").on_hover_text("show every tag's images").clicked() {
-            f.tags.clear();
-        }
-    });
-    if tags.is_empty() {
-        ui.weak("No tags here yet: tag images with L.");
-        return;
-    }
-    ScrollArea::vertical().id_salt("tag_filter").max_height(110.0).auto_shrink([false, true]).show(ui, |ui| {
-        ui.horizontal_wrapped(|ui| {
-            for (t, n) in tags {
-                let at = f.tags.iter().position(|x| x.to_lowercase() == t.to_lowercase());
-                let r = ui.selectable_label(at.is_some(), format!("{t} ({n})"));
-                if r.on_hover_text("only images with this tag (several: all of them)").clicked() {
-                    match at {
-                        Some(i) => {
-                            f.tags.remove(i);
-                        }
-                        None => f.tags.push(t),
-                    }
-                }
-            }
-        });
-    });
+    let tags = st.tag_counts(images.iter().map(|o| &o.image));
+    let (none, tip) = ("No tags here yet: tag images with L.", "only images with this tag (several: all of them)");
+    crate::widgets::tag_chips(ui, "tag_filter", tags, &mut f.tags, none, tip);
 }
 
 /// Search and filters, then the sources: collections (All projects first,

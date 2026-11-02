@@ -549,6 +549,68 @@ pub fn dialog_buttons<R>(ui: &mut egui::Ui, actions: impl FnOnce(&mut egui::Ui) 
     dialog_footer(ui, |_| (), actions).1
 }
 
+/// A search box across the panel with a clear button (Esc in it clears
+/// too); true when `q` changed.
+pub fn search_field(ui: &mut egui::Ui, q: &mut String, hint: &str) -> bool {
+    let before = q.clone();
+    // right to left: the clear button, then the field takes what's left
+    let row = egui::vec2(ui.available_width(), ui.spacing().interact_size.y);
+    ui.allocate_ui_with_layout(row, egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        let mut clear = !q.is_empty() && ui.small_button(ph::X).on_hover_text("clear").clicked();
+        let r = ui.add(
+            egui::TextEdit::singleline(q).hint_text(ic(ph::MAGNIFYING_GLASS, hint)).desired_width(ui.available_width()),
+        );
+        clear |= r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Escape));
+        if clear {
+            q.clear();
+        }
+    });
+    *q != before
+}
+
+/// The tag filter: "Tags" (with clear while some are picked), then each tag
+/// with its count as a chip; a click picks it (several: all of them), again
+/// lets go. A picked tag none have stays, to let go of it.
+pub fn tag_chips(
+    ui: &mut egui::Ui,
+    id: &str,
+    mut tags: Vec<(String, usize)>,
+    picked: &mut Vec<String>,
+    none: &str,
+    tip: &str,
+) {
+    for t in picked.iter() {
+        if !tags.iter().any(|(x, _)| x.to_lowercase() == t.to_lowercase()) {
+            tags.push((t.clone(), 0));
+        }
+    }
+    ui.horizontal(|ui| {
+        ui.label(ic(ph::TAG, "Tags"));
+        if !picked.is_empty() && ui.small_button("clear").on_hover_text("show them whatever their tags").clicked() {
+            picked.clear();
+        }
+    });
+    if tags.is_empty() {
+        ui.weak(none);
+        return;
+    }
+    egui::ScrollArea::vertical().id_salt(id).max_height(110.0).auto_shrink([false, true]).show(ui, |ui| {
+        ui.horizontal_wrapped(|ui| {
+            for (t, n) in tags {
+                let at = picked.iter().position(|x| x.to_lowercase() == t.to_lowercase());
+                if ui.selectable_label(at.is_some(), format!("{t} ({n})")).on_hover_text(tip).clicked() {
+                    match at {
+                        Some(i) => {
+                            picked.remove(i);
+                        }
+                        None => picked.push(t),
+                    }
+                }
+            }
+        });
+    });
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
