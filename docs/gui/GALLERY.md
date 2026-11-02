@@ -58,6 +58,12 @@ Input library → Add to collection… on two selected ideas (also from their ri
 
 ![05c-input-library-add-to-collection](05c-input-library-add-to-collection.webp)
 
+## 05d-input-library-smart
+
+Input library → Smart folders → not in a collection: the ideas in no collection; by date, by source, by project, by tag, with images, starred and not in a collection below the Collections, each with its count
+
+![05d-input-library-smart](05d-input-library-smart.webp)
+
 ## 06-projects-grid
 
 Projects: tree and project tiles (cover, counts); the details pane on the right with the folder's totals
@@ -297,6 +303,12 @@ Output library → Folder: `smart › by project` (copy images from here into a 
 Input library → Folder: a collection's ideas (purple, titled; their images behind)
 
 ![42-input-library-folder](42-input-library-folder.webp)
+
+## 42b-input-library-folder-smart
+
+Input library → Folder → `smart/`: the smart folders as a virtual, read-only folder at the top of the collections (ideas copied or dragged out go in a collection)
+
+![42b-input-library-folder-smart](42b-input-library-folder-smart.webp)
 
 ## 43-idea-inbox-folder
 

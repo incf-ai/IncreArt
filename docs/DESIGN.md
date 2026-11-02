@@ -2873,6 +2873,17 @@ idea can be in any number of collections, or in none. The differences:
   collections inside it; the other filters (search, starred, with images,
   tags) apply on top. Cards dragged onto a collection go in it; Remove
   from this collection takes them out of it and the ones inside it.
+- **Smart folders**, computed from the index and read-only, as the Output
+  library's: **by date** (the day an idea was added, from its ID), **by
+  source** (typed, clipboard, inbox folder, dropped file, from outputs),
+  **by project** (the projects its ideas were used in), **by tag** (any
+  case), then **with images**, **starred** and **not in a collection**.
+  They list the input library's ideas only. Picked in the pane, one takes
+  the place of a collection. In the Folder tab they are a virtual
+  `smart/` at the top of `input/collections/` (so "smart", any case, is
+  refused as a collection's name there): ideas copied or dragged out of it
+  go in the collection they're dropped on; nothing can be made, moved or
+  removed inside it.
 - A library from before collections (ideas in folders under
   `input/library/`) is converted once, when opened: each folder becomes a
   collection holding its ideas' entries, and the ideas move to the top of
@@ -3014,7 +3025,10 @@ the keys and mouse buttons go through that view's own history instead.
   ideas**, **All collections** (the ideas in any), then each collection,
   indented under its parent, with how many ideas are in it and the ones
   inside it; right-click one for New collection inside, Rename, Move to
-  the top level, Open in file manager, Delete… (its ideas stay). Then the
+  the top level, Open in file manager, Delete… (its ideas stay). Then
+  **Smart folders** (see Input collections): by date, by source, by
+  project and by tag as lists (open while one of theirs is shown), then
+  with images, starred, not in a collection, each with its count. Then the
   selection actions (with **Add to collection…**); the grid shows the
   selected collection's ideas, newest first (or most used first); cards show PE rewrite state like the inbox's. Multi-select → new project
   (button or `P`/`Space`); ← → ↑ ↓ and `Home`/`End` select the previous /

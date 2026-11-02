@@ -854,6 +854,9 @@ fn picks_bar(ui: &mut egui::Ui, st: &AppState, picks: &[increart_core::Id], inbo
         if ui.button(ic(ph::ROCKET_LAUNCH, "New project…")).on_hover_text("from the picked ideas (P)").clicked() {
             out.push(Msg::NewProjectFromIdeas(picks.to_vec()));
         }
+        if !inbox && ui.button(ic(ph::FOLDER_PLUS, "Add to collection…")).clicked() {
+            out.push(Msg::CollectIdeasAsk(picks.to_vec()));
+        }
         if inbox {
             if ui.button(ic(ph::BOOKMARK_SIMPLE, "Save to input library…")).on_hover_text("1 / 2 / S").clicked() {
                 out.push(Msg::SaveIdeas(picks.to_vec()));
@@ -1055,73 +1058,79 @@ pub fn input_library(ui: &mut egui::Ui, st: &AppState, tex: &mut Textures, out: 
                     }
                 });
         });
-        let mut f = st.lib_filter.clone();
-        crate::widgets::search_field(ui, &mut f.text, "Search titles, text and tags");
-        ui.horizontal_wrapped(|ui| {
-            ui.checkbox(&mut f.starred_only, ic(ph::STAR, "starred"));
-            ui.checkbox(&mut f.with_images_only, ic(ph::IMAGE, "with images"));
-            ui.checkbox(&mut f.show_hidden, ic(ph::PENCIL_SIMPLE, "edited copies")).on_hover_text(
-                "the cropped and marked copies (Crop / mark…), hidden otherwise; with no folder selected",
-            );
-        });
-        ui.horizontal(|ui| {
-            ui.label("used in a project:");
-            for (v, l) in [(None, "any"), (Some(true), "yes"), (Some(false), "no")] {
-                if ui.selectable_label(f.used_in_project == v, l).clicked() {
-                    f.used_in_project = v;
+        // above the keys; scrolls when the collections and smart folders are many
+        ScrollArea::vertical().auto_shrink([false, true]).id_salt("lib_side_scroll").show(ui, |ui| {
+            let mut f = st.lib_filter.clone();
+            crate::widgets::search_field(ui, &mut f.text, "Search titles, text and tags");
+            ui.horizontal_wrapped(|ui| {
+                ui.checkbox(&mut f.starred_only, ic(ph::STAR, "starred"));
+                ui.checkbox(&mut f.with_images_only, ic(ph::IMAGE, "with images"));
+                ui.checkbox(&mut f.show_hidden, ic(ph::PENCIL_SIMPLE, "edited copies")).on_hover_text(
+                    "the cropped and marked copies (Crop / mark…), hidden otherwise; with no folder selected",
+                );
+            });
+            ui.horizontal(|ui| {
+                ui.label("used in a project:");
+                for (v, l) in [(None, "any"), (Some(true), "yes"), (Some(false), "no")] {
+                    if ui.selectable_label(f.used_in_project == v, l).clicked() {
+                        f.used_in_project = v;
+                    }
                 }
-            }
-        });
-        ui.horizontal(|ui| {
-            ui.label("order:");
-            for (v, l, tip) in [
-                (false, "newest", "newest first"),
-                (true, "most used", "most runs using its images (as ref or start image) first"),
-            ] {
-                if ui.selectable_label(f.most_used == v, l).on_hover_text(tip).clicked() {
-                    f.most_used = v;
+            });
+            ui.horizontal(|ui| {
+                ui.label("order:");
+                for (v, l, tip) in [
+                    (false, "newest", "newest first"),
+                    (true, "most used", "most runs using its images (as ref or start image) first"),
+                ] {
+                    if ui.selectable_label(f.most_used == v, l).on_hover_text(tip).clicked() {
+                        f.most_used = v;
+                    }
                 }
+            });
+            let tags = st.idea_tag_counts(st.lib_source_ideas());
+            let (none, tip) =
+                ("No tags here yet: Edit an idea to tag it.", "only ideas with this tag (several: all of them)");
+            crate::widgets::tag_chips(ui, "lib_tag_filter", tags, &mut f.tags, none, tip);
+            if f != st.lib_filter {
+                out.push(Msg::LibFilter(f));
             }
-        });
-        let tags = st.idea_tag_counts(st.lib_source_ideas());
-        let (none, tip) =
-            ("No tags here yet: Edit an idea to tag it.", "only ideas with this tag (several: all of them)");
-        crate::widgets::tag_chips(ui, "lib_tag_filter", tags, &mut f.tags, none, tip);
-        if f != st.lib_filter {
-            out.push(Msg::LibFilter(f));
-        }
-        ui.separator();
-        collections_panel(ui, st, out);
-        ui.separator();
-        let sel: Vec<_> = st.lib_selected.iter().cloned().collect();
-        ui.label(format!("{} selected", sel.len()));
-        ui.add_enabled_ui(!sel.is_empty(), |ui| {
-            if ui.button(ic(ph::ROCKET_LAUNCH, "New project from selection…")).clicked() {
-                out.push(Msg::NewProjectFromIdeas(sel.clone()));
-            }
-            if ui
-                .button(ic(ph::IMAGES, "Add images as refs"))
-                .on_hover_text("to the Generate panel of the current project")
-                .clicked()
-            {
-                let refs = sel
-                    .iter()
-                    .filter_map(|id| st.idea(id))
-                    .flat_map(|e| e.idea.images.iter().cloned().map(ImageRef::input))
-                    .collect();
-                out.push(Msg::AddRefs(refs));
-            }
-            if ui.button(ic(ph::FOLDER_PLUS, "Add to collection…")).clicked() {
-                out.push(Msg::CollectIdeasAsk(sel.clone()));
-            }
-            if ui.button(ic(ph::SQUARES_FOUR, "Tile their images…")).on_hover_text("T, with several selected").clicked()
-            {
-                let view: Vec<_> = st.library_ideas().iter().map(|e| e.idea.id.clone()).collect();
-                out.push(Msg::TileIdeas(view.into_iter().filter(|id| st.lib_selected.contains(id)).collect()));
-            }
-            if ui.button(ic(ph::X, "Clear selection")).clicked() {
-                out.push(Msg::LibClearSelection);
-            }
+            ui.separator();
+            collections_panel(ui, st, out);
+            ui.separator();
+            let sel: Vec<_> = st.lib_selected.iter().cloned().collect();
+            ui.label(format!("{} selected", sel.len()));
+            ui.add_enabled_ui(!sel.is_empty(), |ui| {
+                if ui.button(ic(ph::ROCKET_LAUNCH, "New project from selection…")).clicked() {
+                    out.push(Msg::NewProjectFromIdeas(sel.clone()));
+                }
+                if ui
+                    .button(ic(ph::IMAGES, "Add images as refs"))
+                    .on_hover_text("to the Generate panel of the current project")
+                    .clicked()
+                {
+                    let refs = sel
+                        .iter()
+                        .filter_map(|id| st.idea(id))
+                        .flat_map(|e| e.idea.images.iter().cloned().map(ImageRef::input))
+                        .collect();
+                    out.push(Msg::AddRefs(refs));
+                }
+                if ui.button(ic(ph::FOLDER_PLUS, "Add to collection…")).clicked() {
+                    out.push(Msg::CollectIdeasAsk(sel.clone()));
+                }
+                if ui
+                    .button(ic(ph::SQUARES_FOUR, "Tile their images…"))
+                    .on_hover_text("T, with several selected")
+                    .clicked()
+                {
+                    let view: Vec<_> = st.library_ideas().iter().map(|e| e.idea.id.clone()).collect();
+                    out.push(Msg::TileIdeas(view.into_iter().filter(|id| st.lib_selected.contains(id)).collect()));
+                }
+                if ui.button(ic(ph::X, "Clear selection")).clicked() {
+                    out.push(Msg::LibClearSelection);
+                }
+            });
         });
     });
     Panel::top("lib_tabs").show(ui, |ui| {
@@ -1790,6 +1799,57 @@ fn image_meta(ui: &mut egui::Ui, st: &AppState, root: &Path, tex: &mut Textures,
     });
 }
 
+/// The input library's smart folders, as the Output library's: by date,
+/// by source, by project, by tag (each a list, open while one of it is
+/// shown), then with images, starred, not in a collection.
+fn smart_panel(ui: &mut egui::Ui, st: &AppState, out: &mut Vec<Msg>) {
+    use increart_gui_core::IdeaSmart;
+    ui.add_space(6.0);
+    ui.label(RichText::new("Smart folders").strong());
+    let pick = |ui: &mut egui::Ui, out: &mut Vec<Msg>, s: IdeaSmart, label: String| {
+        if ui.selectable_label(st.lib_smart.as_ref() == Some(&s), label).clicked() {
+            out.push(Msg::LibSmart(s));
+        }
+    };
+    let open = |f: fn(&IdeaSmart) -> bool| st.lib_smart.as_ref().is_some_and(f);
+    egui::CollapsingHeader::new("by date").default_open(open(|s| matches!(s, IdeaSmart::Day(_)))).show(ui, |ui| {
+        for (day, n) in st.idea_days() {
+            pick(ui, out, IdeaSmart::Day(day.clone()), format!("{day} ({n})"));
+        }
+    });
+    egui::CollapsingHeader::new("by source").default_open(open(|s| matches!(s, IdeaSmart::Origin(_)))).show(ui, |ui| {
+        for (o, n) in st.idea_origins() {
+            pick(ui, out, IdeaSmart::Origin(o), format!("{} ({n})", o.label()));
+        }
+    });
+    egui::CollapsingHeader::new("by project").default_open(open(|s| matches!(s, IdeaSmart::Project(_)))).show(
+        ui,
+        |ui| {
+            let projects = st.idea_projects();
+            if projects.is_empty() {
+                ui.weak("No idea has been used in a project yet.");
+            }
+            for (p, n) in projects {
+                let name = st.index.project(&p).map(|e| e.name()).unwrap_or_default();
+                pick(ui, out, IdeaSmart::Project(p), ic(ph::ROCKET_LAUNCH, &format!("{} ({n})", short(&name, 26))));
+            }
+        },
+    );
+    egui::CollapsingHeader::new("by tag").default_open(open(|s| matches!(s, IdeaSmart::Tag(_)))).show(ui, |ui| {
+        let tags = st.idea_tags();
+        if tags.is_empty() {
+            ui.weak("No idea has a tag yet.");
+        }
+        for (t, n) in tags {
+            pick(ui, out, IdeaSmart::Tag(t.clone()), ic(ph::TAG, &format!("{} ({n})", short(&t, 26))));
+        }
+    });
+    for (s, name) in IdeaSmart::FLAT {
+        let n = st.smart_ideas(&s).len();
+        pick(ui, out, s, format!("{name} ({n})"));
+    }
+}
+
 /// The input collections, as the Output library's: New collection, All
 /// ideas, All collections (the ideas in any), then each collection with
 /// how many ideas are in it and in the ones inside it; idea cards drop
@@ -1801,8 +1861,10 @@ fn collections_panel(ui: &mut egui::Ui, st: &AppState, out: &mut Vec<Msg>) {
             out.push(Msg::NewFolder(Tree::InputCollections, PathBuf::new()));
         }
     });
-    let all =
-        ui.selectable_label(st.lib_folder.is_none(), ic(ph::BOOKS, &format!("All ideas ({})", lib_count(st, None))));
+    let all = ui.selectable_label(
+        st.lib_folder.is_none() && st.lib_smart.is_none(),
+        ic(ph::BOOKS, &format!("All ideas ({})", lib_count(st, None))),
+    );
     if all.on_hover_text("every idea in the input library").clicked() {
         out.push(Msg::LibFolder(None));
     }
@@ -1857,6 +1919,7 @@ fn collections_panel(ui: &mut egui::Ui, st: &AppState, out: &mut Vec<Msg>) {
             });
         });
     }
+    smart_panel(ui, st, out);
 }
 
 fn lib_count(st: &AppState, folder: Option<&Path>) -> usize {

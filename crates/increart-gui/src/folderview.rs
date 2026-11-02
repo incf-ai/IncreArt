@@ -8,7 +8,9 @@ use std::path::{Path, PathBuf};
 
 use eframe::egui::{self, Color32, FontId, Key, Panel, RichText, ScrollArea, Sense, Stroke, Vec2};
 use increart_core::{ImageRef, Verdict};
-use increart_gui_core::{AppState, EntryKind, FvEntry, FvMode, FvPlace, Msg, OutputSource, SelectHow, is_smart};
+use increart_gui_core::{
+    AppState, EntryKind, FvEntry, FvMode, FvPlace, Msg, OutputSource, SelectHow, is_input_smart, is_smart,
+};
 
 use crate::textures::Textures;
 use crate::widgets::{
@@ -369,7 +371,9 @@ fn entry_menu(ui: &mut egui::Ui, st: &AppState, e: &FvEntry, out: &mut Vec<Msg>)
             item(ui, out, ic(ph::PENCIL_SIMPLE, "Edit idea…"), Msg::OpenIdea(id.clone()));
             if fv.place == FvPlace::InputLibrary {
                 item(ui, out, ic(ph::COPY, "Copy   Ctrl+C"), Msg::FvCopy);
-                item(ui, out, ic(ph::SCISSORS, "Cut   Ctrl+X"), Msg::FvCut);
+                if !smart {
+                    item(ui, out, ic(ph::SCISSORS, "Cut   Ctrl+X"), Msg::FvCut);
+                }
             }
         }
         EntryKind::Folder if fv.place == FvPlace::Inbox => {}
@@ -574,6 +578,7 @@ pub fn view(ui: &mut egui::Ui, st: &AppState, tex: &mut Textures, out: &mut Vec<
         let shown = fv.shown();
         if shown.is_empty() {
             ui.weak(match fv.place {
+                _ if is_input_smart(&fv.path) => "No ideas here.",
                 _ if is_smart(&fv.path) => "No images here.",
                 FvPlace::Collections => "Empty. Right-click for New collection; paste or drag images here.",
                 FvPlace::InputLibrary => "Empty. Right-click for New collection; paste or drag ideas here.",

@@ -954,6 +954,13 @@ fn smart_is_reserved_at_the_top_of_collections() {
     refused(lib.copy_node(c, Path::new("work/smart"), Path::new("")));
     refused(lib.rename_node(c, Path::new("work"), "SMART"));
     assert!(!tmp.path().join("lib/collections/smart").exists() && !tmp.path().join("lib/collections/SMART").exists());
+    // the input collections' too
+    let ic = increart_core::Tree::InputCollections;
+    refused(lib.create_folder(ic, Path::new(""), Some("smart")));
+    let e = lib.make_input_collection(Path::new("Smart/x")).unwrap_err().to_string();
+    assert!(e.contains("reserved"), "{e}");
+    lib.make_input_collection(Path::new("work/smart")).unwrap();
+    refused(lib.move_node(ic, Path::new("work/smart"), Path::new("")));
 }
 
 fn usage(lib: &Library, r: &ImageRef) -> png::UsageCounts {

@@ -448,6 +448,88 @@ fn input_collections_add_drop_show_and_remove() {
 }
 
 #[test]
+fn input_smart_folders_in_the_pane_and_the_folder_view() {
+    let mut h = Harness::new();
+    for (t, tags) in [("Fox", "animal, photo"), ("Owl", "animal"), ("Fern", "")] {
+        h.send(Msg::Draft(IdeaDraft {
+            title: t.into(),
+            text: t.to_lowercase(),
+            tags: tags.into(),
+            ..Default::default()
+        }));
+        h.send(Msg::AddIdea(AddIdea::Keep));
+        h.send(Msg::ConfirmSaveIdea);
+        h.settle();
+    }
+    let id = |h: &Harness, t: &str| h.state.index.ideas.iter().find(|e| e.idea.title == t).unwrap().idea.id.clone();
+    let (fox, owl) = (id(&h, "Fox"), id(&h, "Owl"));
+    h.send(Msg::SetStar(owl.clone(), true));
+    h.send(Msg::CollectIdeas("animals".into(), vec![fox.clone()]));
+    h.settle();
+    let shown = |h: &Harness| {
+        let mut v: Vec<String> = h.state.library_ideas().iter().map(|e| e.idea.title.clone()).collect();
+        v.sort();
+        v
+    };
+    h.send(Msg::Tab(Tab::InputLibrary));
+
+    // the pane: a smart folder in place of a collection, and back
+    h.send(Msg::LibSmart(IdeaSmart::Tag("ANIMAL".into())));
+    assert_eq!(shown(&h), ["Fox", "Owl"], "any case");
+    assert_eq!(h.state.idea_tags(), [("animal".to_string(), 2), ("photo".to_string(), 1)]);
+    h.send(Msg::LibSmart(IdeaSmart::Starred));
+    assert_eq!(shown(&h), ["Owl"]);
+    h.send(Msg::LibSmart(IdeaSmart::Uncollected));
+    assert_eq!(shown(&h), ["Fern", "Owl"]);
+    h.send(Msg::LibSmart(IdeaSmart::Origin(IdeaOrigin::Typed)));
+    assert_eq!(shown(&h), ["Fern", "Fox", "Owl"]);
+    let day = h.state.idea_days()[0].0.clone();
+    h.send(Msg::LibSmart(IdeaSmart::Day(day.clone())));
+    assert_eq!(shown(&h).len(), 3);
+    h.send(Msg::LibFolder(Some("animals".into())));
+    assert!(h.state.lib_smart.is_none());
+    assert_eq!(shown(&h), ["Fox"]);
+
+    // the Folder tab: a virtual smart/ beside the collections; a smart
+    // folder picked there goes to it
+    h.send(Msg::LibTab(LibTab::Folder));
+    h.send(Msg::LibSmart(IdeaSmart::Starred));
+    h.settle();
+    assert_eq!(h.state.folder_view.path, PathBuf::from("input/collections/smart/starred"));
+    let names = |h: &Harness| h.state.folder_view.shown().iter().map(|e| e.name.clone()).collect::<Vec<_>>();
+    assert_eq!(names(&h), [format!("{owl}.idea")]);
+    h.send(Msg::FvGo(PathBuf::from("input/collections")));
+    h.settle();
+    assert!(names(&h).contains(&"smart".to_string()));
+    h.send(Msg::FvGo(PathBuf::from("input/collections/smart")));
+    h.settle();
+    assert_eq!(
+        names(&h),
+        ["by date", "by source", "by project", "by tag", "with images", "starred", "not in a collection"]
+    );
+    h.send(Msg::FvGo(PathBuf::from("input/collections/smart/by tag")));
+    h.settle();
+    assert_eq!(names(&h), ["animal", "photo"]);
+    // read-only: no new collection, nothing removed; an idea dragged out
+    // goes in the collection
+    h.send(Msg::FvNewFolder);
+    h.settle();
+    assert!(h.state.renaming.is_none());
+    h.send(Msg::DropInto {
+        paths: vec![PathBuf::from(format!("input/collections/smart/starred/{owl}.idea"))],
+        dest: PathBuf::from("input/collections/animals"),
+        copy: false,
+    });
+    h.settle();
+    assert_eq!(h.state.index.idea_collections(&owl), [Path::new("animals")]);
+    assert!(h.errors().is_empty(), "{:?}", h.errors());
+    // "smart" can't be a collection at the top
+    h.send(Msg::CollectIdeas("Smart".into(), vec![owl.clone()]));
+    h.settle();
+    assert!(h.errors().iter().any(|e| e.contains("reserved")), "{:?}", h.errors());
+}
+
+#[test]
 fn save_and_make_a_project_in_one_step() {
     let mut h = Harness::new();
     h.send(Msg::Draft(IdeaDraft { title: "Fox".into(), text: "a red fox".into(), ..Default::default() }));
@@ -2969,13 +3051,14 @@ fn input_library_and_inbox_folder_views_and_selection_keys() {
     let shown =
         |h: &Harness| h.state.folder_view.shown().iter().map(|e| (e.name.clone(), e.info.clone())).collect::<Vec<_>>();
 
-    // Input library → Folder: its collections, ideas in none aren't there
+    // Input library → Folder: its collections and smart/; ideas in none
+    // aren't there
     h.send(Msg::Tab(Tab::InputLibrary));
     h.send(Msg::LibTab(LibTab::Folder));
     h.settle();
     assert_eq!(h.state.folder_view.place, FvPlace::InputLibrary);
     assert_eq!(h.state.folder_view.path, PathBuf::from("input/collections"));
-    assert!(shown(&h).is_empty());
+    assert_eq!(shown(&h).into_iter().map(|(n, _)| n).collect::<Vec<_>>(), ["smart"]);
     let id =
         |h: &Harness, title: &str| h.state.index.ideas.iter().find(|e| e.idea.title == title).unwrap().idea.id.clone();
     let (fox, fern) = (id(&h, "Fox"), id(&h, "Fern"));
@@ -3031,7 +3114,7 @@ fn input_library_and_inbox_folder_views_and_selection_keys() {
     h.send(Msg::FvGo(PathBuf::from("input/collections")));
     h.settle();
     let names: Vec<String> = h.state.folder_view.shown().iter().map(|e| e.name.clone()).collect();
-    assert_eq!(names[0], "animals", "folders first");
+    assert_eq!(names[..3], ["smart", "animals", "red things"], "smart/, then folders");
     h.send(Msg::FvMoveCursor { by: 1, extend: false });
     assert_eq!(h.state.folder_view.selected, [names[0].clone()].into(), "nothing selected: the first");
     h.send(Msg::FvMoveCursor { by: 1, extend: true });
@@ -3044,7 +3127,7 @@ fn input_library_and_inbox_folder_views_and_selection_keys() {
     assert_eq!(h.state.folder_view.selected, ["animals".to_string()].into());
     h.state.now = 102.0; // after a pause, typing starts over
     h.send(Msg::FvTypeAhead("r".into()));
-    assert_eq!(h.state.folder_view.selected, [names[1].clone()].into());
+    assert_eq!(h.state.folder_view.selected, [names[2].clone()].into());
     h.send(Msg::FvSelectSet(names.iter().cloned().collect()));
     assert_eq!(h.state.folder_view.selected.len(), names.len());
 

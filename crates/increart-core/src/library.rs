@@ -953,9 +953,13 @@ impl Library {
     /// `input/collections/`) and its missing parents, checking each name.
     pub fn make_input_collection(&self, folder: &Path) -> Result<()> {
         let mut dir = self.root.join(INPUT_COLLECTIONS);
-        for c in folder.components() {
-            validate_name(&c.as_os_str().to_string_lossy())?;
+        for (i, c) in folder.components().enumerate() {
+            let name = c.as_os_str().to_string_lossy();
+            validate_name(&name)?;
             dir.push(c);
+            if i == 0 && !dir.is_dir() {
+                reserved(Tree::InputCollections, Path::new(""), &name)?;
+            }
         }
         if !dir.is_dir() {
             fs::create_dir_all(&dir).at(&dir)?;
@@ -1055,14 +1059,15 @@ impl Library {
 
 // ------------------------------------------------------------------ folder trees
 
-/// The name the Output library's folder view gives its virtual folder of
-/// smart folders, at the top of `collections/`.
+/// The name the libraries' folder views give their virtual folder of smart
+/// folders, at the top of `collections/` and `input/collections/`.
 pub const SMART_FOLDER: &str = "smart";
 
-/// Refuses "smart" (any case) at the top of the collections tree, where it
-/// would hide the smart folders.
+/// Refuses "smart" (any case) at the top of either collections tree, where
+/// it would hide the smart folders.
 fn reserved(tree: Tree, parent: &Path, name: &str) -> Result<()> {
-    if tree == Tree::Collections && parent.as_os_str().is_empty() && name.eq_ignore_ascii_case(SMART_FOLDER) {
+    let collections = matches!(tree, Tree::Collections | Tree::InputCollections);
+    if collections && parent.as_os_str().is_empty() && name.eq_ignore_ascii_case(SMART_FOLDER) {
         return Err(Error::InvalidName {
             name: name.into(),
             reason: "reserved for the smart folders at the top of collections",

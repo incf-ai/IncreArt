@@ -23,6 +23,7 @@ What POC1 (`tmp/gui-prototype`, [POC1.md](POC1.md)) had that the real app
 | **Discarded** tab | ✓ (this round) |
 | Left-panel **filters**: text, tag, starred, has images, used in a project / not | ✓ (this round) |
 | Collections pane as the Output library's (All ideas, All collections, counts, menus); drag cards onto a collection; Add to collection…; Remove from this collection | ✓ |
+| Smart folders: by date, by source, by project, by tag, with images, starred, not in a collection; the Folder tab's virtual `smart/` | ✓ |
 | **Folder** tab (collections and idea entries: new collection, rename, move, copy, remove; the tree drives it) | ✓ |
 
 ## Projects (POC1: Grid · Folder · Generate · Jobs)

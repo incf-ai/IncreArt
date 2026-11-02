@@ -39,6 +39,7 @@ const SCENES: &[&str] = &[
     "05-input-library",
     "05b-input-library-tile",
     "05c-input-library-add-to-collection",
+    "05d-input-library-smart",
     "06-projects-grid",
     "06b-projects-pane",
     "06c-projects-pane-run",
@@ -83,6 +84,7 @@ const SCENES: &[&str] = &[
     "39-output-library-folder",
     "40-output-library-smart-folder",
     "42-input-library-folder",
+    "42b-input-library-folder-smart",
     "43-idea-inbox-folder",
     "44-projects-folder-compact",
     "45-reference-preview",
@@ -1187,9 +1189,16 @@ impl Tour {
                     Msg::EditCollectIdeas(d),
                 ]
             }
-            "06-projects-grid" => vec![
-                // 05b's tiling closed, its cell size back to auto; 05c's dialog
+            "05d-input-library-smart" => vec![
                 Msg::CancelCollectIdeas,
+                Msg::LibClearSelection,
+                Msg::LibSmart(increart_gui_core::IdeaSmart::Uncollected),
+            ],
+            "06-projects-grid" => vec![
+                // 05b's tiling closed, its cell size back to auto; 05c's
+                // dialog; 05d's smart folder
+                Msg::CancelCollectIdeas,
+                Msg::LibFolder(None),
                 Msg::CloseTile,
                 Msg::LibClearSelection,
                 Msg::TileSettings(increart_core::config::TileSettings { cell: None, ..st.config.tile.clone() }),
@@ -1604,6 +1613,7 @@ impl Tour {
                 Msg::FvMode(increart_gui_core::FvMode::Icons),
                 Msg::FvGo(PathBuf::from("input/collections/places")),
             ],
+            "42b-input-library-folder-smart" => vec![Msg::FvGo(PathBuf::from("input/collections/smart"))],
             "43-idea-inbox-folder" => vec![
                 Msg::Tab(Tab::IdeaInbox),
                 Msg::InboxTab(InboxTab::Folder),

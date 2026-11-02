@@ -288,6 +288,8 @@ pub enum Msg {
     EmptyDiscardedProjects,
     // ---- input library
     LibFolder(Option<PathBuf>),
+    /// An Input library smart folder, in place of a collection.
+    LibSmart(IdeaSmart),
     /// The idea in the Input library's side panel (`None` closes it).
     LibInfo(Option<Id>),
     LibSelect {
@@ -1929,8 +1931,13 @@ fn go_to(state: &mut AppState, p: Place) -> Vec<Effect> {
     fx.extend(update(state, Msg::LibTab(p.lib_tab)));
     fx.extend(update(state, Msg::ProjectsTab(p.projects_tab)));
     fx.extend(update(state, Msg::OutputTab(p.output_tab)));
-    if p.lib_folder != state.lib_folder {
-        fx.extend(update(state, Msg::LibFolder(p.lib_folder)));
+    match p.lib_smart {
+        Some(s) if state.lib_smart.as_ref() != Some(&s) => fx.extend(update(state, Msg::LibSmart(s))),
+        Some(_) => {}
+        None if p.lib_folder != state.lib_folder || state.lib_smart.is_some() => {
+            fx.extend(update(state, Msg::LibFolder(p.lib_folder)))
+        }
+        None => {}
     }
     match p.project {
         Some(id) if state.project.as_ref() != Some(&id) && state.index.project(&id).is_some() => {
@@ -3441,6 +3448,17 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
             // on the Folder tab, the folder view goes there too
             let path = std::path::Path::new(INPUT_COLLECTIONS).join(f.clone().unwrap_or_default());
             state.lib_folder = f;
+            state.lib_smart = None;
+            state.lib_selected.clear();
+            if state.tab == Tab::InputLibrary && state.lib_tab == LibTab::Folder {
+                return fv_go(state, path, true);
+            }
+            vec![]
+        }
+        Msg::LibSmart(smart) => {
+            let path = state.input_smart_path(&smart);
+            state.lib_folder = None;
+            state.lib_smart = Some(smart);
             state.lib_selected.clear();
             if state.tab == Tab::InputLibrary && state.lib_tab == LibTab::Folder {
                 return fv_go(state, path, true);
@@ -7060,6 +7078,11 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
                 let info = "smart folders (read-only)".to_string();
                 entries.push(FvEntry { name: "smart".into(), kind: EntryKind::Smart, size: n, modified: None, info });
             }
+            if path == std::path::Path::new(INPUT_COLLECTIONS) && !entries.iter().any(|e| e.name == "smart") {
+                let n = state.input_smart_ideas(std::path::Path::new("")).len() as u64;
+                let info = "smart folders (read-only)".to_string();
+                entries.push(FvEntry { name: "smart".into(), kind: EntryKind::Smart, size: n, modified: None, info });
+            }
             let smart = is_smart(&path);
             let fv = fv_for(state, &path);
             if fv.place == FvPlace::Inbox && path == std::path::Path::new("input") {
@@ -7118,8 +7141,18 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
             let found: Vec<(String, Vec<ImageRef>)> = smart
                 .into_iter()
                 .map(|n| {
-                    let rel = dir.join(&n).strip_prefix(SMART_DIR).map(PathBuf::from).unwrap_or_default();
-                    let imgs = state.smart_images(&rel).into_iter().take(3).map(|o| o.image.clone()).collect();
+                    let path = dir.join(&n);
+                    let imgs = if let Ok(rel) = path.strip_prefix(INPUT_SMART_DIR) {
+                        // an idea's entry: its images; a folder: its ideas'
+                        let ideas = match increart_core::scan::idea_link_id(&path).and_then(|id| state.idea(&id)) {
+                            Some(e) => vec![e],
+                            None => state.input_smart_ideas(rel),
+                        };
+                        ideas.iter().flat_map(|e| e.idea.images.iter().cloned().map(ImageRef::input)).take(3).collect()
+                    } else {
+                        let rel = path.strip_prefix(SMART_DIR).map(PathBuf::from).unwrap_or_default();
+                        state.smart_images(&rel).into_iter().take(3).map(|o| o.image.clone()).collect()
+                    };
                     (n, imgs)
                 })
                 .collect();
@@ -7241,8 +7274,8 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
             let mut skipped = false;
             for e in fv.shown().into_iter().filter(|e| fv.selected.contains(&e.name)) {
                 let ok = match (fv.place, &e.kind) {
-                    // smart images can be copied into a collection
-                    _ if smart => !cut && matches!(e.kind, EntryKind::Image(_)),
+                    // smart images and ideas can be copied into a collection
+                    _ if smart => !cut && matches!(e.kind, EntryKind::Image(_) | EntryKind::Idea(_)),
                     (FvPlace::Collections, k) => matches!(k, EntryKind::Folder | EntryKind::Image(_)),
                     (FvPlace::InputLibrary, k) => matches!(k, EntryKind::Folder | EntryKind::Idea(_)),
                     (FvPlace::Inbox, _) => false,
@@ -7258,7 +7291,7 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
             }
             if skipped {
                 state.messages_info(match (fv.place, cut) {
-                    _ if smart => "Smart folders are read-only: copy their images into a collection",
+                    _ if smart => "Smart folders are read-only: copy what's in them into a collection",
                     (FvPlace::Collections, _) => "Only collections and their images can be copied or cut",
                     (FvPlace::InputLibrary, _) => "Only folders and ideas can be copied or cut",
                     (FvPlace::Inbox, _) => "Inbox ideas are saved to the input library or discarded from the Grid",
@@ -9253,6 +9286,11 @@ fn fv_for<'a>(state: &'a mut AppState, path: &std::path::Path) -> &'a mut Folder
 /// Lists a folder: the virtual smart folders from the index, the rest from
 /// disk.
 fn fv_list(state: &mut AppState, path: PathBuf) -> Vec<Effect> {
+    if is_input_smart(&path) {
+        let rel = path.strip_prefix(INPUT_SMART_DIR).map(PathBuf::from).unwrap_or_default();
+        let entries = state.input_smart_listing(&rel);
+        return update(state, Msg::FvListed(path, entries));
+    }
     if is_smart(&path) {
         let rel = path.strip_prefix(SMART_DIR).map(PathBuf::from).unwrap_or_default();
         let entries = state.smart_listing(&rel);
@@ -9447,6 +9485,14 @@ fn transfer(state: &mut AppState, paths: &[PathBuf], cut: bool, dest: &std::path
             continue;
         }
         if let Ok(to) = dest.strip_prefix(INPUT_COLLECTIONS) {
+            if is_input_smart(src) {
+                // an idea from a smart folder: added to the collection
+                match increart_core::scan::idea_link_id(src) {
+                    Some(id) => fx.extend(lib(state, LibOp::CollectIdeas(to.to_path_buf(), vec![id]))),
+                    None => state.messages_error("Only ideas can be copied out of smart folders"),
+                }
+                continue;
+            }
             let Ok(from) = src.strip_prefix(INPUT_COLLECTIONS) else {
                 state.messages_error("Only collections and their ideas can go here");
                 continue;
