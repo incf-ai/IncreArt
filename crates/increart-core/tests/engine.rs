@@ -121,6 +121,14 @@ fn collect(engine: &Engine, mut stop: impl FnMut(&Event, &[Event]) -> bool) -> V
     panic!("timed out; events so far: {out:#?}");
 }
 
+/// How many jobs the fake has been asked about.
+fn polled_jobs(a: &Fake) -> usize {
+    a.with(|s| {
+        let polls = s.log.iter().filter(|(m, p, _)| m == "GET" && p.contains("/jobs/")).map(|(_, p, _)| p.clone());
+        polls.collect::<std::collections::BTreeSet<_>>().len()
+    })
+}
+
 /// Waits up to 5 s for `cond`.
 fn wait_until(cond: impl Fn() -> bool, what: &str) {
     let deadline = Instant::now() + Duration::from_secs(5);
@@ -594,8 +602,15 @@ fn finish_and_stop_keeps_the_images_being_generated() {
     )
     .unwrap();
     engine.queue_run(&run);
-    // the fake generates both in-flight jobs at once
-    collect(&engine, |e, _| matches!(e, Event::Progress { step: 3.., .. }));
+    // the fake generates both in-flight jobs at once: on until the engine
+    // has seen both generating (a slow machine sends the second later)
+    collect(&engine, |e, seen| {
+        let progress = |e: &Event| match e {
+            Event::Progress { seed, .. } => Some(*seed),
+            _ => None,
+        };
+        seen.iter().chain([e]).filter_map(progress).collect::<std::collections::BTreeSet<_>>().len() == 2
+    });
     engine.cancel_run(&run, Stop::Finish);
     let events = collect(&engine, run_done(&run));
     assert_eq!(outputs(&events).len(), 2, "both generating images finished");
@@ -626,6 +641,9 @@ fn finish_and_stop_cancels_the_waiting_job() {
     .unwrap();
     engine.queue_run(&run);
     collect(&engine, |e, _| matches!(e, Event::Progress { step: 3.., .. }));
+    // the waiting one sent and polled, so there's a job on the server to
+    // cancel (a slow machine sends it later)
+    wait_until(|| polled_jobs(&a) == 2, "both jobs polled");
     engine.cancel_run(&run, Stop::Finish);
     let events = collect(&engine, run_done(&run));
     assert_eq!(outputs(&events).len(), 1, "the generating image finished");
