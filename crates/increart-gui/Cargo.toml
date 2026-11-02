@@ -21,3 +21,6 @@ similar = "2"
 [[bin]]
 name = "increart"
 path = "src/main.rs"
+
+[dev-dependencies]
+tempfile = "3.27.0"

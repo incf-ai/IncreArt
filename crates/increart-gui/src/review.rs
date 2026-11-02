@@ -743,7 +743,7 @@ fn single(ui: &mut egui::Ui, st: &AppState, root: &Path, tex: &mut Textures, out
     });
     egui::CentralPanel::default().show(ui, |ui| {
         follow_hold(ui, st, out);
-        let t = tex.full(root, &item.image);
+        let t = tex.full_or_thumb(root, &item.image);
         let (rect, resp) = ui.allocate_exact_size(ui.available_size(), Sense::click());
         image_fit_bg(&ui.painter_at(rect), rect.shrink(4.0), t.as_ref(), st.checkerboard);
         if resp.double_clicked() {
@@ -1460,7 +1460,7 @@ fn compare_sides(
                 if let Some(o) = link {
                     verdict_buttons(ui, out, |v| rate(is_a, o, v));
                 }
-                let t = tex.full(root, image);
+                let t = tex.full_or_thumb(root, image);
                 let (rect, resp) = ui.allocate_exact_size(ui.available_size(), Sense::click());
                 image_fit_bg(&ui.painter_at(rect), rect.shrink(4.0), t.as_ref(), st.checkerboard);
                 if resp.double_clicked() {

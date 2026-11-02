@@ -1322,7 +1322,7 @@ pub fn retag_window(ctx: &egui::Context, st: &AppState, out: &mut Vec<Msg>) {
 pub fn preview_window(ctx: &egui::Context, st: &AppState, tex: &mut Textures, keys_open: bool, out: &mut Vec<Msg>) {
     let (Some(img), Some(root)) = (&st.preview, &st.library) else { return };
     // the large version once it's loaded, the thumbnail until then
-    let t = tex.full(root, img).or_else(|| tex.thumb(root, img));
+    let t = tex.full_or_thumb(root, img);
     let [w, h] = tex.dims(root, img).unwrap_or([1024, 1024]);
     let full = egui::vec2(w as f32, h as f32);
     const BAR: f32 = 30.0;
