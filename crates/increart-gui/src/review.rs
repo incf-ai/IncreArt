@@ -2770,9 +2770,11 @@ pub fn ref_window(ctx: &egui::Context, st: &AppState, tex: &mut Textures, out: &
         ui.horizontal(|ui| {
             ui.label(RichText::new("To").strong());
             ui.add_space(6.0);
-            let form =
-                format!("{} Generate form   U", project.as_deref().map_or("the current project's".into(), possessive));
-            let r = ui.add_enabled(project.is_some(), egui::Button::selectable(d.to == RefTo::Project, form));
+            // short labels, the project's name below (it can be long)
+            let r = ui.add_enabled(
+                project.is_some(),
+                egui::Button::selectable(d.to == RefTo::Project, "the Generate form   U"),
+            );
             if r.on_disabled_hover_text("Select a project first (Projects tab)").clicked() {
                 d.to = RefTo::Project;
             }
@@ -2780,11 +2782,12 @@ pub fn ref_window(ctx: &egui::Context, st: &AppState, tex: &mut Textures, out: &
                 d.to = RefTo::InputLibrary;
             }
         });
+        let form = project.as_deref().map_or("the current project's".into(), possessive);
         ui.weak(match d.to {
-            RefTo::Project if n == 1 => "Added to the form's references, after those there.",
-            RefTo::Project => "Added to the form's references in this order, after those there.",
-            RefTo::InputLibrary if n == 1 => "An image-only idea at the top of the input library.",
-            RefTo::InputLibrary => "An image-only idea each, at the top of the input library.",
+            RefTo::Project if n == 1 => format!("Added to {form} Generate form references, after those there."),
+            RefTo::Project => format!("Added to {form} Generate form references in this order, after those there."),
+            RefTo::InputLibrary if n == 1 => "An image-only idea at the top of the input library.".into(),
+            RefTo::InputLibrary => "An image-only idea each, at the top of the input library.".into(),
         });
         ui.add_space(8.0);
         rate_row(ui, &mut d.verdict);
@@ -2800,8 +2803,8 @@ pub fn ref_window(ctx: &egui::Context, st: &AppState, tex: &mut Textures, out: &
         });
         ui.add_space(8.0);
         let to = match d.to {
-            RefTo::Project => format!("{} form", project.as_deref().map_or("the project's".into(), possessive)),
-            RefTo::InputLibrary => "the input library".to_string(),
+            RefTo::Project => "the form",
+            RefTo::InputLibrary => "the input library",
         };
         let rate = d.verdict.and_then(|v| VERDICTS.iter().find(|x| x.1 == v)).map(|x| x.0.to_lowercase());
         let it = if n == 1 { String::new() } else { format!(" {n}") };
