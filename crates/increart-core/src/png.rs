@@ -10,6 +10,7 @@ use crate::error::{Error, IoContext, Result};
 pub const SIGNATURE: &[u8; 8] = b"\x89PNG\r\n\x1a\n";
 
 pub const KEY_ID: &str = "increart:id";
+pub const KEY_UUID: &str = "increart:uuid";
 pub const KEY_PIXELS: &str = "increart:pixels";
 pub const KEY_BLAKE3: &str = "increart:blake3";
 pub const KEY_USAGE: &str = "increart:usage";

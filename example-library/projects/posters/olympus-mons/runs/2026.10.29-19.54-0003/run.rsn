@@ -1,5 +1,6 @@
 Run {
     id: "2026.10.29-19.54-0003",
+    uuid: "01a18939-f7c3-75e6-950d-cedf7ad54794",
     label: "r01",
     created: "2026-10-29T19:54:44Z",
     prompt: "a 1930s WPA travel poster style, like <image1> and <image2>: \"OLYMPUS MONS NATIONAL PARK\", \"RANGER NATURALIST SERVICE\", a towering red volcanic peak dominating the center, two moons glowing in the twilight sky, lush green forest canopy prominently in the foreground, flat graphic design with bold outlines, muted earth tones and deep reds, stylized national park typography, vintage government poster aesthetic, strong vertical composition, dramatic perspective emphasizing the volcano's scale, illustrated with clean lines and solid color blocks, reminiscent of mid-century American travel art",

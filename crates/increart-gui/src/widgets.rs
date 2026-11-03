@@ -527,6 +527,22 @@ pub fn when(t: increart_core::id::Timestamp) -> String {
     format!("{} · {ago}", t.format("%Y-%m-%d %H:%M UTC"))
 }
 
+/// A UUID in a details grid: its first part (the time), the whole and when
+/// it was made on hover (with `more` under it), copied on a click.
+pub fn uuid_label(ui: &mut egui::Ui, u: &increart_core::id::Uuid, more: &str) {
+    let full = u.to_string();
+    let made = increart_core::id::uuid_time(u).map(|t| format!("\nmade {}", when(t))).unwrap_or_default();
+    let more = if more.is_empty() { String::new() } else { format!("\n{more}") };
+    let short = egui::RichText::new(format!("{}…", &full[..13])).monospace().small();
+    if ui
+        .add(egui::Label::new(short).sense(Sense::click()))
+        .on_hover_text(format!("UUID {full}{made}{more}\nclick: copy"))
+        .clicked()
+    {
+        ui.ctx().copy_text(full);
+    }
+}
+
 /// `name` cut to `max` characters, "…" in place of the rest: a name in a
 /// button (the whole of it on hover).
 pub fn short_name(name: &str, max: usize) -> String {

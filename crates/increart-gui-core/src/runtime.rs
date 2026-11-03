@@ -1502,8 +1502,10 @@ fn work_on(ctx: &Ctx, fx: Effect) -> Vec<Msg> {
         }
         Effect::LoadRecipe(id) => {
             let Some(lib) = ctx.library() else { return vec![] };
-            let r = lib.lock_or_recover().recipe(&id).ok().flatten();
-            vec![Msg::RecipeLoaded(id, r)]
+            let l = lib.lock_or_recover();
+            let r = l.recipe(&id).ok().flatten();
+            let uuid = l.image_uuid(&ImageRef::output(id.clone()));
+            vec![Msg::RecipeLoaded(id, r, uuid)]
         }
         Effect::LoadInputMeta(ids) => {
             let Some(lib) = ctx.library() else { return vec![] };
@@ -1513,7 +1515,8 @@ fn work_on(ctx: &Ctx, fx: Effect) -> Vec<Msg> {
                 .map(|id| {
                     let source = l.source_info(&id).ok().flatten();
                     let blake3 = l.blake3_of(&ImageRef::input(id.clone())).ok();
-                    (id, crate::state::InputMeta { source, blake3 })
+                    let uuid = l.image_uuid(&ImageRef::input(id.clone()));
+                    (id, crate::state::InputMeta { source, blake3, uuid })
                 })
                 .collect();
             vec![Msg::InputMetaLoaded(list)]

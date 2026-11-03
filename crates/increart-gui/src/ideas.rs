@@ -1521,6 +1521,11 @@ fn idea_details(ui: &mut egui::Ui, st: &AppState, root: &Path, tex: &mut Texture
                 }
             });
             ui.end_row();
+            if let Some(u) = &e.idea.uuid {
+                ui.weak("uuid");
+                crate::widgets::uuid_label(ui, u, "");
+                ui.end_row();
+            }
             let text = &e.idea.text;
             if !text.is_empty() {
                 let words = text.split_whitespace().count();
@@ -1792,6 +1797,19 @@ fn image_meta(ui: &mut egui::Ui, st: &AppState, root: &Path, tex: &mut Textures,
                     {
                         ui.ctx().copy_text(h.clone());
                     }
+                    ui.end_row();
+                }
+                if let Some(u) = &m.uuid {
+                    let from = m.source.as_ref().map(|s| s.derived_from.as_slice()).unwrap_or_default();
+                    let more = match from {
+                        [] => String::new(),
+                        f => {
+                            let list: Vec<String> = f.iter().map(|u| u.to_string()).collect();
+                            format!("made from {}", list.join(", "))
+                        }
+                    };
+                    ui.weak("uuid");
+                    crate::widgets::uuid_label(ui, u, &more);
                     ui.end_row();
                 }
             }

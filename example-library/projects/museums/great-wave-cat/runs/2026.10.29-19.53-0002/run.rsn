@@ -1,5 +1,6 @@
 Run {
     id: "2026.10.29-19.53-0002",
+    uuid: "01a18939-0d62-71fe-84cd-f53219159a17",
     label: "r01 · Pixel art 16-bit",
     created: "2026-10-29T19:53:43Z",
     prompt: "Convert <image1> into 16-bit pixel art with crisp, blocky pixels and a limited retro palette—vibrant blues, creamy beige, and muted grays—evoking classic console games. Keep the wave’s dramatic composition and the boats’ positions unchanged. On the wave’s crest, place a tabby cat with ginger and white fur, wearing a pixelated surfboard with visible fins, mid-air in a dynamic crouched stance. Above, a cloudy dawn sky glows with soft pastel gradients of peach and lavender. The cat’s fur texture should be clearly defined in pixel blocks, and the surfboard’s wood grain and metal fins should have distinct, stylized pixel details. All elements remain in the same framing and perspective as the original, preserving the iconic Ukiyo-e composition.",

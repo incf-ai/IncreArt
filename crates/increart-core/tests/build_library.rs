@@ -333,7 +333,10 @@ fn whole_library_through_the_api() {
     let inputs = lib.recipe(&edited).unwrap().unwrap().inputs;
     assert_eq!(
         inputs.iter().map(|i| (i.role, i.image.clone())).collect::<Vec<_>>(),
-        [(InputRole::Start, ImageRef::output(outs[0].0.clone()))]
+        [
+            (InputRole::Start, ImageRef::output(outs[0].0.clone())),
+            (InputRole::Parent, ImageRef::output(outs[0].0.clone()))
+        ]
     );
     assert_eq!(inputs[0].original_name, None);
     lib.set_cover(&project, Some(ImageRef::output(outs[0].0.clone()))).unwrap();
@@ -1137,4 +1140,128 @@ fn libraries_go_to_archives_and_back() {
         assert!(archive::is_cancelled(&e), "{e}");
         assert!(!dest.exists() && !tmp.path().join(".stopped.zip.part").exists());
     }
+}
+
+#[test]
+fn uuids_follow_images_and_records() {
+    use increart_core::id::uuid_time;
+    let (_tmp, mut lib) = setup(None);
+    let root = lib.root().to_path_buf();
+    let meta: LibraryMeta = increart_core::rsnfmt::read(&root.join("library.rsn")).unwrap();
+    assert!(meta.uuid.is_some(), "a new library has one");
+    let source = |lib: &Library, id: &increart_core::Id| lib.source_info(id).unwrap().unwrap();
+
+    // ---- new things: UUIDv7s at the library clock's time, in order
+    let photo = lib.import_bytes(&png_bytes(DynamicImage::ImageRgb8(picture(16, 16, 3))), &original("a.png")).unwrap();
+    let photo = ImageRef::input(photo.image);
+    let pu = lib.image_uuid(&photo).unwrap();
+    assert_eq!(uuid_time(&pu), Some(t0()));
+    assert_eq!(lib.find_uuid(&pu), Some(&photo));
+    assert!(source(&lib, &photo.id).derived_from.is_empty());
+    let idea = lib.new_idea(NewIdea { images: vec![photo.id.clone()], ..NewIdea::text("A", "") }).unwrap();
+    let iu = lib.load_idea(&idea).unwrap().uuid.unwrap();
+    let (project, path) = lib.create_project(Path::new(""), Some("p"), std::slice::from_ref(&idea)).unwrap();
+    let prj = lib.load_project(&project).unwrap().uuid.unwrap();
+    let run = lib.create_run(&project, new_run(vec![photo.clone()], Mode::Generate, 2)).unwrap();
+    let (_, run_file) = lib.find_run(&run).unwrap();
+    let ru = run_file.uuid.unwrap();
+    let (out, _) = lib.write_output(&run, 0, 0, &sdserver_png(1), &recipe(&run_file, 0, None)).unwrap();
+    let out = ImageRef::output(out);
+    let ou = lib.image_uuid(&out).unwrap();
+    assert_eq!(lib.find_uuid(&ou), Some(&out));
+    let made = [pu, iu, prj, ru, ou];
+    assert!(made.windows(2).all(|w| w[0] < w[1]), "in the order made: {made:?}");
+    let inputs = lib.recipe(&out.id).unwrap().unwrap().inputs;
+    assert_eq!(inputs.iter().map(|i| i.uuid).collect::<Vec<_>>(), [Some(pu)], "a recipe names its inputs' UUIDs");
+
+    // ---- made from other images: a new UUID, derived from theirs
+    let from_out = lib.idea_from_output(&out.id, false, IdeaLoc::Unreviewed).unwrap();
+    let img = ImageRef::input(lib.load_idea(&from_out).unwrap().images[0].clone());
+    assert_ne!(lib.image_uuid(&img), Some(ou), "the output's UUID is taken here");
+    assert_eq!(source(&lib, &img.id).derived_from, [ou]);
+    let crop = png_bytes(DynamicImage::ImageRgb8(picture(8, 8, 9)));
+    let edited = lib.edited_copy(&crop, photo.clone(), ImageEdits::default(), "crop").unwrap().image;
+    assert_eq!(source(&lib, &edited).derived_from, [pu]);
+    let tiles = png_bytes(DynamicImage::ImageRgb8(picture(8, 8, 10)));
+    let tiled = lib.idea_from_tiles(&tiles, vec![photo.clone(), out.clone(), photo.clone()], "t", IdeaLoc::Unreviewed);
+    let tiled = lib.load_idea(&tiled.unwrap()).unwrap().images[0].clone();
+    assert_eq!(source(&lib, &tiled).derived_from, [pu, ou], "each once");
+
+    // ---- a file from another library keeps its UUID while its pixels do
+    let (_tmp2, mut other) = setup(None);
+    let bytes = fs::read(lib.image_path(&out)).unwrap();
+    let there = other.import_bytes(&bytes, &original("out.png")).unwrap().image;
+    assert_eq!(other.image_uuid(&ImageRef::input(there.clone())), Some(ou));
+    assert!(source(&other, &there).derived_from.is_empty());
+    // changed by another tool that kept the chunks: a new one, derived from it
+    let kept: Vec<png::Chunk> = png::read_chunks(&bytes)
+        .unwrap()
+        .into_iter()
+        .filter(|c| c.as_text().is_some_and(|(k, _)| k == png::KEY_UUID || k == png::KEY_BLAKE3))
+        .collect();
+    let changed = png::set_chunks(&png_bytes(DynamicImage::ImageRgb8(picture(64, 64, 77))), &kept).unwrap();
+    let changed = other.import_bytes(&changed, &original("edited-elsewhere.png")).unwrap().image;
+    let cu = other.image_uuid(&ImageRef::input(changed.clone())).unwrap();
+    assert_ne!(cu, ou);
+    assert_eq!(source(&other, &changed).derived_from, [ou]);
+
+    // ---- a copied project and its runs: new UUIDs
+    let copy = lib.duplicate_project(&path, "p2").unwrap();
+    let ix = lib.scan().unwrap();
+    let p2 = ix.projects.iter().find(|p| p.dir.ends_with(&copy)).unwrap();
+    assert!(p2.project.uuid.is_some_and(|u| u != prj));
+    assert!(p2.runs.len() == 1 && p2.runs[0].uuid.is_some_and(|u| u != ru));
+
+    // ---- converting keeps them; a copied store file is reported
+    convert(&mut lib, StoreFormat::Webp);
+    assert_eq!(lib.image_uuid(&out), Some(ou));
+    let copied = ImageRef::output("2026.10.24-12.00-0099".parse().unwrap());
+    fs::copy(lib.image_path(&out), root.join(copied.rel_path_as(StoreFormat::Webp))).unwrap();
+    drop(lib);
+    let lib = Library::open(&root).unwrap();
+    let ou_text = ou.to_string();
+    assert!(lib.problems().iter().any(|p| p.contains("increart:uuid") && p.contains(&ou_text)), "{:?}", lib.problems());
+    assert_eq!(lib.find_uuid(&ou), Some(&out), "the first keeps it");
+}
+
+/// A copy library from before UUIDs: the upgrade gives the links' copies the
+/// store files' new bytes too, so a file taken from an idea folder or a
+/// review folder carries its UUID.
+#[test]
+fn copy_library_links_get_the_uuids() {
+    let (_tmp, mut lib) = setup(Some(LinkMode::Copy));
+    let root = lib.root().to_path_buf();
+    let photo = lib.import_bytes(&jpeg_bytes(picture(20, 20, 3)), &original("a.jpg")).unwrap().image;
+    let idea = lib.new_idea(NewIdea { images: vec![photo.clone()], ..NewIdea::text("A", "") }).unwrap();
+    let (project, _) = lib.create_project(Path::new(""), None, std::slice::from_ref(&idea)).unwrap();
+    let run = lib.create_run(&project, new_run(vec![ImageRef::input(photo.clone())], Mode::Generate, 1)).unwrap();
+    let (_, def) = lib.find_run(&run).unwrap();
+    let (out, at) = lib.write_output(&run, 0, 0, &sdserver_png(1), &recipe(&def, 0, None)).unwrap();
+    let idea_link = lib.find_idea(&idea).unwrap().1.join("1-a.png");
+    drop(lib);
+
+    // as before UUIDs: the chunk gone from store files and copies alike
+    let strip = |p: &Path| {
+        let chunks = png::read_chunks(&fs::read(p).unwrap()).unwrap();
+        let kept: Vec<_> = chunks.into_iter().filter(|c| c.as_text().is_none_or(|(k, _)| k != png::KEY_UUID)).collect();
+        fs::write(p, png::write_chunks(&kept)).unwrap();
+    };
+    let photo_file = root.join(ImageRef::input(photo.clone()).rel_path_as(StoreFormat::Png));
+    let out_file = root.join(ImageRef::output(out.clone()).rel_path_as(StoreFormat::Png));
+    for p in [&photo_file, &out_file, &idea_link, &root.join(&at)] {
+        strip(p);
+        assert_eq!(png::text(&fs::read(p).unwrap(), png::KEY_UUID).unwrap(), None);
+    }
+    let meta = fs::read_to_string(root.join("library.rsn")).unwrap().replace("metadata: 3", "metadata: 2");
+    fs::write(root.join("library.rsn"), meta).unwrap();
+    let _ = fs::remove_file(root.join("cache/pixel-index.rsn"));
+
+    let lib = Library::open(&root).unwrap();
+    assert!(lib.problems().is_empty(), "{:?}", lib.problems());
+    for (store_file, copy) in [(&photo_file, &idea_link), (&out_file, &root.join(&at))] {
+        assert_eq!(fs::read(copy).unwrap(), fs::read(store_file).unwrap(), "{}", copy.display());
+        assert!(png::text(&fs::read(copy).unwrap(), png::KEY_UUID).unwrap().is_some());
+    }
+    let report = common::verify(&root);
+    assert!(report.trim_end().ends_with("problems: none"), "{report}");
 }

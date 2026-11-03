@@ -1,5 +1,6 @@
 Run {
     id: "2026.10.29-19.53-0000",
+    uuid: "01a18939-0d60-703b-8bd6-defb6eb8be8c",
     label: "r01 · Impressionist",
     created: "2026-10-29T19:53:43Z",
     prompt: "Convert <image1> into an impressionist painting, small broken dabs of colour, shimmering light and atmosphere, loose visible brushwork. Keep the composition, pose and identity unchanged. Add a tabby cat wearing a surfboard with fins, dynamically riding the crest of the wave, with a soft, cloudy dawn overhead, rendered in dabs of warm ochre, lavender, and pale gold, blending into the cool blues and whites of the wave; the cat’s fur rendered as loose strokes of amber and grey, its eyes catching the dawn’s glow, the surfboard’s surface textured with brushed highlights, the wave’s foam rendered in quick, energetic dabs of white and cerulean, the distant Fuji softened into impressionistic blue-grey and white, all unified by a luminous, hazy atmosphere of early morning light.",

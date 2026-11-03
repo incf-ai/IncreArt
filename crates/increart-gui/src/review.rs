@@ -656,6 +656,11 @@ pub fn recipe_grid(
             ui.label(v);
             ui.end_row();
         }
+        if let Some(u) = st.output_uuids.get(&image.id) {
+            ui.weak("uuid");
+            crate::widgets::uuid_label(ui, u, "");
+            ui.end_row();
+        }
     });
     if !r.inputs.is_empty() {
         ui.weak("inputs");
@@ -664,10 +669,12 @@ pub fn recipe_grid(
                 ui.weak(match i.role {
                     increart_core::model::InputRole::Ref(n) => format!("<image{n}>"),
                     increart_core::model::InputRole::Start => "start".into(),
+                    increart_core::model::InputRole::Parent => "parent".into(),
                 });
                 let name = i.original_name.clone().unwrap_or_else(|| i.file.clone());
+                let uuid = i.uuid.map(|u| format!("\nUUID {u}")).unwrap_or_default();
                 ui.label(RichText::new(short(&name, 34)).small())
-                    .on_hover_text(format!("{}\nBLAKE3 {}", i.file, i.blake3));
+                    .on_hover_text(format!("{}\nBLAKE3 {}{uuid}", i.file, i.blake3));
                 ui.end_row();
             }
         });

@@ -1,5 +1,6 @@
 Run {
     id: "2026.10.29-19.53-0001",
+    uuid: "01a18939-0d61-7830-90b5-f8e81428246e",
     label: "r01 · Stained glass",
     created: "2026-10-29T19:53:43Z",
     prompt: "Convert <image1> into a stained glass window, composed of vibrant translucent glass panels in deep cobalt, pearl white, and muted ochre, framed by thick, dark leaded lines that catch the light. Light streams from behind, illuminating the scene from within, casting a luminous glow through the glass. Keep the composition, pose, and identity unchanged: the massive wave cresting with crystalline blue foam, the distant snow-capped mountain, and the small boats caught in its fury. Add a tabby cat wearing a surfboard with fins, riding the apex of the wave with focused grace. The sky above is a cloudy dawn, rendered in soft gradient tones of peach and lavender glass, pierced by golden shafts of light. The wave’s texture is defined by layered glass shards — sharp fins of blue and white — while the cat’s fur is rendered in amber and cream panes, catching the light. All materials and textures must be stylized as stained glass, including the boats, the mountain, and the water’s surface, with every detail carved into translucent glass forms.",

@@ -1,5 +1,6 @@
 Run {
     id: "2026.10.29-19.56-0002",
+    uuid: "01a1893b-cc82-7c8f-817d-7d6adbfe8db9",
     label: "r01 · Assembled from objects",
     created: "2026-10-29T19:56:09Z",
     prompt: "Transform <image1> into an assemblage of the subject built entirely from weathered, rusted metal pipes of varying diameters and lengths, laid out on a textured bed of fine, grey moon dust, arranged to form the astronaut’s silhouette, suit details, helmet visor, and the distinct shading of lunar light and shadow, seen from a high-angle overhead perspective. Keep the subject recognisable, with the pipes forming the contours of the suit’s torso, arms, legs, and the helmet’s reflective surface, while the moon dust subtly highlights the separation and depth of each component.",
