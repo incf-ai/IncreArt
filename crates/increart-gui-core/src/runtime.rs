@@ -105,6 +105,7 @@ pub struct Runtime {
     download_cancel: Cell<Arc<AtomicBool>>,
     convert_cancel: Cell<Arc<AtomicBool>>,
     archive_cancel: Cell<Arc<AtomicBool>>,
+    export_cancel: Cell<Arc<AtomicBool>>,
     server_test_cancel: Cell<Arc<AtomicBool>>,
     /// The suite's run going on (its number): its stdin, for `stop` (the
     /// run's thread lets it go when the run ends).
@@ -231,6 +232,7 @@ impl Runtime {
             download_cancel: Cell::default(),
             convert_cancel: Cell::default(),
             archive_cancel: Cell::default(),
+            export_cancel: Cell::default(),
             server_test_cancel: Cell::default(),
             api_test_stdin: Arc::default(),
             watch: Cell::new(None),
@@ -479,6 +481,30 @@ impl Runtime {
                 });
             }
             Effect::CancelArchive => cancel(&self.archive_cancel),
+            Effect::Export { items, template, prefs, dest } => {
+                let Some(lib) = self.ctx.library() else { return };
+                let (tx, wake) = (self.ctx.tx.clone(), self.ctx.wake.clone());
+                let cancel = new_cancel(&self.export_cancel);
+                self.spawn("export", move || {
+                    let mut last = Instant::now() - Duration::from_secs(1);
+                    let progress = |done, total| {
+                        if last.elapsed() >= Duration::from_millis(200) {
+                            last = Instant::now();
+                            let _ = tx.send(Msg::ExportProgress(done, total));
+                            wake();
+                        }
+                        !cancel.load(Ordering::Relaxed)
+                    };
+                    let r = increart_core::exportimages::export(&lib, &items, &template, &prefs, &dest, progress);
+                    let _ = tx.send(Msg::Exported(dest, r));
+                    wake();
+                });
+            }
+            Effect::CancelExport => cancel(&self.export_cancel),
+            Effect::SaveExportPrefs(path, prefs) => {
+                // not saved: the next export starts from the defaults, no worse
+                let _ = prefs.save(&path);
+            }
             Effect::CancelConvert => cancel(&self.convert_cancel),
             Effect::WatchLibrary(root) => {
                 let w = crate::watch::start(root, self.ctx.tx.clone(), self.ctx.wake.clone());
@@ -1172,33 +1198,6 @@ fn watch_start_log(
     });
 }
 
-/// Copies store images to `dest`, named by image ID or by run / revision /
-/// seed, with or without IncreArt's and sd-server's metadata chunks.
-fn export(lib: &Library, images: &[ImageRef], dest: &Path, keep_metadata: bool, by_id: bool) -> Result<usize, String> {
-    std::fs::create_dir_all(dest).map_err(|e| format!("{}: {e}", dest.display()))?;
-    let ix = lib.scan().map_err(err)?;
-    let mut n = 0;
-    for img in images {
-        let bytes = std::fs::read(lib.image_path(img)).map_err(|e| e.to_string())?;
-        let bytes = if keep_metadata { bytes } else { increart_core::container::strip_metadata(&bytes)? };
-        let format = lib.format_of(img);
-        let link = ix.projects.iter().flat_map(|p| &p.outputs).find(|o| &o.image == img);
-        let stem = match (by_id, link) {
-            (false, Some(o)) => format!("{}_r{}_s{:04}", o.name.run, o.name.rev, o.name.seed),
-            _ => img.id.to_string(),
-        };
-        let mut target = dest.join(format!("{stem}.{}", format.ext()));
-        let mut k = 2;
-        while target.exists() {
-            target = dest.join(format!("{stem} {k}.{}", format.ext()));
-            k += 1;
-        }
-        std::fs::write(&target, bytes).map_err(|e| format!("{}: {e}", target.display()))?;
-        n += 1;
-    }
-    Ok(n)
-}
-
 /// Opens a folder (a file: its folder) in the file manager: `command` if
 /// set, else the desktop's (Explorer, Finder, or on Linux the first of
 /// xdg-open, gio, thunar, nautilus, dolphin, nemo, pcmanfm that works).
@@ -1527,10 +1526,10 @@ fn work_on(ctx: &Ctx, fx: Effect) -> Vec<Msg> {
                 ids.into_iter().take(200).filter_map(|id| l.source_info(&id).ok().flatten().map(|s| (id, s))).collect();
             vec![Msg::Imports(list)]
         }
-        Effect::Export { images, dest, keep_metadata, by_id } => {
+        Effect::ReadExportFiles(mut items) => {
             let Some(lib) = ctx.library() else { return vec![] };
-            let l = lib.lock_or_recover();
-            vec![Msg::Exported(export(&l, &images, &dest, keep_metadata, by_id))]
+            increart_core::exportimages::read_files(&lib.lock_or_recover(), &mut items);
+            vec![Msg::ExportFilesRead(items)]
         }
         Effect::ShowInFileManager { path, command } => match show_in_file_manager(&path, &command) {
             Ok(()) => vec![],
@@ -1710,6 +1709,9 @@ fn work_on(ctx: &Ctx, fx: Effect) -> Vec<Msg> {
         | Effect::SaveBugReport { .. }
         | Effect::UnpackArchive { .. }
         | Effect::CancelArchive
+        | Effect::Export { .. }
+        | Effect::CancelExport
+        | Effect::SaveExportPrefs(..)
         | Effect::CheckUsage => {
             // (handled on their own threads, never sent here)
             vec![Msg::Problem(format!("internal: {fx:?} reached the library worker"))]

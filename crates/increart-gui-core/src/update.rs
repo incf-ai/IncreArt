@@ -959,11 +959,20 @@ pub enum Msg {
     /// Compose and copy, save or add to the library.
     TileOut(TileTarget),
     TilesDone(TileTarget, Result<crate::tile::TileImage, String>),
+    /// Export… on images; the text says what they are, for the title.
     OpenExport(Vec<ImageRef>, String),
+    /// Export… on ideas: their images, and their texts if so chosen.
+    OpenExportIdeas(Vec<Id>, String),
     EditExport(ExportDialog),
+    /// What only the files say (store format, an input's size), for the
+    /// dialog open on these images.
+    ExportFilesRead(Vec<increart_core::exportimages::Item>),
     RunExport,
     CloseExport,
-    Exported(Result<usize, String>),
+    /// Files done of how many.
+    ExportProgress(usize, usize),
+    CancelExport,
+    Exported(PathBuf, Result<increart_core::exportimages::Summary, String>),
     // ---- file manager
     /// Open a folder (or a file's folder) in the system file manager; the
     /// path is relative to the library or absolute.
@@ -1108,12 +1117,19 @@ pub enum Effect {
     ReadJobLog(Id, std::path::PathBuf),
     LoadInputMeta(Vec<Id>),
     LoadImports,
+    /// Fills in what only the files say ([`increart_core::exportimages::read_files`]);
+    /// answers `ExportFilesRead`.
+    ReadExportFiles(Vec<increart_core::exportimages::Item>),
+    /// Exports images on a thread of its own, reporting `ExportProgress`,
+    /// then `Exported`.
     Export {
-        images: Vec<ImageRef>,
+        items: Vec<increart_core::exportimages::Item>,
+        template: String,
+        prefs: increart_core::exportimages::Prefs,
         dest: PathBuf,
-        keep_metadata: bool,
-        by_id: bool,
     },
+    CancelExport,
+    SaveExportPrefs(PathBuf, increart_core::exportimages::Prefs),
     ShowInFileManager {
         path: PathBuf,
         command: String,
@@ -6006,37 +6022,117 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
             }
         }
         Msg::OpenExport(images, what) => {
-            let dest = state.export.as_ref().map(|e| e.dest.clone()).unwrap_or_default();
-            state.export = Some(ExportDialog { images, what, dest, keep_metadata: true, by_id: false });
-            vec![]
+            let outputs = images.iter().any(|i| i.store == increart_core::Store::Output);
+            let items = images.iter().map(|i| export_item(state, i)).collect();
+            open_export(state, items, what, outputs)
+        }
+        Msg::OpenExportIdeas(ids, what) => {
+            let mut items = vec![];
+            for id in &ids {
+                let Some(e) = state.index.ideas.iter().find(|e| &e.idea.id == id) else { continue };
+                let text = increart_core::exportimages::idea_text(&e.idea.title, &e.idea.text, &e.idea.tags);
+                if e.idea.images.is_empty() {
+                    items.push(increart_core::exportimages::Item {
+                        fields: idea_fields(&e.idea),
+                        text: Some(text),
+                        ..Default::default()
+                    });
+                    continue;
+                }
+                for (k, img) in e.idea.images.iter().enumerate() {
+                    let mut it = export_item(state, &ImageRef::input(img.clone()));
+                    it.text = (k == 0).then(|| text.clone());
+                    items.push(it);
+                }
+            }
+            open_export(state, items, what, false)
         }
         Msg::EditExport(e) => {
+            let mut fx = vec![];
+            if e.prefs.saved != state.export_prefs.saved {
+                state.export_prefs.saved = e.prefs.saved.clone();
+                fx.extend(save_export_prefs(state));
+            }
             state.export = Some(e);
+            fx
+        }
+        Msg::ExportFilesRead(items) => {
+            if let Some(e) = &mut state.export
+                && e.items.iter().map(|i| &i.image).eq(items.iter().map(|i| &i.image))
+            {
+                e.items = items;
+                e.loading = false;
+            }
             vec![]
         }
         Msg::RunExport => {
             let Some(e) = state.export.clone() else { return vec![] };
-            if e.dest.trim().is_empty() {
+            if state.exporting.is_some() {
+                state.messages_error("An export is still being written");
+                return vec![];
+            }
+            let dest = e.prefs.dest.trim().to_string();
+            if dest.is_empty() {
                 state.messages_error("Choose a destination folder");
                 return vec![];
             }
+            let unknown = increart_core::exportimages::unknown_tokens(&e.template);
+            if !unknown.is_empty() {
+                state.messages_error(format!("Unknown in the name format: {{{}}}", unknown.join("}, {")));
+                return vec![];
+            }
+            let mut prefs = e.prefs.clone();
+            prefs.dest = dest.clone();
+            match e.outputs {
+                true => prefs.outputs = e.template.clone(),
+                false => prefs.inputs = e.template.clone(),
+            }
+            state.export_prefs = prefs.clone();
             state.export = None;
             state.busy += 1;
-            vec![Effect::Export {
-                images: e.images,
-                dest: e.dest.trim().into(),
-                keep_metadata: e.keep_metadata,
-                by_id: e.by_id,
-            }]
+            state.exporting = Some(Exporting::default());
+            let mut fx = save_export_prefs(state);
+            fx.push(Effect::Export { items: e.items, template: e.template, prefs, dest: dest.into() });
+            fx
         }
         Msg::CloseExport => {
             state.export = None;
             vec![]
         }
-        Msg::Exported(r) => {
+        Msg::ExportProgress(done, total) => {
+            if let Some(x) = &mut state.exporting {
+                (x.done, x.total) = (done, total);
+            }
+            vec![]
+        }
+        Msg::CancelExport => match state.exporting {
+            Some(_) => vec![Effect::CancelExport],
+            None => vec![],
+        },
+        Msg::Exported(dest, r) => {
             state.busy = state.busy.saturating_sub(1);
+            state.exporting = None;
             match r {
-                Ok(n) => state.messages_info(format!("Exported {n} image(s)")),
+                Ok(s) => {
+                    let images = |n: usize| if n == 1 { "1 image".to_string() } else { format!("{n} images") };
+                    let mut text = match s.stopped {
+                        true => format!("Export stopped: {} written to {}", images(s.images), dest.display()),
+                        false => format!("Exported {} to {}", images(s.images), dest.display()),
+                    };
+                    if s.texts > 0 {
+                        text += &format!(", {} text file(s)", s.texts);
+                    }
+                    if s.skipped > 0 {
+                        text += &format!("; {} skipped (already there)", s.skipped);
+                    }
+                    increart_core::applog::line("info", &text);
+                    state.messages.push(Message { text, error: false, alert: false, log: None, folder: Some(dest) });
+                    if let Some(first) = s.failed.first() {
+                        let more = s.failed.len() - 1;
+                        let more = if more > 0 { format!(" (and {more} more)") } else { String::new() };
+                        state.messages_error(format!("Export: couldn't write {first}{more}"));
+                    }
+                }
                 Err(e) => state.messages_error(format!("Export: {e}")),
             }
             vec![]
@@ -6781,7 +6877,7 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
                     PathBuf::from(&state.config.programs.sd_server.binary).parent().map(PathBuf::from)
                 }
                 PickKind::KoboldBinary => PathBuf::from(kobold_binary(state)).parent().map(PathBuf::from),
-                PickKind::ExportDir => state.export.as_ref().map(|e| PathBuf::from(&e.dest)),
+                PickKind::ExportDir => state.export.as_ref().map(|e| PathBuf::from(&e.prefs.dest)),
                 PickKind::Pe(f) => match state.pe.editor.as_ref().map(|e| &e.draft.run) {
                     Some(PeRun::KoboldCpp { binary, model, mmproj, config, .. }) => {
                         let p = match f {
@@ -6915,7 +7011,7 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
             }
             PickKind::ExportDir => {
                 if let Some(e) = &mut state.export {
-                    e.dest = paths.remove(0).to_string_lossy().into_owned();
+                    e.prefs.dest = paths.remove(0).to_string_lossy().into_owned();
                 }
                 vec![]
             }
@@ -10100,4 +10196,103 @@ fn ring(state: &mut AppState, sound: increart_core::notify::Sound, text: String)
         state.messages_alert(text);
     }
     fx
+}
+
+/// Opens the export dialog on `items` with the choices made last (the
+/// template for outputs or for inputs), and asks for what only the files
+/// say.
+fn open_export(
+    state: &mut AppState,
+    items: Vec<increart_core::exportimages::Item>,
+    what: String,
+    outputs: bool,
+) -> Vec<Effect> {
+    let prefs = state.export_prefs.clone();
+    let template = if outputs { prefs.outputs.clone() } else { prefs.inputs.clone() };
+    let loading = items.iter().any(|i| i.image.is_some());
+    state.export = Some(ExportDialog { items: items.clone(), what, outputs, template, prefs, loading });
+    if loading { vec![Effect::ReadExportFiles(items)] } else { vec![] }
+}
+
+fn save_export_prefs(state: &AppState) -> Vec<Effect> {
+    match &state.export_prefs_path {
+        Some(p) => vec![Effect::SaveExportPrefs(p.clone(), state.export_prefs.clone())],
+        None => vec![],
+    }
+}
+
+/// An idea's tokens: `{idea}` its title, else the start of its text.
+fn idea_fields(idea: &increart_core::model::Idea) -> increart_core::exportimages::Fields {
+    use increart_core::model::IdeaSource;
+    let mut f = increart_core::exportimages::Fields::new();
+    f.insert("idea", idea_name(idea));
+    f.insert("idea_id", idea.id.to_string());
+    f.insert("title", idea.title.clone());
+    f.insert("tags", idea.tags.join(" "));
+    let source = match &idea.source {
+        IdeaSource::Manual => "manual",
+        IdeaSource::Clipboard => "clipboard",
+        IdeaSource::InboxFolder => "inbox",
+        IdeaSource::DroppedFile { .. } => "dropped",
+        IdeaSource::FromOutput { .. } => "output",
+        IdeaSource::Tiled { .. } => "tiled",
+        IdeaSource::Edited { .. } => "edited",
+    };
+    f.insert("source", source.into());
+    f
+}
+
+fn idea_name(idea: &increart_core::model::Idea) -> String {
+    match idea.title.trim() {
+        "" => idea.text.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(40).collect(),
+        t => t.to_string(),
+    }
+}
+
+/// An image's tokens, from what the index knows (the files add the rest:
+/// [`Effect::ReadExportFiles`]).
+fn export_item(state: &AppState, image: &ImageRef) -> increart_core::exportimages::Item {
+    let mut f = increart_core::exportimages::Fields::new();
+    let id = image.id.as_str();
+    f.insert("id", id.to_string());
+    if let Some((date, time)) = image.id.minute().split_once('-') {
+        f.insert("date", date.replace('.', "-"));
+        f.insert("time", time.to_string());
+    }
+    match image.store {
+        increart_core::Store::Input => {
+            if let Some(e) = state.index.ideas.iter().find(|e| e.idea.images.contains(&image.id)) {
+                f.extend(idea_fields(&e.idea));
+                let k = e.idea.images.iter().position(|i| i == &image.id).unwrap_or(0);
+                f.insert("idea_n", (k + 1).to_string());
+            }
+        }
+        increart_core::Store::Output => {
+            if let Some(link) = state.output_link(image) {
+                f.insert("run", link.name.run.to_string());
+                f.insert("rev", link.name.rev.to_string());
+                f.insert("seed", link.name.seed.to_string());
+                f.insert("rating", link.verdict.map_or("unrated", |v| v.dir()).into());
+                let run = state.index.run(&link.name.run).map(|(_, r)| r);
+                if let Some(p) = state.project_of_link(link) {
+                    f.insert("project", p.name());
+                    f.insert("title", p.project.titles.get(&image.id).cloned().unwrap_or_default());
+                    f.insert("tags", state.image_tags(image).join(" "));
+                    let idea = run.and_then(|r| r.source_idea.as_ref()).or(p.project.sources.first());
+                    if let Some(e) = idea.and_then(|id| state.index.ideas.iter().find(|e| &e.idea.id == id)) {
+                        f.insert("idea", idea_name(&e.idea));
+                        f.insert("idea_id", e.idea.id.to_string());
+                    }
+                }
+                if let Some(r) = run {
+                    f.insert("prompt", r.prompt.clone());
+                    f.insert("model", r.model.recipe.clone());
+                    f.insert("width", r.width.to_string());
+                    f.insert("height", r.height.to_string());
+                }
+            }
+        }
+    }
+    f.retain(|_, v| !v.is_empty());
+    increart_core::exportimages::Item { image: Some(image.clone()), fields: f, ..Default::default() }
 }
