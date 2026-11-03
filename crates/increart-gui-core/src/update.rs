@@ -6096,9 +6096,9 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
             let mut items = e.items.clone();
             let mut prefs = e.prefs.clone();
             prefs.dest = dest.clone();
-            if e.named() {
+            if e.save_as {
                 if increart_core::exportimages::file_name(&e.name).is_none() {
-                    state.messages_error("Type a name for the file");
+                    state.messages_error("Choose a name for the file");
                     return vec![];
                 }
                 items[0].name = Some(e.name.clone());
@@ -6118,6 +6118,10 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
             state.busy += 1;
             state.exporting = Some(Exporting::default());
             let mut fx = save_export_prefs(state);
+            if e.save_as {
+                // the Save dialog asked before choosing a file that is there
+                prefs.existing = increart_core::exportimages::Existing::Overwrite;
+            }
             fx.push(Effect::Export { items, template: e.template, prefs, dest: dest.into() });
             fx
         }
@@ -7057,12 +7061,13 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
                 }
                 vec![]
             }
-            PickKind::ExportFile => {
-                if let Some(e) = &mut state.export {
+            PickKind::ExportFile => match &mut state.export {
+                Some(e) if e.save_as => {
                     export_saved_as(e, &paths[0]);
+                    update(state, Msg::RunExport)
                 }
-                vec![]
-            }
+                _ => vec![],
+            },
             PickKind::SdServerBinary => {
                 let mut c = state.config.programs.sd_server.clone();
                 c.binary = paths.remove(0).to_string_lossy().into_owned();
@@ -10258,7 +10263,17 @@ fn open_export(
     let prefs = state.export_prefs.clone();
     let template = if outputs { prefs.outputs.clone() } else { prefs.inputs.clone() };
     let loading = items.iter().any(|i| i.image.is_some());
-    let mut e = ExportDialog { items: items.clone(), what, outputs, template, name: String::new(), prefs, loading };
+    let mut e = ExportDialog {
+        items: items.clone(),
+        what,
+        outputs,
+        template,
+        save_as: false,
+        name: String::new(),
+        prefs,
+        loading,
+    };
+    e.save_as = e.can_save_as();
     if !loading {
         e.suggest_name();
     }
@@ -10267,7 +10282,8 @@ fn open_export(
 }
 
 /// Save as… picked `file`: its folder and name, and its format when its
-/// extension is another than the one the dialog would write.
+/// extension is another than the one the dialog would write (an extension
+/// that is no format's is part of the name).
 fn export_saved_as(e: &mut ExportDialog, file: &std::path::Path) {
     use increart_core::config::TileFormat;
     if let Some(dir) = file.parent() {

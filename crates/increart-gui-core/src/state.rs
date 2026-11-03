@@ -604,8 +604,12 @@ pub struct ExportDialog {
     /// Outputs (else inputs: ideas' images): which template is kept.
     pub outputs: bool,
     pub template: String,
-    /// The name typed when one thing is exported (`prefs.one_name`),
-    /// without the extension; the template's name for it to start with.
+    /// Save as (one image): the system's Save dialog chooses the folder
+    /// and name, and it is written as soon as one is chosen. Else export to
+    /// a folder, named by the template.
+    pub save_as: bool,
+    /// Save as's name, without the extension: the template's name for it,
+    /// as the Save dialog starts; then the one chosen there.
     pub name: String,
     pub prefs: increart_core::exportimages::Prefs,
     /// The values read from the images (prompt, model, size) still coming.
@@ -613,9 +617,9 @@ pub struct ExportDialog {
 }
 
 impl ExportDialog {
-    /// One thing exported, named by `name` rather than the template.
-    pub fn named(&self) -> bool {
-        self.items.len() == 1 && self.prefs.one_name
+    /// One image: it can be saved as (else only exported to a folder).
+    pub fn can_save_as(&self) -> bool {
+        self.items.len() == 1 && self.items[0].image.is_some()
     }
 
     /// The template's name for the one thing, as `name` starts.

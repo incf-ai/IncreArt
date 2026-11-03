@@ -364,7 +364,7 @@ fn ideas_exported_with_their_text() {
 }
 
 #[test]
-fn one_image_exported_by_a_name_or_its_uuid() {
+fn one_image_saved_as_or_exported_by_its_uuid() {
     let mut h = Harness::new();
     let dir = h._tmp.path().join("drop");
     std::fs::create_dir_all(&dir).unwrap();
@@ -375,11 +375,11 @@ fn one_image_exported_by_a_name_or_its_uuid() {
     let image = increart_core::ImageRef::input(idea.images[0].clone());
     let dest = h._tmp.path().join("export");
 
-    // one image: a name of its own, the template's to start with
+    // one image: Save as, the Save dialog starting with the template's name
     h.send(Msg::OpenExport(vec![image.clone()], "1 image".into()));
     h.settle();
-    let mut e = h.state.export.clone().unwrap();
-    assert!(e.named());
+    let e = h.state.export.clone().unwrap();
+    assert!(e.save_as);
     let suggested = increart_core::exportimages::render(&e.template, &e.items[0].fields, 1, false).unwrap();
     assert_eq!(e.name, suggested);
     let uuid = e.items[0].fields["uuid"].clone();
@@ -390,40 +390,35 @@ fn one_image_exported_by_a_name_or_its_uuid() {
     );
     assert_eq!(e.items[0].fields["idea_uuid"], idea.uuid.unwrap().to_string());
 
-    e.prefs.dest = dest.to_string_lossy().into();
-    e.name = "Red {draft}.png".into();
-    e.template = "{nope}".into();
-    h.send(Msg::EditExport(e));
-    h.send(Msg::RunExport);
+    // the file chosen is written at once: its folder, its name as chosen,
+    // the format its extension says, replacing one there (the Save dialog
+    // asked)
+    std::fs::create_dir_all(&dest).unwrap();
+    std::fs::write(dest.join("Red {draft}.jpg"), b"old").unwrap();
+    h.send(Msg::Picked(PickKind::ExportFile, vec![dest.join("Red {draft}.jpeg")]));
+    assert!(h.state.export.is_none(), "closed");
     h.settle();
-    assert!(dest.join("Red {draft}.png").is_file(), "as typed, the template not used");
-    assert_eq!(h.state.export_prefs.inputs, increart_core::exportimages::INPUT_TEMPLATES[0], "not kept");
+    let jpg = std::fs::read(dest.join("Red {draft}.jpg")).unwrap();
+    assert!(jpg.starts_with(&[0xFF, 0xD8]), "replaced, as JPEG");
+    assert_eq!(std::fs::read_dir(&dest).unwrap().count(), 1);
+    let kept = &h.state.export_prefs;
+    assert_eq!(kept.dest, dest.to_string_lossy(), "the folder kept for next time");
+    assert_eq!(kept.existing, increart_core::exportimages::Existing::Number, "replacing only for this one");
+    assert_eq!(kept.inputs, increart_core::exportimages::INPUT_TEMPLATES[0]);
 
-    // Save as…: the folder, the name, and the format its extension says
-    let other = h._tmp.path().join("other");
-    std::fs::create_dir_all(&other).unwrap();
-    h.send(Msg::OpenExport(vec![image.clone()], "1 image".into()));
-    h.settle();
-    h.send(Msg::Picked(PickKind::ExportFile, vec![other.join("Shiny.jpeg")]));
-    let e = h.state.export.clone().unwrap();
-    assert_eq!((e.name.as_str(), e.prefs.dest.as_str()), ("Shiny", &*other.to_string_lossy()));
-    assert_eq!(e.prefs.format, Some(increart_core::config::TileFormat::Jpeg));
-    h.send(Msg::RunExport);
-    h.settle();
-    assert!(other.join("Shiny.jpg").is_file());
-
-    // a name format instead: by the UUID
+    // export to a folder instead: named by the template (the UUID)
     h.send(Msg::OpenExport(vec![image], "1 image".into()));
     h.settle();
     let mut e = h.state.export.clone().unwrap();
-    e.prefs.one_name = false;
-    (e.prefs.dest, e.prefs.format) = (dest.to_string_lossy().into(), None);
+    assert!(e.save_as, "one image always opens as Save as");
+    e.save_as = false;
+    e.prefs.format = None;
     e.template = "{uuid}".into();
     h.send(Msg::EditExport(e));
     h.send(Msg::RunExport);
     h.settle();
     assert!(dest.join(format!("{uuid}.png")).is_file());
-    assert!(!h.state.export_prefs.one_name, "the choice kept");
+    assert_eq!(h.state.export_prefs.inputs, "{uuid}");
 }
 
 #[test]
