@@ -213,16 +213,80 @@ fn upgraded(lib: &Library) {
                 let recipe = lib.recipe(&id).unwrap().unwrap();
                 assert_eq!(
                     recipe.inputs.len(),
-                    recipe.refs.len() + usize::from(matches!(recipe.mode, Mode::Edit { init: Some(_), .. })),
+                    recipe.refs.len()
+                        + usize::from(matches!(recipe.mode, Mode::Edit { init: Some(_), .. }))
+                        + usize::from(recipe.parent.is_some()),
                     "{id}"
                 );
+                if let Some(p) = &recipe.parent {
+                    let parent = recipe.inputs.iter().find(|i| i.role == InputRole::Parent);
+                    assert_eq!(parent.map(|i| &i.image), Some(p), "{id}: its parent is an input");
+                }
                 for i in &recipe.inputs {
                     assert_eq!(i.blake3, lib.blake3_of(&i.image).unwrap());
                     assert!(root.join(&i.file).is_file(), "{}", i.file);
+                    assert_eq!(i.uuid, lib.image_uuid(&i.image), "{id}: its inputs' UUIDs");
                 }
                 with_inputs += usize::from(!recipe.inputs.is_empty());
             }
+            let u = lib.image_uuid(&r).unwrap_or_else(|| panic!("{id}: no increart:uuid"));
+            backfilled(&id, &u);
+            assert_eq!(lib.find_uuid(&u), Some(&r));
         }
     }
     assert!(with_inputs > 0, "the sample has outputs made from other images");
+    assert!(meta.uuid.is_some(), "the library's UUID");
+    let ix = lib.scan().unwrap();
+    for e in &ix.ideas {
+        backfilled(&e.idea.id, &e.idea.uuid.unwrap());
+    }
+    for p in &ix.projects {
+        backfilled(&p.project.id, &p.project.uuid.unwrap());
+        for r in &p.runs {
+            backfilled(&r.id, &r.uuid.unwrap());
+        }
+    }
+}
+
+/// A UUID given to something from before UUIDs: its ID's minute, plus its
+/// number in milliseconds.
+fn backfilled(id: &increart_core::Id, u: &increart_core::id::Uuid) {
+    let at = id.time().unwrap() + chrono::TimeDelta::milliseconds(id.seq() as i64);
+    assert_eq!(increart_core::id::uuid_time(u), Some(at), "{id}: {u}");
+}
+
+/// Every UUID in the library: its own, the store images', the records'.
+fn all_uuids(lib: &Library) -> Vec<String> {
+    let meta: LibraryMeta = rsnfmt::read(&lib.root().join("library.rsn")).unwrap();
+    let mut out = vec![format!("library {}", meta.uuid.unwrap())];
+    for store in [Store::Input, Store::Output] {
+        for id in lib.store_ids(store).unwrap() {
+            let r = ImageRef { id: id.clone(), store };
+            out.push(format!("{store:?} {id} {}", lib.image_uuid(&r).unwrap()));
+        }
+    }
+    let ix = lib.scan().unwrap();
+    out.extend(ix.ideas.iter().map(|e| format!("idea {} {}", e.idea.id, e.idea.uuid.unwrap())));
+    for p in ix.projects.iter().chain(ix.discarded_projects.iter().map(|d| &d.entry)) {
+        out.push(format!("project {} {}", p.project.id, p.project.uuid.unwrap()));
+        out.extend(p.runs.iter().map(|r| format!("run {} {}", r.id, r.uuid.unwrap())));
+    }
+    out
+}
+
+#[test]
+fn uuids_are_given_once() {
+    let tmp = sample();
+    let root = tmp.path().join("lib");
+    let lib = Library::open(&root).unwrap();
+    let first = all_uuids(&lib);
+    let distinct: std::collections::HashSet<_> = first.iter().map(|l| l.rsplit(' ').next().unwrap()).collect();
+    assert_eq!(distinct.len(), first.len(), "every UUID different");
+    drop(lib);
+    let lib = Library::open(&root).unwrap();
+    assert_eq!(all_uuids(&lib), first, "kept when opened again");
+    assert!(lib.problems().is_empty(), "{:?}", lib.problems());
+    let report = common::verify(&root);
+    assert!(report.trim_end().ends_with("problems: none"), "{report}");
+    assert!(report.contains(&format!(", {} UUIDs;", first.len())), "the verifier sees them all: {report}");
 }

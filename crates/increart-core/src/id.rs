@@ -1,5 +1,6 @@
 //! IDs: `YYYY.MM.DD-HH.MM-NNNN`, the UTC creation minute plus a counter from
-//! 0000, separate for each kind (DESIGN.md, IDs).
+//! 0000, separate for each kind; and the UUIDv7 kept beside each (DESIGN.md,
+//! IDs, UUIDs).
 
 use std::collections::HashMap;
 use std::fmt;
@@ -141,6 +142,49 @@ impl IdAllocator {
     }
 }
 
+// ------------------------------------------------------------------ UUIDs
+
+pub use uuid::Uuid;
+
+/// A UUIDv7 for `at` (to the millisecond), the rest random.
+pub fn uuid_at(at: Timestamp) -> Uuid {
+    let mut random = [0u8; 10];
+    // (never fails where the app runs; zeros still leave a valid UUID)
+    let _ = getrandom::fill(&mut random);
+    uuid::Builder::from_unix_timestamp_millis(at.timestamp_millis().max(0) as u64, &random).into_uuid()
+}
+
+/// The UUID given to something made before UUIDs, from its ID: the ID's
+/// minute plus its number in milliseconds, so they sort as the IDs do.
+pub fn uuid_for(id: &Id) -> Uuid {
+    let minute = id.time().unwrap_or_default();
+    uuid_at(minute + chrono::TimeDelta::milliseconds(id.seq().min(59_999) as i64))
+}
+
+/// When a UUIDv7 was made (`None` for other versions).
+pub fn uuid_time(u: &Uuid) -> Option<Timestamp> {
+    if u.get_version_num() != 7 {
+        return None;
+    }
+    let (s, ns) = u.get_timestamp()?.to_unix();
+    DateTime::from_timestamp(s as i64, ns)
+}
+
+/// Hands out UUIDv7s in order: one made in the same millisecond as the last
+/// (or a clock gone back) takes the millisecond after it.
+#[derive(Default, Debug)]
+pub struct UuidGen {
+    last_ms: i64,
+}
+
+impl UuidGen {
+    pub fn next(&mut self, at: Timestamp) -> Uuid {
+        let ms = at.timestamp_millis().max(self.last_ms + 1);
+        self.last_ms = ms;
+        uuid_at(DateTime::from_timestamp_millis(ms).unwrap_or(at))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -148,6 +192,24 @@ mod tests {
 
     fn t(h: u32, m: u32, s: u32) -> Timestamp {
         Utc.with_ymd_and_hms(2025, 1, 30, h, m, s).unwrap()
+    }
+
+    #[test]
+    fn uuids_are_v7_in_order() {
+        let mut g = UuidGen::default();
+        let at = t(23, 45, 12);
+        let a = g.next(at);
+        let b = g.next(at);
+        assert_eq!(a.get_version_num(), 7);
+        assert!(a < b && a.to_string() < b.to_string());
+        assert_eq!(uuid_time(&a), Some(at));
+        assert_eq!(uuid_time(&b), Some(at + chrono::TimeDelta::milliseconds(1)));
+        // a clock gone back still gives a later one
+        assert!(g.next(t(23, 0, 0)) > b);
+        // a backfilled one: the ID's minute, its number in milliseconds
+        let old = Id::new(at, 7);
+        assert_eq!(uuid_time(&uuid_for(&old)), Some(t(23, 45, 0) + chrono::TimeDelta::milliseconds(7)));
+        assert!(uuid_for(&old) < uuid_for(&Id::new(at, 8)));
     }
 
     #[test]

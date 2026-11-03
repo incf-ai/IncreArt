@@ -1,5 +1,6 @@
 Run {
     id: "2026.10.29-19.54-0004",
+    uuid: "01a18939-f7c4-7abd-a8be-3ec44e62cf32",
     label: "r01",
     created: "2026-10-29T19:54:54Z",
     prompt: "The harbour in <image1> at night as a hand-coloured photochrom print, the statue from <image2> standing on the headland, fireworks exploding over water over the water, steamboats glowing red crossing the bay",

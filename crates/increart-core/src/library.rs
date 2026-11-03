@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use crate::container;
 use crate::error::{Error, IoContext, PathParts, Result};
 use crate::fsutil;
-use crate::id::{self, Id, IdAllocator, IdKind, Timestamp};
+use crate::id::{self, Id, IdAllocator, IdKind, Timestamp, Uuid, UuidGen};
 use crate::import::{self, Original};
 use crate::link;
 use crate::model::*;
@@ -147,6 +147,7 @@ pub struct Library {
     meta: LibraryMeta,
     _lock: File,
     ids: IdAllocator,
+    uuids: UuidGen,
     pixels: PixelIndexFile,
     clock: Clock,
     disposal: Disposal,
@@ -182,6 +183,7 @@ impl Library {
                 format: LIBRARY_FORMAT,
                 link_mode: Some(link_mode),
                 metadata: METADATA_VERSION,
+                uuid: Some(id::uuid_at(chrono::Utc::now())),
                 store_format: StoreFormat::Png,
             },
         )?;
@@ -241,6 +243,7 @@ impl Library {
             meta,
             _lock: lock,
             ids: IdAllocator::default(),
+            uuids: UuidGen::default(),
             pixels: PixelIndexFile::default(),
             clock: Box::new(id::now),
             disposal: Disposal::SystemTrash,
@@ -260,7 +263,8 @@ impl Library {
                 lib.ids.observe(IdKind::Run, &r.id);
             }
         }
-        lib.problems.extend(ix.problems);
+        lib.problems.extend(ix.problems.iter().cloned());
+        lib.give_record_uuids(&ix)?;
         for store in [Store::Input, Store::Output] {
             for (id, formats) in lib.store_files(store)? {
                 lib.ids.observe(store_kind(store), &id);
@@ -274,14 +278,83 @@ impl Library {
             }
         }
         lib.sync_pixel_index()?;
-        if lib.meta.metadata < 1 {
+        if lib.meta.metadata < 3 {
             lib.upgrade_metadata()?;
         }
-        if lib.meta.metadata < METADATA_VERSION {
+        if lib.meta.metadata < METADATA_VERSION || lib.meta.uuid.is_none() {
             lib.meta.metadata = METADATA_VERSION;
+            // a library from before UUIDs: when it was made isn't known
+            lib.meta.uuid.get_or_insert_with(|| id::uuid_at(chrono::Utc::now()));
             rsnfmt::write(&lib.root.join(LIBRARY_FILE), &lib.meta)?;
         }
         Ok(lib)
+    }
+
+    /// Gives every idea, project and run without a UUID the one its ID
+    /// makes ([`id::uuid_for`]), and reports UUIDs found twice (a record
+    /// copied by hand: its ID still tells them apart).
+    fn give_record_uuids(&mut self, ix: &Index) -> Result<()> {
+        let mut seen: HashMap<Uuid, String> = HashMap::new();
+        let mut note = |u: Uuid, what: String, problems: &mut Vec<String>| match seen.get(&u) {
+            Some(first) => problems.push(format!("{what} has the UUID of {first} ({u})")),
+            None => {
+                seen.insert(u, what);
+            }
+        };
+        for e in &ix.ideas {
+            let u = match e.idea.uuid {
+                Some(u) => u,
+                None => {
+                    let idea = Idea { uuid: Some(id::uuid_for(&e.idea.id)), ..e.idea.clone() };
+                    rsnfmt::write(&self.root.join(&e.dir).join(IDEA_FILE), &idea)?;
+                    idea.uuid.unwrap_or_default()
+                }
+            };
+            note(u, format!("idea {}", e.idea.id), &mut self.problems);
+        }
+        let projects = ix.projects.iter().chain(ix.discarded_projects.iter().map(|d| &d.entry));
+        for p in projects {
+            let u = match p.project.uuid {
+                Some(u) => u,
+                None => {
+                    let project = Project { uuid: Some(id::uuid_for(&p.project.id)), ..p.project.clone() };
+                    rsnfmt::write(&self.root.join(&p.dir).join(PROJECT_FILE), &project)?;
+                    project.uuid.unwrap_or_default()
+                }
+            };
+            note(u, format!("project {}", p.project.id), &mut self.problems);
+            for r in &p.runs {
+                let u = match r.uuid {
+                    Some(u) => u,
+                    None => {
+                        let run = Run { uuid: Some(id::uuid_for(&r.id)), ..r.clone() };
+                        self.save_run(&self.root.join(&p.dir), &run)?;
+                        run.uuid.unwrap_or_default()
+                    }
+                };
+                note(u, format!("run {}", r.id), &mut self.problems);
+            }
+        }
+        Ok(())
+    }
+
+    /// A new UUIDv7, at the library clock's time (to the millisecond when
+    /// the clock is the real one).
+    fn new_uuid(&mut self) -> Uuid {
+        let at = self.now();
+        let real = chrono::Utc::now();
+        let at = if chrono::SubsecRound::trunc_subsecs(real, 0) == at { real } else { at };
+        self.uuids.next(at)
+    }
+
+    /// A store image's `increart:uuid`, if it has one.
+    pub fn image_uuid(&self, r: &ImageRef) -> Option<Uuid> {
+        container::header_text(&self.image_path(r), png::KEY_UUID).ok().flatten().and_then(|t| t.parse().ok())
+    }
+
+    /// The store image with this `increart:uuid`, if any.
+    pub fn find_uuid(&self, uuid: &Uuid) -> Option<&ImageRef> {
+        self.pixels.uuids.get(uuid)
     }
 
     /// What a usage check goes through: every store image, with the counts
@@ -372,27 +445,69 @@ impl Library {
     }
 
     /// Brings the store images' metadata up to date, once per library: adds
-    /// `increart:blake3` where missing (inputs first), then output recipes'
-    /// `inputs`. Only text chunks change; the pixels aren't re-encoded. An
-    /// image that can't be upgraded is reported in [`problems`](Self::problems).
+    /// `increart:blake3` and `increart:uuid` (the one its ID makes) where
+    /// missing, and output recipes' `inputs`, with their UUIDs. Only text
+    /// chunks change; the pixels aren't re-encoded. An image that can't be
+    /// upgraded is reported in [`problems`](Self::problems).
     fn upgrade_metadata(&mut self) -> Result<()> {
+        let mut images = vec![];
         for store in [Store::Input, Store::Output] {
-            for id in self.store_ids(store)? {
-                let r = ImageRef { id, store };
-                if let Err(e) = self.upgrade_image(&r) {
-                    self.problems.push(format!("upgrading {}: {e}", self.image_path(&r).display()));
-                }
+            images.extend(self.store_ids(store)?.into_iter().map(|id| ImageRef { id, store }));
+        }
+        // every image's UUID first, so a recipe can name its inputs'
+        let mut uuids: HashMap<ImageRef, Uuid> = HashMap::new();
+        for r in &images {
+            let had = self.image_uuid(r);
+            let u = had.unwrap_or_else(|| id::uuid_for(&r.id));
+            if had.is_none() {
+                self.pixels.uuids.entry(u).or_insert_with(|| r.clone());
+            }
+            uuids.insert(r.clone(), u);
+        }
+        // a copy library's links are copies: given the new bytes too, so a
+        // file taken from a collection or an idea folder has them
+        let copies = match self.link_mode() {
+            LinkMode::Copy => self.links_by_image()?,
+            _ => HashMap::new(),
+        };
+        for r in &images {
+            let done = self.upgrade_image(r, &uuids).and_then(|rewritten| match copies.get(r) {
+                Some(links) if rewritten => self.refresh_copies(r, links),
+                _ => Ok(()),
+            });
+            if let Err(e) = done {
+                self.problems.push(format!("upgrading {}: {e}", self.image_path(r).display()));
+            }
+        }
+        self.save_pixel_index()
+    }
+
+    /// Writes a store image's bytes over its copies (the links of a copy
+    /// library; a symlink among them is left as it is).
+    fn refresh_copies(&self, r: &ImageRef, links: &[PathBuf]) -> Result<()> {
+        let path = self.image_path(r);
+        let bytes = fs::read(&path).at(&path)?;
+        for rel in links {
+            let at = self.root.join(rel);
+            if fs::symlink_metadata(&at).is_ok_and(|m| m.file_type().is_file()) {
+                fsutil::write_atomic(&at, &bytes)?;
             }
         }
         Ok(())
     }
 
-    fn upgrade_image(&self, r: &ImageRef) -> Result<()> {
+    /// Adds what a store image's metadata lacks; whether it was rewritten.
+    fn upgrade_image(&self, r: &ImageRef, uuids: &HashMap<ImageRef, Uuid>) -> Result<bool> {
         let path = self.image_path(r);
         let texts = container::header_texts(&path)?;
         let text = |key: &str| texts.iter().find(|(k, _)| k == key).map(|(_, v)| v.as_str());
         let mut chunks = vec![];
         let mut bytes = None;
+        if text(png::KEY_UUID).is_none()
+            && let Some(u) = uuids.get(r)
+        {
+            chunks.push(Chunk::text(png::KEY_UUID, &u.to_string()));
+        }
         if text(png::KEY_BLAKE3).is_none() {
             let b = fs::read(&path).at(&path)?;
             let px = import::decode_pixels(&b).map_err(|e| Error::image(&path, e))?;
@@ -401,23 +516,37 @@ impl Library {
         }
         if let Some(t) = text(png::KEY_RECIPE) {
             let mut recipe: Recipe = rsnfmt::from_str(t).map_err(|e| Error::format(&path, rsnfmt::describe(t, &e)))?;
+            let mut changed = false;
             if recipe.inputs.is_empty() && recipe.image_refs().next().is_some() {
                 recipe.inputs = self.input_images(&recipe);
-                if !recipe.inputs.is_empty() {
-                    let text = rsnfmt::to_string(&recipe).map_err(|e| Error::encode(path.display(), e))?;
-                    chunks.push(Chunk::itxt(png::KEY_RECIPE, &text));
-                }
+                changed = !recipe.inputs.is_empty();
+            }
+            if let Some(p) = &recipe.parent
+                && !recipe.inputs.iter().any(|i| i.role == InputRole::Parent)
+                && let Some(i) = self.input_image(InputRole::Parent, p)
+            {
+                recipe.inputs.push(i);
+                changed = true;
+            }
+            for i in recipe.inputs.iter_mut().filter(|i| i.uuid.is_none()) {
+                i.uuid = uuids.get(&i.image).copied();
+                changed |= i.uuid.is_some();
+            }
+            if changed {
+                let text = rsnfmt::to_string(&recipe).map_err(|e| Error::encode(path.display(), e))?;
+                chunks.push(Chunk::itxt(png::KEY_RECIPE, &text));
             }
         }
         if chunks.is_empty() {
-            return Ok(());
+            return Ok(false);
         }
         let bytes = match bytes {
             Some(b) => b,
             None => fs::read(&path).at(&path)?,
         };
         let new = container::set_chunks(&bytes, &chunks).map_err(|e| Error::format(&path, e))?;
-        self.rewrite_image(&path, &new)
+        self.rewrite_image(&path, &new)?;
+        Ok(true)
     }
 
     /// Replaces a store image's bytes (same pixels, other text chunks).
@@ -587,6 +716,9 @@ impl Library {
             let before = self.pixels.transparent.len();
             self.pixels.transparent.retain(|r| r.store != store || ids.contains(&r.id));
             changed |= self.pixels.transparent.len() != before;
+            let before = self.pixels.uuids.len();
+            self.pixels.uuids.retain(|_, r| r.store != store || ids.contains(&r.id));
+            changed |= self.pixels.uuids.len() != before;
             let index = self.index_of(store);
             let known: HashSet<Id> = index.values().cloned().collect();
             for id in ids.into_iter().filter(|id| !known.contains(id)) {
@@ -611,6 +743,22 @@ impl Library {
                         self.problems.push(format!("{}: increart:pixels {h} != pixel hash {real}", path.display()))
                     }
                     _ => self.problems.push(format!("{}: no increart:pixels chunk", path.display())),
+                }
+                // (one without a UUID gets it from the upgrade)
+                if let Ok(Some(u)) = container::text(&bytes, png::KEY_UUID) {
+                    match u.parse::<Uuid>() {
+                        Ok(u) => match self.pixels.uuids.get(&u) {
+                            Some(first) if *first != r => self.problems.push(format!(
+                                "{}: increart:uuid {u} is also {}'s (a copied file?)",
+                                path.display(),
+                                first.rel_path(&self.root)
+                            )),
+                            _ => {
+                                self.pixels.uuids.insert(u, r.clone());
+                            }
+                        },
+                        Err(e) => self.problems.push(format!("{}: increart:uuid {u}: {e}", path.display())),
+                    }
                 }
                 self.index_of(store).entry(real).or_insert(r.id);
                 changed = true;
@@ -675,8 +823,8 @@ impl Library {
         Ok(import::decode_pixels(&bytes).map_err(|e| Error::image(&path, e))?.blake3())
     }
 
-    /// A recipe's refs (`<imageN>`, in order) and start image, with their
-    /// files and hashes. An image that can't be read is left out.
+    /// A recipe's refs (`<imageN>`, in order), start image and parent, with
+    /// their files, hashes and UUIDs. An image that can't be read is left out.
     pub fn input_images(&self, recipe: &Recipe) -> Vec<InputImage> {
         let start = match &recipe.mode {
             Mode::Edit { init, .. } => init.as_ref(),
@@ -685,16 +833,20 @@ impl Library {
         let roles = recipe.refs.iter().enumerate().map(|(i, r)| (InputRole::Ref(i as u32 + 1), r));
         roles
             .chain(start.map(|r| (InputRole::Start, r)))
-            .filter_map(|(role, image)| {
-                let blake3 = self.blake3_of(image).ok()?;
-                let original_name = match image.store {
-                    Store::Input => self.source_info(&image.id).ok().flatten().and_then(|s| s.original_name),
-                    Store::Output => None,
-                };
-                let file = fsutil::posix(&self.rel(&self.image_path(image)));
-                Some(InputImage { role, image: image.clone(), file, original_name, blake3 })
-            })
+            .chain(recipe.parent.as_ref().map(|r| (InputRole::Parent, r)))
+            .filter_map(|(role, image)| self.input_image(role, image))
             .collect()
+    }
+
+    fn input_image(&self, role: InputRole, image: &ImageRef) -> Option<InputImage> {
+        let blake3 = self.blake3_of(image).ok()?;
+        let original_name = match image.store {
+            Store::Input => self.source_info(&image.id).ok().flatten().and_then(|s| s.original_name),
+            Store::Output => None,
+        };
+        let file = fsutil::posix(&self.rel(&self.image_path(image)));
+        let uuid = self.image_uuid(image);
+        Some(InputImage { role, image: image.clone(), file, original_name, blake3, uuid })
     }
 }
 
@@ -706,19 +858,39 @@ impl Library {
     /// `increart:id`, `increart:pixels`, `increart:source` and the original
     /// `eXIf`), or returns the existing image with the same pixels.
     pub fn import_bytes(&mut self, bytes: &[u8], original: &Original) -> Result<Imported> {
+        self.import_derived(bytes, original, vec![])
+    }
+
+    /// [`import_bytes`](Self::import_bytes) of an image made from others
+    /// (their `increart:uuid`s, for its `derived_from`). A file that brings
+    /// an `increart:uuid` keeps it while its pixels are still the ones its
+    /// `increart:blake3` names and no image here has it; otherwise it gets
+    /// a new one, derived from that one.
+    fn import_derived(&mut self, bytes: &[u8], original: &Original, mut derived: Vec<Uuid>) -> Result<Imported> {
         let label = original.name.clone().unwrap_or_else(|| "image".into());
         let prepared = import::prepare(bytes, original).map_err(|e| Error::image(&label, e))?;
         if let Some(id) = self.find_pixels(Store::Input, &prepared.pixel_hash) {
             return Ok(Imported { image: id.clone(), reused: true });
         }
+        let texts = container::texts(bytes).unwrap_or_default();
+        let text = |key: &str| texts.iter().find(|(k, _)| k == key).map(|(_, v)| v.as_str());
+        let uuid = match text(png::KEY_UUID).and_then(|t| t.parse::<Uuid>().ok()) {
+            Some(u) if text(png::KEY_BLAKE3) == Some(&prepared.blake3) && !self.pixels.uuids.contains_key(&u) => u,
+            brought => {
+                derived.extend(brought.filter(|u| !derived.contains(u)));
+                self.new_uuid()
+            }
+        };
         let mut source = prepared.source;
         source.imported = Some(self.now());
+        source.derived_from = derived;
         let json = serde_json::to_string_pretty(&source).map_err(|e| Error::encode(&label, e))?;
         let hash = prepared.pixel_hash.clone();
         let format = self.meta.store_format;
         let id = self.write_store(Store::Input, |id| {
             let mut chunks = vec![
                 Chunk::text(png::KEY_ID, id.as_str()),
+                Chunk::text(png::KEY_UUID, &uuid.to_string()),
                 Chunk::text(png::KEY_PIXELS, &hash),
                 Chunk::text(png::KEY_BLAKE3, &prepared.blake3),
                 UsageCounts::default().chunk(),
@@ -730,6 +902,7 @@ impl Library {
             container::encode(format, &prepared.pixels, &chunks).map_err(|e| Error::encode(&label, e))
         })?;
         self.pixels.input.insert(prepared.pixel_hash, id.clone());
+        self.pixels.uuids.insert(uuid, ImageRef::input(id.clone()));
         if prepared.pixels.is_transparent() {
             self.pixels.transparent.insert(ImageRef::input(id.clone()));
         }
@@ -799,6 +972,7 @@ impl Library {
         let id = self.ids.allocate(IdKind::Idea, now);
         let idea = Idea {
             id: id.clone(),
+            uuid: Some(self.new_uuid()),
             title: new.title,
             text: new.text,
             variants: vec![],
@@ -1002,7 +1176,8 @@ impl Library {
         let bytes = fs::read(&path).at(&path)?;
         let name = format!("{output}.{}", self.format_of(&r).ext());
         let original = Original { name: Some(name), path: Some(r.rel_path(&self.root)), ..Default::default() };
-        let imported = self.import_bytes(&bytes, &original)?;
+        let from = self.image_uuid(&r).into_iter().collect();
+        let imported = self.import_derived(&bytes, &original, from)?;
         let text = match (with_prompt, self.recipe(output)?) {
             (true, Some(recipe)) => recipe.prompt_original,
             _ => String::new(),
@@ -1027,7 +1202,8 @@ impl Library {
         let dir = self.root.join(EDITED_IDEAS);
         fs::create_dir_all(&dir).at(&dir)?;
         let original = Original { name: Some("edited.png".into()), ..Default::default() };
-        let imported = self.import_bytes(bytes, &original)?;
+        let from = self.image_uuid(&image).into_iter().collect();
+        let imported = self.import_derived(bytes, &original, from)?;
         self.new_idea(NewIdea {
             title: title.into(),
             text: String::new(),
@@ -1043,7 +1219,13 @@ impl Library {
 
     pub fn idea_from_tiles(&mut self, bytes: &[u8], images: Vec<ImageRef>, title: &str, loc: IdeaLoc) -> Result<Id> {
         let original = Original { name: Some("tiles.png".into()), ..Default::default() };
-        let imported = self.import_bytes(bytes, &original)?;
+        let mut from: Vec<Uuid> = vec![];
+        for u in images.iter().filter_map(|r| self.image_uuid(r)) {
+            if !from.contains(&u) {
+                from.push(u);
+            }
+        }
+        let imported = self.import_derived(bytes, &original, from)?;
         self.new_idea(NewIdea {
             title: title.into(),
             text: String::new(),
@@ -1304,6 +1486,7 @@ impl Library {
         let now = self.now();
         let project = Project {
             id: self.ids.allocate(IdKind::Project, now),
+            uuid: Some(self.new_uuid()),
             created: now,
             sources: src.sources,
             cover: None,
@@ -1315,6 +1498,7 @@ impl Library {
         for run_dir in fsutil::subdirs(&from.join("runs"))? {
             let mut run: Run = rsnfmt::read(&run_dir.join(RUN_FILE))?;
             run.id = self.ids.allocate(IdKind::Run, now);
+            run.uuid = Some(self.new_uuid());
             run.created = now;
             run.revisions.clear();
             run.cancelled.clear();
@@ -1389,6 +1573,7 @@ impl Library {
         let now = self.now();
         let project = Project {
             id: self.ids.allocate(IdKind::Project, now),
+            uuid: Some(self.new_uuid()),
             created: now,
             sources: sources.to_vec(),
             cover: None,
@@ -1555,6 +1740,7 @@ impl Library {
         };
         let run = Run {
             id: id.clone(),
+            uuid: Some(self.new_uuid()),
             label: new.label,
             created: now,
             prompt: new.prompt,
@@ -1695,9 +1881,11 @@ impl Library {
         // Fail on a malformed file before taking an ID.
         let server_meta = container::metadata(png_bytes).map_err(|e| Error::format(&label, e))?;
         let format = self.meta.store_format;
+        let uuid = self.new_uuid();
         let id = self.write_store(Store::Output, |id| {
             let chunks = [
                 Chunk::text(png::KEY_ID, id.as_str()),
+                Chunk::text(png::KEY_UUID, &uuid.to_string()),
                 Chunk::text(png::KEY_PIXELS, &hash),
                 Chunk::text(png::KEY_BLAKE3, &blake3),
                 UsageCounts::default().chunk(),
@@ -1717,6 +1905,7 @@ impl Library {
             container::encode(format, &pixels, &all).map_err(|e| Error::encode(&label, e))
         })?;
         self.pixels.output.entry(hash).or_insert_with(|| id.clone());
+        self.pixels.uuids.insert(uuid, ImageRef::output(id.clone()));
         if pixels.is_transparent() {
             self.pixels.transparent.insert(ImageRef::output(id.clone()));
         }
@@ -2292,6 +2481,7 @@ impl Library {
             self.dispose(&self.image_path(r))?;
             self.index_of(r.store).retain(|_, id| id != &r.id);
             self.pixels.transparent.remove(r);
+            self.pixels.uuids.retain(|_, u| u != r);
         }
         self.save_pixel_index()?;
         Ok(gone)

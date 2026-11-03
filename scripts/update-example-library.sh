@@ -38,7 +38,7 @@ if grep -q 'seeds to generate' <<<"$report"; then
     echo "the library has runs still to generate: finish or cancel them" >&2
     exit 1
 fi
-grep -q 'metadata: 2' "$lib/library.rsn" || { echo "expected metadata 2 after the check" >&2; exit 1; }
+grep -q 'metadata: 3' "$lib/library.rsn" || { echo "expected metadata 3 after the check" >&2; exit 1; }
 
 stage=$(mktemp -d)
 trap 'rm -rf "$stage"' EXIT

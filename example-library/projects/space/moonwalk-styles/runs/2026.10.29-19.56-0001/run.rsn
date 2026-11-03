@@ -1,5 +1,6 @@
 Run {
     id: "2026.10.29-19.56-0001",
+    uuid: "01a1893b-cc81-71d4-a992-f2a5771ae0eb",
     label: "r01 · Made of an element",
     created: "2026-10-29T19:56:09Z",
     prompt: "Transform <image1> so the subject's whole body is formed from molten gold, swirling and alive with liquid light, holding the subject's shape and features with crystalline precision — the helmet’s visor reflecting starlight, the suit’s seams glowing like molten veins, the boots casting sharp, luminous shadows on the lunar regolith. Rendered in a hyperrealistic, cinematic style with high contrast, the gold radiates a warm, ethereal glow against the stark blackness of space, while the moon’s surface gleams with fine, metallic dust kicked up by the astronaut’s steps. Composition: low-angle shot, subject centered, casting a long, golden shadow that traces the footprints. Lighting: directional sunlight from the upper left, casting sharp highlights on the molten gold and deep, dramatic shadows. Colors: molten gold, lunar gray, and deep space black. Texture: liquid metal with flowing, reflective surfaces, grainy lunar soil, and polished metal sheen on the suit’s joints. Mood: awe-inspiring, divine, otherworldly. Keep the subject recognisable as an astronaut on the moon — no new subjects.",

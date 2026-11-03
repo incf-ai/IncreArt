@@ -65,6 +65,7 @@ pub struct LibFilter {
 pub struct InputMeta {
     pub source: Option<SourceInfo>,
     pub blake3: Option<String>,
+    pub uuid: Option<increart_core::id::Uuid>,
 }
 
 /// The right-side details panels; each starts shown (every session) and
@@ -3470,6 +3471,8 @@ pub struct AppState {
     pub retag: Option<Retag>,
     /// Recipes of output images, loaded on demand.
     pub recipes: HashMap<Id, Option<Recipe>>,
+    /// Output images' `increart:uuid`s, loaded with their recipes.
+    pub output_uuids: HashMap<Id, increart_core::id::Uuid>,
     /// Input images' stored metadata, loaded on demand (`None`: loading).
     pub input_meta: HashMap<Id, Option<InputMeta>>,
     /// How often each image was used as a ref or start image (from the
@@ -3768,6 +3771,7 @@ impl AppState {
             switching: None,
             watch_status: String::new(),
             recipes: HashMap::new(),
+            output_uuids: HashMap::new(),
             input_meta: HashMap::new(),
             usage: HashMap::new(),
             imports: None,

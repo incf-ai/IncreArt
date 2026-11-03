@@ -1,5 +1,6 @@
 Idea {
     id: "2026.10.29-19.53-0011",
+    uuid: "01a18939-0d6b-7aa2-8a60-9c2309e79b8c",
     title: "Lighthouse keeper robot",
     text: "A small rusty robot who keeps a lighthouse, polishing the lens at dawn. Storybook watercolour.",
     variants: [],

@@ -1,5 +1,6 @@
 Run {
     id: "2026.10.29-19.54-0000",
+    uuid: "01a18939-f7c0-739a-a3ac-6425ddff8e72",
     label: "r01 · Raining objects",
     created: "2026-10-29T19:54:24Z",
     prompt: "Transform <image1> so it is raining smartphones and e-scooters over the park bench, falling from the sky in a cascade that blankets the scene, piling up on the grass and picnic blankets around the subject. Keep the subject recognisable. Present day: smartphones, e-scooters, sandwiches and fruit on the picnic blankets.",

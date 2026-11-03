@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::id::{Id, Timestamp};
+use crate::id::{Id, Timestamp, Uuid};
 use crate::rsnfmt::bare;
 
 pub const LIBRARY_FORMAT: u32 = 1;
@@ -15,7 +15,7 @@ pub const LIBRARY_FORMAT: u32 = 1;
 /// some left from it): older versions, which read only PNG, refuse it.
 pub const LIBRARY_FORMAT_WEBP: u32 = 2;
 /// See [`LibraryMeta::metadata`].
-pub const METADATA_VERSION: u32 = 2;
+pub const METADATA_VERSION: u32 = 3;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum Store {
@@ -141,9 +141,12 @@ pub struct LibraryMeta {
     pub link_mode: Option<LinkMode>,
     /// How far the store images' metadata has been brought up to date
     /// (1: `increart:blake3` everywhere, `inputs` in output recipes; 2: runs
-    /// record their deleted output links).
+    /// record their deleted output links; 3: everything has a UUID).
     #[serde(default, skip_serializing_if = "is_zero")]
     pub metadata: u32,
+    /// The library's UUIDv7 (DESIGN.md, UUIDs); a copy of the library keeps it.
+    #[serde(default, serialize_with = "bare", skip_serializing_if = "Option::is_none")]
+    pub uuid: Option<Uuid>,
     /// The format new store images are written in; existing ones change
     /// only when the library is converted.
     #[serde(default, skip_serializing_if = "is_png")]
@@ -163,6 +166,9 @@ fn is_zero(v: &u32) -> bool {
 #[serde(rename = "Idea")]
 pub struct Idea {
     pub id: Id,
+    /// Its UUIDv7 (DESIGN.md, UUIDs); missing only before the library is opened.
+    #[serde(default, serialize_with = "bare", skip_serializing_if = "Option::is_none")]
+    pub uuid: Option<Uuid>,
     #[serde(default)]
     pub title: String,
     #[serde(default)]
@@ -261,6 +267,9 @@ pub enum Shape {
 #[serde(rename = "Project")]
 pub struct Project {
     pub id: Id,
+    /// Its UUIDv7 (DESIGN.md, UUIDs); missing only before the library is opened.
+    #[serde(default, serialize_with = "bare", skip_serializing_if = "Option::is_none")]
+    pub uuid: Option<Uuid>,
     pub created: Timestamp,
     /// The ideas it was made from (New project from idea).
     #[serde(default)]
@@ -318,6 +327,9 @@ impl EditWith {
 #[serde(rename = "Run")]
 pub struct Run {
     pub id: Id,
+    /// Its UUIDv7 (DESIGN.md, UUIDs); missing only before the library is opened.
+    #[serde(default, serialize_with = "bare", skip_serializing_if = "Option::is_none")]
+    pub uuid: Option<Uuid>,
     #[serde(default)]
     pub label: String,
     pub created: Timestamp,
@@ -638,6 +650,9 @@ pub struct InputImage {
     pub original_name: Option<String>,
     /// BLAKE3 of its pixels (as its `increart:blake3`).
     pub blake3: String,
+    /// Its `increart:uuid`.
+    #[serde(default, serialize_with = "bare", skip_serializing_if = "Option::is_none")]
+    pub uuid: Option<Uuid>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -646,6 +661,8 @@ pub enum InputRole {
     Ref(u32),
     /// The img2img start image.
     Start,
+    /// The recipe's `parent`.
+    Parent,
 }
 
 impl Recipe {
@@ -698,6 +715,10 @@ pub struct SourceInfo {
     pub imported: Option<Timestamp>,
     #[serde(default)]
     pub conversions: Vec<String>,
+    /// The `increart:uuid`s of the images it was made from (a crop, a
+    /// tiling, an output, an image changed outside the library).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub derived_from: Vec<Uuid>,
 }
 
 /// `projects/<project>/draft.rsn`: the Generate panel's unsent form for a
@@ -789,8 +810,8 @@ pub struct IdeaDraftFile {
     pub images: Vec<Id>,
 }
 
-/// `cache/pixel-index.rsn`: pixel hash → image ID, per store, and which
-/// store images are transparent.
+/// `cache/pixel-index.rsn`: pixel hash → image ID, per store, which store
+/// images are transparent, and each one's UUID.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename = "PixelIndex")]
 pub struct PixelIndexFile {
@@ -804,10 +825,13 @@ pub struct PixelIndexFile {
     /// Images that are [transparent](crate::pixel::Pixels::is_transparent).
     #[serde(default)]
     pub transparent: BTreeSet<ImageRef>,
+    /// `increart:uuid` → store image, both stores.
+    #[serde(default)]
+    pub uuids: BTreeMap<Uuid, ImageRef>,
 }
 
-/// 2: adds `transparent`.
-pub const PIXEL_INDEX_VERSION: u32 = 2;
+/// 2: adds `transparent`; 3: `uuids`.
+pub const PIXEL_INDEX_VERSION: u32 = 3;
 
 /// An output link's name, `<run-id>_r<rev>_s<seed>.png` (`.webp` for a
 /// WebP store file), seed padded to at least 4 digits.

@@ -1,8 +1,9 @@
 //! An independent check of a library, the sample one (sample.rs) or one the
 //! core built: store files (name = increart:id, increart:pixels = real pixel
 //! hash, recipe or source chunk present), every image link resolves into a
-//! store, every ImageRef and idea image resolves, and idea/project/run IDs
-//! are well formed and unique. Decodes PNGs itself (all five row filters) and
+//! store, every ImageRef and idea image resolves, idea/project/run IDs
+//! are well formed and unique, and so are UUIDs (UUIDv7s; on everything once
+//! the library has one). Decodes PNGs itself (all five row filters) and
 //! reads the RSN as text, not through the core. WebP store files (lossless)
 //! get every check but the pixel hash: their metadata is read from the PNGt
 //! chunks; the pixels are left to the app's own tests. By hand:
@@ -194,6 +195,24 @@ fn repr(xs: &[String]) -> String {
 }
 
 /// The lines `    id: "…",` say.
+/// `8-4-4-4-12` lower-case hex, version 7, the RFC variant.
+fn is_uuid_v7(s: &str) -> bool {
+    let b = s.as_bytes();
+    let dash = |i: usize| [8, 13, 18, 23].contains(&i);
+    b.len() == 36
+        && b.iter().enumerate().all(|(i, &c)| if dash(i) { c == b'-' } else { matches!(c, b'0'..=b'9' | b'a'..=b'f') })
+        && b[14] == b'7'
+        && matches!(b[19], b'8' | b'9' | b'a' | b'b')
+}
+
+/// The `uuid: "…"` of a record (`idea.rsn`, `project.rsn`, `run.rsn`,
+/// `library.rsn`).
+fn uuid_line(text: &str) -> Option<String> {
+    // (the last field has no comma)
+    let value = |l: &str| l.strip_prefix("    uuid: \"")?.trim_end_matches(',').strip_suffix('"').map(str::to_string);
+    text.lines().find_map(value)
+}
+
 fn id_lines(text: &str) -> Vec<String> {
     text.lines().filter_map(|l| l.strip_prefix("    id: \"")?.strip_suffix("\",")).map(str::to_string).collect()
 }
@@ -264,6 +283,8 @@ pub fn verify(root: &Path) -> String {
     };
 
     let mut store: BTreeMap<String, Vec<u8>> = BTreeMap::new();
+    // (what, its UUID if it has one)
+    let mut uuids: Vec<(String, Option<String>)> = vec![];
     let mut unhashed = 0;
     let store_files =
         images.iter().filter(|p| matches!(p.split('/').collect::<Vec<_>>()[..], [d, _] if d.ends_with("_images")));
@@ -283,6 +304,7 @@ pub fn verify(root: &Path) -> String {
         if !is_id(stem(p)) {
             problems.push(format!("bad id format: {p}"));
         }
+        uuids.push((p.to_string(), text(&d, "increart:uuid", &mut problems)));
         let other = if ext(p) == "webp" { "png" } else { "webp" };
         if root.join(format!("{}.{other}", &p[..p.len() - ext(p).len() - 1])).exists() {
             problems.push(format!("stored twice: {p}"));
@@ -420,12 +442,34 @@ pub fn verify(root: &Path) -> String {
         }
     }
 
+    let meta_uuid = uuid_line(&meta);
+    for f in ideas.iter().chain(&projects).chain(&runs) {
+        uuids.push((f.to_string(), uuid_line(&read(f))));
+    }
+    let mut seen = HashSet::new();
+    for (what, u) in &uuids {
+        match u {
+            Some(u) if !is_uuid_v7(u) => problems.push(format!("not a UUIDv7: {what} {u}")),
+            Some(u) if !seen.insert(u.clone()) || meta_uuid.as_ref() == Some(u) => {
+                problems.push(format!("UUID twice: {what} {u}"))
+            }
+            Some(_) => {}
+            // the core gives everything one on opening, the library its own
+            None if meta_uuid.is_some() => problems.push(format!("no UUID: {what}")),
+            None => {}
+        }
+    }
+    let n_uuids = seen.len() + usize::from(meta_uuid.is_some());
+    if let Some(u) = meta_uuid.filter(|u| !is_uuid_v7(u)) {
+        problems.push(format!("not a UUIDv7: library.rsn {u}"));
+    }
+
     let n_ids: usize = ids.iter().map(|(_, xs)| xs.len()).sum();
     let n_links = if mode == "Symlink" { links.len() } else { outside.len() };
     let webp = if unhashed > 0 { format!(", {unhashed} WebP pixel hashes left unchecked") } else { String::new() };
     let problems = if problems.is_empty() { "none".into() } else { repr(&problems) };
     format!(
-        "{n_ids} idea/project/run ids; {} store images, {n_links} links, {} refs{webp}; problems: {problems}",
+        "{n_ids} idea/project/run ids, {n_uuids} UUIDs; {} store images, {n_links} links, {} refs{webp}; problems: {problems}",
         store.len(),
         refs.len()
     )

@@ -457,6 +457,7 @@ mod tests {
         use increart_core::model::{Mode, ModelSelection, Sample};
         Run {
             id: id(1),
+            uuid: None,
             label: "r01".into(),
             created: chrono::DateTime::from_timestamp(1_800_000_000, 0).unwrap(),
             prompt: String::new(),

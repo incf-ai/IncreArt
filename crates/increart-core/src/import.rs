@@ -118,6 +118,7 @@ pub fn prepare(bytes: &[u8], original: &Original) -> Result<Prepared, image::Ima
         original_height,
         imported: None,
         conversions,
+        derived_from: vec![],
     };
     Ok(Prepared { pixels, pixel_hash, blake3, source, exif })
 }

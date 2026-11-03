@@ -1128,6 +1128,49 @@ with an exclusive create, so even a wrong count can't overwrite a file; it
 just moves on to the next number. Past 9999 in one minute the counter grows a
 fifth digit (names then stop sorting exactly; not expected in practice).
 
+### UUIDs
+
+Beside its ID, every idea, project, run and store image, and the library
+itself, has a **UUIDv7**, e.g. `01a18939-0d60-7ebd-9943-6eb47a6c2203`. The ID
+stays the key inside the library: file names, links and references all use
+it. The UUID is what goes outside: unique across kinds, libraries and
+machines, so an image exported with its metadata, or a library unpacked
+elsewhere, still says which image, idea or run it is, and an output's recipe
+still names the images it was made from.
+
+- Where: `uuid` in `idea.rsn`, `project.rsn`, `run.rsn` and `library.rsn`;
+  the `increart:uuid` chunk (`tEXt`) in store images; `uuid` in each of an
+  output recipe's `inputs`.
+- A UUIDv7 holds its creation time to the millisecond, then random bits, so
+  UUIDs sort by creation time too. One made in the same millisecond as the
+  last takes the next millisecond, so they stay in order.
+- Copies keep the UUID only when they are the same thing: converting PNG ↔
+  WebP keeps it, as does a copy of the whole library (an archive, a copied
+  folder; its `library.rsn` too). A copied idea, project or run gets a new
+  one.
+- An input made from other images gets a new UUID, and its
+  `increart:source` lists theirs in `derived_from`: a Crop / mark copy (the
+  image it was cut from), a tiling (each tile's image, once), an output made
+  an idea (the output).
+- An imported file that brings an `increart:uuid` (one exported from an
+  IncreArt library) keeps it while its pixels are still the ones its
+  `increart:blake3` names and no image in this library has that UUID. An
+  image changed by another tool that kept the chunks, or one already here,
+  gets a new UUID, `derived_from` the one it brought.
+- Two store images with the same UUID (a store file copied by hand) are
+  reported when the library opens; the first indexed keeps it in the pixel
+  index. Ideas, projects and runs with the same UUID are reported the same
+  way. Their IDs still tell them apart.
+- **Libraries from before UUIDs** get them when they are opened (`metadata:
+  3`, see Metadata upgrade): each thing's UUID is made from its ID, at the
+  ID's minute plus its number in milliseconds, so they sort as the IDs do
+  and don't claim to be newer than they are. The library's own UUID is made
+  then (when the library was created isn't known).
+- Shown where IDs are: an idea's details (**uuid**, under **id**), an idea
+  image's facts and an output's recipe grid. The start of it (its time) is
+  shown; hovering gives the whole UUID, when it was made and, for an input,
+  the UUIDs it was made from; a click copies it.
+
 ### Ideas (input side)
 
 An `Idea` is a small folder: `idea.rsn` plus any attached images.
@@ -1261,11 +1304,13 @@ its project. Clean up keeps any output another run refers to.
 - model selection: recipe id + slot → (file id, sha256)
 - sd.cpp commit, IncreArt version, GPU/backend, elapsed seconds
 - `inputs: Vec<InputImage>` — the images it was made from, filled in by the
-  library when the output is stored: `role` (`Ref(n)` for `<imageN>`, or
-  `Start` for the img2img start image), `image` (`ImageRef`), `file` (the
+  library when the output is stored: `role` (`Ref(n)` for `<imageN>`,
+  `Start` for the img2img start image, `Parent` for `parent`), `image`
+  (`ImageRef`), `file` (the
   store file, e.g. `input_images/<id>.png`), `original_name` (the file an
-  input was imported from, if known) and `blake3` (its BLAKE3 pixel hash).
-  The output's own BLAKE3 is its `increart:blake3` chunk.
+  input was imported from, if known), `blake3` (its BLAKE3 pixel hash) and
+  `uuid` (its `increart:uuid`, see UUIDs). The output's own BLAKE3 is its
+  `increart:blake3` chunk.
 
 **Metadata upgrade.** `library.rsn` records `metadata: 1` once every store
 image has `increart:blake3` and every output recipe its `inputs`. A library
@@ -1275,7 +1320,13 @@ atomically, except in hard-link libraries, where it is rewritten in place so
 the links keep sharing it. Images that can't be upgraded are listed as
 problems. `metadata: 2`: runs record their deleted output links (`deleted`,
 below); upgrading to it records every generated seed whose link is already
-gone as deleted.
+gone as deleted. `metadata: 3`: everything has a UUID (see UUIDs); upgrading
+to it gives every store image its `increart:uuid` and every recipe input its
+`uuid` (and a recipe's `parent` its place in `inputs`) in the same rewrite,
+and ideas, projects and runs theirs in their files. In a copy library the
+links' copies are given the store file's new bytes too, so a file taken from
+an idea or review folder carries its UUID. An idea, project or run found later without one (a folder from an
+older library) gets it when the library is opened.
 
 **Use counts.** How often an image was used is derived from the run records:
 the runs naming it as a ref, the runs starting from it, and the images those
@@ -1362,6 +1413,7 @@ stable, and one format keeps everything downstream simple. On import:
    hash (pixel index, below), reuse it.
 3. Otherwise allocate an image ID and write the file with these chunks:
    - `increart:id` (`tEXt`): the image ID.
+   - `increart:uuid` (`tEXt`): its UUIDv7 (see UUIDs).
    - `increart:pixels` (`tEXt`): the pixel hash.
    - `increart:blake3` (`tEXt`): the BLAKE3 pixel hash.
    - `increart:usage` (`tEXt`): the use counts, `ref=000000000 start=000000000`
@@ -1385,6 +1437,8 @@ stable, and one format keeps everything downstream simple. On import:
        "conversions": ["exif-orientation: rotate 90", "icc: Display P3 -> sRGB"]
      }
      ```
+     plus `derived_from` (the UUIDs of the images it was made from, see
+     UUIDs) when there are any.
    - `eXIf`: the original EXIF block, unchanged.
 
 The original file's times (modified, status changed, last accessed before
@@ -1396,8 +1450,9 @@ again, the store file keeps the first import's `increart:source`; each idea's
 `source` still records where its copy came from.
 
 **Outputs arrive as PNG.** Requests set `output_format: "png"` (also
-sd-server's default). IncreArt then adds `increart:id`, `increart:pixels`,
-`increart:blake3`, `increart:usage` and `increart:recipe` as extra chunks, keeps
+sd-server's default). IncreArt then adds `increart:id`, `increart:uuid`,
+`increart:pixels`, `increart:blake3`, `increart:usage` and `increart:recipe` as
+extra chunks, keeps
 sd-server's `parameters` chunk, and writes the result to
 `output_images/<image-id>.png`. In a PNG library the pixels are not
 re-encoded; in a WebP library they are encoded as WebP with the same chunks.
@@ -1405,8 +1460,9 @@ re-encoded; in a WebP library they are encoded as WebP with the same chunks.
 `increart:id` lets the app identify a file reached through a hard link or a
 copy (see Links), whose own name is not the ID. `increart:pixels` is checked
 against a real hash when an image is first indexed. The **pixel index**
-(`pixel_sha256 → image ID`, per store) is kept in `cache/`, and rebuilt from
-the `increart:pixels` chunks by a scan when missing.
+(`pixel_sha256 → image ID`, per store, and `increart:uuid → image`) is kept
+in `cache/`, and rebuilt from the `increart:pixels` and `increart:uuid`
+chunks by a scan when missing.
 
 **Store format.** Settings → **Library** (this library only) picks the
 format for new store files: **PNG** (the default) or **WebP, lossless**,
@@ -1637,7 +1693,7 @@ costs ~4% speed and frees ~21 GiB: see Measurements so far).
       reviewed/{good,neutral,bad}/...         links
   collections/<folder>/…/<image-id>.png  output-library collections: links into output_images/
   thumbs/{input,output}/<image-id>.webp   shared cache, deletable
-  cache/pixel-index.rsn               pixel hash → image ID, transparent images; deletable
+  cache/pixel-index.rsn               pixel hash → image ID, transparent images, UUID → image; deletable
   cache/conditioning/                 future: disk conditioning cache (needs sd.cpp patch)
 ```
 
@@ -3889,7 +3945,8 @@ matrix cores that hipBLAS uses. The same sd-server and int8 model takes
   keep, Add & new project)? POC1 shows all three with equal weight.
 - IDs use a separate counter per kind, so the same string can be an idea, a
   run and an image. Keep that, or use one counter across kinds so every ID is
-  unique in the library?
+  unique in the library? (Outside the library, the UUIDs are unique across
+  kinds already.)
 
 - Ideas from outside: is a watched drop folder enough, or is a small HTTP
   endpoint wanted (e.g. a phone share target or browser bookmarklet)?

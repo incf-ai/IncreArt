@@ -815,7 +815,8 @@ pub enum Msg {
     CloseRecipes,
     // ---- review / output library
     NeedRecipe(Id),
-    RecipeLoaded(Id, Option<Recipe>),
+    /// An output's recipe and `increart:uuid`.
+    RecipeLoaded(Id, Option<Recipe>, Option<increart_core::id::Uuid>),
     /// Idea panels: the input images' metadata, read once each.
     NeedInputMeta(Vec<Id>),
     InputMetaLoaded(Vec<(Id, InputMeta)>),
@@ -5468,7 +5469,10 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
             state.recipes.insert(id.clone(), None);
             vec![Effect::LoadRecipe(id)]
         }
-        Msg::RecipeLoaded(id, r) => {
+        Msg::RecipeLoaded(id, r, uuid) => {
+            if let Some(u) = uuid {
+                state.output_uuids.insert(id.clone(), u);
+            }
             state.recipes.insert(id, r);
             vec![]
         }
