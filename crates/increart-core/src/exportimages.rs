@@ -41,6 +41,8 @@ pub const TOKENS: &[(&str, &str, Option<bool>)] = &[
     ("title", "the image's title (an input: its idea's)", None),
     ("tags", "its tags", None),
     ("id", "the image's ID", None),
+    ("uuid", "the image's UUID", None),
+    ("idea_uuid", "the idea's UUID", None),
     ("date", "when it was made, YYYY-MM-DD", None),
     ("time", "when it was made, HH.MM", None),
     ("width", "width in pixels", None),
@@ -91,6 +93,9 @@ pub struct Prefs {
     /// An idea's text and tags as a `.txt` beside its images.
     pub idea_text: bool,
     pub existing: Existing,
+    /// One thing exported: named by a name typed for it (Save as), not by
+    /// the template.
+    pub one_name: bool,
 }
 
 impl Default for Prefs {
@@ -106,6 +111,7 @@ impl Default for Prefs {
             keep_metadata: true,
             idea_text: false,
             existing: Existing::Number,
+            one_name: true,
         }
     }
 }
@@ -144,12 +150,15 @@ pub struct Item {
     /// Its store format (the extension when exported as stored).
     pub stored: StoreFormat,
     pub fields: Fields,
+    /// A name given to this one (Save as), used instead of the template's.
+    pub name: Option<String>,
     /// An idea's `.txt` (on its first image), written with `idea_text`.
     pub text: Option<String>,
 }
 
 /// Fills in what only the files say: each image's store format, and the
-/// size of one that has none yet (an input's), read from its header.
+/// size of one that has none yet (an input's), read from its header, and
+/// its UUID.
 pub fn read_files(lib: &crate::Library, items: &mut [Item]) {
     for it in items {
         let Some(img) = &it.image else { continue };
@@ -159,6 +168,9 @@ pub fn read_files(lib: &crate::Library, items: &mut [Item]) {
         {
             it.fields.insert("width", w.to_string());
             it.fields.insert("height", h.to_string());
+        }
+        if let Some(u) = lib.image_uuid(img) {
+            it.fields.insert("uuid", u.to_string());
         }
     }
 }
@@ -334,6 +346,19 @@ fn clean_component(s: &str) -> String {
     out
 }
 
+/// A name typed for one file (Save as) made safe, without an image's or a
+/// text's extension if it was typed with one. None when nothing is left.
+pub fn file_name(name: &str) -> Option<String> {
+    let name = name.trim();
+    let stem = match name.rsplit_once('.') {
+        Some((stem, ext)) if ["png", "webp", "jpg", "jpeg", "avif", "txt"].contains(&ext.to_lowercase().as_str()) => {
+            stem
+        }
+        _ => name,
+    };
+    Some(clean_component(&clean_value(stem))).filter(|s| !s.is_empty())
+}
+
 /// The name `template` gives an image (its `fields`, `n`th in the
 /// export), without the extension: folders joined by `/` with `folders`,
 /// else by `_`. A token with no value is left out with the separator
@@ -397,8 +422,8 @@ pub struct Planned {
     pub numbered: bool,
 }
 
-/// Where each item goes: named by `template` (an item whose name comes
-/// out empty: by its ID), a name taken by an earlier item numbered (`name
+/// Where each item goes: named by `template` (one given a name: by
+/// that; an item whose name comes out empty: by its ID), a name taken by an earlier item numbered (`name
 /// 2.png`), one already in the destination (`exists`, relative paths)
 /// numbered, skipped or replaced as `prefs.existing` says. Text-only items
 /// are left out without `prefs.idea_text`. Names are compared ignoring
@@ -413,7 +438,8 @@ pub fn plan(items: &[Item], template: &str, prefs: &Prefs, exists: impl Fn(&Path
             continue;
         }
         let n = out.len() + 1;
-        let stem = render(template, &item.fields, n, prefs.folders)
+        let stem = (item.name.as_deref().and_then(file_name))
+            .or_else(|| render(template, &item.fields, n, prefs.folders))
             .or_else(|| item.fields.get("id").map(|id| clean_component(id)).filter(|s| !s.is_empty()))
             .unwrap_or_else(|| format!("export {n}"));
         let ext = prefs.ext(item.stored);
@@ -655,6 +681,24 @@ mod tests {
             plan(&items, "{title}", &prefs, |_| false)[0].image,
             Some("2026.11.03-10.05-0001.jpg".into()),
             "by ID"
+        );
+    }
+
+    #[test]
+    fn a_name_given_instead_of_the_template() {
+        let mut it = item("2026.11.03-10.05-0001", None);
+        it.name = Some(" my {cat}__on/a mat.PNG ".into());
+        let prefs = Prefs { format: Some(TileFormat::Webp), ..Prefs::default() };
+        let p =
+            plan(std::slice::from_ref(&it), "{project}/{run}", &prefs, |p| p == Path::new("my {cat}_on_a mat.webp"));
+        assert_eq!(p[0].image, Some("my {cat}_on_a mat 2.webp".into()), "as typed, made safe, numbered");
+        assert_eq!(file_name("cat.jpeg"), Some("cat".into()), "a typed extension dropped");
+        assert_eq!(file_name("v1.2"), Some("v1.2".into()));
+        it.name = Some(" .png".into());
+        assert_eq!(
+            plan(&[it], "{project}", &prefs, |_| false)[0].image,
+            Some("Cats.webp".into()),
+            "empty: the template"
         );
     }
 

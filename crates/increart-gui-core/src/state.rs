@@ -604,9 +604,30 @@ pub struct ExportDialog {
     /// Outputs (else inputs: ideas' images): which template is kept.
     pub outputs: bool,
     pub template: String,
+    /// The name typed when one thing is exported (`prefs.one_name`),
+    /// without the extension; the template's name for it to start with.
+    pub name: String,
     pub prefs: increart_core::exportimages::Prefs,
     /// The values read from the images (prompt, model, size) still coming.
     pub loading: bool,
+}
+
+impl ExportDialog {
+    /// One thing exported, named by `name` rather than the template.
+    pub fn named(&self) -> bool {
+        self.items.len() == 1 && self.prefs.one_name
+    }
+
+    /// The template's name for the one thing, as `name` starts.
+    pub fn suggest_name(&mut self) {
+        if self.name.is_empty()
+            && let Some(it) = self.items.first()
+        {
+            self.name = increart_core::exportimages::render(&self.template, &it.fields, 1, false)
+                .or_else(|| it.fields.get("id").cloned())
+                .unwrap_or_default();
+        }
+    }
 }
 
 /// An export being written: files done of how many.

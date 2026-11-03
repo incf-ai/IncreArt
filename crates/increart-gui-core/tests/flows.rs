@@ -364,6 +364,55 @@ fn ideas_exported_with_their_text() {
 }
 
 #[test]
+fn one_image_exported_by_a_name_or_its_uuid() {
+    let mut h = Harness::new();
+    let dir = h._tmp.path().join("drop");
+    std::fs::create_dir_all(&dir).unwrap();
+    image::RgbImage::from_pixel(8, 6, image::Rgb([200, 10, 10])).save(dir.join("red.png")).unwrap();
+    h.send(Msg::DropFiles(vec![dir.join("red.png")]));
+    h.settle();
+    let idea = h.state.unreviewed_ideas()[0].idea.clone();
+    let image = increart_core::ImageRef::input(idea.images[0].clone());
+    let dest = h._tmp.path().join("export");
+
+    // one image: a name of its own, the template's to start with
+    h.send(Msg::OpenExport(vec![image.clone()], "1 image".into()));
+    h.settle();
+    let mut e = h.state.export.clone().unwrap();
+    assert!(e.named());
+    let suggested = increart_core::exportimages::render(&e.template, &e.items[0].fields, 1, false).unwrap();
+    assert_eq!(e.name, suggested);
+    let uuid = e.items[0].fields["uuid"].clone();
+    assert_eq!(
+        uuid.parse::<increart_core::id::Uuid>().unwrap().get_version_num(),
+        7,
+        "the image's UUID, from its file"
+    );
+    assert_eq!(e.items[0].fields["idea_uuid"], idea.uuid.unwrap().to_string());
+
+    e.prefs.dest = dest.to_string_lossy().into();
+    e.name = "Red {draft}.png".into();
+    e.template = "{nope}".into();
+    h.send(Msg::EditExport(e));
+    h.send(Msg::RunExport);
+    h.settle();
+    assert!(dest.join("Red {draft}.png").is_file(), "as typed, the template not used");
+    assert_eq!(h.state.export_prefs.inputs, increart_core::exportimages::INPUT_TEMPLATES[0], "not kept");
+
+    // a name format instead: by the UUID
+    h.send(Msg::OpenExport(vec![image], "1 image".into()));
+    h.settle();
+    let mut e = h.state.export.clone().unwrap();
+    e.prefs.one_name = false;
+    e.template = "{uuid}".into();
+    h.send(Msg::EditExport(e));
+    h.send(Msg::RunExport);
+    h.settle();
+    assert!(dest.join(format!("{uuid}.png")).is_file());
+    assert!(!h.state.export_prefs.one_name, "the choice kept");
+}
+
+#[test]
 fn save_to_input_library_asks_the_name_and_folder() {
     let mut h = Harness::new();
     for (t, x) in [("Fox", "a red fox"), ("Owl", "an owl at night"), ("Sea", "waves")] {

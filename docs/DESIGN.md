@@ -3589,7 +3589,8 @@ the keys and mouse buttons go through that view's own history instead.
       bad, unrated), `{prompt}`, `{model}`; inputs': `{idea_n}` (the
       image's number in its idea), `{source}` (where the idea came from);
       both: `{idea}` (the idea's title, else its text's start; an
-      output's source idea), `{idea_id}`, `{title}`, `{tags}`, `{id}`,
+      output's source idea), `{idea_id}`, `{idea_uuid}`, `{title}`,
+      `{tags}`, `{id}`, `{uuid}` (the image's UUID, from its file),
       `{date}` and `{time}` (from the ID), `{width}`, `{height}`, `{n}`
       (its place in this export). `{seed:4}` pads a number with zeros to
       4 digits, `{prompt:30}` cuts text to 30 characters. A token with no
@@ -3600,6 +3601,11 @@ the keys and mouse buttons go through that view's own history instead.
       `{idea}_{idea_n}`) and the saved ones (**Save this format**, ✕
       forgets one); **{ } ▾** adds a token. An unknown token is shown in
       red and nothing exports.
+    - **Name**, when one thing is exported: **this name** (a Save as: a
+      name typed for it, starting as the template's name for it, the
+      extension the format's; a typed `.png` or the like is dropped) or
+      **a name format** (the template, as above). The choice is kept;
+      a typed name never changes the template kept.
     - A template with `/` makes folders, or, with **flat**, every file
       goes in the folder itself (`/` becomes `_`).
     - The preview: the first names, with how many were numbered, skipped
