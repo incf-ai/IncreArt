@@ -193,6 +193,27 @@ fn pixel_index_is_built_and_checked() {
     assert!(lib.problems()[0].contains("increart:pixels 0000"));
 }
 
+/// The upgrade tells how it goes, from (0, n) to (n, n), and is timed; the
+/// next open has nothing to upgrade.
+#[test]
+fn upgrade_reports_progress() {
+    let tmp = sample();
+    let root = tmp.path().join("lib");
+    let mut told = vec![];
+    let lib = Library::open_with(&root, &mut |done, total| told.push((done, total))).unwrap();
+    assert!(lib.problems().is_empty(), "{:?}", lib.problems());
+    let n = 45;
+    assert_eq!(told.first(), Some(&(0, n)));
+    assert_eq!(told.last(), Some(&(n, n)));
+    assert!(told.windows(2).all(|w| w[0].0 <= w[1].0));
+    assert_eq!(lib.open_times().upgrade.map(|(_, n)| n), Some(n));
+    drop(lib);
+    told.clear();
+    let lib = Library::open_with(&root, &mut |done, total| told.push((done, total))).unwrap();
+    assert!(told.is_empty(), "{told:?}");
+    assert!(lib.open_times().upgrade.is_none());
+}
+
 /// The generator writes no `increart:blake3` and no recipe `inputs`: opening
 /// adds them (once), leaving the pixels and the other chunks alone.
 fn upgraded(lib: &Library) {

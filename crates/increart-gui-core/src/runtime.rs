@@ -1435,8 +1435,19 @@ fn work_on(ctx: &Ctx, fx: Effect) -> Vec<Msg> {
         },
         Effect::OpenLibrary { path, create } => {
             let t = std::time::Instant::now();
-            let opened = if create { Library::create(&path, None) } else { Library::open(&path) };
-            let locked = t.elapsed();
+            // a library from before an update: its images' metadata
+            // upgraded once, which can take minutes
+            let mut upgrading = |done, total| {
+                if done == 0 {
+                    increart_core::applog::line(
+                        "info",
+                        &format!("library {}: upgrading the metadata of {total} images (once)", path.display()),
+                    );
+                }
+                let _ = ctx.tx.send(Msg::LibraryUpgrading(done, total));
+                (ctx.wake)();
+            };
+            let opened = if create { Library::create(&path, None) } else { Library::open_with(&path, &mut upgrading) };
             vec![Msg::LibraryOpened(opened.map_err(err).and_then(|mut lib| {
                 if let Some(d) = ctx.paths.disposal.get() {
                     lib.set_disposal(d.clone());
@@ -1445,14 +1456,20 @@ fn work_on(ctx: &Ctx, fx: Effect) -> Vec<Msg> {
                 let root = lib.root().to_path_buf();
                 // in the app's log, for a slow start
                 let outputs: usize = ix.projects.iter().map(|p| p.outputs.len()).sum();
+                let times = lib.open_times();
+                let upgrade = times.upgrade.map_or(Duration::ZERO, |(d, _)| d);
+                let upgraded = match times.upgrade {
+                    Some((d, n)) => format!(", metadata upgrade {} ms: {n} images", d.as_millis()),
+                    None => String::new(),
+                };
                 increart_core::applog::line(
                     "info",
                     &format!(
-                        "library {} opened in {} ms (lock {} ms, scan {} ms: {} projects, {} folders, {} outputs)",
+                        "library {} opened in {} ms (lock {} ms{upgraded}, scan {} ms: {} projects, {} folders, {} outputs)",
                         root.display(),
                         t.elapsed().as_millis(),
-                        locked.as_millis(),
-                        (t.elapsed() - locked).as_millis(),
+                        times.lock.as_millis(),
+                        t.elapsed().saturating_sub(times.lock + upgrade).as_millis(),
                         ix.projects.len(),
                         ix.project_folders.len(),
                         outputs,

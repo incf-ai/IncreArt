@@ -197,10 +197,14 @@ pub fn library(
             ui.ctx().data_mut(|m| m.remove::<f64>(loading));
         } else if d.wizard.is_none() {
             ui.add_space(8.0);
-            // reading every project, run and idea: under a second, longer on a cold disk
-            ui.add(
-                egui::ProgressBar::new(loading_fraction(ui, loading)).text("Opening the library…").desired_width(360.0),
-            );
+            let bar = match d.upgrading {
+                // once, after an update: every store image rewritten
+                Some((done, total)) => egui::ProgressBar::new(done as f32 / total.max(1) as f32)
+                    .text(format!("Upgrading the images' metadata (once): {done} of {total}…")),
+                // reading every project, run and idea: under a second, longer on a cold disk
+                None => egui::ProgressBar::new(loading_fraction(ui, loading)).text("Opening the library…"),
+            };
+            ui.add(bar.desired_width(360.0));
             ui.ctx().request_repaint();
         }
         if let Some(e) = &d.error
