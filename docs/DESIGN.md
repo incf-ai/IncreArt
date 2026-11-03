@@ -3334,7 +3334,10 @@ the keys and mouse buttons go through that view's own history instead.
   of the Projects tab's selection so browsing projects doesn't change the
   queue; "review this project" actions (double-click in Projects → Grid,
   opening an unreviewed image in a folder view) set it. Single view + grid view + A/B compare (`C` or
-  the A/B button pins the current image as A and shows the next as B; both can
+  the A/B button pins the current image as A and shows the next as B;
+  right-click → **Pin & compare** on Single's image does the same, on a strip
+  thumbnail pins that one as A with B staying the current image, and
+  Compare's B has **Pin as A** (it pinned, the next as B); both can
   be rated, and their sides swapped; **Compare with…** (`Shift+C`, the
   toolbar, the compare bar, right-click A → Replace A with…, or any
   image's right-click menu) makes A an image picked in the From library…
