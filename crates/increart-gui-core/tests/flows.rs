@@ -399,11 +399,25 @@ fn one_image_exported_by_a_name_or_its_uuid() {
     assert!(dest.join("Red {draft}.png").is_file(), "as typed, the template not used");
     assert_eq!(h.state.export_prefs.inputs, increart_core::exportimages::INPUT_TEMPLATES[0], "not kept");
 
+    // Save as…: the folder, the name, and the format its extension says
+    let other = h._tmp.path().join("other");
+    std::fs::create_dir_all(&other).unwrap();
+    h.send(Msg::OpenExport(vec![image.clone()], "1 image".into()));
+    h.settle();
+    h.send(Msg::Picked(PickKind::ExportFile, vec![other.join("Shiny.jpeg")]));
+    let e = h.state.export.clone().unwrap();
+    assert_eq!((e.name.as_str(), e.prefs.dest.as_str()), ("Shiny", &*other.to_string_lossy()));
+    assert_eq!(e.prefs.format, Some(increart_core::config::TileFormat::Jpeg));
+    h.send(Msg::RunExport);
+    h.settle();
+    assert!(other.join("Shiny.jpg").is_file());
+
     // a name format instead: by the UUID
     h.send(Msg::OpenExport(vec![image], "1 image".into()));
     h.settle();
     let mut e = h.state.export.clone().unwrap();
     e.prefs.one_name = false;
+    (e.prefs.dest, e.prefs.format) = (dest.to_string_lossy().into(), None);
     e.template = "{uuid}".into();
     h.send(Msg::EditExport(e));
     h.send(Msg::RunExport);

@@ -3603,7 +3603,10 @@ the keys and mouse buttons go through that view's own history instead.
       red and nothing exports.
     - **Name**, when one thing is exported: **this name** (a Save as: a
       name typed for it, starting as the template's name for it, the
-      extension the format's; a typed `.png` or the like is dropped) or
+      extension the format's; a typed `.png` or the like is dropped;
+      **Save as…** chooses the folder and name in the system's Save
+      dialog, its file type setting the format when it's another, and
+      Export writes it) or
       **a name format** (the template, as above). The choice is kept;
       a typed name never changes the template kept.
     - A template with `/` makes folders, or, with **flat**, every file

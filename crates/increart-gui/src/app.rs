@@ -875,9 +875,16 @@ fn export_window(ctx: &egui::Context, st: &AppState, e: &increart_gui_core::Expo
                             Some(_) => d.prefs.ext(d.items[0].stored),
                             None => "txt",
                         };
-                        let w = ui.available_width() - 60.0;
+                        let w = ui.available_width() - 140.0;
                         ui.add(egui::TextEdit::singleline(&mut d.name).desired_width(w).hint_text("a name"));
                         ui.weak(format!(".{ext}"));
+                        if ui
+                            .button(ic(ph::FLOPPY_DISK, "Save as…"))
+                            .on_hover_text("choose the folder and the name in the system's Save dialog")
+                            .clicked()
+                        {
+                            out.push(Msg::Pick(increart_gui_core::PickKind::ExportFile));
+                        }
                     });
                     return;
                 }

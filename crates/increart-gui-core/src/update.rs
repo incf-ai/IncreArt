@@ -6907,6 +6907,10 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
                 }
                 PickKind::KoboldBinary => PathBuf::from(kobold_binary(state)).parent().map(PathBuf::from),
                 PickKind::ExportDir => state.export.as_ref().map(|e| PathBuf::from(&e.prefs.dest)),
+                PickKind::ExportFile => state.export.as_ref().map(|e| {
+                    let ext = e.items.first().map_or("png", |i| e.prefs.ext(i.stored));
+                    PathBuf::from(e.prefs.dest.trim()).join(format!("{}.{ext}", e.name.trim()))
+                }),
                 PickKind::Pe(f) => match state.pe.editor.as_ref().map(|e| &e.draft.run) {
                     Some(PeRun::KoboldCpp { binary, model, mmproj, config, .. }) => {
                         let p = match f {
@@ -7041,6 +7045,12 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
             PickKind::ExportDir => {
                 if let Some(e) = &mut state.export {
                     e.prefs.dest = paths.remove(0).to_string_lossy().into_owned();
+                }
+                vec![]
+            }
+            PickKind::ExportFile => {
+                if let Some(e) = &mut state.export {
+                    export_saved_as(e, &paths[0]);
                 }
                 vec![]
             }
@@ -10245,6 +10255,27 @@ fn open_export(
     }
     state.export = Some(e);
     if loading { vec![Effect::ReadExportFiles(items)] } else { vec![] }
+}
+
+/// Save as… picked `file`: its folder and name, and its format when its
+/// extension is another than the one the dialog would write.
+fn export_saved_as(e: &mut ExportDialog, file: &std::path::Path) {
+    use increart_core::config::TileFormat;
+    if let Some(dir) = file.parent() {
+        e.prefs.dest = dir.to_string_lossy().into_owned();
+    }
+    e.name = file.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let ext = file.extension().map(|x| x.to_string_lossy().to_lowercase()).unwrap_or_default();
+    let ext = if ext == "jpeg" { "jpg".to_string() } else { ext };
+    let now = e.items.first().map_or("png", |i| e.prefs.ext(i.stored));
+    if ext != now
+        && let Some(f) = TileFormat::available().iter().find(|f| f.ext() == ext)
+    {
+        e.prefs.format = Some(*f);
+    }
+    if let Some(stem) = increart_core::exportimages::file_name(&e.name) {
+        e.name = stem;
+    }
 }
 
 fn save_export_prefs(state: &AppState) -> Vec<Effect> {

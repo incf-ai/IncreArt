@@ -2780,6 +2780,8 @@ pub enum PickKind {
     GenerateRefs,
     /// The Export dialog's destination folder.
     ExportDir,
+    /// The Export dialog's one file (Save as…): its folder and name.
+    ExportFile,
     /// Where Tile… saves its image, in this format.
     TileFile(increart_core::config::TileFormat),
     SdServerBinary,
