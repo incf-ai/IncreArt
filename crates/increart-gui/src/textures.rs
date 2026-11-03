@@ -299,7 +299,13 @@ mod tests {
         std::fs::create_dir_all(root.join("output_images")).unwrap();
         let ctx = egui::Context::default();
         let mut tex = textures(&ctx);
+        // waits no slow runner sleeps through: the test ends them itself
+        tex.waits[0] = Duration::from_secs(600);
+        tex.waits[1] = Duration::from_secs(3600);
+        let end_waits = |tex: &mut Textures| tex.failed.values_mut().for_each(|f| f.at = Instant::now());
         let img = image("2026.11.02-00.31-0000");
+        let k = key("2026.11.02-00.31-0000", true);
+        let long_wait = |tex: &Textures| tex.failed[&k].at > Instant::now() + Duration::from_secs(1800);
 
         // not there: tried TRIES times, each after the short wait
         for i in 0..TRIES {
@@ -308,20 +314,23 @@ mod tests {
             settle(&mut tex, &ctx);
             assert!(tex.full_or_thumb(root, &img).is_none());
             assert!(!tex.busy(), "waits before trying again");
-            std::thread::sleep(Duration::from_millis(30));
+            assert_eq!(long_wait(&tex), i + 1 == TRIES, "the long wait only after {TRIES} tries");
+            if i + 1 < TRIES {
+                end_waits(&mut tex);
+            }
         }
-        assert_eq!(tex.failed[&key("2026.11.02-00.31-0000", true)].tries, TRIES);
-        // then the long wait: not asked for after the short one
+        assert_eq!(tex.failed[&k].tries, TRIES);
+        // then the long wait: not asked for again during it
         assert!(tex.full(root, &img).is_none());
         assert!(!tex.busy(), "waits longer after {TRIES} tries");
 
         // there now: once the long wait is over, it shows
         image::RgbaImage::new(4, 2).save(img.path(root)).unwrap();
-        std::thread::sleep(Duration::from_millis(150));
+        end_waits(&mut tex);
         assert!(tex.full(root, &img).is_none());
         settle(&mut tex, &ctx);
         assert_eq!(tex.full(root, &img).map(|t| t.size()), Some([4, 2]));
-        assert!(!tex.failed.contains_key(&key("2026.11.02-00.31-0000", true)));
+        assert!(!tex.failed.contains_key(&k));
     }
 
     #[test]
