@@ -52,6 +52,25 @@ pub fn encode(px: &Pixels, chunks: &[Chunk]) -> Option<Vec<u8>> {
     Some(assemble(&Parts { alpha: px.has_alpha(), width: px.width, height: px.height, meta: chunks.to_vec(), image }))
 }
 
+/// Encodes pixels lossily at `quality` (percent), alpha kept, without
+/// metadata: an export, never a store file. `None` when a side is over
+/// [`MAX_SIDE`].
+pub fn encode_lossy(px: &Pixels, quality: u8) -> Option<Vec<u8>> {
+    if px.width > MAX_SIDE || px.height > MAX_SIDE || px.width == 0 || px.height == 0 {
+        return None;
+    }
+    let enc = if px.has_alpha() {
+        webp::Encoder::from_rgba(&px.data, px.width, px.height)
+    } else {
+        webp::Encoder::from_rgb(&px.data, px.width, px.height)
+    };
+    let mut cfg = webp::WebPConfig::new().ok()?;
+    cfg.lossless = 0;
+    cfg.method = 4;
+    cfg.quality = quality.clamp(1, 100) as f32;
+    Some(enc.encode_advanced(&cfg).ok()?.to_vec())
+}
+
 struct Parts {
     alpha: bool,
     width: u32,

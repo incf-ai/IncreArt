@@ -1022,6 +1022,7 @@ fn settings(
         let tips = |f: TileFormat| match f {
             TileFormat::Png => "lossless, readable everywhere",
             TileFormat::Webp => "lossless, about half PNG's size",
+            TileFormat::WebpLossy => "lossy and small, transparency kept",
             TileFormat::Jpeg => "lossy and small; transparency becomes white",
             TileFormat::Avif => "lossy, smaller than JPEG at the same quality; slow to write when large",
         };
