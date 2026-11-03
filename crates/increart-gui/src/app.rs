@@ -902,7 +902,9 @@ fn export_window(ctx: &egui::Context, st: &AppState, e: &increart_gui_core::Expo
                     possible,
                     egui::Checkbox::new(&mut keep, "keep the metadata (recipe, sd-server parameters, source)"),
                 );
-                r.on_disabled_hover_text("JPEG and AVIF are written without it: export as PNG or WebP to keep it");
+                r.on_disabled_hover_text(
+                    "lossy WebP, JPEG and AVIF are written without it: export as PNG or WebP (lossless) to keep it",
+                );
                 if possible {
                     d.prefs.keep_metadata = keep;
                 }

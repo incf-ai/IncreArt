@@ -24,6 +24,12 @@ pub fn encode(img: &RgbaImage, format: TileFormat, quality: u8) -> Result<Vec<u8
                 format!("{w} × {h} is too large for WebP (at most {} on a side)", crate::webp::MAX_SIDE)
             })?;
         }
+        TileFormat::WebpLossy => {
+            let px = Pixels { width: w, height: h, channels: 4, data: img.as_raw().clone() };
+            out = crate::webp::encode_lossy(&px, quality).ok_or_else(|| {
+                format!("{w} × {h} is too large for WebP (at most {} on a side)", crate::webp::MAX_SIDE)
+            })?;
+        }
         TileFormat::Jpeg => {
             let rgb: Vec<u8> = img
                 .pixels()
@@ -41,18 +47,11 @@ pub fn encode(img: &RgbaImage, format: TileFormat, quality: u8) -> Result<Vec<u8
     Ok(out)
 }
 
-#[cfg(feature = "avif")]
 fn avif(img: &RgbaImage, quality: u8, out: &mut Vec<u8>) -> Result<(), String> {
     // speed 7 of 10: a large tiling takes seconds, not minutes
     image::codecs::avif::AvifEncoder::new_with_speed_quality(out, 7, quality)
         .write_image(img.as_raw(), img.width(), img.height(), image::ExtendedColorType::Rgba8)
         .map_err(|e| e.to_string())
-}
-
-#[cfg(not(feature = "avif"))]
-fn avif(_: &RgbaImage, _: u8, _: &mut Vec<u8>) -> Result<(), String> {
-    // (TileFormat::usable() offers no AVIF without the avif feature)
-    Err("this build can't write AVIF".into())
 }
 
 #[cfg(test)]
@@ -67,6 +66,11 @@ mod tests {
     fn each_format_reads_back() {
         for &f in TileFormat::available() {
             let bytes = encode(&img(), f, 70).unwrap();
+            if f == TileFormat::Avif && !cfg!(feature = "avif") {
+                // written in every build, read only with the avif feature
+                assert_eq!(&bytes[4..12], b"ftypavif");
+                continue;
+            }
             let back = image::load_from_memory(&bytes).unwrap();
             assert_eq!((back.width(), back.height()), (40, 30), "{f:?}");
             if !f.lossy() {
@@ -81,8 +85,12 @@ mod tests {
     #[test]
     fn quality_changes_the_size() {
         let big = RgbaImage::from_fn(256, 256, |x, y| image::Rgba([(x ^ y) as u8, (x * y) as u8, (x + y) as u8, 255]));
-        let small = encode(&big, TileFormat::Jpeg, 30).unwrap().len();
-        let large = encode(&big, TileFormat::Jpeg, 95).unwrap().len();
-        assert!(small < large, "{small} < {large}");
+        for f in [TileFormat::Jpeg, TileFormat::WebpLossy, TileFormat::Avif] {
+            let small = encode(&big, f, 30).unwrap().len();
+            let large = encode(&big, f, 95).unwrap().len();
+            assert!(small < large, "{f:?}: {small} < {large}");
+        }
+        let lossless = encode(&big, TileFormat::Webp, 30).unwrap().len();
+        assert!(encode(&big, TileFormat::WebpLossy, 80).unwrap().len() < lossless, "lossy WebP is smaller");
     }
 }

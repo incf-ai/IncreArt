@@ -87,7 +87,7 @@ pub struct Prefs {
     pub folders: bool,
     /// None: as stored (PNG or WebP).
     pub format: Option<TileFormat>,
-    /// For JPEG and AVIF, percent.
+    /// For the lossy formats (lossy WebP, JPEG, AVIF), percent.
     pub quality: u8,
     pub keep_metadata: bool,
     /// An idea's text and tags as a `.txt` beside its images.
@@ -123,7 +123,7 @@ impl Prefs {
     }
 
     /// Whether the metadata can be kept in the chosen format: PNG and WebP
-    /// carry it over, JPEG and AVIF are written without.
+    /// carry it over, lossy WebP, JPEG and AVIF are written without.
     pub fn metadata_possible(&self) -> bool {
         matches!(self.format.map(TileFormat::usable), None | Some(TileFormat::Png | TileFormat::Webp))
     }
@@ -477,7 +477,7 @@ pub fn plan(items: &[Item], template: &str, prefs: &Prefs, exists: impl Fn(&Path
 // ------------------------------------------------------------------ write
 
 /// A store file as exported: as stored or converted, with or without the
-/// metadata (JPEG and AVIF never have it).
+/// metadata (lossy WebP, JPEG and AVIF never have it).
 pub fn convert(bytes: &[u8], format: Option<TileFormat>, quality: u8, keep_metadata: bool) -> Result<Vec<u8>, String> {
     let store = |f: StoreFormat| -> Result<Vec<u8>, String> {
         let out = if crate::container::format_of(bytes) == Some(f) {
@@ -731,6 +731,11 @@ mod tests {
         assert!(has(&webp), "carried over");
         let jpeg = convert(&png, Some(TileFormat::Jpeg), 90, true).unwrap();
         assert_eq!(image::guess_format(&jpeg).unwrap(), image::ImageFormat::Jpeg);
+        let lossy = convert(&png, Some(TileFormat::WebpLossy), 60, true).unwrap();
+        let back = image::load_from_memory(&lossy).unwrap();
+        assert_eq!((back.width(), back.height()), (4, 3), "a WebP any decoder reads");
+        assert!(!lossy.windows(4).any(|w| w == b"PNGt"), "no metadata");
+        assert!(!Prefs { format: Some(TileFormat::WebpLossy), ..Prefs::default() }.metadata_possible());
     }
 
     #[test]
