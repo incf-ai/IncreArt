@@ -72,6 +72,7 @@ const SCENES: &[&str] = &[
     "21b-model-presets",
     "22-output-library-lineage",
     "23-export",
+    "23b-export-one",
     "24-projects-grid-tile-actions",
     // a check, not a screenshot: clicks the selected tile's Generate button
     "25-check-grid-click",
@@ -1713,6 +1714,11 @@ impl Tour {
             "23-export" => {
                 let kept: Vec<_> = st.kept_outputs().iter().map(|o| o.image.clone()).collect();
                 vec![Msg::OpenExport(kept, "all kept images".into())]
+            }
+            "23b-export-one" => {
+                // one image: Save as, a name of its own
+                let one: Vec<_> = st.kept_outputs().iter().take(1).map(|o| o.image.clone()).collect();
+                vec![Msg::OpenExport(one, "1 image".into())]
             }
             "16-servers-opening" => {
                 // A Start server whose binary never answers: stays "starting".

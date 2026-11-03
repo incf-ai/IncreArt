@@ -1029,6 +1029,24 @@ fn pick(kind: PickKind, start: Option<PathBuf>) -> Vec<PathBuf> {
             d.set_title("Images for the new idea").add_filter("Images", IMAGE_EXTS).pick_files().unwrap_or_default()
         }
         PickKind::ExportDir => d.set_title("Export to").pick_folder().into_iter().collect(),
+        // `start` is the file as the dialog has it: its folder, name and
+        // format (first of the formats offered)
+        PickKind::ExportFile => {
+            use increart_core::config::TileFormat;
+            let file = start.unwrap_or_default();
+            if let Some(dir) = file.parent().filter(|p| p.is_dir()) {
+                d = d.set_directory(dir);
+            }
+            let ext = file.extension().map_or("png".into(), |e| e.to_string_lossy().to_lowercase());
+            let mut formats: Vec<TileFormat> = TileFormat::available().to_vec();
+            formats.sort_by_key(|f| f.ext() != ext);
+            for f in formats {
+                let exts: &[&str] = if f.ext() == "jpg" { &["jpg", "jpeg"] } else { &[f.ext()] };
+                d = d.add_filter(f.name(), exts);
+            }
+            let name = file.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+            d.set_title("Export as").set_file_name(name).save_file().into_iter().collect()
+        }
         PickKind::BugReport => d
             .set_title("Save for a bug report")
             .set_file_name(format!("increart-bug-report-{}.zip", chrono::Local::now().format("%Y-%m-%d-%H%M")))

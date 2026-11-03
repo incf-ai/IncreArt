@@ -6078,6 +6078,7 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
             {
                 e.items = items;
                 e.loading = false;
+                e.suggest_name();
             }
             vec![]
         }
@@ -6092,23 +6093,32 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
                 state.messages_error("Choose a destination folder");
                 return vec![];
             }
-            let unknown = increart_core::exportimages::unknown_tokens(&e.template);
-            if !unknown.is_empty() {
-                state.messages_error(format!("Unknown in the name format: {{{}}}", unknown.join("}, {")));
-                return vec![];
-            }
+            let mut items = e.items.clone();
             let mut prefs = e.prefs.clone();
             prefs.dest = dest.clone();
-            match e.outputs {
-                true => prefs.outputs = e.template.clone(),
-                false => prefs.inputs = e.template.clone(),
+            if e.named() {
+                if increart_core::exportimages::file_name(&e.name).is_none() {
+                    state.messages_error("Type a name for the file");
+                    return vec![];
+                }
+                items[0].name = Some(e.name.clone());
+            } else {
+                let unknown = increart_core::exportimages::unknown_tokens(&e.template);
+                if !unknown.is_empty() {
+                    state.messages_error(format!("Unknown in the name format: {{{}}}", unknown.join("}, {")));
+                    return vec![];
+                }
+                match e.outputs {
+                    true => prefs.outputs = e.template.clone(),
+                    false => prefs.inputs = e.template.clone(),
+                }
             }
             state.export_prefs = prefs.clone();
             state.export = None;
             state.busy += 1;
             state.exporting = Some(Exporting::default());
             let mut fx = save_export_prefs(state);
-            fx.push(Effect::Export { items: e.items, template: e.template, prefs, dest: dest.into() });
+            fx.push(Effect::Export { items, template: e.template, prefs, dest: dest.into() });
             fx
         }
         Msg::CloseExport => {
@@ -6906,6 +6916,10 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
                 }
                 PickKind::KoboldBinary => PathBuf::from(kobold_binary(state)).parent().map(PathBuf::from),
                 PickKind::ExportDir => state.export.as_ref().map(|e| PathBuf::from(&e.prefs.dest)),
+                PickKind::ExportFile => state.export.as_ref().map(|e| {
+                    let ext = e.items.first().map_or("png", |i| e.prefs.ext(i.stored));
+                    PathBuf::from(e.prefs.dest.trim()).join(format!("{}.{ext}", e.name.trim()))
+                }),
                 PickKind::Pe(f) => match state.pe.editor.as_ref().map(|e| &e.draft.run) {
                     Some(PeRun::KoboldCpp { binary, model, mmproj, config, .. }) => {
                         let p = match f {
@@ -7040,6 +7054,12 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
             PickKind::ExportDir => {
                 if let Some(e) = &mut state.export {
                     e.prefs.dest = paths.remove(0).to_string_lossy().into_owned();
+                }
+                vec![]
+            }
+            PickKind::ExportFile => {
+                if let Some(e) = &mut state.export {
+                    export_saved_as(e, &paths[0]);
                 }
                 vec![]
             }
@@ -10238,8 +10258,33 @@ fn open_export(
     let prefs = state.export_prefs.clone();
     let template = if outputs { prefs.outputs.clone() } else { prefs.inputs.clone() };
     let loading = items.iter().any(|i| i.image.is_some());
-    state.export = Some(ExportDialog { items: items.clone(), what, outputs, template, prefs, loading });
+    let mut e = ExportDialog { items: items.clone(), what, outputs, template, name: String::new(), prefs, loading };
+    if !loading {
+        e.suggest_name();
+    }
+    state.export = Some(e);
     if loading { vec![Effect::ReadExportFiles(items)] } else { vec![] }
+}
+
+/// Save as… picked `file`: its folder and name, and its format when its
+/// extension is another than the one the dialog would write.
+fn export_saved_as(e: &mut ExportDialog, file: &std::path::Path) {
+    use increart_core::config::TileFormat;
+    if let Some(dir) = file.parent() {
+        e.prefs.dest = dir.to_string_lossy().into_owned();
+    }
+    e.name = file.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let ext = file.extension().map(|x| x.to_string_lossy().to_lowercase()).unwrap_or_default();
+    let ext = if ext == "jpeg" { "jpg".to_string() } else { ext };
+    let now = e.items.first().map_or("png", |i| e.prefs.ext(i.stored));
+    if ext != now
+        && let Some(f) = TileFormat::available().iter().find(|f| f.ext() == ext)
+    {
+        e.prefs.format = Some(*f);
+    }
+    if let Some(stem) = increart_core::exportimages::file_name(&e.name) {
+        e.name = stem;
+    }
 }
 
 fn save_export_prefs(state: &AppState) -> Vec<Effect> {
@@ -10255,6 +10300,7 @@ fn idea_fields(idea: &increart_core::model::Idea) -> increart_core::exportimages
     let mut f = increart_core::exportimages::Fields::new();
     f.insert("idea", idea_name(idea));
     f.insert("idea_id", idea.id.to_string());
+    f.insert("idea_uuid", idea.uuid.map(|u| u.to_string()).unwrap_or_default());
     f.insert("title", idea.title.clone());
     f.insert("tags", idea.tags.join(" "));
     let source = match &idea.source {
@@ -10310,6 +10356,7 @@ fn export_item(state: &AppState, image: &ImageRef) -> increart_core::exportimage
                     if let Some(e) = idea.and_then(|id| state.index.ideas.iter().find(|e| &e.idea.id == id)) {
                         f.insert("idea", idea_name(&e.idea));
                         f.insert("idea_id", e.idea.id.to_string());
+                        f.insert("idea_uuid", e.idea.uuid.map(|u| u.to_string()).unwrap_or_default());
                     }
                 }
                 if let Some(r) = run {

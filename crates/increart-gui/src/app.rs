@@ -840,7 +840,8 @@ fn export_window(ctx: &egui::Context, st: &AppState, e: &increart_gui_core::Expo
     use increart_core::exportimages::{self as ex, Existing};
     let mut d = e.clone();
     let planned = export_plan(ctx, e);
-    let unknown = ex::unknown_tokens(&d.template);
+    let named = d.named();
+    let unknown = if named { vec![] } else { ex::unknown_tokens(&d.template) };
     let images = d.items.iter().filter(|i| i.image.is_some()).count();
     let ideas_text = d.items.iter().any(|i| i.text.is_some());
     let m = egui::Modal::new(egui::Id::unique("export")).show(ctx, |ui| {
@@ -860,8 +861,33 @@ fn export_window(ctx: &egui::Context, st: &AppState, e: &increart_gui_core::Expo
             });
             ui.end_row();
 
-            ui.label("Names");
+            ui.label(if d.items.len() == 1 { "Name" } else { "Names" });
             ui.vertical(|ui| {
+                if d.items.len() == 1 {
+                    ui.horizontal(|ui| {
+                        ui.radio_value(&mut d.prefs.one_name, true, "this name");
+                        ui.radio_value(&mut d.prefs.one_name, false, "a name format");
+                    });
+                }
+                if d.named() {
+                    ui.horizontal(|ui| {
+                        let ext = match d.items[0].image {
+                            Some(_) => d.prefs.ext(d.items[0].stored),
+                            None => "txt",
+                        };
+                        let w = ui.available_width() - 140.0;
+                        ui.add(egui::TextEdit::singleline(&mut d.name).desired_width(w).hint_text("a name"));
+                        ui.weak(format!(".{ext}"));
+                        if ui
+                            .button(ic(ph::FLOPPY_DISK, "Save as…"))
+                            .on_hover_text("choose the folder and the name in the system's Save dialog")
+                            .clicked()
+                        {
+                            out.push(Msg::Pick(increart_gui_core::PickKind::ExportFile));
+                        }
+                    });
+                    return;
+                }
                 ui.horizontal(|ui| {
                     let w = ui.available_width() - 150.0;
                     let r = ui.add(
@@ -942,7 +968,11 @@ fn export_window(ctx: &egui::Context, st: &AppState, e: &increart_gui_core::Expo
             ui.end_row();
         });
         let writes = planned.iter().filter(|p| !p.skip).count();
-        let ready = unknown.is_empty() && !d.prefs.dest.trim().is_empty() && writes > 0 && st.exporting.is_none();
+        let ready = unknown.is_empty()
+            && !d.prefs.dest.trim().is_empty()
+            && writes > 0
+            && st.exporting.is_none()
+            && (!named || ex::file_name(&d.name).is_some());
         let enter = ui.input(|i| i.key_pressed(egui::Key::Enter));
         ui.add_space(8.0);
         dialog_footer(
@@ -952,6 +982,8 @@ fn export_window(ctx: &egui::Context, st: &AppState, e: &increart_gui_core::Expo
                     ui.weak("an export is still being written");
                 } else if d.prefs.dest.trim().is_empty() {
                     ui.weak("choose a folder");
+                } else if named && ex::file_name(&d.name).is_none() {
+                    ui.weak("type a name");
                 }
             },
             |ui| {
@@ -989,6 +1021,7 @@ fn export_plan(
         e.prefs.folders,
         format!("{:?}{:?}", e.prefs.format, e.prefs.existing),
         e.prefs.idea_text,
+        e.named().then_some(&e.name),
     )
         .hash(&mut h);
     for i in &e.items {
@@ -1003,7 +1036,11 @@ fn export_plan(
     }
     let dest = std::path::PathBuf::from(e.prefs.dest.trim());
     let there = |p: &std::path::Path| !dest.as_os_str().is_empty() && dest.join(p).exists();
-    let p = std::sync::Arc::new(increart_core::exportimages::plan(&e.items, &e.template, &e.prefs, there));
+    let mut items = e.items.clone();
+    if e.named() {
+        items[0].name = Some(e.name.clone());
+    }
+    let p = std::sync::Arc::new(increart_core::exportimages::plan(&items, &e.template, &e.prefs, there));
     ctx.data_mut(|d| d.insert_temp(id, (key, p.clone())));
     p
 }
