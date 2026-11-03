@@ -708,6 +708,7 @@ fn single(ui: &mut egui::Ui, st: &AppState, root: &Path, tex: &mut Textures, out
                         out.push(Msg::ReviewCursor(i));
                     }
                     r.context_menu(|ui| {
+                        pin_button(ui, &o.image, i == cur, out);
                         crate::tiles::menu(ui, st, &o.image, out);
                         use_menu(ui, st, root, &o.image, out);
                         ui.separator();
@@ -757,6 +758,7 @@ fn single(ui: &mut egui::Ui, st: &AppState, root: &Path, tex: &mut Textures, out
             out.push(Msg::Preview(Some(item.image.clone())));
         }
         resp.context_menu(|ui| {
+            pin_button(ui, &item.image, true, out);
             crate::tiles::menu(ui, st, &item.image, out);
             use_menu(ui, st, root, &item.image, out);
             ui.separator();
@@ -768,6 +770,22 @@ fn single(ui: &mut egui::Ui, st: &AppState, root: &Path, tex: &mut Textures, out
             }
         });
     });
+}
+
+/// Right-click → Pin & compare: the image as A (`current`: B the next, as
+/// `C`; else B stays the current image).
+fn pin_button(ui: &mut egui::Ui, image: &increart_core::ImageRef, current: bool, out: &mut Vec<Msg>) {
+    let label = if current { "Pin & compare   C" } else { "Pin & compare" };
+    let tip = if current {
+        "pin this as A and compare the next with it"
+    } else {
+        "pin this as A and compare the current image with it"
+    };
+    if ui.button(ic(ph::PUSH_PIN, label)).on_hover_text(tip).clicked() {
+        out.push(Msg::PinCompare(image.clone()));
+        ui.close();
+    }
+    ui.separator();
 }
 
 /// "Use this image" actions: into the current, its own, a new or a
@@ -1477,6 +1495,13 @@ fn compare_sides(
                     if is_a {
                         if ui.button(ic(ph::IMAGES, "Replace A with…")).clicked() {
                             out.push(Msg::CompareWith(None));
+                            ui.close();
+                        }
+                        ui.separator();
+                    } else if st.tab == Tab::Review {
+                        // B pinned in A's place, the next as B
+                        if ui.button(ic(ph::PUSH_PIN, "Pin as A")).clicked() {
+                            out.push(Msg::PinCompare(image.clone()));
                             ui.close();
                         }
                         ui.separator();

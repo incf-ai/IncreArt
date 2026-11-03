@@ -2099,6 +2099,15 @@ fn review_views_compare_and_rejected() {
     assert_eq!(h.state.review_queue()[h.state.review_cursor].image, second);
     h.send(Msg::SwapCompare);
     assert!(!h.state.compare_flipped);
+    // right-click → Pin & compare: another image as A, B stays; the current
+    // one (B's Pin as A) is pinned and B goes on
+    h.send(Msg::ReviewCursor(0));
+    h.send(Msg::PinCompare(second.clone()));
+    assert_eq!(h.state.review_pinned.as_ref(), Some(&second));
+    assert_eq!(h.state.review_queue()[h.state.review_cursor].image, first);
+    h.send(Msg::PinCompare(first.clone()));
+    assert_eq!(h.state.review_pinned.as_ref(), Some(&first));
+    assert_eq!(h.state.review_queue()[h.state.review_cursor].image, second);
     // rate B (keys) and A (its own buttons)
     h.send(Msg::ReviewCurrent(Verdict::Bad));
     h.settle();

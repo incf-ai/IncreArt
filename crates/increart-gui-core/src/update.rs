@@ -445,6 +445,9 @@ pub enum Msg {
     ToggleReviewGrid,
     /// `C`: pin the current image as A and show the next as B (again: leave).
     Compare,
+    /// Right-click → Pin & compare: this image as A. The current one: as
+    /// `C` (B the next); another: B stays the current one.
+    PinCompare(ImageRef),
     /// A and B change sides on screen (which one steps stays).
     SwapCompare,
     /// Rate the pinned image (A).
@@ -6611,6 +6614,18 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
             state.review_view = ReviewView::Compare;
             if has_next {
                 state.review_cursor += 1;
+            }
+            vec![]
+        }
+        Msg::PinCompare(img) => {
+            let queue = state.review_queue();
+            let current = queue.get(state.review_cursor).is_some_and(|o| o.image == img);
+            let has_next = state.review_cursor + 1 < queue.len();
+            state.review_pinned = Some(img);
+            state.review_view = ReviewView::Compare;
+            if current && has_next {
+                state.review_cursor += 1;
+                unfollow(state);
             }
             vec![]
         }
