@@ -806,13 +806,10 @@ pub enum TileFormat {
 }
 
 impl TileFormat {
-    /// The formats this build can write.
+    /// The formats that can be written (every build: AVIF's encoder is
+    /// pure Rust; only reading AVIF needs the `avif` feature).
     pub fn available() -> &'static [TileFormat] {
-        if cfg!(feature = "avif") {
-            &[TileFormat::Png, TileFormat::Webp, TileFormat::Jpeg, TileFormat::Avif]
-        } else {
-            &[TileFormat::Png, TileFormat::Webp, TileFormat::Jpeg]
-        }
+        &[TileFormat::Png, TileFormat::Webp, TileFormat::Jpeg, TileFormat::Avif]
     }
 
     /// This format if the build can write it, else PNG (a setting saved by

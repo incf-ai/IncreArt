@@ -5,8 +5,9 @@ edition.workspace = true
 license.workspace = true
 
 [features]
-# AVIF import (links the system libdav1d) and export (pure Rust).
-avif = ["image/avif-native", "image/avif"]
+# AVIF import (links the system libdav1d). Writing AVIF (Export, Tile) is
+# always built: pure Rust.
+avif = ["image/avif-native"]
 
 [dependencies]
 base64 = "0.22"
@@ -15,7 +16,7 @@ blake3 = "1.8.7"
 crc32fast = "1.5.3"
 getrandom = "0.3.4"
 libc = "0.2.191"
-image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "webp", "gif", "bmp", "tiff"] }
+image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "webp", "gif", "bmp", "tiff", "avif"] }
 moxcms = "0.8.1"
 pathdiff = "0.2.3"
 rsn = "0.2.0"

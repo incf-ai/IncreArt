@@ -106,8 +106,9 @@ A distro-packaged Rust is usually too old; use rustup.
 cargo build --release -p increart-gui
 ```
 
-Optional AVIF output for Tile → Save needs `--features avif` and extra native
-libraries (dav1d); that is **not covered** here.
+AVIF output (Export, Save as, Tile) is in every build. Importing AVIF files
+needs `--features avif` and the system's dav1d library; that is **not
+covered** here.
 
 **Expected result:** `Finished \`release\` profile`; the binary is
 `target/release/increart` (`target\release\increart.exe` on Windows).

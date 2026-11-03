@@ -2548,8 +2548,7 @@ out as one image.
   settings are kept in `config.rsn` (`tile`); the layout is not.
 - **Copy** puts the tiled image on the clipboard, **Save {format}…** writes a
   file in the format chosen under **Save**: PNG, WebP (lossless, at most
-  16383 on a side), JPEG (transparency flattened onto white) or AVIF (only
-  in builds with the `avif` feature); the lossy ones (JPEG, AVIF) have a
+  16383 on a side), JPEG (transparency flattened onto white) or AVIF; the lossy ones (JPEG, AVIF) have a
   quality slider, 70 % by default. The file name's extension follows the
   format. Both are kept in `tile` (`save_format`, `save_quality`); **Add to input library** makes a new idea at the top of the input
   library with the image, its source `Tiled { images }` (they count as used,
@@ -3626,8 +3625,7 @@ the keys and mouse buttons go through that view's own history instead.
     - The preview: the first names, with how many were numbered, skipped
       or replace a file. The names are planned as the export writes them,
       against what is in the folder.
-    - **Format**: as stored (PNG or WebP), PNG, WebP, JPEG or AVIF (in
-      builds with the `avif` feature); JPEG and AVIF have a quality. PNG
+    - **Format**: as stored (PNG or WebP), PNG, WebP, JPEG or AVIF; JPEG and AVIF have a quality. PNG
       and WebP keep the metadata (recipe, sd-server parameters, source) if
       **keep the metadata** is on; JPEG and AVIF are written without it.
     - **If a file is there**: add a number (`name 2.png`), skip it, or
