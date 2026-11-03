@@ -3496,7 +3496,7 @@ the keys and mouse buttons go through that view's own history instead.
     (as in Review's info panel);
     double-click any of its images for the full-size preview. Right-click: change rating, back to Review, edit run, → input ref, → new
     idea, **Tag…**, add to collection, **Use as project cover** (the Projects Grid then
-    shows it instead of the best-rated image), **Export…** (as on every image), show project, copy
+    shows it instead of the best-rated image), **Save as…** (as on every image), show project, copy
     path. **Export these N…** exports everything shown.
   - **Folder**: the file-manager component over the collections tree, with a
     `smart/` folder at the top for the smart folders. Collections behave like
@@ -3579,17 +3579,30 @@ the keys and mouse buttons go through that view's own history instead.
     lineage panel, but while it's closed only a moment after the click, so
     a double-click (full size) doesn't open it; while it's open, a click
     shows the clicked image at once.
-  - **Export…** copies images out of the library into a folder you choose;
-    the library is unchanged (`increart_core::exportimages`). It is on
-    every image's right-click menu (Review's views, the Output library, the
-    folder views, an idea's images), as **Export the N picked…** /
-    **Export the N selected…** for picks and selections, as **Export these
-    N…** for everything an Output library source shows, and on ideas in the
-    Idea inbox and the Input library (**Export…**, **Export the N
-    ideas…**): an idea's images, and with **also each idea's text and
-    tags, as a .txt** (off by default) its `.txt` beside its first image
-    (an idea without images: only the `.txt`). A modal: Enter exports,
-    Escape or a click outside cancels. Its parts:
+  - **Export…** copies images out of the library; the library is unchanged
+    (`increart_core::exportimages`). One image is saved as, several are
+    exported to a folder. It is on every image's right-click menu as
+    **Save as…** (Review's views, the Output library, the folder views, an
+    idea's images), as **Export the N picked…** / **Export the N
+    selected…** for picks and selections, as **Export these N…** for
+    everything an Output library source shows, and on ideas in the Idea
+    inbox and the Input library (**Save as…** on an idea of one image, else
+    **Export…**, **Export the N ideas…**): an idea's images, and with
+    **also each idea's text and tags, as a .txt** (off by default) its
+    `.txt` beside its first image (an idea without images: only the
+    `.txt`). A modal: Enter does its button, Escape or a click outside
+    cancels.
+    - **Save as** (one image; always how one opens): only **Format** (and
+      the idea's text). **Save as…** at the bottom right opens the
+      system's Save dialog in the folder last used, with the name the
+      template gives it and the format's extension; the file chosen is
+      written at once and the modal closes (cancelling the Save dialog
+      leaves it open). The extension chosen there sets the format when
+      it's another's (`.jpeg` is JPEG); a file there is replaced (the Save
+      dialog asked). **Export to a folder with a name format instead…**
+      switches to the other, and **Save as instead…** back.
+    - **Export to a folder** (several, or one switched to it): the parts
+      below, and **Export N files** at the bottom right.
     - **To**: the folder (made when missing).
     - **Names**: a template of `{token}`s and text. Outputs' tokens:
       `{project}`, `{run}`, `{rev}`, `{seed}`, `{rating}` (good, neutral,
@@ -3608,14 +3621,6 @@ the keys and mouse buttons go through that view's own history instead.
       `{idea}_{idea_n}`) and the saved ones (**Save this format**, ✕
       forgets one); **{ } ▾** adds a token. An unknown token is shown in
       red and nothing exports.
-    - **Name**, when one thing is exported: **this name** (a Save as: a
-      name typed for it, starting as the template's name for it, the
-      extension the format's; a typed `.png` or the like is dropped;
-      **Save as…** chooses the folder and name in the system's Save
-      dialog, its file type setting the format when it's another, and
-      Export writes it) or
-      **a name format** (the template, as above). The choice is kept;
-      a typed name never changes the template kept.
     - A template with `/` makes folders, or, with **flat**, every file
       goes in the folder itself (`/` becomes `_`).
     - The preview: the first names, with how many were numbered, skipped

@@ -840,86 +840,40 @@ fn export_window(ctx: &egui::Context, st: &AppState, e: &increart_gui_core::Expo
     use increart_core::exportimages::{self as ex, Existing};
     let mut d = e.clone();
     let planned = export_plan(ctx, e);
-    let named = d.named();
-    let unknown = if named { vec![] } else { ex::unknown_tokens(&d.template) };
+    let save_as = d.save_as;
+    let unknown = if save_as { vec![] } else { ex::unknown_tokens(&d.template) };
     let images = d.items.iter().filter(|i| i.image.is_some()).count();
     let ideas_text = d.items.iter().any(|i| i.text.is_some());
     let m = egui::Modal::new(egui::Id::unique("export")).show(ctx, |ui| {
         ui.set_width(560.0);
-        ui.heading(ic(ph::EXPORT, &format!("Export {}", e.what)));
         let n = |k: usize, one: &str, many: &str| if k == 1 { format!("1 {one}") } else { format!("{k} {many}") };
-        ui.weak(format!("{}, copied out of the library; the library is unchanged.", n(images, "image", "images")));
+        match save_as {
+            true => {
+                ui.heading(ic(ph::FLOPPY_DISK, "Save as"));
+                ui.weak("A copy out of the library, where you choose; the library is unchanged.");
+            }
+            false => {
+                ui.heading(ic(ph::EXPORT, &format!("Export {}", e.what)));
+                ui.weak(format!(
+                    "{}, copied out of the library; the library is unchanged.",
+                    n(images, "image", "images")
+                ));
+            }
+        }
+        if d.can_save_as() {
+            let other = match save_as {
+                true => "Export to a folder with a name format instead…",
+                false => "Save as instead…",
+            };
+            if ui.link(other).clicked() {
+                d.save_as = !save_as;
+            }
+        }
         ui.add_space(6.0);
         egui::Grid::new("export_grid").num_columns(2).spacing([10.0, 8.0]).show(ui, |ui| {
-            ui.label("To");
-            ui.horizontal(|ui| {
-                let w = ui.available_width() - 34.0;
-                ui.add(egui::TextEdit::singleline(&mut d.prefs.dest).desired_width(w).hint_text("a folder"));
-                if ui.button(ph::FOLDER_OPEN).on_hover_text("Browse…").clicked() {
-                    out.push(Msg::Pick(increart_gui_core::PickKind::ExportDir));
-                }
-            });
-            ui.end_row();
-
-            ui.label(if d.items.len() == 1 { "Name" } else { "Names" });
-            ui.vertical(|ui| {
-                if d.items.len() == 1 {
-                    ui.horizontal(|ui| {
-                        ui.radio_value(&mut d.prefs.one_name, true, "this name");
-                        ui.radio_value(&mut d.prefs.one_name, false, "a name format");
-                    });
-                }
-                if d.named() {
-                    ui.horizontal(|ui| {
-                        let ext = match d.items[0].image {
-                            Some(_) => d.prefs.ext(d.items[0].stored),
-                            None => "txt",
-                        };
-                        let w = ui.available_width() - 140.0;
-                        ui.add(egui::TextEdit::singleline(&mut d.name).desired_width(w).hint_text("a name"));
-                        ui.weak(format!(".{ext}"));
-                        if ui
-                            .button(ic(ph::FLOPPY_DISK, "Save as…"))
-                            .on_hover_text("choose the folder and the name in the system's Save dialog")
-                            .clicked()
-                        {
-                            out.push(Msg::Pick(increart_gui_core::PickKind::ExportFile));
-                        }
-                    });
-                    return;
-                }
-                ui.horizontal(|ui| {
-                    let w = ui.available_width() - 150.0;
-                    let r = ui.add(
-                        egui::TextEdit::singleline(&mut d.template)
-                            .font(egui::TextStyle::Monospace)
-                            .desired_width(w)
-                            .hint_text("{id}"),
-                    );
-                    r.on_hover_text(
-                        "{token} is a value of the image's; :N after its name pads a number to N digits or cuts \
-                         text to N characters ({seed:4}, {prompt:30}). A token with no value is left out, with \
-                         the separator beside it. / makes a folder.",
-                    );
-                    name_formats_menu(ui, &mut d);
-                    tokens_menu(ui, &mut d);
-                });
-                if !unknown.is_empty() {
-                    let list = unknown.iter().map(|u| format!("{{{u}}}")).collect::<Vec<_>>().join(", ");
-                    ui.colored_label(BAD, format!("{} unknown: {list}", ph::WARNING));
-                }
-                if ex::has_folders(&d.template) {
-                    ui.horizontal(|ui| {
-                        ui.radio_value(&mut d.prefs.folders, true, "in the template's folders");
-                        ui.radio_value(&mut d.prefs.folders, false, "flat (/ becomes _)");
-                    });
-                }
-            });
-            ui.end_row();
-
-            ui.label("");
-            ui.vertical(|ui| export_preview(ui, &d, &planned));
-            ui.end_row();
+            if !save_as {
+                export_name_rows(ui, &mut d, &unknown, &planned, out);
+            }
 
             ui.label("Format");
             ui.vertical(|ui| {
@@ -959,20 +913,18 @@ fn export_window(ctx: &egui::Context, st: &AppState, e: &increart_gui_core::Expo
             });
             ui.end_row();
 
-            ui.label("If a file is there");
-            ui.horizontal(|ui| {
-                ui.radio_value(&mut d.prefs.existing, Existing::Number, "add a number");
-                ui.radio_value(&mut d.prefs.existing, Existing::Skip, "skip it");
-                ui.radio_value(&mut d.prefs.existing, Existing::Overwrite, "replace it");
-            });
-            ui.end_row();
+            if !save_as {
+                ui.label("If a file is there");
+                ui.horizontal(|ui| {
+                    ui.radio_value(&mut d.prefs.existing, Existing::Number, "add a number");
+                    ui.radio_value(&mut d.prefs.existing, Existing::Skip, "skip it");
+                    ui.radio_value(&mut d.prefs.existing, Existing::Overwrite, "replace it");
+                });
+                ui.end_row();
+            }
         });
         let writes = planned.iter().filter(|p| !p.skip).count();
-        let ready = unknown.is_empty()
-            && !d.prefs.dest.trim().is_empty()
-            && writes > 0
-            && st.exporting.is_none()
-            && (!named || ex::file_name(&d.name).is_some());
+        let ready = unknown.is_empty() && !d.prefs.dest.trim().is_empty() && writes > 0 && st.exporting.is_none();
         let enter = ui.input(|i| i.key_pressed(egui::Key::Enter));
         ui.add_space(8.0);
         dialog_footer(
@@ -980,17 +932,25 @@ fn export_window(ctx: &egui::Context, st: &AppState, e: &increart_gui_core::Expo
             |ui| {
                 if st.exporting.is_some() {
                     ui.weak("an export is still being written");
-                } else if d.prefs.dest.trim().is_empty() {
+                } else if !save_as && d.prefs.dest.trim().is_empty() {
                     ui.weak("choose a folder");
-                } else if named && ex::file_name(&d.name).is_none() {
-                    ui.weak("type a name");
                 }
             },
             |ui| {
-                let label = ic(ph::EXPORT, &format!("Export {}   Enter", n(writes, "file", "files")));
-                let r = ui.add_enabled(ready, egui::Button::new(RichText::new(label).strong()));
-                if r.clicked() || (enter && ready) {
-                    out.push(Msg::RunExport);
+                if save_as {
+                    let ready = st.exporting.is_none();
+                    let label = ic(ph::FLOPPY_DISK, "Save as…   Enter");
+                    let r = ui.add_enabled(ready, egui::Button::new(RichText::new(label).strong()));
+                    let r = r.on_hover_text("choose the folder and the name in the system's Save dialog");
+                    if r.clicked() || (enter && ready) {
+                        out.push(Msg::Pick(increart_gui_core::PickKind::ExportFile));
+                    }
+                } else {
+                    let label = ic(ph::EXPORT, &format!("Export {}   Enter", n(writes, "file", "files")));
+                    let r = ui.add_enabled(ready, egui::Button::new(RichText::new(label).strong()));
+                    if r.clicked() || (enter && ready) {
+                        out.push(Msg::RunExport);
+                    }
                 }
                 if ui.button("Cancel   Esc").clicked() {
                     out.push(Msg::CloseExport);
@@ -1004,6 +964,61 @@ fn export_window(ctx: &egui::Context, st: &AppState, e: &increart_gui_core::Expo
     if m.should_close() {
         out.push(Msg::CloseExport);
     }
+}
+
+/// Export to a folder's To, Names and the preview of the names.
+fn export_name_rows(
+    ui: &mut egui::Ui,
+    d: &mut increart_gui_core::ExportDialog,
+    unknown: &[String],
+    planned: &[increart_core::exportimages::Planned],
+    out: &mut Vec<Msg>,
+) {
+    use increart_core::exportimages as ex;
+    ui.label("To");
+    ui.horizontal(|ui| {
+        let w = ui.available_width() - 34.0;
+        ui.add(egui::TextEdit::singleline(&mut d.prefs.dest).desired_width(w).hint_text("a folder"));
+        if ui.button(ph::FOLDER_OPEN).on_hover_text("Browse…").clicked() {
+            out.push(Msg::Pick(increart_gui_core::PickKind::ExportDir));
+        }
+    });
+    ui.end_row();
+
+    ui.label("Names");
+    ui.vertical(|ui| {
+        ui.horizontal(|ui| {
+            let w = ui.available_width() - 150.0;
+            let r = ui.add(
+                egui::TextEdit::singleline(&mut d.template)
+                    .font(egui::TextStyle::Monospace)
+                    .desired_width(w)
+                    .hint_text("{id}"),
+            );
+            r.on_hover_text(
+                "{token} is a value of the image's; :N after its name pads a number to N digits or cuts \
+                 text to N characters ({seed:4}, {prompt:30}). A token with no value is left out, with \
+                 the separator beside it. / makes a folder.",
+            );
+            name_formats_menu(ui, d);
+            tokens_menu(ui, d);
+        });
+        if !unknown.is_empty() {
+            let list = unknown.iter().map(|u| format!("{{{u}}}")).collect::<Vec<_>>().join(", ");
+            ui.colored_label(BAD, format!("{} unknown: {list}", ph::WARNING));
+        }
+        if ex::has_folders(&d.template) {
+            ui.horizontal(|ui| {
+                ui.radio_value(&mut d.prefs.folders, true, "in the template's folders");
+                ui.radio_value(&mut d.prefs.folders, false, "flat (/ becomes _)");
+            });
+        }
+    });
+    ui.end_row();
+
+    ui.label("");
+    ui.vertical(|ui| export_preview(ui, d, planned));
+    ui.end_row();
 }
 
 /// Where each file goes, for the preview and the button's count; planned
@@ -1021,7 +1036,6 @@ fn export_plan(
         e.prefs.folders,
         format!("{:?}{:?}", e.prefs.format, e.prefs.existing),
         e.prefs.idea_text,
-        e.named().then_some(&e.name),
     )
         .hash(&mut h);
     for i in &e.items {
@@ -1036,11 +1050,7 @@ fn export_plan(
     }
     let dest = std::path::PathBuf::from(e.prefs.dest.trim());
     let there = |p: &std::path::Path| !dest.as_os_str().is_empty() && dest.join(p).exists();
-    let mut items = e.items.clone();
-    if e.named() {
-        items[0].name = Some(e.name.clone());
-    }
-    let p = std::sync::Arc::new(increart_core::exportimages::plan(&items, &e.template, &e.prefs, there));
+    let p = std::sync::Arc::new(increart_core::exportimages::plan(&e.items, &e.template, &e.prefs, there));
     ctx.data_mut(|d| d.insert_temp(id, (key, p.clone())));
     p
 }

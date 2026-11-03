@@ -93,9 +93,6 @@ pub struct Prefs {
     /// An idea's text and tags as a `.txt` beside its images.
     pub idea_text: bool,
     pub existing: Existing,
-    /// One thing exported: named by a name typed for it (Save as), not by
-    /// the template.
-    pub one_name: bool,
 }
 
 impl Default for Prefs {
@@ -111,7 +108,6 @@ impl Default for Prefs {
             keep_metadata: true,
             idea_text: false,
             existing: Existing::Number,
-            one_name: true,
         }
     }
 }
@@ -776,6 +772,11 @@ mod tests {
             ..Prefs::default()
         };
         prefs.save(&p).unwrap();
+        assert_eq!(Prefs::load(&p), prefs);
+        // a field no longer there (one_name) is ignored, the rest kept
+        let old = std::fs::read_to_string(&p).unwrap().replacen("dest:", "one_name: true,\n    dest:", 1);
+        assert!(old.contains("one_name"));
+        std::fs::write(&p, old).unwrap();
         assert_eq!(Prefs::load(&p), prefs);
         assert_eq!(Prefs::load(&dir.path().join("none.rsn")), Prefs::default());
         assert!(!Prefs { format: Some(TileFormat::Jpeg), ..Prefs::default() }.metadata_possible());
