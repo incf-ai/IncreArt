@@ -2341,12 +2341,14 @@ pub struct PeEditor {
     pub error: Option<String>,
 }
 
-/// A style's ask: its settings, the prompt sent to improve, and how many
-/// times asked again.
+/// A style's ask: its settings, the prompt (or style's part) sent to
+/// improve, and how many times asked again.
 #[derive(Clone, Debug, PartialEq)]
 pub struct StyleTry {
     pub ask: increart_core::prompts::EnhanceAsk,
     pub sent: String,
+    /// Only the style's part asked for: the prompt's text around it.
+    pub fixed: Option<(String, String)>,
     pub retry: u8,
 }
 

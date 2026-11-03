@@ -1945,8 +1945,9 @@ pub fn added_blanks_window(ctx: &egui::Context, st: &AppState, out: &mut Vec<Msg
 /// (with where its prompt is and the prompt), **Tick only** buttons, the
 /// settings each ask gets, the system prompt and the first one's message.
 fn enhance_dialog(ctx: &egui::Context, st: &AppState, out: &mut Vec<Msg>) {
-    use increart_core::pe::STYLE_PROMPT;
-    use increart_gui_core::update::{StyleRow, enhance_picks, running_styles, style_message_for, style_row};
+    use increart_gui_core::update::{
+        StyleRow, enhance_job, enhance_picks, running_styles, style_message_for, style_row,
+    };
     let (Some(a), Some(server)) = (&st.pe.style_dialog, st.pe.server.as_ref()) else { return };
     let mut a = a.clone();
     let running = running_styles(st);
@@ -1957,7 +1958,7 @@ fn enhance_dialog(ctx: &egui::Context, st: &AppState, out: &mut Vec<Msg>) {
         ui.heading(ic(ph::MAGIC_WAND, "Enhance style prompts"));
         ui.weak(
             "one ask for each style ticked, each with these settings (kept with the project): its prompt, the \
-             template with the style and the values in, improved",
+             template with the style and the values in, improved (only the style's part, or all of it)",
         );
         ui.add_space(6.0);
         // each ticks exactly those it names, unticking the rest
@@ -2030,13 +2031,32 @@ fn enhance_dialog(ctx: &egui::Context, st: &AppState, out: &mut Vec<Msg>) {
                 .desired_rows(2)
                 .hint_text("more cinematic · keep it under 40 words · night scenes …"),
         );
+        let own_text = increart_core::prompts::template_around(&st.generate.prompt).is_some();
         egui::Grid::new("enhance_grid").num_columns(2).spacing([10.0, 6.0]).show(ui, |ui| {
-            ui.label("Improve");
+            ui.label("Start from");
             ui.horizontal(|ui| {
                 ui.radio_value(&mut a.from_shown, false, "the prompt as built")
                     .on_hover_text("from the template, the style and the values: a fresh start each time");
-                ui.radio_value(&mut a.from_shown, true, "the prompt as shown")
-                    .on_hover_text("an edit or enhancement is improved further");
+                ui.radio_value(&mut a.from_shown, true, "the prompt as shown").on_hover_text(
+                    "the row's prompt now, an edit or enhancement, improved further (changing only the style's \
+                     part: its part, while the template's text in it is as written)",
+                );
+            });
+            ui.end_row();
+            ui.label("Change");
+            ui.add_enabled_ui(own_text, |ui| {
+                ui.horizontal(|ui| {
+                    ui.radio_value(&mut a.whole, false, "only the style's part").on_hover_text(
+                        "the template's own text is kept exactly as written; what goes where {preset} is is \
+                         written for the style, seeing the template",
+                    );
+                    ui.radio_value(&mut a.whole, true, "the whole prompt").on_hover_text(
+                        "the template's text is rewritten with the style's: freer, but it can drop or change \
+                         what you wrote",
+                    );
+                })
+                .response
+                .on_disabled_hover_text("the template is only {preset}: the whole prompt is the style's");
             });
             ui.end_row();
             ui.label("Images");
@@ -2048,7 +2068,8 @@ fn enhance_dialog(ctx: &egui::Context, st: &AppState, out: &mut Vec<Msg>) {
             ui.end_row();
             ui.label("Sampling");
             ui.horizontal(|ui| {
-                let usual = st.config.pe.sampling(STYLE_PROMPT);
+                let job = enhance_job(st, &a);
+                let usual = st.config.pe.sampling(job);
                 let mut x = a.sampling.unwrap_or(usual);
                 ui.label("Temperature");
                 ui.add(egui::Slider::new(&mut x.temperature, 0.0..=2.0).step_by(0.05))
@@ -2076,19 +2097,24 @@ fn enhance_dialog(ctx: &egui::Context, st: &AppState, out: &mut Vec<Msg>) {
             ui.end_row();
         });
         ui.add_space(4.0);
-        egui::CollapsingHeader::new("System prompt (for every style)").id_salt("enhance_system").show(ui, |ui| {
-            let default = increart_core::pe::DEFAULT_STYLE_PROMPT;
-            let own = st.config.pe.system_prompts.get(STYLE_PROMPT).filter(|p| !p.trim().is_empty());
+        let job = enhance_job(st, &a);
+        let title = match job {
+            increart_core::pe::STYLE_PART => "System prompt (for every style; the style's part)",
+            _ => "System prompt (for every style; the whole prompt)",
+        };
+        egui::CollapsingHeader::new(title).id_salt(("enhance_system", job)).show(ui, |ui| {
+            let default = increart_core::pe::default_system_prompt(job);
+            let own = st.config.pe.system_prompts.get(job).filter(|p| !p.trim().is_empty());
             let mut text = own.cloned().unwrap_or_else(|| default.to_string());
             if own.is_some() && ui.small_button(ic(ph::ARROW_COUNTER_CLOCKWISE, "Default")).clicked() {
-                out.push(Msg::PeSystemPrompt { job: STYLE_PROMPT.into(), text: String::new() });
+                out.push(Msg::PeSystemPrompt { job: job.into(), text: String::new() });
             }
             let r = ScrollArea::vertical().id_salt("enhance_system_text").max_height(140.0).show(ui, |ui| {
                 ui.add(egui::TextEdit::multiline(&mut text).desired_width(f32::INFINITY).desired_rows(5))
             });
             if r.inner.changed() {
                 let text = if text == default { String::new() } else { text };
-                out.push(Msg::PeSystemPrompt { job: STYLE_PROMPT.into(), text });
+                out.push(Msg::PeSystemPrompt { job: job.into(), text });
             }
         });
         let ticked: Vec<_> = running.iter().filter(|(k, _)| a.styles.contains(k)).collect();

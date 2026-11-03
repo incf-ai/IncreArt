@@ -5898,9 +5898,13 @@ fn prompt_enhance_improves_each_styles_prompt() {
                 let mut seen = seen.lock().unwrap();
                 seen.push(v);
                 // asked to echo: the prompt given back as it was sent
-                let content = match text.contains("Instructions: echo") {
-                    true => text.split("Improve this prompt:\n\n").nth(1).unwrap().split("\n\n").next().unwrap().into(),
-                    false => format!("Improved prompt: {}. {style} in glass", seen.len()),
+                let content = if text.contains("Instructions: echo") {
+                    text.split("Improve this prompt:\n\n").nth(1).unwrap().split("\n\n").next().unwrap().into()
+                } else if text.contains("Instructions: whole") {
+                    // asked for the style's part, the whole prompt given
+                    "a cat, in ink".to_string()
+                } else {
+                    format!("Improved prompt: {}. {style} in glass", seen.len())
                 };
                 serde_json::json!({"choices": [{"message": {"content": content}}]}).to_string()
             };
@@ -5955,7 +5959,8 @@ fn prompt_enhance_improves_each_styles_prompt() {
     let a = h.state.pe.style_dialog.clone().unwrap();
     assert_eq!(a.styles, [key("Sculpted"), key("Plain")]);
     assert_eq!(enhance_picks(&h.state), [a.styles.clone(), vec![]]);
-    let moody = EnhanceAsk { how: "moody".into(), ..a };
+    // the whole prompt (only the style's part further on)
+    let moody = EnhanceAsk { how: "moody".into(), whole: true, ..a };
     h.send(Msg::PeStyleDialog(Some(moody.clone())));
     assert_eq!(h.state.generate.sweep.enhance_ask.as_ref(), Some(&moody));
     h.send(Msg::PeStyleAsk);
@@ -5970,7 +5975,7 @@ fn prompt_enhance_improves_each_styles_prompt() {
     let text = parts.last().unwrap()["text"].as_str().unwrap();
     assert_eq!(
         text,
-        "The reference image <image1> is attached.\n\nTemplate (the subject): a cat, {preset}\n\n\
+        "The reference image <image1> is attached.\n\nTemplate (what's asked for): a cat, {preset}\n\n\
          Style \"Sculpted\": <image1> sculpted from {material}\n\n\
          Improve this prompt:\n\na cat, <image1> sculpted from {material}\n\n\
          Blanks to fill: {material}\n\nInstructions: moody"
@@ -6027,6 +6032,37 @@ fn prompt_enhance_improves_each_styles_prompt() {
         .unwrap()
         .to_string();
     assert!(!text.contains("Instructions") && !text.contains("my own"), "{text}");
+
+    // ... which is only the style's part: the template's text is kept as
+    // written, the answer goes where {preset} is
+    let req = asked.lock().unwrap()[last].clone();
+    assert_eq!(req["messages"][0]["content"].as_str().unwrap(), increart_core::pe::DEFAULT_STYLE_PART);
+    assert!(
+        text.ends_with(
+            "The prompt, kept exactly as written: a cat, {preset}\n\nStyle \"Plain\": <image1> as a sketch\n\n\
+             Improve the style's part, what goes where {preset} is:\n\n<image1> as a sketch"
+        ),
+        "{text}"
+    );
+    let plain = h.state.generate.sweep.style_prompt(&key("Plain")).unwrap().prompt.clone();
+    assert!(plain.starts_with("a cat, ") && plain.ends_with("Plain in glass"), "{plain}");
+    // as shown: its part, while the template's text in it is as written
+    let part = plain.strip_prefix("a cat, ").unwrap().to_string();
+    let shown = EnhanceAsk { from_shown: true, styles: vec![key("Plain")], ..EnhanceAsk::default() };
+    h.send(Msg::PeStyleDialog(Some(shown.clone())));
+    h.send(Msg::PeStyleAsk);
+    wait(&mut h);
+    let text =
+        asked.lock().unwrap().last().unwrap()["messages"][1]["content"].as_array().unwrap().last().unwrap()["text"]
+            .as_str()
+            .unwrap()
+            .to_string();
+    assert!(text.ends_with(&format!("is:\n\n{part}")), "{text}");
+    // the whole prompt given back anyway: its part taken, the text not twice
+    h.send(Msg::PeStyleDialog(Some(EnhanceAsk { how: "whole".into(), ..shown })));
+    h.send(Msg::PeStyleAsk);
+    wait(&mut h);
+    assert_eq!(h.state.generate.sweep.style_prompt(&key("Plain")).unwrap().prompt, "a cat, in ink");
 
     // the prompt given back unchanged: asked once more, hotter, then marked
     let before = h.state.generate.sweep.style_prompt(&key("Plain")).cloned();

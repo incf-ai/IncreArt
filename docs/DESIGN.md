@@ -780,7 +780,8 @@ rewrites).
   flattened over a checkerboard first (models read the colour of fully
   transparent pixels as if it were there). A KoboldCpp without `mmproj`
   gets no images, and can't describe.
-- **System prompts** are per job (`fill_blanks`, `rewrite`, `describe`),
+- **System prompts** are per job (`fill_blanks`, `style_prompt`,
+  `style_part`, `rewrite`, `describe`),
   shared by every chat server, with a built-in default for each. The
   server status window's Prompt enhance section shows the chat server in
   use, how it runs, its state, and each job's system prompt in a
@@ -796,8 +797,10 @@ rewrites).
   its lines (bullets and numbers dropped); repeats and empties are dropped.
 - **Rewriting** (Generate's **Rewrite**, **Rewrite with PE** in Edit idea
   and the New idea form): the system prompt asks for a clearer, more
-  specific and visual prompt keeping the user's intent, `<imageN>` tags,
-  `{blanks}` and `{preset}`, and only the prompt back. The message gives
+  specific and visual prompt keeping the user's intent, instructions to
+  the image model ("Remove the text") as instructions, never describing
+  something to be removed as there, `<imageN>` tags, `{blanks}` and
+  `{preset}`, and only the prompt back. The message gives
   the text (a sweep template says what `{preset}` is), which images are
   attached (Generate: the references, then the start image; an idea: its
   images) and the instructions, if any. The answer is cleaned (code fences,
@@ -2188,22 +2191,46 @@ and its tooltip says how many more are generating.
   enhanced from older values (edits by hand are left alone), a ⚙ button
   for **Enhance…**, and while asking "Enhancing 4 of 6 · …" with
   **Stop**. A row's ✨ asks for that style with the defaults too. Each
-  style is one request with the `style_prompt` job's system prompt (built
-  in: improve the prompt for the style, keep the subject, the template's
-  asks and the style's look, fill every blank, keep `<imageN>` tags, reply
-  with only the prompt): the images (512 px, as for blanks, so they're read
-  once for all the styles), the template, the style's name and prompt,
-  "Improve this prompt:" and the prompt, "Blanks to fill: {…}" when any are
-  left, and the instructions when given. **Enhance…** is a modal: a table
+  style is one request, of one of two kinds (**Change** in Enhance…):
+  - **only the style's part** (the default, when the template has text of
+    its own besides one `{preset}`): the template's text (its values in)
+    is kept exactly as written, and the model writes only what goes where
+    `{preset}` is, seeing it. So an instruction like `Remove the "acme"
+    text. {preset}` can't be dropped or turned into a description of the
+    text. The `style_part` job's system prompt (built in: the user's prompt
+    is fixed, write only the style's part, agreeing with the prompt's
+    instructions, never describing something to be removed as there, not
+    repeating the prompt, fill the part's blanks and leave the prompt's,
+    keep `<imageN>` tags, reply with only the part); the message: the
+    images, "The prompt, kept exactly as written:" and the template,
+    the style's name and prompt, "Improve the style's part, what goes where
+    {preset} is:" and the part (the style's prompt, its values in; as shown:
+    the shown prompt's part while the template's text in it is as written,
+    else as built), "Blanks to fill" for the part's, and the instructions.
+    The answer is put back between the template's text; an answer that is
+    the whole prompt anyway has its part taken;
+  - **the whole prompt** (the template's text rewritten too; the only kind
+    when the template is just `{preset}`): the `style_prompt` job's system
+    prompt (built in: improve the prompt for the style, keep the subject,
+    the template's asks, its instructions to the image model as
+    instructions, and the style's look, fill every blank, keep `<imageN>`
+    tags, reply with only the prompt): the images (512 px, as for blanks,
+    so they're read once for all the styles), the template, the style's
+    name and prompt, "Improve this prompt:" and the prompt, "Blanks to
+    fill: {…}" when any are left, and the instructions when given.
+
+  **Enhance…** is a modal: a table
   of the styles that will run (a checkbox each, where its prompt is: as
   built / enhanced / edited, "older values" when made from values changed
   since, ⚠ when its last ask failed, and the prompt, whole on hover);
   **Tick only** All / None / Not enhanced yet / Failed ⚠ (each with its
-  count, unticking the rest); instructions; **Improve** the prompt as built
-  / as shown (an edit or enhancement improved further); **Images**;
-  temperature and `min_p` (the server's for `style_prompt` until moved,
+  count, unticking the rest); instructions; **Start from** the prompt as
+  built / as shown (an edit or enhancement improved further); **Change**
+  only the style's part / the whole prompt (only the whole prompt when the
+  template has no text of its own); **Images**; temperature and `min_p` (the
+  server's for the job, `style_part` or `style_prompt`, until moved,
   **Default** puts them back); **Longest** (tokens, 400 by default); the
-  server's system prompt for it (edited there, **Default**); **The message
+  server's system prompt for the job (edited there, **Default**); **The message
   sent** for the first ticked; **Enhance (N)**, which asks and closes, and
   **Close**. Its settings and ticks are kept with the project's sweep
   (`enhance_ask`) and come back as left.

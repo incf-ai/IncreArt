@@ -34,7 +34,9 @@ pub const REWRITE: &str = "rewrite";
 pub const DEFAULT_REWRITE: &str = "You rewrite prompts for an image generator (a diffusion model that also \
 edits images) so they give better pictures: clearer, more specific and more visual, describing the subject, \
 composition, setting, lighting, colours, materials and style. Keep the user's intent and everything they \
-asked for; don't add subjects they didn't ask for. Keep these exactly as written, wherever they make sense: \
+asked for; don't add subjects they didn't ask for. The prompt may tell the image generator what to do (remove, \
+change or keep something): keep such instructions as instructions, as written, and never describe something \
+to be removed as being there. Keep these exactly as written, wherever they make sense: \
 tags like <image1> and <image2> (they name the attached reference images, the first image attached is \
 <image1>), blanks like {name} and {preset}. When images are attached, look at them and use what they show. \
 Follow the user's instructions for the rewrite if there are any. Write it in the prompt's language. Reply \
@@ -45,15 +47,36 @@ pub const STYLE_PROMPT: &str = "style_prompt";
 
 /// The built-in system prompt for [`STYLE_PROMPT`].
 pub const DEFAULT_STYLE_PROMPT: &str = "You improve prompts for an image generator (a diffusion model that \
-also edits images). The user is trying one subject in many styles: the template is the subject, the style is \
-one way of picturing it, and the prompt is the two put together. Make the prompt give a better picture in that \
-style: clearer, more specific and more visual, with the composition, setting, lighting, colours, materials and \
-textures the style calls for. Keep the subject and everything the template asks for, and keep the style's look; \
-don't add subjects that aren't asked for. Fill every blank like {material} with something that suits the style \
+also edits images). The user is trying one request in many styles: the template is what they ask for (a \
+subject, instructions, or both), the style is one way of picturing it, and the prompt is the two put together. \
+Make the prompt give a better picture in that style: clearer, more specific and more visual, with the \
+composition, setting, lighting, colours, materials and textures the style calls for. Keep the subject and \
+everything the template asks for, and keep the style's look; don't add subjects that aren't asked for. The \
+template may tell the image generator what to do (remove, change or keep something): keep such instructions as \
+instructions, as written, and never describe something to be removed as being there. Fill every blank like {material} with something that suits the style \
 and the subject (and the images, when attached), so none is left. Keep tags like <image1> exactly as written \
 (they name the attached reference images, the first image attached is <image1>). When images are attached, look \
 at them and use what they show. Follow the user's instructions if there are any. Write it in the prompt's \
 language. Reply with only the improved prompt: no title, no quotes, no explanations.";
+
+/// The job improving only a style's part of a sweep's prompt: the
+/// template's own text is kept as written, the answer goes where
+/// `{preset}` is.
+pub const STYLE_PART: &str = "style_part";
+
+/// The built-in system prompt for [`STYLE_PART`].
+pub const DEFAULT_STYLE_PART: &str = "You improve prompts for an image generator (a diffusion model that also \
+edits images). The user is trying one prompt in many styles. Their prompt is fixed and kept exactly as written; \
+{preset} in it marks where a style's part goes. You write only that part, for one style: make it give a better \
+picture in that style, clearer, more specific and more visual, with the composition, lighting, colours, \
+materials and textures the style calls for, suited to the user's prompt. The user's prompt may tell the image \
+generator what to do (remove, change or keep something): the part must agree with it, never describe something \
+to be removed as being there, and not repeat what the prompt says already. Fill every blank like {material} in \
+the part with something that suits the style and the subject, so none is left; blanks in the user's prompt are \
+filled in later, leave them. Keep tags like <image1> exactly as written (they name the attached reference \
+images, the first image attached is <image1>). When images are attached, look at them and use what they show. \
+Follow the user's instructions if there are any. Write it in the prompt's language. Reply with only the style's \
+part, to go where {preset} is: not the whole prompt, no title, no quotes, no explanations.";
 
 /// The job describing an image.
 pub const DESCRIBE: &str = "describe";
@@ -66,9 +89,10 @@ style or medium (photo, painting, 3D render, …), with any text in it quoted. F
 instructions if there are any. Reply with only the description, one paragraph: no title, no preamble.";
 
 /// The jobs a server's system prompts are for, with their built-in prompt.
-pub const JOBS: [(&str, &str); 4] = [
+pub const JOBS: [(&str, &str); 5] = [
     (FILL_BLANKS, DEFAULT_FILL_BLANKS),
     (STYLE_PROMPT, DEFAULT_STYLE_PROMPT),
+    (STYLE_PART, DEFAULT_STYLE_PART),
     (REWRITE, DEFAULT_REWRITE),
     (DESCRIBE, DEFAULT_DESCRIBE),
 ];
@@ -93,12 +117,17 @@ pub struct PeConfig {
     pub servers: Vec<OldPeServer>,
 }
 
+/// The built-in system prompt for `job`.
+pub fn default_system_prompt(job: &str) -> &'static str {
+    JOBS.iter().find(|(j, _)| *j == job).map_or("", |(_, p)| p)
+}
+
 impl PeConfig {
     /// The system prompt for `job`: the one set, else the default.
     pub fn system_prompt(&self, job: &str) -> &str {
         match self.system_prompts.get(job) {
             Some(p) if !p.trim().is_empty() => p,
-            _ => JOBS.iter().find(|(j, _)| *j == job).map_or("", |(_, p)| p),
+            _ => default_system_prompt(job),
         }
     }
 
@@ -803,6 +832,9 @@ pub fn text_message(a: &TextAsk) -> String {
 pub struct StyleAsk {
     /// The sweep's template (`{preset}` where the style goes).
     pub template: String,
+    /// Only the style's part ([`STYLE_PART`]): `template` (its values
+    /// in) is kept as written, `prompt` is the part.
+    pub part: bool,
     pub style: String,
     /// The style preset's own prompt.
     pub style_prompt: String,
@@ -827,11 +859,17 @@ pub fn style_message(a: &StyleAsk) -> String {
     if a.start {
         s.push_str("The start image (the picture being transformed) is attached last.\n\n");
     }
-    if a.template.trim() != crate::prompts::PRESET_SLOT && !a.template.trim().is_empty() {
-        s.push_str(&format!("Template (the subject): {}\n\n", a.template.trim()));
+    if a.part {
+        s.push_str(&format!("The prompt, kept exactly as written: {}\n\n", a.template.trim()));
+    } else if a.template.trim() != crate::prompts::PRESET_SLOT && !a.template.trim().is_empty() {
+        s.push_str(&format!("Template (what's asked for): {}\n\n", a.template.trim()));
     }
     s.push_str(&format!("Style \"{}\": {}\n\n", a.style, a.style_prompt.trim()));
-    s.push_str(&format!("Improve this prompt:\n\n{}\n\n", a.prompt.trim()));
+    if a.part {
+        s.push_str(&format!("Improve the style's part, what goes where {{preset}} is:\n\n{}\n\n", a.prompt.trim()));
+    } else {
+        s.push_str(&format!("Improve this prompt:\n\n{}\n\n", a.prompt.trim()));
+    }
     let blanks = crate::prompts::slot_names([a.prompt.as_str()]);
     if !blanks.is_empty() {
         let list: Vec<String> = blanks.iter().map(|b| format!("{{{b}}}")).collect();

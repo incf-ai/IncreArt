@@ -1259,6 +1259,8 @@ fn pe_section(ui: &mut egui::Ui, st: &AppState, out: &mut Vec<Msg>) {
     for (job, default) in JOBS {
         let title = match job {
             increart_core::pe::FILL_BLANKS => "System prompt: suggesting values for a sweep's blanks",
+            increart_core::pe::STYLE_PROMPT => "System prompt: improving a sweep's whole prompt for a style",
+            increart_core::pe::STYLE_PART => "System prompt: improving only a style's part of a sweep's prompt",
             increart_core::pe::REWRITE => "System prompt: rewriting a prompt or an idea",
             increart_core::pe::DESCRIBE => "System prompt: describing an image",
             _ => job,

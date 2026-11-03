@@ -335,6 +335,11 @@ pub struct EnhanceAsk {
     /// rather than the one built from the template and values.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub from_shown: bool,
+    /// Rewrite the whole prompt, the template's own text too, rather than
+    /// only the style's part (the template's text kept as written; see
+    /// [`template_around`]).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub whole: bool,
     /// None: the server's, as set in Settings.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sampling: Option<crate::pe::Sampling>,
@@ -351,6 +356,7 @@ impl Default for EnhanceAsk {
         EnhanceAsk {
             how: String::new(),
             from_shown: false,
+            whole: false,
             sampling: None,
             images: true,
             max_tokens: 400,
@@ -684,6 +690,24 @@ pub fn unblank(mut text: String, names: &[String]) -> String {
 
 /// Where a sweep's template takes each preset's prompt.
 pub const PRESET_SLOT: &str = "{preset}";
+
+/// A template's own text before and after its `{preset}`, when it has one
+/// `{preset}` and text besides: what enhancing only the style's part keeps
+/// as written.
+pub fn template_around(template: &str) -> Option<(&str, &str)> {
+    if template.matches(PRESET_SLOT).count() != 1 {
+        return None;
+    }
+    let (before, after) = template.split_once(PRESET_SLOT)?;
+    (!before.trim().is_empty() || !after.trim().is_empty()).then_some((before, after))
+}
+
+/// The style's part of `prompt`, made as `before` + part + `after` (spaces
+/// at the ends aside); None when that text isn't there as written.
+pub fn style_part<'a>(prompt: &'a str, before: &str, after: &str) -> Option<&'a str> {
+    let rest = prompt.trim().strip_prefix(before.trim())?.strip_suffix(after.trim())?;
+    Some(rest.trim())
+}
 
 /// The `{slot}` names (without braces) of these texts, first-seen order,
 /// `{preset}` left out.
@@ -1061,6 +1085,13 @@ mod tests {
         let p = sweep_presets(&list, &sw)[0].1;
         assert_eq!(sweep_prompt("", &p.prompt, &slots), p.prompt.replace("{text}", "OPEN"));
         assert_eq!(sweep_prompt("a fox, {preset}", "watercolour", &slots), "a fox, watercolour");
+        assert_eq!(template_around("Remove the text. {preset}"), Some(("Remove the text. ", "")));
+        assert_eq!(template_around(" {preset} "), None, "nothing of its own");
+        assert_eq!(template_around("{preset} or {preset}"), None);
+        assert_eq!(template_around("a fox"), None);
+        assert_eq!(style_part("Remove it. ink, moody", "Remove it. ", ""), Some("ink, moody"));
+        assert_eq!(style_part("a fox in ink, at night", "a fox in ", ", at night"), Some("ink"));
+        assert_eq!(style_part("A fox in ink", "a fox in ", ""), None, "its text changed");
         assert_eq!(slot_names(["{preset} in {scene}", "{text} {scene}"]), ["scene", "text"]);
     }
 

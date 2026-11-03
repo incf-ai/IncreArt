@@ -4374,12 +4374,25 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
                 PeKey::Style(key) => {
                     let from = state.pe.style_from.remove(&key).unwrap_or_default();
                     let tried = state.pe.style_tries.remove(&key);
-                    let why = match r.map(|a| increart_core::pe::clean_text(&a)) {
+                    let fixed = tried.as_ref().and_then(|t| t.fixed.clone());
+                    let answer = r.map(|a| increart_core::pe::clean_text(&a)).map(|a| match &fixed {
+                        // the style's part (the whole prompt given back
+                        // anyway: its part)
+                        Some((before, after)) => {
+                            increart_core::prompts::style_part(&a, before, after).map_or(a.clone(), String::from)
+                        }
+                        None => a,
+                    });
+                    let why = match answer {
                         Ok(prompt) if prompt.is_empty() => Some("answered nothing".to_string()),
                         Ok(prompt) if tried.as_ref().is_some_and(|t| t.sent.trim() == prompt.trim()) => {
                             Some("gave the prompt back unchanged".to_string())
                         }
                         Ok(prompt) => {
+                            let prompt = match &fixed {
+                                Some((before, after)) => format!("{before}{prompt}{after}").trim().to_string(),
+                                None => prompt,
+                            };
                             let added = increart_core::prompts::added_slots(&from, &prompt);
                             if !added.is_empty() {
                                 state.pe.added_blanks.push((key.clone(), added));
@@ -4404,11 +4417,12 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
                         let tried = tried.unwrap_or_else(|| StyleTry {
                             ask: EnhanceAsk::default(),
                             sent: String::new(),
+                            fixed: None,
                             retry: 0,
                         });
                         if tried.retry < STYLE_RETRIES {
                             let mut a = tried.ask.clone();
-                            let usual = state.config.pe.sampling(increart_core::pe::STYLE_PROMPT);
+                            let usual = state.config.pe.sampling(enhance_job(state, &a));
                             let mut x = a.sampling.unwrap_or(usual);
                             x.temperature = (x.temperature + RETRY_HOTTER).min(2.0);
                             a.sampling = Some(x);
@@ -8798,7 +8812,16 @@ pub fn style_message_for(
     ask: &EnhanceAsk,
 ) -> Option<String> {
     let server = state.pe.server.as_ref()?;
-    style_job(state, server, key, ask).map(|(j, _, _)| j.text)
+    style_job(state, server, key, ask).map(|(j, ..)| j.text)
+}
+
+/// The job an enhance with these settings is: improving only the style's
+/// part when the template has text of its own to keep, else the whole
+/// prompt.
+pub fn enhance_job(state: &AppState, ask: &EnhanceAsk) -> &'static str {
+    use increart_core::pe::{STYLE_PART, STYLE_PROMPT};
+    let part = !ask.whole && increart_core::prompts::template_around(&state.generate.prompt).is_some();
+    if part { STYLE_PART } else { STYLE_PROMPT }
 }
 
 /// Asks to improve these styles' prompts (those not waiting already),
@@ -8828,11 +8851,11 @@ fn ask_styles(
     state.pe.style_batch += jobs.len();
     let jobs = jobs
         .into_iter()
-        .map(|(j, built, sent)| {
+        .map(|(j, built, sent, fixed)| {
             if let PeKey::Style(k) = &j.key {
                 state.pe.style_from.insert(k.clone(), built);
                 state.pe.style_failed.remove(k);
-                state.pe.style_tries.insert(k.clone(), StyleTry { ask: ask.clone(), sent, retry });
+                state.pe.style_tries.insert(k.clone(), StyleTry { ask: ask.clone(), sent, fixed, retry });
             }
             queue_job(state, j)
         })
@@ -8841,18 +8864,37 @@ fn ask_styles(
 }
 
 /// The request improving a style's prompt, with the prompt built for it
-/// now; None if the style won't run.
+/// now, the text sent to improve, and when only the style's part is, the
+/// template's text around it (values in); None if the style won't run.
+type StyleJob = (PeJob, String, String, Option<(String, String)>);
+
 fn style_job(
     state: &AppState,
     server: &increart_core::pe::PeServer,
     key: &increart_core::prompts::PresetKey,
     settings: &EnhanceAsk,
-) -> Option<(PeJob, String, String)> {
-    use increart_core::pe::{STYLE_PROMPT, StyleAsk, style_message};
+) -> Option<StyleJob> {
+    use increart_core::pe::{STYLE_PART, StyleAsk, style_message};
+    use increart_core::prompts::{fill_slots, style_part, template_around};
     let f = &state.generate;
     let (_, p) = running_styles(state).into_iter().find(|(k, _)| k == key)?;
     let built = built_style_prompt(state, key, &p.prompt);
-    let prompt = if settings.from_shown { f.sweep.prompt_for(&f.prompt, key, &p.prompt) } else { built.clone() };
+    let shown = || f.sweep.prompt_for(&f.prompt, key, &p.prompt);
+    let job = enhance_job(state, settings);
+    let slots = f.sweep.slots_for(key);
+    let fixed = template_around(&f.prompt)
+        .filter(|_| job == STYLE_PART)
+        .map(|(b, a)| (fill_slots(b.to_string(), &slots), fill_slots(a.to_string(), &slots)));
+    let prompt = match &fixed {
+        // the part as shown, when the text around it is the template's still
+        Some((before, after)) => {
+            let built_part = fill_slots(p.prompt.clone(), &slots);
+            let shown = settings.from_shown.then(shown);
+            shown.as_deref().and_then(|s| style_part(s, before, after)).map_or(built_part, String::from)
+        }
+        None if settings.from_shown => shown(),
+        None => built.clone(),
+    };
     let root = state.library.as_ref()?;
     let (mut images, mut start) = (vec![], false);
     if server.vision() && settings.images {
@@ -8863,7 +8905,8 @@ fn style_job(
         }
     }
     let ask = StyleAsk {
-        template: f.prompt.clone(),
+        template: if fixed.is_some() { fill_slots(f.prompt.clone(), &slots) } else { f.prompt.clone() },
+        part: fixed.is_some(),
         style: p.name.clone(),
         style_prompt: p.prompt.clone(),
         prompt: prompt.clone(),
@@ -8874,8 +8917,8 @@ fn style_job(
     let job = PeJob {
         id: 0,
         key: PeKey::Style(key.clone()),
-        system: state.config.pe.system_prompt(STYLE_PROMPT).to_string(),
-        sampling: settings.sampling.unwrap_or_else(|| state.config.pe.sampling(STYLE_PROMPT)),
+        system: state.config.pe.system_prompt(job).to_string(),
+        sampling: settings.sampling.unwrap_or_else(|| state.config.pe.sampling(job)),
         text: style_message(&ask),
         images,
         // as for blanks: small enough to read quickly, the same for every
@@ -8883,7 +8926,7 @@ fn style_job(
         image_size: increart_core::pe::BLANK_IMAGE_SIZE,
         max_tokens: settings.max_tokens,
     };
-    Some((job, built, prompt))
+    Some((job, built, prompt, fixed))
 }
 
 /// The message a Suggest dialog's ask for a blank would send.
