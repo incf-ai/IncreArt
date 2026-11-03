@@ -1337,6 +1337,9 @@ pub struct LibraryDialog {
     pub path: String,
     pub error: Option<String>,
     pub busy: bool,
+    /// While opening upgrades the library's image metadata (once, after an
+    /// update): images done, of how many.
+    pub upgrading: Option<(usize, usize)>,
     /// The wizard open over the dialog: create a library at `path`, or open
     /// the one there.
     pub wizard: Option<LibraryWizard>,

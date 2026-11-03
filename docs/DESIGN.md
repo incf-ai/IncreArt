@@ -2839,8 +2839,15 @@ servers' in the viewer (titled **Logs**):
   <text>` (config warnings at start among them), and a panic's, as
   `<date time> panic: thread '<name>' at <file>:<line>: <what>`.
 - Each library opened, with how long it took: `info: library <path>
-  opened in <ms> ms (lock <ms> ms, scan <ms> ms: <n> projects, <n>
-  folders, <n> outputs)`.
+  opened in <ms> ms (lock <ms> ms[, metadata upgrade <ms> ms: <n>
+  images], scan <ms> ms: <n> projects, <n> folders, <n> outputs)`: lock
+  is the wait for `library.lock`, scan the rest. A library from before
+  metadata 3 has its images upgraded once as it opens, on a few threads
+  (each file still synced before its rename; the syncs share the disk's
+  commits): `info: library <path>: upgrading the metadata of <n> images
+  (once)` when it starts, and the library screen's bar shows `Upgrading
+  the images' metadata (once): <done> of <n>…` in place of `Opening the
+  library…`.
 - What was slow on the GUI thread: `slow: <message> took <ms> ms` for a
   message handled in 250 ms or more (the start of its Debug, at most 80
   bytes), `slow: drawing a frame took <ms> ms` for a frame of 1 s or more;

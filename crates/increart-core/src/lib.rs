@@ -58,6 +58,6 @@ pub mod webp;
 pub use error::{Error, Result};
 pub use id::{Id, IdKind};
 pub use import::Original;
-pub use library::{Disposal, HistoryKey, Imported, Library, NewIdea, NewRun, Tree};
+pub use library::{Disposal, HistoryKey, Imported, Library, NewIdea, NewRun, OpenTimes, Tree};
 pub use model::{ImageRef, Store};
 pub use scan::{IdeaLoc, Index, Verdict};

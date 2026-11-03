@@ -152,6 +152,16 @@ pub struct Library {
     clock: Clock,
     disposal: Disposal,
     problems: Vec<String>,
+    opened: OpenTimes,
+}
+
+/// How long [`Library::open`] spent where, for the app's log.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct OpenTimes {
+    /// Waiting for `library.lock`.
+    pub lock: std::time::Duration,
+    /// The one-time metadata upgrade, and how many images it went through.
+    pub upgrade: Option<(std::time::Duration, usize)>,
 }
 
 impl std::fmt::Debug for Library {
@@ -193,6 +203,13 @@ impl Library {
     /// Opens a library: takes `library.lock` (refusing if another instance
     /// holds it), seeds the ID counters and syncs the pixel index.
     pub fn open(root: &Path) -> Result<Library> {
+        Library::open_with(root, &mut |_, _| {})
+    }
+
+    /// [`open`](Self::open), telling `upgrading` (images done, of how many)
+    /// how a metadata upgrade goes: (0, n) when it starts, then a few times
+    /// a second. A library already up to date never calls it.
+    pub fn open_with(root: &Path, upgrading: &mut dyn FnMut(usize, usize)) -> Result<Library> {
         let root = link::absolute(root)?;
         let meta_path = root.join(LIBRARY_FILE);
         if !meta_path.exists() {
@@ -203,6 +220,7 @@ impl Library {
             return Err(Error::UnsupportedFormat(meta.format));
         }
         let lock_path = root.join(LOCK_FILE);
+        let t = std::time::Instant::now();
         let mut lock = OpenOptions::new().create(true).truncate(false).write(true).open(&lock_path).at(&lock_path)?;
         // tried for a moment: a process being started elsewhere in this one
         // holds a copy of every open file (the lock too) until it execs. The
@@ -222,6 +240,7 @@ impl Library {
                 Err(fs::TryLockError::Error(e)) => return Err(e).at(&lock_path),
             }
         }
+        let locked = t.elapsed();
         lock.set_len(0).at(&lock_path)?;
         writeln!(lock, "{}", std::process::id()).at(&lock_path)?;
         let mut meta = meta;
@@ -248,6 +267,7 @@ impl Library {
             clock: Box::new(id::now),
             disposal: Disposal::SystemTrash,
             problems: Vec::new(),
+            opened: OpenTimes { lock: locked, upgrade: None },
         };
         lib.upgrade_input_folders()?;
         let ix = lib.scan()?;
@@ -279,7 +299,9 @@ impl Library {
         }
         lib.sync_pixel_index()?;
         if lib.meta.metadata < 3 {
-            lib.upgrade_metadata()?;
+            let t = std::time::Instant::now();
+            let n = lib.upgrade_metadata(upgrading)?;
+            lib.opened.upgrade = Some((t.elapsed(), n));
         }
         if lib.meta.metadata < METADATA_VERSION || lib.meta.uuid.is_none() {
             lib.meta.metadata = METADATA_VERSION;
@@ -448,8 +470,11 @@ impl Library {
     /// `increart:blake3` and `increart:uuid` (the one its ID makes) where
     /// missing, and output recipes' `inputs`, with their UUIDs. Only text
     /// chunks change; the pixels aren't re-encoded. An image that can't be
-    /// upgraded is reported in [`problems`](Self::problems).
-    fn upgrade_metadata(&mut self) -> Result<()> {
+    /// upgraded is reported in [`problems`](Self::problems). The images are
+    /// done on a few threads: each file is still synced before its rename,
+    /// but the syncs share the filesystem's commits (one at a time, a big
+    /// library took minutes). How many images it went through.
+    fn upgrade_metadata(&mut self, progress: &mut dyn FnMut(usize, usize)) -> Result<usize> {
         let mut images = vec![];
         for store in [Store::Input, Store::Output] {
             images.extend(self.store_ids(store)?.into_iter().map(|id| ImageRef { id, store }));
@@ -470,16 +495,48 @@ impl Library {
             LinkMode::Copy => self.links_by_image()?,
             _ => HashMap::new(),
         };
-        for r in &images {
-            let done = self.upgrade_image(r, &uuids).and_then(|rewritten| match copies.get(r) {
-                Some(links) if rewritten => self.refresh_copies(r, links),
-                _ => Ok(()),
-            });
-            if let Err(e) = done {
-                self.problems.push(format!("upgrading {}: {e}", self.image_path(r).display()));
+        let total = images.len();
+        progress(0, total);
+        let next = std::sync::atomic::AtomicUsize::new(0);
+        let threads = std::thread::available_parallelism().map_or(4, |n| n.get()).clamp(4, 8).min(total.max(1));
+        let failed = std::thread::scope(|s| {
+            let (tx, rx) = std::sync::mpsc::channel();
+            for _ in 0..threads {
+                let (tx, next, images, uuids, copies) = (tx.clone(), &next, &images, &uuids, &copies);
+                let this = &*self;
+                s.spawn(move || {
+                    while let Some(r) = images.get(next.fetch_add(1, std::sync::atomic::Ordering::Relaxed)) {
+                        let done = this.upgrade_image(r, uuids).and_then(|rewritten| match copies.get(r) {
+                            Some(links) if rewritten => this.refresh_copies(r, links),
+                            _ => Ok(()),
+                        });
+                        let failed = done.err().map(|e| format!("upgrading {}: {e}", this.image_path(r).display()));
+                        if tx.send(failed).is_err() {
+                            return;
+                        }
+                    }
+                });
             }
-        }
-        self.save_pixel_index()
+            drop(tx);
+            let (mut done, mut failed) = (0, vec![]);
+            let mut told = std::time::Instant::now();
+            for f in rx {
+                done += 1;
+                failed.extend(f);
+                if told.elapsed() >= std::time::Duration::from_millis(200) {
+                    told = std::time::Instant::now();
+                    progress(done, total);
+                }
+            }
+            failed
+        });
+        progress(total, total);
+        // the threads finish in any order
+        let mut failed = failed;
+        failed.sort();
+        self.problems.extend(failed);
+        self.save_pixel_index()?;
+        Ok(total)
     }
 
     /// Writes a store image's bytes over its copies (the links of a copy
@@ -567,6 +624,11 @@ impl Library {
 
     pub fn link_mode(&self) -> LinkMode {
         self.meta.link_mode.unwrap_or(LinkMode::Copy)
+    }
+
+    /// How long opening took where.
+    pub fn open_times(&self) -> OpenTimes {
+        self.opened
     }
 
     /// Problems found when opening (unreadable files, wrong pixel hashes).

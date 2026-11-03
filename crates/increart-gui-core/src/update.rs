@@ -39,6 +39,8 @@ pub enum Msg {
     /// Opens a library wizard on a folder (`None` closes it).
     LibraryWizard(Option<(LibraryWizard, String)>),
     LibraryOpened(Result<(PathBuf, Index), String>),
+    /// Opening's one-time metadata upgrade: images done, of how many.
+    LibraryUpgrading(usize, usize),
     /// The background check of the images' usage counts after opening:
     /// images done, of how many (done = total: finished).
     UsageCheck(usize, usize),
@@ -2104,7 +2106,14 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
         Msg::LibraryOpened(Err(e)) => {
             if let Phase::Library(d) = &mut state.phase {
                 d.busy = false;
+                d.upgrading = None;
                 d.error = Some(e);
+            }
+            vec![]
+        }
+        Msg::LibraryUpgrading(done, total) => {
+            if let Phase::Library(d) = &mut state.phase {
+                d.upgrading = Some((done, total));
             }
             vec![]
         }
