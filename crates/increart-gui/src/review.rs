@@ -2997,10 +2997,6 @@ fn image_grid(
                         out.push(Msg::SetCover(p.project.id.clone(), Some(o.image.clone())));
                         ui.close();
                     }
-                    if ui.button(ic(ph::EXPORT, "Export…")).clicked() {
-                        out.push(Msg::OpenExport(vec![o.image.clone()], "1 image".into()));
-                        ui.close();
-                    }
                     if ui.button(ic(ph::FOLDER_OPEN, "Show in file manager")).clicked() {
                         out.push(Msg::ShowInFileManager(o.path.clone()));
                         ui.close();
