@@ -306,6 +306,63 @@ fn dropped_files_become_ideas() {
     assert!(meta.blake3.is_some_and(|b| b.len() == 64));
 }
 
+/// Export… on ideas: their images named by the inputs' template (the
+/// size read from the file), their texts as .txt when asked, converted;
+/// the choices kept for the next export.
+#[test]
+fn ideas_exported_with_their_text() {
+    let mut h = Harness::new();
+    let dir = h._tmp.path().join("drop");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("note.txt"), "otter with a teacup\n").unwrap();
+    image::RgbImage::from_pixel(8, 6, image::Rgb([200, 10, 10])).save(dir.join("red.png")).unwrap();
+    h.send(Msg::DropFiles(vec![dir.join("note.txt"), dir.join("red.png")]));
+    h.settle();
+    let ids: Vec<_> = h.state.unreviewed_ideas().iter().map(|e| e.idea.id.clone()).collect();
+
+    h.send(Msg::OpenExportIdeas(ids.clone(), "2 ideas".into()));
+    let e = h.state.export.clone().unwrap();
+    assert!(!e.outputs && e.loading);
+    assert_eq!(e.template, increart_core::exportimages::INPUT_TEMPLATES[0]);
+    assert_eq!(e.items.len(), 2, "the image, and the idea without one");
+    h.settle();
+    let mut e = h.state.export.clone().unwrap();
+    assert!(!e.loading);
+    let image = e.items.iter().find(|i| i.image.is_some()).unwrap();
+    assert_eq!((image.fields["width"].as_str(), image.fields["height"].as_str()), ("8", "6"));
+
+    let dest = h._tmp.path().join("export");
+    e.prefs.dest = dest.to_string_lossy().into();
+    e.template = "{idea}_{width}x{height}".into();
+    e.prefs.idea_text = true;
+    e.prefs.format = Some(increart_core::config::TileFormat::Jpeg);
+    h.send(Msg::EditExport(e));
+    h.send(Msg::RunExport);
+    h.settle();
+    let mut names: Vec<_> =
+        std::fs::read_dir(&dest).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
+    names.sort();
+    assert_eq!(names.len(), 3, "{names:?}");
+    let jpg = names.iter().find(|n| n.ends_with("8x6.jpg")).expect("the image, as JPEG");
+    assert!(names.contains(&jpg.replace(".jpg", ".txt")), "its idea's text beside it: {names:?}");
+    assert!(names.contains(&"otter with a teacup.txt".to_string()), "the idea without images: {names:?}");
+    let text = std::fs::read_to_string(dest.join("otter with a teacup.txt")).unwrap();
+    assert_eq!(text, "otter with a teacup\n");
+    let done = h.state.messages.last().unwrap();
+    assert!(done.text.starts_with("Exported 1 image to") && done.folder.as_deref() == Some(dest.as_path()));
+
+    // the choices kept; again, the names there get a number
+    assert_eq!(h.state.export_prefs.inputs, "{idea}_{width}x{height}");
+    h.send(Msg::OpenExportIdeas(ids, "2 ideas".into()));
+    h.settle();
+    let e = h.state.export.clone().unwrap();
+    assert_eq!((e.template.as_str(), e.prefs.dest.as_str()), ("{idea}_{width}x{height}", &*dest.to_string_lossy()));
+    h.send(Msg::RunExport);
+    h.settle();
+    assert_eq!(std::fs::read_dir(&dest).unwrap().count(), 6);
+    assert!(dest.join("otter with a teacup 2.txt").is_file());
+}
+
 #[test]
 fn save_to_input_library_asks_the_name_and_folder() {
     let mut h = Harness::new();
@@ -2694,8 +2751,8 @@ fn library_filters_and_output_sources() {
     let dest = h._tmp.path().join("export");
     h.send(Msg::OpenExport(imgs.clone(), "2 images".into()));
     let mut e = h.state.export.clone().unwrap();
-    e.dest = dest.to_string_lossy().into();
-    e.keep_metadata = false;
+    e.prefs.dest = dest.to_string_lossy().into();
+    e.prefs.keep_metadata = false;
     h.send(Msg::EditExport(e));
     h.send(Msg::RunExport);
     h.settle();

@@ -20,6 +20,7 @@ pub mod container;
 pub mod engine;
 pub mod error;
 pub mod export;
+pub mod exportimages;
 pub mod fsutil;
 pub mod history;
 pub mod id;

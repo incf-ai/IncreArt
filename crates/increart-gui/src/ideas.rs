@@ -691,6 +691,7 @@ fn inbox_grid(ui: &mut egui::Ui, st: &AppState, tex: &mut Textures, out: &mut Ve
                             ui.close();
                         }
                         ui.separator();
+                        export_ideas_item(ui, std::slice::from_ref(id), out);
                         copy_items(ui, root, e, out);
                         ui.separator();
                         folder_item(ui, e, out);
@@ -800,6 +801,7 @@ fn picks_menu(ui: &mut egui::Ui, st: &AppState, picks: &[increart_core::Id], inb
     if !inbox {
         collection_items(ui, st, picks, out);
     }
+    export_ideas_item(ui, picks, out);
     if inbox {
         if ui.button(ic(ph::BOOKMARK_SIMPLE, "Save them to input library…")).clicked() {
             out.push(Msg::SaveIdeas(picks.to_vec()));
@@ -809,6 +811,19 @@ fn picks_menu(ui: &mut egui::Ui, st: &AppState, picks: &[increart_core::Id], inb
             out.push(Msg::ReviewPickedIdeas(Verdict::Bad));
             ui.close();
         }
+    }
+}
+
+/// **Export…** on ideas: their images, and their texts if so chosen.
+fn export_ideas_item(ui: &mut egui::Ui, ids: &[increart_core::Id], out: &mut Vec<Msg>) {
+    let (label, what) = match ids.len() {
+        1 => ("Export…".to_string(), "1 idea".to_string()),
+        n => (format!("Export the {n} ideas…"), format!("{n} ideas")),
+    };
+    let tip = "their images outside the library, named as you choose; their text too if you like";
+    if ui.button(ic(ph::EXPORT, &label)).on_hover_text(tip).clicked() {
+        out.push(Msg::OpenExportIdeas(ids.to_vec(), what));
+        ui.close();
     }
 }
 
@@ -1291,6 +1306,7 @@ pub fn input_library(ui: &mut egui::Ui, st: &AppState, tex: &mut Textures, out: 
                             ui.close();
                         }
                         ui.separator();
+                        export_ideas_item(ui, std::slice::from_ref(&id), out);
                         copy_items(ui, &root, e, out);
                         ui.separator();
                         folder_item(ui, e, out);

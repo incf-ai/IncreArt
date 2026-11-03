@@ -48,6 +48,10 @@ impl App {
         if let Some(p) = &st.load_times_path {
             st.load_times = increart_core::loadtimes::LoadTimes::load(p);
         }
+        st.export_prefs_path = increart_core::exportimages::path();
+        if let Some(p) = &st.export_prefs_path {
+            st.export_prefs = increart_core::exportimages::Prefs::load(p);
+        }
         st.suite_found = increart_core::apitest::binary().is_file();
         for w in warnings {
             st.messages_info(w);
@@ -251,6 +255,19 @@ impl App {
                     ui.weak(RichText::new("checking images").small());
                     ui.separator();
                 }
+                if let Some(x) = st.exporting {
+                    if ui.small_button("Stop").on_hover_text("stop the export (what's written stays)").clicked() {
+                        out.push(Msg::CancelExport);
+                    }
+                    ui.add(
+                        egui::ProgressBar::new(x.done as f32 / x.total.max(1) as f32)
+                            .desired_width(120.0)
+                            .desired_height(12.0)
+                            .text(RichText::new(format!("{} / {}", x.done, x.total)).small()),
+                    );
+                    ui.weak(RichText::new("exporting").small());
+                    ui.separator();
+                }
                 // done: shown full a few seconds more
                 let shown = increart_gui_core::USAGE_CHECKED_SHOWN;
                 if let Some((total, at)) = st.usage_checked.filter(|(_, at)| st.now - at < shown) {
@@ -298,6 +315,7 @@ impl App {
                             crate::settings::alert_links(ui, out);
                         }
                         message_log_button(ui, m, out);
+                        message_folder_button(ui, m, out);
                         let force_open = self.tour.as_ref().is_some_and(|t| t.messages_popover());
                         messages_line(ui, st, m, out, force_open);
                     }
@@ -652,6 +670,15 @@ fn message_log_button(ui: &mut egui::Ui, m: &increart_gui_core::Message, out: &m
     }
 }
 
+/// A message about a folder (an export's): a button opening it.
+fn message_folder_button(ui: &mut egui::Ui, m: &increart_gui_core::Message, out: &mut Vec<Msg>) {
+    let Some(dir) = &m.folder else { return };
+    if ui.small_button(ic(ph::FOLDER_OPEN, "Open folder")).on_hover_text(dir.display().to_string()).clicked() {
+        out.push(Msg::ShowInFileManager(dir.clone()));
+        egui::Popup::close_all(ui.ctx());
+    }
+}
+
 fn messages_line(
     ui: &mut egui::Ui,
     st: &AppState,
@@ -702,6 +729,7 @@ fn messages_line(
                             crate::settings::alert_links(ui, out);
                         }
                         message_log_button(ui, m, out);
+                        message_folder_button(ui, m, out);
                         let (icon, c) = if m.error { (ph::WARNING, BAD) } else { (ph::INFO, Color32::LIGHT_GRAY) };
                         ui.add(egui::Label::new(RichText::new(format!("{icon} {}", m.text)).color(c)).wrap());
                     });
@@ -803,37 +831,140 @@ fn jobs_indicator(ui: &mut egui::Ui, st: &AppState, out: &mut Vec<Msg>, force_op
         });
 }
 
-/// The Export… dialog: destination, metadata, file names. Enter exports,
+/// The Export… dialog (DESIGN.md, Export): destination, the name format
+/// with a preview of the names, folders or flat, the file format, metadata,
+/// an idea's text, what to do with a name that's there. Enter exports,
 /// Escape or a click outside cancels.
-fn export_window(ctx: &egui::Context, e: &increart_gui_core::ExportDialog, out: &mut Vec<Msg>) {
+fn export_window(ctx: &egui::Context, st: &AppState, e: &increart_gui_core::ExportDialog, out: &mut Vec<Msg>) {
+    use increart_core::config::TileFormat;
+    use increart_core::exportimages::{self as ex, Existing};
     let mut d = e.clone();
+    let planned = export_plan(ctx, e);
+    let unknown = ex::unknown_tokens(&d.template);
+    let images = d.items.iter().filter(|i| i.image.is_some()).count();
+    let ideas_text = d.items.iter().any(|i| i.text.is_some());
     let m = egui::Modal::new(egui::Id::unique("export")).show(ctx, |ui| {
+        ui.set_width(560.0);
         ui.heading(ic(ph::EXPORT, &format!("Export {}", e.what)));
-        ui.label(format!("{} image(s), copied as PNG; the library is unchanged.", d.images.len()));
-        ui.add_space(4.0);
-        ui.horizontal(|ui| {
+        let n = |k: usize, one: &str, many: &str| if k == 1 { format!("1 {one}") } else { format!("{k} {many}") };
+        ui.weak(format!("{}, copied out of the library; the library is unchanged.", n(images, "image", "images")));
+        ui.add_space(6.0);
+        egui::Grid::new("export_grid").num_columns(2).spacing([10.0, 8.0]).show(ui, |ui| {
             ui.label("To");
-            ui.add(egui::TextEdit::singleline(&mut d.dest).desired_width(320.0).hint_text("/path/to/folder"));
-            if ui.button(ph::FOLDER_OPEN).on_hover_text("Browse…").clicked() {
-                out.push(Msg::Pick(increart_gui_core::PickKind::ExportDir));
-            }
+            ui.horizontal(|ui| {
+                let w = ui.available_width() - 34.0;
+                ui.add(egui::TextEdit::singleline(&mut d.prefs.dest).desired_width(w).hint_text("a folder"));
+                if ui.button(ph::FOLDER_OPEN).on_hover_text("Browse…").clicked() {
+                    out.push(Msg::Pick(increart_gui_core::PickKind::ExportDir));
+                }
+            });
+            ui.end_row();
+
+            ui.label("Names");
+            ui.vertical(|ui| {
+                ui.horizontal(|ui| {
+                    let w = ui.available_width() - 150.0;
+                    let r = ui.add(
+                        egui::TextEdit::singleline(&mut d.template)
+                            .font(egui::TextStyle::Monospace)
+                            .desired_width(w)
+                            .hint_text("{id}"),
+                    );
+                    r.on_hover_text(
+                        "{token} is a value of the image's; :N after its name pads a number to N digits or cuts \
+                         text to N characters ({seed:4}, {prompt:30}). A token with no value is left out, with \
+                         the separator beside it. / makes a folder.",
+                    );
+                    name_formats_menu(ui, &mut d);
+                    tokens_menu(ui, &mut d);
+                });
+                if !unknown.is_empty() {
+                    let list = unknown.iter().map(|u| format!("{{{u}}}")).collect::<Vec<_>>().join(", ");
+                    ui.colored_label(BAD, format!("{} unknown: {list}", ph::WARNING));
+                }
+                if ex::has_folders(&d.template) {
+                    ui.horizontal(|ui| {
+                        ui.radio_value(&mut d.prefs.folders, true, "in the template's folders");
+                        ui.radio_value(&mut d.prefs.folders, false, "flat (/ becomes _)");
+                    });
+                }
+            });
+            ui.end_row();
+
+            ui.label("");
+            ui.vertical(|ui| export_preview(ui, &d, &planned));
+            ui.end_row();
+
+            ui.label("Format");
+            ui.vertical(|ui| {
+                ui.horizontal(|ui| {
+                    let name = |f: Option<TileFormat>| match f {
+                        None => "As stored (PNG or WebP)".to_string(),
+                        Some(f) => f.name().to_string(),
+                    };
+                    egui::ComboBox::from_id_salt("export_format").selected_text(name(d.prefs.format)).show_ui(
+                        ui,
+                        |ui| {
+                            ui.selectable_value(&mut d.prefs.format, None, name(None))
+                                .on_hover_text("the library's files as they are");
+                            for &f in TileFormat::available() {
+                                ui.selectable_value(&mut d.prefs.format, Some(f), name(Some(f)));
+                            }
+                        },
+                    );
+                    if d.prefs.format.is_some_and(|f| f.usable().lossy()) {
+                        ui.add(egui::Slider::new(&mut d.prefs.quality, 1..=100).text("quality"));
+                    }
+                });
+                let possible = d.prefs.metadata_possible();
+                let mut keep = d.prefs.keep_metadata && possible;
+                let r = ui.add_enabled(
+                    possible,
+                    egui::Checkbox::new(&mut keep, "keep the metadata (recipe, sd-server parameters, source)"),
+                );
+                r.on_disabled_hover_text("JPEG and AVIF are written without it: export as PNG or WebP to keep it");
+                if possible {
+                    d.prefs.keep_metadata = keep;
+                }
+                if ideas_text {
+                    ui.checkbox(&mut d.prefs.idea_text, "also each idea's text and tags, as a .txt beside its images")
+                        .on_hover_text("named as its first image; an idea without images gets only its .txt");
+                }
+            });
+            ui.end_row();
+
+            ui.label("If a file is there");
+            ui.horizontal(|ui| {
+                ui.radio_value(&mut d.prefs.existing, Existing::Number, "add a number");
+                ui.radio_value(&mut d.prefs.existing, Existing::Skip, "skip it");
+                ui.radio_value(&mut d.prefs.existing, Existing::Overwrite, "replace it");
+            });
+            ui.end_row();
         });
-        ui.checkbox(&mut d.keep_metadata, "keep metadata (recipe, sd-server parameters, EXIF)");
-        ui.horizontal(|ui| {
-            ui.label("Names:");
-            ui.radio_value(&mut d.by_id, false, "run / revision / seed");
-            ui.radio_value(&mut d.by_id, true, "image ID");
-        });
+        let writes = planned.iter().filter(|p| !p.skip).count();
+        let ready = unknown.is_empty() && !d.prefs.dest.trim().is_empty() && writes > 0 && st.exporting.is_none();
         let enter = ui.input(|i| i.key_pressed(egui::Key::Enter));
         ui.add_space(8.0);
-        dialog_buttons(ui, |ui| {
-            if ui.button(RichText::new(ic(ph::EXPORT, "Export   Enter")).strong()).clicked() || enter {
-                out.push(Msg::RunExport);
-            }
-            if ui.button("Cancel   Esc").clicked() {
-                out.push(Msg::CloseExport);
-            }
-        });
+        dialog_footer(
+            ui,
+            |ui| {
+                if st.exporting.is_some() {
+                    ui.weak("an export is still being written");
+                } else if d.prefs.dest.trim().is_empty() {
+                    ui.weak("choose a folder");
+                }
+            },
+            |ui| {
+                let label = ic(ph::EXPORT, &format!("Export {}   Enter", n(writes, "file", "files")));
+                let r = ui.add_enabled(ready, egui::Button::new(RichText::new(label).strong()));
+                if r.clicked() || (enter && ready) {
+                    out.push(Msg::RunExport);
+                }
+                if ui.button("Cancel   Esc").clicked() {
+                    out.push(Msg::CloseExport);
+                }
+            },
+        );
     });
     if &d != e {
         out.push(Msg::EditExport(d));
@@ -841,6 +972,156 @@ fn export_window(ctx: &egui::Context, e: &increart_gui_core::ExportDialog, out: 
     if m.should_close() {
         out.push(Msg::CloseExport);
     }
+}
+
+/// Where each file goes, for the preview and the button's count; planned
+/// again only when what it depends on changes (it asks the disk whether
+/// each name is there).
+fn export_plan(
+    ctx: &egui::Context,
+    e: &increart_gui_core::ExportDialog,
+) -> std::sync::Arc<Vec<increart_core::exportimages::Planned>> {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    (
+        &e.template,
+        &e.prefs.dest,
+        e.prefs.folders,
+        format!("{:?}{:?}", e.prefs.format, e.prefs.existing),
+        e.prefs.idea_text,
+    )
+        .hash(&mut h);
+    for i in &e.items {
+        (&i.image, i.stored.ext(), &i.fields, i.text.is_some()).hash(&mut h);
+    }
+    let key = h.finish();
+    let id = egui::Id::unique("export_plan");
+    if let Some((k, p)) = ctx.data(|d| d.get_temp::<(u64, std::sync::Arc<Vec<_>>)>(id))
+        && k == key
+    {
+        return p;
+    }
+    let dest = std::path::PathBuf::from(e.prefs.dest.trim());
+    let there = |p: &std::path::Path| !dest.as_os_str().is_empty() && dest.join(p).exists();
+    let p = std::sync::Arc::new(increart_core::exportimages::plan(&e.items, &e.template, &e.prefs, there));
+    ctx.data_mut(|d| d.insert_temp(id, (key, p.clone())));
+    p
+}
+
+/// The first names the files get, and how many were numbered, skipped or
+/// replaced for a name already there.
+fn export_preview(
+    ui: &mut egui::Ui,
+    d: &increart_gui_core::ExportDialog,
+    planned: &[increart_core::exportimages::Planned],
+) {
+    const SHOWN: usize = 6;
+    egui::Frame::group(ui.style()).show(ui, |ui| {
+        ui.set_width(ui.available_width());
+        if planned.is_empty() {
+            ui.weak("nothing to export");
+            return;
+        }
+        for p in planned.iter().take(SHOWN) {
+            let name = p.image.as_ref().or(p.text.as_ref()).map(|p| p.display().to_string()).unwrap_or_default();
+            let mut line = name;
+            if let (Some(_), Some(t)) = (&p.image, &p.text) {
+                line += &format!("  + {}", t.file_name().unwrap_or_default().to_string_lossy());
+            }
+            let text = RichText::new(line).monospace();
+            let r = match (p.skip, p.replaces) {
+                (true, _) => ui.label(text.strikethrough().weak()).on_hover_text("there already: skipped"),
+                (_, true) => ui.label(text.color(NEUTRAL)).on_hover_text("there already: replaced"),
+                _ => ui.label(text),
+            };
+            if p.numbered {
+                r.on_hover_text("numbered: the name was taken");
+            }
+        }
+        if planned.len() > SHOWN {
+            ui.weak(format!("… and {} more", planned.len() - SHOWN));
+        }
+        let count = |f: fn(&increart_core::exportimages::Planned) -> bool| planned.iter().filter(|p| f(p)).count();
+        let (numbered, skipped, replaced) = (count(|p| p.numbered), count(|p| p.skip), count(|p| p.replaces));
+        let mut notes = vec![];
+        if numbered > 0 {
+            notes.push(format!("{numbered} numbered (the name was taken)"));
+        }
+        if skipped > 0 {
+            notes.push(format!("{skipped} skipped (there already)"));
+        }
+        if replaced > 0 {
+            notes.push(format!("{replaced} replace a file there"));
+        }
+        if !notes.is_empty() {
+            ui.colored_label(NEUTRAL, notes.join(", "));
+        }
+        if d.loading {
+            ui.weak("reading the images…");
+        }
+    });
+}
+
+/// The built-in name formats and the saved ones (with a way to forget
+/// one), and Save this format.
+fn name_formats_menu(ui: &mut egui::Ui, d: &mut increart_gui_core::ExportDialog) {
+    use increart_core::exportimages::{INPUT_TEMPLATES, OUTPUT_TEMPLATES};
+    let built_in = if d.outputs { OUTPUT_TEMPLATES } else { INPUT_TEMPLATES };
+    ui.menu_button(format!("Formats {}", ph::CARET_DOWN), |ui| {
+        for t in built_in {
+            if ui.selectable_label(d.template == *t, RichText::new(*t).monospace()).clicked() {
+                d.template = t.to_string();
+                ui.close();
+            }
+        }
+        if !d.prefs.saved.is_empty() {
+            ui.separator();
+            ui.weak("saved");
+        }
+        let mut forget = None;
+        for (i, t) in d.prefs.saved.iter().enumerate() {
+            ui.horizontal(|ui| {
+                if ui.small_button(ph::X).on_hover_text("forget this format").clicked() {
+                    forget = Some(i);
+                }
+                if ui.selectable_label(d.template == *t, RichText::new(t).monospace()).clicked() {
+                    d.template = t.clone();
+                    ui.close();
+                }
+            });
+        }
+        if let Some(i) = forget {
+            d.prefs.saved.remove(i);
+        }
+        ui.separator();
+        let new = !d.template.trim().is_empty()
+            && !built_in.contains(&d.template.as_str())
+            && !d.prefs.saved.contains(&d.template);
+        if ui.add_enabled(new, egui::Button::new(ic(ph::FLOPPY_DISK, "Save this format"))).clicked() {
+            d.prefs.saved.push(d.template.clone());
+            ui.close();
+        }
+    });
+}
+
+/// The tokens for what is exported, each added to the template's end.
+fn tokens_menu(ui: &mut egui::Ui, d: &mut increart_gui_core::ExportDialog) {
+    ui.menu_button(format!("{{ }} {}", ph::CARET_DOWN), |ui| {
+        ui.weak("add to the name");
+        for (name, what, kind) in increart_core::exportimages::TOKENS {
+            if kind.is_some_and(|o| o != d.outputs) {
+                continue;
+            }
+            let r = ui.add(egui::Button::new(RichText::new(format!("{{{name}}}")).monospace()).shortcut_text(*what));
+            if r.clicked() {
+                let sep = if d.template.is_empty() || d.template.ends_with(['/', '_', '-', ' ']) { "" } else { "_" };
+                d.template += &format!("{sep}{{{name}}}");
+                ui.close();
+            }
+        }
+    })
+    .response
+    .on_hover_text("tokens");
 }
 
 /// The top bar's **Servers…**: each server's state and model, what is
@@ -1170,7 +1451,7 @@ impl eframe::App for App {
             crate::rewrite::window(&ctx, &self.st, &mut self.tex, &mut out);
             crate::presets::save_window(&ctx, &self.st, &mut out);
             if let Some(e) = &self.st.export {
-                export_window(&ctx, e, &mut out);
+                export_window(&ctx, &self.st, e, &mut out);
             }
             if self.st.server_status {
                 server_status_window(&ctx, &self.st, &mut out);

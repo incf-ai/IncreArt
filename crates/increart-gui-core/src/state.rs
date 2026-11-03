@@ -594,16 +594,26 @@ pub struct IdeaEdit {
     pub images: Vec<Id>,
 }
 
-/// The Export… dialog.
+/// The Export… dialog (DESIGN.md, Export): what is exported, with the
+/// tokens' values, and the choices (`prefs`, kept when it exports).
 #[derive(Clone, Debug, PartialEq)]
 pub struct ExportDialog {
-    pub images: Vec<ImageRef>,
+    pub items: Vec<increart_core::exportimages::Item>,
     /// What is being exported, for the title ("3 images", "collection animals").
     pub what: String,
-    pub dest: String,
-    pub keep_metadata: bool,
-    /// Name files by image ID (else run / revision / seed).
-    pub by_id: bool,
+    /// Outputs (else inputs: ideas' images): which template is kept.
+    pub outputs: bool,
+    pub template: String,
+    pub prefs: increart_core::exportimages::Prefs,
+    /// The values read from the images (prompt, model, size) still coming.
+    pub loading: bool,
+}
+
+/// An export being written: files done of how many.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Exporting {
+    pub done: usize,
+    pub total: usize,
 }
 
 /// Crop / mark… (DESIGN.md, Crop and mark): an image, what is drawn on it,
@@ -3064,6 +3074,8 @@ pub struct Message {
     /// The log file (in the log folder) of the server it is about, when the
     /// app started that server: shown with a button opening it.
     pub log: Option<String>,
+    /// A folder it is about (an export's): shown with a button opening it.
+    pub folder: Option<PathBuf>,
 }
 
 /// An inline rename in a tree: which node, and the edited name.
@@ -3378,6 +3390,11 @@ pub struct AppState {
     /// image being B.
     pub output_compare: Option<ImageRef>,
     pub export: Option<ExportDialog>,
+    /// The export dialog's choices (`export.rsn` at `export_prefs_path`;
+    /// None, as in tests: not saved).
+    pub export_prefs: increart_core::exportimages::Prefs,
+    pub export_prefs_path: Option<PathBuf>,
+    pub exporting: Option<Exporting>,
     /// Images picked in Review or the Output library's Grid, in the order
     /// picked: rated together, or tiled (DESIGN.md, Tiling).
     pub picked: Vec<ImageRef>,
@@ -3716,6 +3733,9 @@ impl AppState {
             output_selected: None,
             output_compare: None,
             export: None,
+            export_prefs: Default::default(),
+            export_prefs_path: None,
+            exporting: None,
             picked: vec![],
             tile: None,
             markup: None,
@@ -5513,20 +5533,20 @@ impl AppState {
     pub fn messages_error(&mut self, text: impl Into<String>) {
         let text = text.into();
         increart_core::applog::line("error", &text);
-        self.messages.push(Message { text, error: true, alert: false, log: None });
+        self.messages.push(Message { text, error: true, alert: false, log: None, folder: None });
     }
 
     pub fn messages_info(&mut self, text: impl Into<String>) {
         let text = text.into();
         increart_core::applog::line("info", &text);
-        self.messages.push(Message { text, error: false, alert: false, log: None });
+        self.messages.push(Message { text, error: false, alert: false, log: None, folder: None });
     }
 
     /// A notification alert's reason (its message, when so set).
     pub fn messages_alert(&mut self, text: impl Into<String>) {
         let text = text.into();
         increart_core::applog::line("alert", &text);
-        self.messages.push(Message { text, error: false, alert: true, log: None });
+        self.messages.push(Message { text, error: false, alert: true, log: None, folder: None });
     }
 
     /// An error about a server (`"<name>: …"`, as the engine words them),
@@ -5545,7 +5565,7 @@ impl AppState {
                 }
                 _ => None,
             });
-        self.messages.push(Message { text, error: true, alert: false, log });
+        self.messages.push(Message { text, error: true, alert: false, log, folder: None });
     }
 }
 

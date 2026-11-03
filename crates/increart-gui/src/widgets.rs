@@ -60,6 +60,17 @@ pub fn image_menu_items(ui: &mut egui::Ui, root: &Path, img: &increart_core::Ima
     copy_image_item(ui, root, img, out);
     markup_item(ui, img, None, out);
     describe_item(ui, img, "Describe with PE…", out);
+    export_item(ui, img, out);
+}
+
+/// **Export…**: a copy of the image outside the library, named and
+/// converted as chosen.
+pub fn export_item(ui: &mut egui::Ui, img: &increart_core::ImageRef, out: &mut Vec<Msg>) {
+    if ui.button(ic(ph::EXPORT, "Export…")).on_hover_text("a copy outside the library, named as you choose").clicked()
+    {
+        out.push(Msg::OpenExport(vec![img.clone()], "1 image".into()));
+        ui.close();
+    }
 }
 
 /// **Crop / mark…**: the editor on the image; `index`: its place in

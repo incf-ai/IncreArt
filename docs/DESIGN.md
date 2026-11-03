@@ -908,7 +908,7 @@ Decisions:
 Every structured file IncreArt writes for itself (`config.rsn`,
 `library.rsn`, `idea.rsn`, `project.rsn`, `run.rsn`,
 `cache/pixel-index.rsn`, the histories' `*.rsnl`, and in the app's state
-folder `validated.rsn` and `load-times.rsn`) and the `increart:recipe` PNG
+folder `validated.rsn`, `load-times.rsn` and `export.rsn`) and the `increart:recipe` PNG
 chunk use [RSN](https://github.com/khonsulabs/rsn)
 (the `rsn` crate, a Rust-like object notation) through serde. It reads like Rust
 literals: `Name { field: value }` structs (the name is optional when read,
@@ -3487,7 +3487,7 @@ the keys and mouse buttons go through that view's own history instead.
     (as in Review's info panel);
     double-click any of its images for the full-size preview. Right-click: change rating, back to Review, edit run, → input ref, → new
     idea, **Tag…**, add to collection, **Use as project cover** (the Projects Grid then
-    shows it instead of the best-rated image), **Export…**, show project, copy
+    shows it instead of the best-rated image), **Export…** (as on every image), show project, copy
     path. **Export these N…** exports everything shown.
   - **Folder**: the file-manager component over the collections tree, with a
     `smart/` folder at the top for the smart folders. Collections behave like
@@ -3570,11 +3570,52 @@ the keys and mouse buttons go through that view's own history instead.
     lineage panel, but while it's closed only a moment after the click, so
     a double-click (full size) doesn't open it; while it's open, a click
     shows the clicked image at once.
-  - **Export…** (an image, a selection, a collection, a smart folder, or a
-    folder in either folder view): copies the PNGs to a chosen folder, with
-    or without the embedded metadata, named by run/revision/seed or by image
-    ID. The library is unchanged. A modal: Enter exports, Escape or a click
-    outside cancels.
+  - **Export…** copies images out of the library into a folder you choose;
+    the library is unchanged (`increart_core::exportimages`). It is on
+    every image's right-click menu (Review's views, the Output library, the
+    folder views, an idea's images), as **Export the N picked…** /
+    **Export the N selected…** for picks and selections, as **Export these
+    N…** for everything an Output library source shows, and on ideas in the
+    Idea inbox and the Input library (**Export…**, **Export the N
+    ideas…**): an idea's images, and with **also each idea's text and
+    tags, as a .txt** (off by default) its `.txt` beside its first image
+    (an idea without images: only the `.txt`). A modal: Enter exports,
+    Escape or a click outside cancels. Its parts:
+    - **To**: the folder (made when missing).
+    - **Names**: a template of `{token}`s and text. Outputs' tokens:
+      `{project}`, `{run}`, `{rev}`, `{seed}`, `{rating}` (good, neutral,
+      bad, unrated), `{prompt}`, `{model}`; inputs': `{idea_n}` (the
+      image's number in its idea), `{source}` (where the idea came from);
+      both: `{idea}` (the idea's title, else its text's start; an
+      output's source idea), `{idea_id}`, `{title}`, `{tags}`, `{id}`,
+      `{date}` and `{time}` (from the ID), `{width}`, `{height}`, `{n}`
+      (its place in this export). `{seed:4}` pads a number with zeros to
+      4 digits, `{prompt:30}` cuts text to 30 characters. A token with no
+      value is left out with the separator beside it; a value never makes
+      a folder (its `/`, `\`, `:` and the like become `_`); a name left
+      empty is the image's ID. **Formats ▾** has the built-in templates
+      (outputs: `{project}_{run}_r{rev}_s{seed:4}` first, inputs:
+      `{idea}_{idea_n}`) and the saved ones (**Save this format**, ✕
+      forgets one); **{ } ▾** adds a token. An unknown token is shown in
+      red and nothing exports.
+    - A template with `/` makes folders, or, with **flat**, every file
+      goes in the folder itself (`/` becomes `_`).
+    - The preview: the first names, with how many were numbered, skipped
+      or replace a file. The names are planned as the export writes them,
+      against what is in the folder.
+    - **Format**: as stored (PNG or WebP), PNG, WebP, JPEG or AVIF (in
+      builds with the `avif` feature); JPEG and AVIF have a quality. PNG
+      and WebP keep the metadata (recipe, sd-server parameters, source) if
+      **keep the metadata** is on; JPEG and AVIF are written without it.
+    - **If a file is there**: add a number (`name 2.png`), skip it, or
+      replace it. Two in one export with the same name are both written,
+      the second numbered. Names compare ignoring case.
+    - It writes on a thread of its own, the status bar showing how far,
+      with **Stop**; then a message (how many written, skipped; any file
+      that couldn't be written) with **Open folder**.
+    - The choices (folder, the template last used for outputs and for
+      inputs, the saved templates, the rest) are kept in `export.rsn` in
+      the app's state folder.
 - **Dialog buttons**, the same everywhere:
   - The footer row's ways to finish are right-aligned: the main action in
     the corner and bold, the other ways to finish to its left, then
