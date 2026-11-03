@@ -3415,11 +3415,13 @@ the keys and mouse buttons go through that view's own history instead.
 - **Use as a reference in ‹project›…** (`U`) and **To the input library as
   a ref…** (`R`), from Review's keys, the preview, the right-click menus and
   the picks menu, open the **Use as a reference** modal on the image or the
-  picks: the image (or a stack), **To** ‹project›'s Generate form / the
-  input library (switched there, or with `U` / `R`; the form only with a
-  project selected, else `U` says to select one), and a **Rate** row as in
+  picks: the image (or a stack), **To** the Generate form / the input
+  library (switched there, or with `U` / `R`; the form only with a project
+  selected, else `U` says to select one; the line under them names the
+  project, "Added to fox-cafe's Generate form references…", so a long name
+  wraps there instead of widening the buttons), and a **Rate** row as in
   Add to collection… that starts on neutral every time. Enter or the main
-  button ("Add 2 to fox-cafe's form and rate neutral") confirms. To the
+  button ("Add 2 to the form and rate neutral") confirms. To the
   form, the images join its references after those there (one already a
   reference stays as it is); to the input library, each becomes an
   image-only idea at its top level. Rated, they leave the queue, and one
