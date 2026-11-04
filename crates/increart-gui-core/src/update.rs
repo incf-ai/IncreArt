@@ -939,15 +939,15 @@ pub enum Msg {
     /// Tile's Save… open or closed.
     TileSaving(bool),
     TileSelect(Option<usize>),
-    /// A tile to this (column, row).
-    TileMove(usize, u32, u32),
+    /// A tile to a cell (swapping) or into a new column or row.
+    TileMove(usize, crate::tile::TileAt),
     TileSpan(usize, u32, u32),
     TileCols(u32),
     TileReflow,
     TileRemove(usize),
     TileCaption(usize, String),
-    /// A text block in an empty cell (column, row).
-    TileAddText(u32, u32),
+    /// A text block in an empty cell, or a new column or row.
+    TileAddText(crate::tile::TileAt),
     TileText(usize, String),
     TileTextSize(usize, increart_core::config::TextSize),
     /// The title and subtitle above the grid.
@@ -956,15 +956,16 @@ pub enum Msg {
     /// Every image tile's caption, a template (`AppState::caption_text`).
     TileCaptionFormat(String),
     TileSettings(increart_core::config::TileSettings),
-    /// Images (or pasted ones) from a cell on, else after the last tile.
-    TileAdd(Vec<crate::tile::TileContent>, Option<(u32, u32)>),
+    /// Images (or pasted ones): from a cell on, in a new column or row, or
+    /// after the last tile.
+    TileAdd(Vec<crate::tile::TileContent>, crate::tile::TileAt),
     /// The `i`th tile's inputs just before it.
     TileAddInputs(usize),
     /// Every image's inputs: in columns at the left (`true`) or each
     /// before its image.
     TileInputs(bool),
-    /// The reference picker, its choices for the Tile window (from a cell).
-    TilePicker(Option<(u32, u32)>),
+    /// The reference picker, its choices for the Tile window (there).
+    TilePicker(crate::tile::TileAt),
     /// Compose and copy, save or add to the library.
     TileOut(TileTarget),
     TilesDone(TileTarget, Result<crate::tile::TileImage, String>),
@@ -5800,7 +5801,7 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
                 return vec![];
             }
             if state.tile.is_some() {
-                return update(state, Msg::TileAdd(contents, None));
+                return update(state, Msg::TileAdd(contents, crate::tile::TileAt::End));
             }
             open_tile(state, crate::tile::TileLayout::square_of(contents), None);
             vec![]
@@ -5885,9 +5886,9 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
             }
             vec![]
         }
-        Msg::TileMove(i, c, r) => {
+        Msg::TileMove(i, at) => {
             if let Some(t) = &mut state.tile {
-                t.layout.move_tile(i, c, r);
+                t.layout.move_to(i, at);
                 t.selected = Some(i);
             }
             vec![]
@@ -5926,9 +5927,9 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
             }
             vec![]
         }
-        Msg::TileAddText(c, r) => {
+        Msg::TileAddText(at) => {
             if let Some(t) = &mut state.tile {
-                t.selected = Some(t.layout.add_text(c, r, "Text".into()));
+                t.selected = t.layout.add_text_at(at, "Text".into());
             }
             vec![]
         }
@@ -5958,7 +5959,7 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
             if let Some(t) = &mut state.tile
                 && !contents.is_empty()
             {
-                let added = t.layout.add(contents, at);
+                let added = t.layout.place(contents, at);
                 t.selected = added.last().copied();
             }
             vec![]

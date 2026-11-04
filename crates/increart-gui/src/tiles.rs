@@ -7,7 +7,9 @@ use increart_core::{ImageRef, Verdict};
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use increart_gui_core::tile::{Geometry, NO_IMAGES, Tile, TileContent, TileImage, TileLayout, caption_fit, text_lines};
+use increart_gui_core::tile::{
+    Geometry, Insert, MAX_COLS, NO_IMAGES, Tile, TileAt, TileContent, TileImage, TileLayout, caption_fit, text_lines,
+};
 use increart_gui_core::{AppState, CaptionFill, Msg, PickKind, RefTo, SelectHow, Tab, TileDialog, TileTarget};
 
 use crate::textures::Textures;
@@ -412,7 +414,7 @@ pub fn window(ctx: &egui::Context, st: &AppState, tex: &mut Textures, out: &mut 
                     .on_hover_text("from the libraries, after the last tile")
                     .clicked()
                 {
-                    out.push(Msg::TilePicker(None));
+                    out.push(Msg::TilePicker(TileAt::End));
                 }
                 let inputs = d.layout.images().any(|i| !st.image_inputs(i).is_empty());
                 ui.add_enabled_ui(inputs, |ui| {
@@ -435,13 +437,13 @@ pub fn window(ctx: &egui::Context, st: &AppState, tex: &mut Textures, out: &mut 
                     .on_hover_text("an image (or an image file) from the clipboard, after the last tile   Ctrl+V")
                     .clicked()
                 {
-                    paste(st, None, out);
+                    paste(st, TileAt::End, out);
                 }
             });
             ui.weak(
-                "Drag a tile onto another to swap them, or onto an empty cell; click one to edit it. \
-                     Right-click an empty cell to add text or images there; paste (Ctrl+V) or drop image files \
-                     on a cell.",
+                "Drag a tile onto another to swap them, onto an empty cell, or into the space around or \
+                     between them for a new column or row; click one to edit it. Right-click an empty cell or \
+                     that space to add text or images there; paste (Ctrl+V) or drop image files on either.",
             );
             preview(ui, st, d, &root, tex, out);
         });
@@ -585,8 +587,98 @@ fn held_none(ui: &egui::Ui, dragging: egui::Id) -> bool {
     ui.ctx().data(|m| m.get_temp::<usize>(dragging)).is_none()
 }
 
-/// The layout at the window's scale: drag tiles between cells; an extra
-/// row below takes drops; Delete (or Backspace) removes the selected tile.
+/// The empty space around the grid (points): a new column or row there.
+const GUTTER: f32 = 28.0;
+/// An insert zone in a gap between cells is at least this wide (points).
+const BAND: f32 = 12.0;
+
+/// Where a new column or row can go (screen rects): the gutters on all
+/// four sides, a cell's length each, and the gaps between cells (not
+/// where a tile spans across). No columns past [`MAX_COLS`].
+fn insert_zones(
+    l: &TileLayout,
+    g: &Geometry,
+    area: Rect,
+    cell_rect: &dyn Fn(u32, u32) -> Rect,
+    k: f32,
+) -> Vec<(Rect, Insert)> {
+    let (rows, cols) = (l.rows(), l.cols);
+    let gap = g.gap as f32 * k;
+    let band = |mid: f32| mid - gap.max(BAND) / 2.0..=mid + gap.max(BAND) / 2.0;
+    let across = |t: &Tile, c: u32, r: u32, col: bool| {
+        let (a, n, b, m) = if col { (t.col, t.w, t.row, t.h) } else { (t.row, t.h, t.col, t.w) };
+        let (line, along) = if col { (c, r) } else { (r, c) };
+        a < line && line < a + n && (b..b + m).contains(&along)
+    };
+    let mut zones = vec![];
+    if cols < MAX_COLS {
+        for r in 0..rows {
+            let (first, last) = (cell_rect(0, r), cell_rect(cols - 1, r));
+            let ys = first.top() - gap / 2.0..=first.bottom() + gap / 2.0;
+            zones.push((Rect::from_x_y_ranges(area.left()..=first.left(), ys.clone()), Insert::Col { at: 0, row: r }));
+            zones.push((
+                Rect::from_x_y_ranges(last.right()..=area.right(), ys.clone()),
+                Insert::Col { at: cols, row: r },
+            ));
+            for c in (1..cols).filter(|&c| !l.tiles.iter().any(|t| across(t, c, r, true))) {
+                let x = (cell_rect(c - 1, r).right() + cell_rect(c, r).left()) / 2.0;
+                zones.push((Rect::from_x_y_ranges(band(x), ys.clone()), Insert::Col { at: c, row: r }));
+            }
+        }
+    }
+    for c in 0..cols {
+        let (first, last) = (cell_rect(c, 0), cell_rect(c, rows.max(1) - 1));
+        let xs = first.left() - gap / 2.0..=first.right() + gap / 2.0;
+        zones.push((Rect::from_x_y_ranges(xs.clone(), area.top()..=first.top()), Insert::Row { at: 0, col: c }));
+        zones
+            .push((Rect::from_x_y_ranges(xs.clone(), last.bottom()..=area.bottom()), Insert::Row { at: rows, col: c }));
+        for r in (1..rows).filter(|&r| !l.tiles.iter().any(|t| across(t, c, r, false))) {
+            let y = (cell_rect(c, r - 1).bottom() + cell_rect(c, r).top()) / 2.0;
+            zones.push((Rect::from_x_y_ranges(xs.clone(), band(y)), Insert::Row { at: r, col: c }));
+        }
+    }
+    zones
+}
+
+/// A drop into a new column or row: its zone lit, and a line where it
+/// goes across the grid.
+fn insert_marker(
+    p: &egui::Painter,
+    zones: &[(Rect, Insert)],
+    ins: Insert,
+    cell_rect: &dyn Fn(u32, u32) -> Rect,
+    l: &TileLayout,
+) {
+    let Some(&(zone, _)) = zones.iter().find(|(_, z)| *z == ins) else { return };
+    p.rect_filled(zone, 2.0, ACCENT.gamma_multiply(0.3));
+    let grid = cell_rect(0, 0).union(cell_rect(l.cols - 1, l.rows().max(1) - 1));
+    let line = match ins {
+        Insert::Col { .. } => [egui::pos2(zone.center().x, grid.top()), egui::pos2(zone.center().x, grid.bottom())],
+        Insert::Row { .. } => [egui::pos2(grid.left(), zone.center().y), egui::pos2(grid.right(), zone.center().y)],
+    };
+    p.line_segment(line, Stroke::new(2.0, ACCENT));
+}
+
+/// An empty cell's or an insert zone's menu: text, images or the
+/// clipboard's there.
+fn add_menu(ui: &mut egui::Ui, st: &AppState, at: TileAt, how: &str, out: &mut Vec<Msg>) {
+    if ui.button(ic(ph::TEXT_T, "Add text here")).clicked() {
+        out.push(Msg::TileAddText(at));
+        ui.close();
+    }
+    if ui.button(ic(ph::IMAGES, "Add images…")).on_hover_text(format!("from the libraries, {how}")).clicked() {
+        out.push(Msg::TilePicker(at));
+        ui.close();
+    }
+    if ui.button(ic(ph::CLIPBOARD, "Paste image here   Ctrl+V")).clicked() {
+        paste(st, at, out);
+        ui.close();
+    }
+}
+
+/// The layout at the window's scale: drag tiles between cells, or into a
+/// gutter or a gap for a new column or row; Delete (or Backspace) removes
+/// the selected tile.
 fn preview(
     ui: &mut egui::Ui,
     st: &AppState,
@@ -604,21 +696,20 @@ fn preview(
         out.push(Msg::TileRemove(i));
     }
     let g = Geometry::new(l, s, largest(st, l, root, tex));
-    // one more row to drop into
-    let rows = l.rows() + 1;
-    let full = (g.size.0 as f32, (g.size.1 + g.cell.1 + g.caption + g.gap) as f32);
-    let avail = ui.available_size() - Vec2::splat(8.0);
+    let rows = l.rows();
+    let full = (g.size.0 as f32, g.size.1 as f32);
+    let avail = ui.available_size() - Vec2::splat(8.0 + 2.0 * GUTTER);
     let k = (avail.x / full.0).min(avail.y / full.1).min(1.0);
-    let (area, _) = ui.allocate_exact_size(Vec2::new(full.0, full.1) * k, Sense::hover());
+    let (area, _) = ui.allocate_exact_size(Vec2::new(full.0, full.1) * k + Vec2::splat(2.0 * GUTTER), Sense::hover());
     let p = ui.painter_at(area);
-    let out_rect = Rect::from_min_size(area.min, Vec2::new(g.size.0 as f32, g.size.1 as f32) * k);
+    let out_rect = Rect::from_min_size(area.min + Vec2::splat(GUTTER), Vec2::new(full.0, full.1) * k);
     if s.background[3] == 0 {
         checkerboard(&p, out_rect);
     } else {
         p.rect_filled(out_rect, 0.0, color(s.background));
     }
     let to_screen = |(x, y, w, h): (u32, u32, u32, u32)| {
-        Rect::from_min_size(area.min + Vec2::new(x as f32, y as f32) * k, Vec2::new(w as f32, h as f32) * k)
+        Rect::from_min_size(out_rect.min + Vec2::new(x as f32, y as f32) * k, Vec2::new(w as f32, h as f32) * k)
     };
     let cell_rect = |c: u32, r: u32| to_screen(g.cell_rect(c, r));
     let [tr, sr] = g.title_rects();
@@ -627,6 +718,12 @@ fn preview(
             paint_text(&p, to_screen(r), text, (px, r.2), k, color(s.caption_color));
         }
     }
+    let zones = insert_zones(l, &g, area, &cell_rect, k);
+    // where things are, for the tour's drags and clicks
+    let cells = (0..rows).flat_map(|r| (0..l.cols).map(move |c| (c, r)));
+    let mut spots: Vec<(Rect, TileAt)> = zones.iter().map(|&(z, ins)| (z, TileAt::Insert(ins))).collect();
+    spots.extend(cells.map(|(c, r)| (cell_rect(c, r), TileAt::Cell(c, r))));
+    ui.ctx().data_mut(|m| m.insert_temp(egui::Id::unique("tile_spots"), spots));
     // empty cells: right-click (or double-click) adds a text block
     for r in 0..rows {
         for c in 0..l.cols {
@@ -638,25 +735,11 @@ fn preview(
             let gray = if resp.hovered() { 140 } else { 90 };
             p.rect_stroke(rect.shrink(1.0), 2.0, Stroke::new(1.0, Color32::from_gray(gray)), egui::StrokeKind::Inside);
             if resp.double_clicked() {
-                out.push(Msg::TileAddText(c, r));
+                out.push(Msg::TileAddText(TileAt::Cell(c, r)));
             } else if resp.clicked() {
                 out.push(Msg::TileSelect(None));
             }
-            resp.context_menu(|ui| {
-                if ui.button(ic(ph::TEXT_T, "Add text here")).clicked() {
-                    out.push(Msg::TileAddText(c, r));
-                    ui.close();
-                }
-                if ui.button(ic(ph::IMAGES, "Add images…")).on_hover_text("from the libraries, from here on").clicked()
-                {
-                    out.push(Msg::TilePicker(Some((c, r))));
-                    ui.close();
-                }
-                if ui.button(ic(ph::CLIPBOARD, "Paste image here   Ctrl+V")).clicked() {
-                    paste(st, Some((c, r)), out);
-                    ui.close();
-                }
-            });
+            resp.context_menu(|ui| add_menu(ui, st, TileAt::Cell(c, r), "from here on", out));
         }
     }
     let dragging = egui::Id::unique("tile_drag");
@@ -746,16 +829,53 @@ fn preview(
             dropped = Some(i);
         }
     }
-    // pasted (Ctrl+V) or dropped files: at the cell under the pointer
+    // the gutters and the gaps: a new column or row there (registered
+    // after the tiles: over their edges where the gap is thin)
+    let held = ui.ctx().data(|m| m.get_temp::<usize>(dragging));
+    for &(rect, ins) in &zones {
+        let resp = ui.interact(rect, egui::Id::unique(("tile_insert", ins)), Sense::click());
+        if resp.hovered() && held.is_none() {
+            p.rect_filled(rect, 2.0, Color32::from_white_alpha(12));
+        }
+        let what = match ins {
+            Insert::Col { .. } => "a new column",
+            Insert::Row { .. } => "a new row",
+        };
+        if resp.double_clicked() {
+            out.push(Msg::TileAddText(TileAt::Insert(ins)));
+        }
+        let resp = if held.is_none() {
+            resp.on_hover_text(format!("Drop here into {what}, or right-click to add"))
+        } else {
+            resp
+        };
+        resp.context_menu(|ui| add_menu(ui, st, TileAt::Insert(ins), &format!("into {what} here"), out));
+    }
+    // where the pointer is: an insert zone, else a cell
+    let target = |pos: egui::Pos2| {
+        zones.iter().find(|(r, _)| r.contains(pos)).map(|&(_, ins)| TileAt::Insert(ins)).or_else(|| {
+            (0..rows)
+                .flat_map(|r| (0..l.cols).map(move |c| (c, r)))
+                .find(|&(c, r)| cell_rect(c, r).contains(pos))
+                .map(|(c, r)| TileAt::Cell(c, r))
+        })
+    };
+    let show = |at: TileAt| match at {
+        TileAt::Cell(c, r) => {
+            p.rect_stroke(cell_rect(c, r), 2.0, Stroke::new(2.0, ACCENT), egui::StrokeKind::Inside);
+        }
+        TileAt::Insert(ins) => insert_marker(&p, &zones, ins, &cell_rect, l),
+        TileAt::End => {}
+    };
+    // pasted (Ctrl+V) or dropped files: where the pointer is
     let pos = ui.ctx().pointer_latest_pos().filter(|p| area.contains(*p));
-    let under = pos.and_then(|pos| {
-        (0..rows).flat_map(|r| (0..l.cols).map(move |c| (c, r))).find(|&(c, r)| cell_rect(c, r).contains(pos))
-    });
+    let under = pos.and_then(target);
     let (events, hovering, dropped_files) =
         ui.ctx().input(|i| (i.events.clone(), !i.raw.hovered_files.is_empty(), i.raw.dropped_files.clone()));
-    if hovering && let Some((c, r)) = under {
-        p.rect_stroke(cell_rect(c, r), 2.0, Stroke::new(2.0, ACCENT), egui::StrokeKind::Inside);
+    if hovering && let Some(at) = under {
+        show(at);
     }
+    let under = under.unwrap_or(TileAt::End);
     let picker = st.ref_picker.is_some() || ui.ctx().memory(|m| m.focused().is_some());
     if !picker {
         for e in events {
@@ -780,12 +900,14 @@ fn preview(
         add_files(st, files, under, out);
     }
     // the tile being dragged follows the pointer
-    let held = ui.ctx().data(|m| m.get_temp::<usize>(dragging));
     if let (Some(i), Some(pos)) = (held, ui.ctx().pointer_latest_pos()) {
-        let cell =
-            (0..rows).flat_map(|r| (0..l.cols).map(move |c| (c, r))).find(|&(c, r)| cell_rect(c, r).contains(pos));
-        if let Some((c, r)) = cell {
-            p.rect_stroke(cell_rect(c, r), 2.0, Stroke::new(2.0, ACCENT), egui::StrokeKind::Inside);
+        // (a column it's too wide for: nowhere)
+        let at = target(pos).filter(|at| match at {
+            TileAt::Insert(ins @ Insert::Col { .. }) => l.tiles.get(i).is_some_and(|t| l.can_insert(*ins, t.w)),
+            _ => true,
+        });
+        if let Some(at) = at {
+            show(at);
         }
         if let Some(t) = l.tiles.get(i) {
             let ghost = Rect::from_center_size(pos, Vec2::splat(64.0));
@@ -801,10 +923,10 @@ fn preview(
         }
         if dropped.is_some() {
             ui.ctx().data_mut(|m| m.remove::<usize>(dragging));
-            if let Some((c, r)) = cell
-                && l.tiles.get(i).is_some_and(|t| (t.col, t.row) != (c, r))
-            {
-                out.push(Msg::TileMove(i, c, r));
+            match at {
+                Some(TileAt::Cell(c, r)) if l.tiles.get(i).is_some_and(|t| (t.col, t.row) == (c, r)) => {}
+                Some(at) => out.push(Msg::TileMove(i, at)),
+                None => {}
             }
         }
     }
@@ -832,8 +954,8 @@ pub fn clipboard_tiles(st: &AppState, out: &mut Vec<Msg>) -> Vec<TileContent> {
     tiles
 }
 
-/// The clipboard's images into the tiling (at a cell).
-fn paste(st: &AppState, at: Option<(u32, u32)>, out: &mut Vec<Msg>) {
+/// The clipboard's images into the tiling (there).
+fn paste(st: &AppState, at: TileAt, out: &mut Vec<Msg>) {
     let tiles = clipboard_tiles(st, out);
     if !tiles.is_empty() {
         out.push(Msg::TileAdd(tiles, at));
@@ -892,8 +1014,8 @@ fn files_tiles(st: &AppState, files: Vec<PathBuf>, out: &mut Vec<Msg>) -> Vec<Ti
     tiles
 }
 
-/// [`files_tiles`] into the tiling (at a cell).
-fn add_files(st: &AppState, files: Vec<PathBuf>, at: Option<(u32, u32)>, out: &mut Vec<Msg>) {
+/// [`files_tiles`] into the tiling (there).
+fn add_files(st: &AppState, files: Vec<PathBuf>, at: TileAt, out: &mut Vec<Msg>) {
     let tiles = files_tiles(st, files, out);
     if !tiles.is_empty() {
         out.push(Msg::TileAdd(tiles, at));

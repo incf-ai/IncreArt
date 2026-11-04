@@ -13,6 +13,8 @@ use increart_gui_core::{
     ReviewView, ServerDialog, Tab, ZoomGrid, counts,
 };
 
+use increart_gui_core::tile::{Insert, TileAt};
+
 use crate::textures::Textures;
 
 /// Where the folder view's first icon is, in the tour's window.
@@ -207,6 +209,8 @@ const EXTRA_SCENES: &[&str] = &[
     "97h-tile-picker",
     "97j-tile-save",
     "97k-tile-caption-typed",
+    "97l-check-tile-gap-drag",
+    "97m-check-tile-gutter-drag",
     "15b-crop-mark",
     "97f-project-runs",
     "97g-output-by-project-runs",
@@ -792,7 +796,9 @@ impl Tour {
             | "97e-tile-text-title"
             | "97h-tile-picker"
             | "97j-tile-save"
-            | "97k-tile-caption-typed" => {
+            | "97k-tile-caption-typed"
+            | "97l-check-tile-gap-drag"
+            | "97m-check-tile-gutter-drag" => {
                 // the drags' positions are those of one row per line at the
                 // default size
                 let mut v = vec![
@@ -818,13 +824,13 @@ impl Tour {
                         v.push(Msg::TileSelect(Some(0)));
                     }
                     if name == "97e-tile-text-title" {
-                        v.push(Msg::TileAddText(0, 2));
+                        v.push(Msg::TileAddText(TileAt::Cell(0, 2)));
                         v.push(Msg::TileText(6, "Pixel art and Watercolour\nkept for r03".into()));
                         v.push(Msg::TileTitle("Sticker styles".into(), "sweep r02 · seeds 0–2".into()));
                         v.push(Msg::TileCaptionFormat("#{n} {style} · seed {seed}".into()));
                     }
                     if name == "97h-tile-picker" {
-                        v.push(Msg::TilePicker(Some((0, 2))));
+                        v.push(Msg::TilePicker(TileAt::Cell(0, 2)));
                     }
                     if name == "97k-tile-caption-typed" {
                         v.push(Msg::TileCaptions(increart_gui_core::CaptionFill::Clear));
@@ -2280,18 +2286,31 @@ impl Tour {
                 _ => {}
             }
         }
+        // a place in the Tile window (its centre)
+        let spot = |at: TileAt| {
+            ctx.data(|d| d.get_temp::<Vec<(egui::Rect, TileAt)>>(egui::Id::unique("tile_spots")))
+                .and_then(|v| v.iter().find(|s| s.1 == at).map(|s| s.0.center()))
+        };
+        let (tile0, tile1) = (spot(TileAt::Cell(0, 0)), spot(TileAt::Cell(1, 0)));
+        // 6 tiles, 3 × 2: the gutter below the first column, the gap below
+        // the third's first, the gutter left of the second row
+        let below = spot(TileAt::Insert(Insert::Row { at: 2, col: 0 }));
+        let gap = spot(TileAt::Insert(Insert::Row { at: 1, col: 2 }));
+        let left = spot(TileAt::Insert(Insert::Col { at: 0, row: 1 }));
         if let Some((a, b)) = match name {
             // the contact sheet's first cell; the Tile window's first two tiles
             "96b-picked-menu" => Some((egui::pos2(478.0, 197.0), None)),
             // high on Review's image, so the menu opens downward
             "13f-review-image-menu" => Some((egui::pos2(560.0, 160.0), None)),
-            "97c-tile-menu" => Some((egui::pos2(480.0, 265.0), None)),
-            // the empty row below the tiles
-            "97d-tile-cell-menu" => Some((egui::pos2(305.0, 640.0), None)),
+            "97c-tile-menu" => tile1.map(|a| (a, None)),
+            // the gutter below the tiles
+            "97d-tile-cell-menu" => below.map(|a| (a, None)),
             // empty space below the sheet up over two columns of three rows;
             // the first tile down into the empty row
             "96c-sheet-band" => Some((egui::pos2(1000.0, 700.0), Some(egui::pos2(600.0, 300.0)))),
-            "97b-check-tile-drag" => Some((egui::pos2(305.0, 265.0), Some(egui::pos2(305.0, 640.0)))),
+            "97b-check-tile-drag" => tile0.zip(below).map(|(a, b)| (a, Some(b))),
+            "97l-check-tile-gap-drag" => tile0.zip(gap).map(|(a, b)| (a, Some(b))),
+            "97m-check-tile-gutter-drag" => tile0.zip(left).map(|(a, b)| (a, Some(b))),
             _ => None,
         } {
             let button =
@@ -2309,9 +2328,17 @@ impl Tour {
                 (8 | 9, Some(b)) => self.inject = vec![egui::Event::PointerMoved(b)],
                 (10, Some(b)) => self.inject = vec![button(b, l, false)],
                 (20, Some(_)) => {
+                    // a new row below; a new row 1 at the right; a new
+                    // column 0 in the second row
+                    let l = st.tile.as_ref().map(|t| &t.layout);
+                    let at = |c, r, cols, rows| {
+                        l.is_some_and(|l| (l.tiles[0].col, l.tiles[0].row, l.cols, l.rows()) == (c, r, cols, rows))
+                    };
                     let ok = match name {
                         "96c-sheet-band" => st.picked.len() == 5,
-                        _ => st.tile.as_ref().is_some_and(|t| (t.layout.tiles[0].col, t.layout.tiles[0].row) == (0, 2)),
+                        "97l-check-tile-gap-drag" => at(2, 1, 3, 3),
+                        "97m-check-tile-gutter-drag" => at(0, 1, 4, 2),
+                        _ => at(0, 2, 3, 3),
                     };
                     eprintln!("CHECK {name}: {} ({} picked)", if ok { "ok" } else { "FAILED" }, st.picked.len());
                 }
@@ -2321,7 +2348,8 @@ impl Tour {
         if name == "97k-tile-caption-typed" {
             // no captions yet: right-click a tile, click into its caption
             // field, type; the menu stays open with the text in it
-            let (a, field) = (egui::pos2(480.0, 265.0), egui::pos2(560.0, 280.0));
+            let a = tile1.unwrap_or_default();
+            let field = a + egui::vec2(80.0, 15.0);
             let button =
                 |pos, b, pressed| egui::Event::PointerButton { pos, button: b, pressed, modifiers: Default::default() };
             let (l, r) = (egui::PointerButton::Primary, egui::PointerButton::Secondary);

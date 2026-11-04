@@ -51,6 +51,26 @@ impl Default for TileLayout {
     }
 }
 
+/// Where in a tiling something goes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum TileAt {
+    /// After the last tile.
+    End,
+    /// A cell (column, row): from it on, the first free ones.
+    Cell(u32, u32),
+    /// A new column or row, made for it.
+    Insert(Insert),
+}
+
+/// A new line of cells: a column before column `at` (`cols`: after the
+/// last), the thing going in at `row`; or a row before row `at`, at `col`.
+/// Tiles past the line move over; one spanning across it grows.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Insert {
+    Col { at: u32, row: u32 },
+    Row { at: u32, col: u32 },
+}
+
 /// Bigger than this (output pixels) is refused.
 pub const MAX_PIXELS: u64 = 250_000_000;
 pub const MAX_COLS: u32 = 32;
@@ -291,6 +311,129 @@ impl TileLayout {
     pub fn remove(&mut self, i: usize) {
         if i < self.tiles.len() {
             self.tiles.remove(i);
+        }
+    }
+
+    /// Whether `ins` has room: a column needs `w` more within [`MAX_COLS`].
+    pub fn can_insert(&self, ins: Insert, w: u32) -> bool {
+        match ins {
+            Insert::Col { .. } => self.cols + w <= MAX_COLS,
+            Insert::Row { .. } => true,
+        }
+    }
+
+    /// Makes room: `n` new columns or rows at the line (all tiles but
+    /// `except`); the first new cell along it, and the line (the column or
+    /// row it's at). None when too wide.
+    fn insert_lines(&mut self, ins: Insert, n: u32, except: Option<usize>) -> Option<((u32, u32), u32)> {
+        if !self.can_insert(ins, n) {
+            return None;
+        }
+        let rows = self.rows();
+        let others = self.tiles.iter_mut().enumerate().filter(|(j, _)| Some(*j) != except).map(|(_, t)| t);
+        match ins {
+            Insert::Col { at, row } => {
+                let at = at.min(self.cols);
+                for t in others {
+                    if t.col >= at {
+                        t.col += n;
+                    } else if t.col + t.w > at {
+                        t.w += n;
+                    }
+                }
+                self.cols += n;
+                Some(((at, row), at))
+            }
+            Insert::Row { at, col } => {
+                let at = at.min(rows);
+                for t in others {
+                    if t.row >= at {
+                        t.row += n;
+                    } else if t.row + t.h > at {
+                        t.h += n;
+                    }
+                }
+                Some(((col.min(self.cols - 1), at), at))
+            }
+        }
+    }
+
+    /// Contents at a place: in a new column down from its row, or a new
+    /// row (rows, as many as they fill) along from its column. Their
+    /// indices. A column there's no room for: after the last tile.
+    pub fn place(&mut self, contents: Vec<TileContent>, at: TileAt) -> Vec<usize> {
+        let ins = match at {
+            TileAt::End => return self.add(contents, None),
+            TileAt::Cell(c, r) => return self.add(contents, Some((c, r))),
+            TileAt::Insert(ins) => ins,
+        };
+        let n = contents.len() as u32;
+        let lines = match ins {
+            Insert::Col { .. } => 1,
+            Insert::Row { col, .. } => (col.min(self.cols - 1) + n).div_ceil(self.cols).max(1),
+        };
+        let Some(((c0, r0), _)) = self.insert_lines(ins, lines, None) else { return self.add(contents, None) };
+        // the new line's cells in order (a tile grown across it skipped)
+        let cells: Vec<(u32, u32)> = match ins {
+            Insert::Col { .. } => (r0..).map(|r| (c0, r)).take((n + self.rows()) as usize).collect(),
+            Insert::Row { .. } => {
+                let cols = self.cols;
+                (r0..r0 + lines).flat_map(|r| (0..cols).map(move |c| (c, r))).skip(c0 as usize).collect()
+            }
+        };
+        let free: Vec<_> = cells.into_iter().filter(|&(c, r)| self.tile_at(c, r).is_none()).collect();
+        let mut free = free.into_iter();
+        let mut added = vec![];
+        for content in contents {
+            // (no free cell left: settled into the first free one)
+            let (col, row) = free.next().unwrap_or((u32::MAX, 0));
+            self.tiles.push(Tile { content, col, row, w: 1, h: 1, caption: String::new() });
+            added.push(self.tiles.len() - 1);
+        }
+        self.settle(&added);
+        added
+    }
+
+    /// A text block at a place (see [`place`](Self::place)).
+    pub fn add_text_at(&mut self, at: TileAt, text: String) -> Option<usize> {
+        let content = TileContent::Text { text, size: TextSize::Auto };
+        self.place(vec![content], at).first().copied()
+    }
+
+    /// Moves a tile to a place: a cell (swapping with the tile there), or
+    /// a new column or row as wide or high as it spans; then the columns
+    /// and rows it left, if nothing is left in them, go.
+    pub fn move_to(&mut self, i: usize, at: TileAt) {
+        let ins = match at {
+            TileAt::End => return,
+            TileAt::Cell(c, r) => return self.move_tile(i, c, r),
+            TileAt::Insert(ins) => ins,
+        };
+        let Some(t) = self.tiles.get(i) else { return };
+        let (c0, r0, w, h) = (t.col, t.row, t.w, t.h);
+        let n = match ins {
+            Insert::Col { .. } => w,
+            Insert::Row { .. } => h,
+        };
+        let Some(((col, row), at)) = self.insert_lines(ins, n, Some(i)) else { return };
+        // where the lines it left are now
+        let past = |v: u32| if v >= at { v + n } else { v };
+        let (left_cols, left_rows): (Vec<u32>, Vec<u32>) = match ins {
+            Insert::Col { .. } => ((c0..c0 + w).map(past).collect(), (r0..r0 + h).collect()),
+            Insert::Row { .. } => ((c0..c0 + w).collect(), (r0..r0 + h).map(past).collect()),
+        };
+        (self.tiles[i].col, self.tiles[i].row) = (col, row);
+        self.settle(&[i]);
+        for &c in left_cols.iter().rev() {
+            if self.cols > 1 && self.tiles.iter().all(|t| !(t.col..t.col + t.w).contains(&c)) {
+                self.tiles.iter_mut().filter(|t| t.col > c).for_each(|t| t.col -= 1);
+                self.cols -= 1;
+            }
+        }
+        for &r in left_rows.iter().rev() {
+            if self.tiles.iter().all(|t| !(t.row..t.row + t.h).contains(&r)) {
+                self.tiles.iter_mut().filter(|t| t.row > r).for_each(|t| t.row -= 1);
+            }
         }
     }
 
@@ -1110,6 +1253,91 @@ mod tests {
                 assert!(mean <= off, "scale {scale} fill {fill}: off by {mean} on average");
             }
         }
+    }
+
+    fn new(n: u32) -> Vec<TileContent> {
+        (0..n).map(|k| TileContent::Image(img(100 + k))).collect()
+    }
+
+    #[test]
+    fn inserts_columns_and_rows_at_the_edges_and_between() {
+        // 2 × 2: 0 1 / 2 3
+        let base = TileLayout::flow((0..4).map(img).collect(), 2);
+        let mut l = base.clone();
+        let i = l.place(new(1), TileAt::Insert(Insert::Col { at: 0, row: 1 }));
+        assert_eq!(l.cols, 3);
+        assert_eq!(cells(&l), [(1, 0, 1, 1), (2, 0, 1, 1), (1, 1, 1, 1), (2, 1, 1, 1), (0, 1, 1, 1)]);
+        assert_eq!(i, [4]);
+        let mut l = base.clone();
+        l.place(new(1), TileAt::Insert(Insert::Col { at: 2, row: 0 }));
+        assert_eq!((l.cols, cells(&l)[4]), (3, (2, 0, 1, 1)), "after the last column");
+        let mut l = base.clone();
+        l.place(new(1), TileAt::Insert(Insert::Row { at: 0, col: 1 }));
+        assert_eq!(cells(&l), [(0, 1, 1, 1), (1, 1, 1, 1), (0, 2, 1, 1), (1, 2, 1, 1), (1, 0, 1, 1)]);
+        let mut l = base.clone();
+        l.place(new(1), TileAt::Insert(Insert::Col { at: 1, row: 0 }));
+        assert_eq!(cells(&l), [(0, 0, 1, 1), (2, 0, 1, 1), (0, 1, 1, 1), (2, 1, 1, 1), (1, 0, 1, 1)], "between");
+        // a tile across the line grows
+        let mut l = base.clone();
+        l.set_span(0, 2, 1);
+        let before = cells(&l);
+        l.place(new(1), TileAt::Insert(Insert::Col { at: 1, row: before[1].1 }));
+        assert_eq!(cells(&l)[0], (0, 0, 3, 1));
+        // a row fills along, then on into another new one
+        let mut l = base.clone();
+        l.place(new(3), TileAt::Insert(Insert::Row { at: 1, col: 1 }));
+        assert_eq!(l.rows(), 4);
+        assert_eq!(cells(&l)[4..], [(1, 1, 1, 1), (0, 2, 1, 1), (1, 2, 1, 1)]);
+        assert_eq!(cells(&l)[2..4], [(0, 3, 1, 1), (1, 3, 1, 1)], "the row below moved down two");
+        // a column down from its row
+        let mut l = base.clone();
+        l.place(new(3), TileAt::Insert(Insert::Col { at: 2, row: 1 }));
+        assert_eq!(cells(&l)[4..], [(2, 1, 1, 1), (2, 2, 1, 1), (2, 3, 1, 1)]);
+        // text too
+        let mut l = base.clone();
+        let t = l.add_text_at(TileAt::Insert(Insert::Row { at: 0, col: 0 }), "Title".into()).unwrap();
+        assert_eq!(cells(&l)[t], (0, 0, 1, 1));
+        // no room for a column: after the last tile
+        let mut l = TileLayout::flow((0..MAX_COLS).map(img).collect(), MAX_COLS);
+        assert!(!l.can_insert(Insert::Col { at: 0, row: 0 }, 1));
+        l.place(new(1), TileAt::Insert(Insert::Col { at: 0, row: 0 }));
+        assert_eq!((l.cols, cells(&l)[MAX_COLS as usize]), (MAX_COLS, (0, 1, 1, 1)));
+    }
+
+    #[test]
+    fn moves_into_a_new_line_and_the_lines_left_empty_go() {
+        let base = TileLayout::flow((0..4).map(img).collect(), 2);
+        // its row and column still have others: they stay
+        let mut l = base.clone();
+        l.move_to(3, TileAt::Insert(Insert::Col { at: 2, row: 0 }));
+        assert_eq!((l.cols, cells(&l)), (3, vec![(0, 0, 1, 1), (1, 0, 1, 1), (0, 1, 1, 1), (2, 0, 1, 1)]));
+        // the only one in its column, to the right: the column goes
+        let mut l = TileLayout::flow((0..3).map(img).collect(), 3);
+        l.move_to(0, TileAt::Insert(Insert::Col { at: 3, row: 0 }));
+        assert_eq!((l.cols, cells(&l)), (3, vec![(2, 0, 1, 1), (0, 0, 1, 1), (1, 0, 1, 1)]));
+        // to its own side: where it was
+        let mut l = TileLayout::flow((0..3).map(img).collect(), 3);
+        l.move_to(0, TileAt::Insert(Insert::Col { at: 0, row: 0 }));
+        assert_eq!(l, TileLayout::flow((0..3).map(img).collect(), 3));
+        // down into a new row below: its column keeps it
+        let mut l = TileLayout::flow((0..3).map(img).collect(), 3);
+        l.move_to(1, TileAt::Insert(Insert::Row { at: 1, col: 1 }));
+        assert_eq!((l.cols, cells(&l)), (3, vec![(0, 0, 1, 1), (1, 1, 1, 1), (2, 0, 1, 1)]));
+        // the only one in its row, up to the top: its row goes
+        let mut l = TileLayout::flow((0..4).map(img).collect(), 3);
+        l.move_to(3, TileAt::Insert(Insert::Row { at: 0, col: 0 }));
+        assert_eq!(l.rows(), 2);
+        assert_eq!(cells(&l), [(0, 1, 1, 1), (1, 1, 1, 1), (2, 1, 1, 1), (0, 0, 1, 1)]);
+        // a 2-wide tile makes two columns
+        let mut l = base.clone();
+        l.set_span(3, 2, 1);
+        l.move_to(3, TileAt::Insert(Insert::Col { at: 0, row: 0 }));
+        assert_eq!(l.cols, 4);
+        assert_eq!(cells(&l)[3], (0, 0, 2, 1));
+        // a cell: as before
+        let mut l = base.clone();
+        l.move_to(0, TileAt::Cell(1, 1));
+        assert_eq!(cells(&l)[0], (1, 1, 1, 1));
     }
 
     #[test]

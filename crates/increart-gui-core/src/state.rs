@@ -307,7 +307,7 @@ pub enum PickTarget {
     /// Generate's references.
     Generate,
     /// The Tile window: from that cell on, else after its last tile.
-    Tile(Option<(u32, u32)>),
+    Tile(crate::tile::TileAt),
     /// Compare with…: the image clicked becomes A, against Review's image
     /// (or the Output library's selected one) as B.
     Compare,

@@ -2474,13 +2474,26 @@ out as one image.
   accident). Picks from the contact sheet keep
   their rows and columns as shown (bands side by side; holes included); others start about square
   (⌈√n⌉ columns). Drag a tile onto another to swap them, or onto any empty
-  cell (an extra row below takes drops); click one to give it a caption or
+  cell; click one to give it a caption or
   a span (2 × 1, 2 × 2, …: the tiles in its way move to free cells). The
   **×** on a hovered or selected tile, Delete (or Backspace) on the
   selected one, or its right-click → **Remove from the tiling** takes it
   out (the image itself stays where it was).
   **Columns** re-places what no longer fits; **Reflow** packs the tiles in
   order.
+- **New columns and rows**: the grid has an empty gutter on all four
+  sides, and the gaps between cells count too (at least 12 points wide,
+  over the tiles' edges where the gap is thinner; not where a tile spans
+  across). Hovered, a stretch of one lights up; dropping there (a tile,
+  image files, a paste) makes a new column (left or right of the grid, or
+  between two) or row (above, below, or between) and puts it there, at
+  the row or column it was dropped by; a dragged tile shows the line it
+  will go in. A tile moved makes as many lines as it spans; the column or
+  row it left, if nothing's left in it, goes. Images: a column takes them
+  down from that row, a row along from that column (more rows if they
+  need). A tile across the line grows by it. Right-click (or double-click)
+  there: **Add text here**, **Add images…**, **Paste image here**, the
+  same, into a new line. Columns stop at 32 (no zones for more).
 - **Text blocks**: right-click an empty cell (or double-click it) → **Add
   text here**. A text block is a tile like an image (drag, span, remove)
   holding lines of text, word-wrapped and centred in its cells, in the

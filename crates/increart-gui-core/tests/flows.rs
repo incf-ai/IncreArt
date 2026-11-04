@@ -7,6 +7,7 @@ use std::time::Duration;
 use increart_core::config::{Config, ReviewOrder, ServerConfig, ServerPreset, TreeOrder};
 use increart_core::pe::GpuRuntime;
 use increart_core::{IdeaLoc, Verdict};
+use increart_gui_core::tile::TileAt;
 use increart_gui_core::*;
 
 struct Harness {
@@ -4049,7 +4050,7 @@ fn style_sweeps_queue_review_on_a_contact_sheet_and_reuse_a_style() {
     let captions: Vec<_> = h.state.tile.as_ref().unwrap().layout.tiles.iter().map(|t| t.caption.clone()).collect();
     assert_eq!(captions, ["Clay", "Clay", "Ink"]);
     // a text block in the hole, a title above: composed, not a source
-    h.send(Msg::TileAddText(1, 1));
+    h.send(Msg::TileAddText(TileAt::Cell(1, 1)));
     h.send(Msg::TileText(3, "Clay vs Ink".into()));
     h.send(Msg::TileTitle("Styles".into(), "r02".into()));
     let t = h.state.tile.as_ref().unwrap();
@@ -4093,8 +4094,8 @@ fn style_sweeps_queue_review_on_a_contact_sheet_and_reuse_a_style() {
     assert_eq!(tiled.idea.images.len(), 1);
     // images from the libraries, from a cell on: the picker's, for the tiling
     let input = increart_core::ImageRef::input(tiled.idea.images[0].clone());
-    h.send(Msg::TilePicker(Some((1, 1))));
-    assert_eq!(h.state.ref_picker.as_ref().unwrap().target, PickTarget::Tile(Some((1, 1))));
+    h.send(Msg::TilePicker(TileAt::Cell(1, 1)));
+    assert_eq!(h.state.ref_picker.as_ref().unwrap().target, PickTarget::Tile(TileAt::Cell(1, 1)));
     h.send(Msg::RefPickerSource(RefSource::Inputs(None)));
     assert!(h.state.ref_candidates().iter().any(|c| c.image == input));
     h.send(Msg::RefPickerToggle(input.clone()));
@@ -4104,7 +4105,7 @@ fn style_sweeps_queue_review_on_a_contact_sheet_and_reuse_a_style() {
     assert_eq!((t.layout.tiles[i].col, t.layout.tiles[i].row), (0, 2), "the text has (1, 1): the next free");
     // pasted: a tile, captioned as such, composed but not a source
     let pasted = increart_gui_core::tile::TileImage(std::sync::Arc::new(image::RgbaImage::new(8, 8)));
-    h.send(Msg::TileAdd(vec![increart_gui_core::tile::TileContent::Pasted(pasted)], None));
+    h.send(Msg::TileAdd(vec![increart_gui_core::tile::TileContent::Pasted(pasted)], TileAt::End));
     h.send(Msg::TileCaption(5, "by hand".into()));
     // the format and the fills are for generated images only: the input
     // and the pasted one (no seed, no run) keep their own captions
