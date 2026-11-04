@@ -786,8 +786,21 @@ pub struct TileSettings {
     pub cell: Option<[u32; 2]>,
     /// What Save writes.
     pub save_format: TileFormat,
-    /// The lossy formats' quality (lossy WebP, JPEG, AVIF), in percent.
+    /// JPEG's and AVIF's quality, in percent.
     pub save_quality: u8,
+    /// WebP's, in percent: 100 is lossless.
+    pub save_webp_quality: u8,
+}
+
+impl TileSettings {
+    /// The quality `format` is saved at.
+    pub fn quality(&self, format: TileFormat) -> u8 {
+        if format == TileFormat::Webp { self.save_webp_quality } else { self.save_quality }
+    }
+
+    pub fn quality_mut(&mut self, format: TileFormat) -> &mut u8 {
+        if format == TileFormat::Webp { &mut self.save_webp_quality } else { &mut self.save_quality }
+    }
 }
 
 /// A saved tiled image's format (DESIGN.md, Tiling).
@@ -796,10 +809,11 @@ pub struct TileSettings {
 pub enum TileFormat {
     #[default]
     Png,
-    /// Lossless, about half PNG's size.
+    /// Lossless at quality 100 (about half PNG's size), else lossy
+    /// (transparency kept, no metadata). Lossy WebP was a format of its own
+    /// for a day: read as this.
+    #[serde(alias = "WebpLossy")]
     Webp,
-    /// Lossy WebP, transparency kept; no metadata.
-    WebpLossy,
     /// Lossy; transparency is flattened onto white.
     Jpeg,
     /// Lossy, smaller than JPEG at the same quality.
@@ -810,7 +824,7 @@ impl TileFormat {
     /// The formats that can be written (every build: AVIF's encoder is
     /// pure Rust; only reading AVIF needs the `avif` feature).
     pub fn available() -> &'static [TileFormat] {
-        &[TileFormat::Png, TileFormat::Webp, TileFormat::WebpLossy, TileFormat::Jpeg, TileFormat::Avif]
+        &[TileFormat::Png, TileFormat::Webp, TileFormat::Jpeg, TileFormat::Avif]
     }
 
     /// This format if the build can write it, else PNG (a setting saved by
@@ -822,7 +836,7 @@ impl TileFormat {
     pub fn ext(self) -> &'static str {
         match self {
             TileFormat::Png => "png",
-            TileFormat::Webp | TileFormat::WebpLossy => "webp",
+            TileFormat::Webp => "webp",
             TileFormat::Jpeg => "jpg",
             TileFormat::Avif => "avif",
         }
@@ -832,14 +846,23 @@ impl TileFormat {
         match self {
             TileFormat::Png => "PNG",
             TileFormat::Webp => "WebP",
-            TileFormat::WebpLossy => "WebP lossy",
             TileFormat::Jpeg => "JPEG",
             TileFormat::Avif => "AVIF",
         }
     }
 
-    pub fn lossy(self) -> bool {
-        matches!(self, TileFormat::WebpLossy | TileFormat::Jpeg | TileFormat::Avif)
+    /// Whether it has a quality (WebP: 100 % is lossless).
+    pub fn has_quality(self) -> bool {
+        matches!(self, TileFormat::Webp | TileFormat::Jpeg | TileFormat::Avif)
+    }
+
+    /// Whether it's written losslessly at `quality`.
+    pub fn lossless_at(self, quality: u8) -> bool {
+        match self {
+            TileFormat::Png => true,
+            TileFormat::Webp => quality >= 100,
+            TileFormat::Jpeg | TileFormat::Avif => false,
+        }
     }
 }
 
@@ -871,6 +894,7 @@ impl Default for TileSettings {
             cell: None,
             save_format: TileFormat::Png,
             save_quality: 70,
+            save_webp_quality: 100,
         }
     }
 }

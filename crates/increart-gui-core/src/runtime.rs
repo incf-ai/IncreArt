@@ -25,7 +25,7 @@ use increart_core::request::GenOptions;
 use increart_core::sync::LockExt;
 use increart_core::{Id, IdeaLoc, ImageRef, Library, NewIdea, NewRun, Tree, Verdict, modelhash};
 
-use crate::state::{EntryKind, FvEntry, GenerateForm, PickKind, ReviewUndo};
+use crate::state::{EntryKind, EstimateOf, FvEntry, GenerateForm, PickKind, ReviewUndo};
 use crate::update::{DraftSave, Effect, LibOp, Msg, OpOk, PeJob, TileTarget};
 
 /// The library and the image servers with the engine using them.
@@ -501,6 +501,20 @@ impl Runtime {
                 });
             }
             Effect::CancelExport => cancel(&self.export_cancel),
+            Effect::SampleSize { what, of, root } => self.answer("size sample", move || {
+                let r = match &of {
+                    EstimateOf::Tile(layout, settings) => crate::tile::sample(&root, layout, settings),
+                    EstimateOf::Export(images) => {
+                        let paths: Vec<PathBuf> = images.iter().map(|i| i.path(&root)).collect();
+                        increart_core::estimate::sample_files(&paths)
+                    }
+                };
+                Msg::SizeSampled(what, of, r)
+            }),
+            Effect::EstimateSize { what, sample, format, quality } => self.answer("size estimate", move || {
+                let bytes = increart_core::estimate::size(&sample, format, quality);
+                Msg::SizeEstimated(what, sample, format, quality, bytes)
+            }),
             Effect::SaveExportPrefs(path, prefs) => {
                 // not saved: the next export starts from the defaults, no worse
                 let _ = prefs.save(&path);
@@ -513,8 +527,12 @@ impl Runtime {
             Effect::ComposeTiles { root, layout, settings, to } => self.answer("compose tiles", move || {
                 let r = crate::tile::compose(&root, &layout, &settings).and_then(|img| {
                     if let TileTarget::File(path) = &to {
-                        let bytes = increart_core::export::encode(&img, settings.save_format, settings.save_quality)
-                            .map_err(|e| format!("{}: {e}", path.display()))?;
+                        let bytes = increart_core::export::encode(
+                            &img,
+                            settings.save_format,
+                            settings.quality(settings.save_format),
+                        )
+                        .map_err(|e| format!("{}: {e}", path.display()))?;
                         std::fs::write(path, bytes).map_err(|e| format!("{}: {e}", path.display()))?;
                     }
                     Ok(crate::tile::TileImage(Arc::new(img)))
@@ -1749,6 +1767,8 @@ fn work_on(ctx: &Ctx, fx: Effect) -> Vec<Msg> {
         | Effect::CancelArchive
         | Effect::Export { .. }
         | Effect::CancelExport
+        | Effect::SampleSize { .. }
+        | Effect::EstimateSize { .. }
         | Effect::SaveExportPrefs(..)
         | Effect::CheckUsage => {
             // (handled on their own threads, never sent here)

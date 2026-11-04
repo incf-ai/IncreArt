@@ -2546,12 +2546,18 @@ out as one image.
   run or settings, so they keep the captions written by hand (Captions
   from **clear** empties them all). The
   settings are kept in `config.rsn` (`tile`); the layout is not.
-- **Copy** puts the tiled image on the clipboard, **Save {format}…** writes a
-  file in the format chosen under **Save**: PNG, WebP (lossless, at most
-  16383 on a side), WebP lossy (transparency kept), JPEG (transparency
-  flattened onto white) or AVIF; the lossy ones (WebP lossy, JPEG, AVIF)
-  have a quality slider, 70 % by default. The file name's extension follows the
-  format. Both are kept in `tile` (`save_format`, `save_quality`); **Add to input library** makes a new idea at the top of the input
+- **Copy** puts the tiled image on the clipboard. **Save…** opens a modal
+  of its own over the Tile window: the image's size in px, **Format**
+  (PNG, WebP (at most 16383 on a side, else Save is off and says so;
+  transparency kept), JPEG (transparency flattened onto white) or AVIF),
+  **Quality** for WebP, JPEG and AVIF (WebP's is its own, 100 %
+  (lossless) by default, below it lossy; JPEG's and AVIF's is shared,
+  70 % by default) and **Size**, roughly (Size estimates). **Save
+  {format} as…** (Enter) opens the system's Save dialog and writes the
+  file chosen, closing the modal; Cancel (Esc) goes back to the Tile
+  window. The file name's extension follows the format. They are kept in
+  `tile` (`save_format`, `save_webp_quality`, `save_quality`);
+  **Add to input library** makes a new idea at the top of the input
   library with the image, its source `Tiled { images }` (they count as used,
   so Clean up keeps them). Composing reads the full-size images on its own
   thread; over 250 MP is refused.
@@ -3626,11 +3632,13 @@ the keys and mouse buttons go through that view's own history instead.
     - The preview: the first names, with how many were numbered, skipped
       or replace a file. The names are planned as the export writes them,
       against what is in the folder.
-    - **Format**: as stored (PNG or WebP), PNG, WebP, WebP lossy, JPEG or
-      AVIF; the lossy ones have a quality. PNG
-      and WebP keep the metadata (recipe, sd-server parameters, source) if
-      **keep the metadata** is on; lossy WebP, JPEG and AVIF are written
-      without it.
+    - **Format**: as stored (PNG or WebP), PNG, WebP, JPEG or AVIF. WebP,
+      JPEG and AVIF have a quality: WebP's its own, 100 % (lossless) by
+      default, lossy below; JPEG's and AVIF's shared, 90 % by default.
+      Under it, the files' size: as they are exactly, else roughly (Size
+      estimates). PNG and WebP at 100 % keep the metadata (recipe,
+      sd-server parameters, source) if **keep the metadata** is on; lossy
+      WebP, JPEG and AVIF are written without it.
     - **If a file is there**: add a number (`name 2.png`), skip it, or
       replace it. Two in one export with the same name are both written,
       the second numbered. Names compare ignoring case.
@@ -3640,6 +3648,25 @@ the keys and mouse buttons go through that view's own history instead.
     - The choices (folder, the template last used for outputs and for
       inputs, the saved templates, the rest) are kept in `export.rsn` in
       the app's state folder.
+  - **Size estimates** (`increart_core::estimate`): Tile's Save… and the
+    Export dialog say about how large the file(s) will be in the format
+    and quality chosen, and, for lossy WebP, lossless beside ("≈ 12 MB ·
+    lossless ≈ 31 MB"), so the slider shows what it saves. A sample is
+    taken on a thread of its own when what is written changes (Tile: the
+    tiling; Export: up to 4 of the images, spread through them, and every
+    image's size and bytes from its file): up to 16 patches of 256 × 256
+    at full resolution, spread over it, so their detail is the image's.
+    Never the whole of a large image: a tiling's patches are drawn on
+    their own (as Save would, within half a pixel), each image read only
+    where they show it; an image over 2048 × 2048 is read a PNG row at a
+    time, keeping the rows wanted, and one that can't be (a WebP, whose
+    decoder holds all of it) is left out of the sample. A 10k × 10k tiling
+    is sampled in about 30 MB and well under a second. Each size encodes
+    the patches as the file would be (AVIF, slow, its first 4) and scales
+    their bytes per pixel to all the pixels; one at a time, so while the
+    slider moves each one done is followed by where it is then. Rough:
+    within tens of percent (lossless formats do a little better on a
+    whole image). As stored is exact: the files' bytes.
 - **Dialog buttons**, the same everywhere:
   - The footer row's ways to finish are right-aligned: the main action in
     the corner and bold, the other ways to finish to its left, then

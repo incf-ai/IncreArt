@@ -63,6 +63,84 @@ pub fn image_menu_items(ui: &mut egui::Ui, root: &Path, img: &increart_core::Ima
     export_item(ui, img, out);
 }
 
+/// A quality slider: WebP's says "lossless" at 100 %.
+pub fn quality_slider(ui: &mut egui::Ui, format: increart_core::config::TileFormat, quality: &mut u8) {
+    let s = egui::Slider::new(quality, 1..=100).suffix(" %");
+    let s = match format {
+        increart_core::config::TileFormat::Webp => s
+            .custom_formatter(|v, _| if v >= 100.0 { "lossless".into() } else { format!("{v:.0}") })
+            .custom_parser(|t| match t.trim() {
+                "lossless" => Some(100.0),
+                t => t.trim_end_matches('%').trim().parse().ok(),
+            }),
+        _ => s,
+    };
+    let tip = match format {
+        increart_core::config::TileFormat::Webp => "100 % is lossless (and keeps the metadata); below, lossy",
+        _ => "lower is smaller and blurrier",
+    };
+    ui.add(s).on_hover_text(tip);
+}
+
+/// The rough size of what is about to be written (DESIGN.md, Size
+/// estimates): as `format` (none: the files as they are) at `quality`, and
+/// for lossy WebP its lossless size beside. Asks for what isn't worked out.
+pub fn size_estimate(
+    ui: &mut egui::Ui,
+    st: &increart_gui_core::AppState,
+    what: increart_gui_core::EstimateFor,
+    format: Option<increart_core::config::TileFormat>,
+    quality: u8,
+    out: &mut Vec<Msg>,
+) {
+    use increart_core::config::TileFormat;
+    use increart_core::estimate::human;
+    use increart_gui_core::EstimateFor;
+    let e = match what {
+        EstimateFor::Tile => &st.tile_estimate,
+        EstimateFor::Export => &st.export_estimate,
+    };
+    let mut wanted = vec![];
+    if let Some(f) = format {
+        wanted.push((f, quality));
+        if f == TileFormat::Webp && quality < 100 {
+            wanted.push((f, 100));
+        }
+    }
+    let fresh = e.of.is_some() && e.of == increart_gui_core::estimate_of(st, what);
+    let missing = wanted.iter().any(|&(f, q)| e.size(f, q).is_none());
+    let idle = !e.sampling && e.encoding.is_none() && e.error.is_none();
+    if !fresh || e.wanted != wanted || (missing && idle && e.sample.is_some()) {
+        out.push(Msg::WantSizes(what, wanted.clone()));
+    }
+    let tip = "a rough estimate, from patches of the image encoded as it would be";
+    let text = if e.error.is_some() {
+        "size unknown".to_string()
+    } else if !fresh || e.sample.is_none() {
+        "estimating the size…".to_string()
+    } else if format.is_none() {
+        match e.sample.as_ref().and_then(|s| s.stored) {
+            Some(b) => format!("{} as they are", human(b)),
+            None => "size unknown".to_string(),
+        }
+    } else {
+        let show = |f: TileFormat, q: u8| match e.size(f, q) {
+            Some(Some(b)) => format!("≈ {}", human(b)),
+            Some(None) => "can't be written".to_string(),
+            None => "≈ …".to_string(),
+        };
+        let (f, q) = wanted[0];
+        match wanted.get(1) {
+            Some(&(lf, lq)) => format!("{} · lossless {}", show(f, q), show(lf, lq)),
+            None => show(f, q),
+        }
+    };
+    let r = ui.weak(text);
+    if format.is_some() {
+        r.on_hover_text(tip);
+    }
+}
+
 /// **Save as…**: a copy of the image outside the library, where and as
 /// chosen (the Export dialog's Save as, with export to a folder beside).
 pub fn export_item(ui: &mut egui::Ui, img: &increart_core::ImageRef, out: &mut Vec<Msg>) {

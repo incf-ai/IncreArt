@@ -8,6 +8,7 @@ use ab_glyph::{Font, FontRef, PxScale, PxScaleFont, ScaleFont};
 use image::{Pixel, Rgba, RgbaImage, imageops};
 use increart_core::ImageRef;
 use increart_core::config::{TextSize, TileSettings};
+use increart_core::estimate::{self, Rect, Sample};
 
 /// What a tile shows.
 #[derive(Clone, Debug, PartialEq)]
@@ -490,22 +491,141 @@ pub fn compose_images(
     images: &[Option<RgbaImage>],
     s: &TileSettings,
 ) -> Result<RgbaImage, String> {
-    // cells fit the outputs; inputs and pasted images fit into them (unless
-    // there are only those)
+    let sizes: Vec<_> = images.iter().map(|i| i.as_ref().map(|i| i.dimensions())).collect();
+    let g = Geometry::new(layout, s, largest(layout, &sizes));
+    fits(&g)?;
+    let mut out = RgbaImage::from_pixel(g.size.0, g.size.1, Rgba(s.background));
+    let font = font().ok_or("the built-in font didn't load")?;
+    for (t, img) in layout.tiles.iter().zip(images) {
+        let (TileContent::Image(_) | TileContent::Pasted(_), Some(img)) = (&t.content, img) else { continue };
+        let p = Placed::new(s, g.image_rect(t), img.dimensions());
+        let scaled = if p.size == img.dimensions() {
+            img.clone()
+        } else {
+            imageops::resize(img, p.size.0, p.size.1, imageops::FilterType::CatmullRom)
+        };
+        let (cx, cy, cw, ch) = p.shown;
+        let part = imageops::crop_imm(&scaled, (cx as i64 - p.at.0) as u32, (cy as i64 - p.at.1) as u32, cw, ch);
+        imageops::overlay(&mut out, &part.to_image(), cx as i64, cy as i64);
+    }
+    draw_texts(&mut out, (0, 0), layout, &g, s, &font);
+    Ok(out)
+}
+
+/// The tiling's sample for a size estimate (DESIGN.md, Size estimates):
+/// its patches drawn on their own as [`compose`] would, each image read
+/// only where they show it ([`estimate::read_rects`]), so a tiling of any
+/// size takes a few tens of MB, not all of it. Patches over an image
+/// that can't be read so are left out.
+pub fn sample(root: &Path, layout: &TileLayout, s: &TileSettings) -> Result<Sample, String> {
+    let sizes = layout
+        .tiles
+        .iter()
+        .map(|t| match (&t.content, t.image()) {
+            (TileContent::Pasted(p), _) => Ok(Some(p.0.dimensions())),
+            (_, Some(image)) => {
+                let path = image.path(root);
+                image::image_dimensions(&path).map(Some).map_err(|e| format!("{}: {e}", path.display()))
+            }
+            _ => Ok(None),
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    let g = Geometry::new(layout, s, largest(layout, &sizes));
+    fits(&g)?;
+    let font = font().ok_or("the built-in font didn't load")?;
+    let rects = estimate::patch_rects(g.size.0, g.size.1, estimate::PATCHES);
+    let mut patches: Vec<_> = rects.iter().map(|r| Some(RgbaImage::from_pixel(r.2, r.3, Rgba(s.background)))).collect();
+    for (t, size) in layout.tiles.iter().zip(&sizes) {
+        let Some(size) = *size else { continue };
+        let p = Placed::new(s, g.image_rect(t), size);
+        let k = (p.size.0 as f64 / size.0 as f64, p.size.1 as f64 / size.1 as f64);
+        // where each patch shows the image, and that in the image's own
+        // pixels (a little more, for the resize filter)
+        let mut wants: Vec<(usize, Rect, Rect)> = vec![];
+        for (i, r) in rects.iter().enumerate() {
+            let Some(m) = meet(*r, p.shown) else { continue };
+            // (the filter reaches 2 of the scaled pixels, 2 / k of these)
+            let more = |k: f64| (2.0 / k.min(1.0)).ceil() as i64 + 1;
+            let src = |a: u32, at: i64, k: f64, side: u32| {
+                ((((a as i64 - at) as f64 / k).floor() as i64 - more(k)).max(0) as u32).min(side)
+            };
+            let end = |a: u32, at: i64, k: f64, side: u32| {
+                ((((a as i64 - at) as f64 / k).ceil() as i64 + more(k)).max(0) as u32).min(side)
+            };
+            let (x0, y0) = (src(m.0, p.at.0, k.0, size.0), src(m.1, p.at.1, k.1, size.1));
+            let (x1, y1) = (end(m.0 + m.2, p.at.0, k.0, size.0), end(m.1 + m.3, p.at.1, k.1, size.1));
+            if x1 > x0 && y1 > y0 {
+                wants.push((i, m, (x0, y0, x1 - x0, y1 - y0)));
+            }
+        }
+        if wants.is_empty() {
+            continue;
+        }
+        let from: Vec<Rect> = wants.iter().map(|w| w.2).collect();
+        let parts = match (&t.content, t.image()) {
+            (TileContent::Pasted(img), _) => {
+                Some(from.iter().map(|&(x, y, w, h)| imageops::crop_imm(&*img.0, x, y, w, h).to_image()).collect())
+            }
+            (_, Some(image)) => estimate::read_rects(&image.path(root), &from)?,
+            _ => continue,
+        };
+        let Some(parts) = parts else {
+            for (i, _, _) in wants {
+                patches[i] = None;
+            }
+            continue;
+        };
+        for ((i, m, src), part) in wants.into_iter().zip(parts) {
+            let Some(patch) = &mut patches[i] else { continue };
+            let size = (((src.2 as f64 * k.0).round() as u32).max(1), ((src.3 as f64 * k.1).round() as u32).max(1));
+            let part = if size == part.dimensions() {
+                part
+            } else {
+                imageops::resize(&part, size.0, size.1, imageops::FilterType::CatmullRom)
+            };
+            // the part's top-left on the tiling, and where in it the patch
+            // shows
+            let at = (p.at.0 + (src.0 as f64 * k.0).round() as i64, p.at.1 + (src.1 as f64 * k.1).round() as i64);
+            let (cx, cy) = (
+                (m.0 as i64 - at.0).clamp(0, size.0 as i64) as u32,
+                (m.1 as i64 - at.1).clamp(0, size.1 as i64) as u32,
+            );
+            let (cw, ch) = (m.2.min(size.0 - cx), m.3.min(size.1 - cy));
+            let piece = imageops::crop_imm(&part, cx, cy, cw, ch).to_image();
+            let r = rects[i];
+            imageops::overlay(patch, &piece, m.0 as i64 - r.0 as i64, m.1 as i64 - r.1 as i64);
+        }
+    }
+    let patches = patches
+        .into_iter()
+        .zip(&rects)
+        .filter_map(|(patch, r)| {
+            let mut patch = patch?;
+            draw_texts(&mut patch, (r.0, r.1), layout, &g, s, &font);
+            Some(Arc::new(patch))
+        })
+        .collect();
+    Ok(Sample { patches, pixels: g.size.0 as u64 * g.size.1 as u64, stored: None })
+}
+
+/// The cells' size at 100%: the largest output's (inputs and pasted
+/// images fit into them, unless there are only those); `sizes` one per
+/// tile, none for text.
+fn largest(layout: &TileLayout, sizes: &[Option<(u32, u32)>]) -> (u32, u32) {
     let sized = |want: fn(&TileContent) -> bool| {
-        layout.tiles.iter().zip(images).filter(move |(t, _)| want(&t.content)).filter_map(|(_, i)| i.as_ref())
+        layout.tiles.iter().zip(sizes).filter(move |(t, _)| want(&t.content)).filter_map(|(_, s)| *s)
     };
     let outputs =
         |c: &TileContent| matches!(c, TileContent::Image(i) if i.store == increart_core::model::Store::Output);
     let any = |_: &TileContent| true;
-    let largest = (if sized(outputs).next().is_some() { sized(outputs) } else { sized(any) })
-        .fold(None, |a: Option<(u32, u32)>, i| {
-            Some(a.map_or(i.dimensions(), |(w, h)| (w.max(i.width()), h.max(i.height()))))
-        })
-        .unwrap_or(NO_IMAGES);
-    let g = Geometry::new(layout, s, largest);
-    let pixels = g.size.0 as u64 * g.size.1 as u64;
-    if pixels > MAX_PIXELS {
+    (if sized(outputs).next().is_some() { sized(outputs) } else { sized(any) })
+        .reduce(|(w, h), (iw, ih)| (w.max(iw), h.max(ih)))
+        .unwrap_or(NO_IMAGES)
+}
+
+/// Refuses a tiling over [`MAX_PIXELS`].
+fn fits(g: &Geometry) -> Result<(), String> {
+    if g.size.0 as u64 * g.size.1 as u64 > MAX_PIXELS {
         return Err(format!(
             "{} × {} is too large (over {} MP): scale it down",
             g.size.0,
@@ -513,47 +633,72 @@ pub fn compose_images(
             MAX_PIXELS / 1_000_000
         ));
     }
-    let mut out = RgbaImage::from_pixel(g.size.0, g.size.1, Rgba(s.background));
-    let font = font().ok_or("the built-in font didn't load")?;
+    Ok(())
+}
+
+/// An image in its tile: scaled to `size` with its top-left `at`, shown
+/// in `shown` (all of it, fitted; the middle, filling).
+struct Placed {
+    size: (u32, u32),
+    at: (i64, i64),
+    shown: Rect,
+}
+
+impl Placed {
+    fn new(s: &TileSettings, (x, y, w, h): Rect, (iw, ih): (u32, u32)) -> Placed {
+        let (fw, fh) = (iw as f64, ih as f64);
+        let k = if s.fill { (w as f64 / fw).max(h as f64 / fh) } else { (w as f64 / fw).min(h as f64 / fh) };
+        let (sw, sh) = (((fw * k).round() as u32).max(1), ((fh * k).round() as u32).max(1));
+        if s.fill {
+            let (cx, cy) = (sw.saturating_sub(w) / 2, sh.saturating_sub(h) / 2);
+            Placed {
+                size: (sw, sh),
+                at: (x as i64 - cx as i64, y as i64 - cy as i64),
+                shown: (x, y, w.min(sw), h.min(sh)),
+            }
+        } else {
+            let (px, py) = (x + (w - sw) / 2, y + (h - sh) / 2);
+            Placed { size: (sw, sh), at: (px as i64, py as i64), shown: (px, py, sw, sh) }
+        }
+    }
+}
+
+/// Where two areas meet, if they do.
+fn meet(a: Rect, b: Rect) -> Option<Rect> {
+    let (x0, y0) = (a.0.max(b.0), a.1.max(b.1));
+    let (x1, y1) = ((a.0 + a.2).min(b.0 + b.2), (a.1 + a.3).min(b.1 + b.3));
+    (x1 > x0 && y1 > y0).then(|| (x0, y0, x1 - x0, y1 - y0))
+}
+
+/// The titles, text blocks and captions, on `out` showing the tiling
+/// from `origin`.
+fn draw_texts(
+    out: &mut RgbaImage,
+    origin: (u32, u32),
+    layout: &TileLayout,
+    g: &Geometry,
+    s: &TileSettings,
+    font: &FontRef<'static>,
+) {
     let [tr, sr] = g.title_rects();
     for (text, size, r) in [(&layout.title, g.title_px, tr), (&layout.subtitle, g.title_px / 2, sr)] {
         if r.3 > 0 {
-            draw_text(&mut out, &font, text.trim(), size, r, s.caption_color);
+            draw_text(out, origin, font, text.trim(), size, r, s.caption_color);
         }
     }
-    for (t, img) in layout.tiles.iter().zip(images) {
+    for t in &layout.tiles {
         let (x, y, w, h) = g.image_rect(t);
-        let img = match (&t.content, img) {
-            (TileContent::Text { text, .. }, _) => {
-                draw_text(&mut out, &font, text, g.text_px(t), (x, y, w, h), s.caption_color);
-                continue;
-            }
-            (TileContent::Image(_) | TileContent::Pasted(_), Some(img)) => img,
-            (TileContent::Image(_) | TileContent::Pasted(_), None) => continue,
-        };
-        let (iw, ih) = (img.width() as f64, img.height() as f64);
-        let k = if s.fill { (w as f64 / iw).max(h as f64 / ih) } else { (w as f64 / iw).min(h as f64 / ih) };
-        let (sw, sh) = (((iw * k).round() as u32).max(1), ((ih * k).round() as u32).max(1));
-        let scaled = if (sw, sh) == (img.width(), img.height()) {
-            img.clone()
-        } else {
-            imageops::resize(img, sw, sh, imageops::FilterType::CatmullRom)
-        };
-        if s.fill {
-            let (cx, cy) = (sw.saturating_sub(w) / 2, sh.saturating_sub(h) / 2);
-            let part = imageops::crop_imm(&scaled, cx, cy, w.min(sw), h.min(sh)).to_image();
-            imageops::overlay(&mut out, &part, x as i64, y as i64);
-        } else {
-            imageops::overlay(&mut out, &scaled, (x + (w - sw) / 2) as i64, (y + (h - sh) / 2) as i64);
+        if let TileContent::Text { text, .. } = &t.content {
+            draw_text(out, origin, font, text, g.text_px(t), (x, y, w, h), s.caption_color);
+            continue;
         }
         if g.caption > 0 && !t.caption.trim().is_empty() {
             let (text, px) = caption_fit(t.caption.trim(), w, g.caption_px);
             let sf = font.as_scaled(PxScale::from(px as f32));
             let baseline = (y + h) as f32 + (g.caption as f32 - (sf.ascent() - sf.descent())) / 2.0 + sf.ascent();
-            draw_line(&mut out, &font, px, &text, (x, w), baseline, s.caption_color);
+            draw_line(out, origin, font, px, &text, (x, w), baseline, s.caption_color);
         }
     }
-    Ok(out)
 }
 
 /// A text's width in px at a scale.
@@ -616,9 +761,11 @@ fn wrap(sf: &PxScaleFont<&FontRef<'_>>, text: &str, w: u32) -> Vec<String> {
 }
 
 /// Lines (as typed, then word-wrapped to `w`), centred both ways in
-/// `(x, y, w, h)`; lines below it are left out.
+/// `(x, y, w, h)`; lines below it are left out. `out` shows the tiling
+/// from `origin`.
 fn draw_text(
     out: &mut RgbaImage,
+    origin: (u32, u32),
     font: &FontRef<'static>,
     text: &str,
     size: u32,
@@ -632,13 +779,16 @@ fn draw_text(
     lines.truncate(fit);
     let top = y as f32 + (h as f32 - (lines.len() as f32 * lh - sf.line_gap())).max(0.0) / 2.0;
     for (n, line) in lines.iter().enumerate() {
-        draw_line(out, font, size, line, (x, w), top + n as f32 * lh + sf.ascent(), color);
+        draw_line(out, origin, font, size, line, (x, w), top + n as f32 * lh + sf.ascent(), color);
     }
 }
 
-/// One line on `baseline`, centred in the span `(x, w)`.
+/// One line on `baseline`, centred in the span `(x, w)`; `out` shows the
+/// tiling from `origin`.
+#[allow(clippy::too_many_arguments)]
 fn draw_line(
     out: &mut RgbaImage,
+    origin: (u32, u32),
     font: &FontRef<'static>,
     size: u32,
     text: &str,
@@ -658,7 +808,8 @@ fn draw_line(
         let Some(outline) = font.outline_glyph(glyph) else { continue };
         let b = outline.px_bounds();
         outline.draw(|gx, gy, cov| {
-            let (px, py) = (b.min.x as i64 + gx as i64, b.min.y as i64 + gy as i64);
+            let px = b.min.x as i64 + gx as i64 - origin.0 as i64;
+            let py = b.min.y as i64 + gy as i64 - origin.1 as i64;
             if px < 0 || py < 0 || px >= out.width() as i64 || py >= out.height() as i64 {
                 return;
             }
@@ -912,6 +1063,53 @@ mod tests {
         let cut = caption_fit("Claymation · cfg 3 · shift 3.1 · strength 0.6 · seed 5", 300, 50);
         assert_eq!(cut.1, 30);
         assert!(cut.0.ends_with('…'), "{cut:?}");
+    }
+
+    /// Detail everywhere, smooth enough that a resize half a pixel over
+    /// barely shows (a tile misplaced would).
+    fn busy(w: u32, h: u32, k: u8) -> TileImage {
+        let wave = |v: f32, f: f32| ((v * f).sin() * 100.0 + 128.0) as u8;
+        TileImage(Arc::new(RgbaImage::from_fn(w, h, |x, y| {
+            let (x, y) = (x as f32, y as f32 + k as f32 * 9.0);
+            Rgba([wave(x, 0.21), wave(y, 0.17), wave(x + y, 0.13), 255])
+        })))
+    }
+
+    #[test]
+    fn samples_the_patches_as_composed() {
+        let images: Vec<_> = (0..7u8).map(|k| busy(700, 500, k)).collect();
+        let mut l = TileLayout::square_of(images.iter().cloned().map(TileContent::Pasted).collect());
+        l.title = "A title".into();
+        l.tiles[2].caption = "a caption".into();
+        let i = l.add_text(0, 3, "Some words in a block".into());
+        l.set_span(i, 2, 1);
+        let decoded: Vec<_> = l
+            .tiles
+            .iter()
+            .map(|t| match &t.content {
+                TileContent::Pasted(p) => Some((*p.0).clone()),
+                _ => None,
+            })
+            .collect();
+        let root = Path::new("/nonexistent");
+        let mut s = TileSettings { gap: 12, ..TileSettings::default() };
+        // at 100% (or small, taken whole) the same pixels; scaled, nearly
+        // (each part resized on its own lands within half a pixel)
+        for (scale, fill, off) in [(100, false, 0.0), (55, false, 2.5), (60, true, 2.5), (37, false, 0.0)] {
+            s.scale = scale;
+            s.fill = fill;
+            let whole = compose_images(&l, &decoded, &s).unwrap();
+            let want = estimate::patches(&whole, estimate::PATCHES);
+            let got = sample(root, &l, &s).unwrap();
+            assert_eq!(got.pixels, whole.width() as u64 * whole.height() as u64);
+            assert_eq!(got.patches.len(), want.len());
+            for (g, w) in got.patches.iter().zip(&want) {
+                assert_eq!(g.dimensions(), w.dimensions());
+                let diff: u64 = g.as_raw().iter().zip(w.as_raw()).map(|(a, b)| a.abs_diff(*b) as u64).sum();
+                let mean = diff as f64 / g.as_raw().len() as f64;
+                assert!(mean <= off, "scale {scale} fill {fill}: off by {mean} on average");
+            }
+        }
     }
 
     #[test]

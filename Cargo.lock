@@ -2212,6 +2212,7 @@ dependencies = [
  "libc",
  "moxcms",
  "pathdiff",
+ "png",
  "rsn",
  "serde",
  "serde_json",
