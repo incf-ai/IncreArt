@@ -2546,14 +2546,17 @@ out as one image.
   run or settings, so they keep the captions written by hand (Captions
   from **clear** empties them all). The
   settings are kept in `config.rsn` (`tile`); the layout is not.
-- **Copy** puts the tiled image on the clipboard, **Save {format}…** writes a
-  file in the format chosen under **Save**: PNG, WebP (at most 16383 on a
-  side; transparency kept), JPEG (transparency flattened onto white) or
-  AVIF. WebP, JPEG and AVIF have a quality slider: WebP's is its own,
-  100 % (lossless) by default, below it lossy; JPEG's and AVIF's is
-  shared, 70 % by default. Under it, the file's size, roughly (Size
-  estimates). The file name's extension follows the format. They are
-  kept in `tile` (`save_format`, `save_webp_quality`, `save_quality`);
+- **Copy** puts the tiled image on the clipboard. **Save…** opens a modal
+  of its own over the Tile window: the image's size in px, **Format**
+  (PNG, WebP (at most 16383 on a side, else Save is off and says so;
+  transparency kept), JPEG (transparency flattened onto white) or AVIF),
+  **Quality** for WebP, JPEG and AVIF (WebP's is its own, 100 %
+  (lossless) by default, below it lossy; JPEG's and AVIF's is shared,
+  70 % by default) and **Size**, roughly (Size estimates). **Save
+  {format} as…** (Enter) opens the system's Save dialog and writes the
+  file chosen, closing the modal; Cancel (Esc) goes back to the Tile
+  window. The file name's extension follows the format. They are kept in
+  `tile` (`save_format`, `save_webp_quality`, `save_quality`);
   **Add to input library** makes a new idea at the top of the input
   library with the image, its source `Tiled { images }` (they count as used,
   so Clean up keeps them). Composing reads the full-size images on its own
@@ -3645,7 +3648,7 @@ the keys and mouse buttons go through that view's own history instead.
     - The choices (folder, the template last used for outputs and for
       inputs, the saved templates, the rest) are kept in `export.rsn` in
       the app's state folder.
-  - **Size estimates** (`increart_core::estimate`): Tile's Save and the
+  - **Size estimates** (`increart_core::estimate`): Tile's Save… and the
     Export dialog say about how large the file(s) will be in the format
     and quality chosen, and, for lossy WebP, lossless beside ("≈ 12 MB ·
     lossless ≈ 31 MB"), so the slider shows what it saves. A sample is

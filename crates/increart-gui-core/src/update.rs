@@ -936,6 +936,8 @@ pub enum Msg {
     MarkupSave(bool),
     CloseMarkup,
     CloseTile,
+    /// Tile's Save… open or closed.
+    TileSaving(bool),
     TileSelect(Option<usize>),
     /// A tile to this (column, row).
     TileMove(usize, u32, u32),
@@ -5807,6 +5809,12 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
             state.tile = None;
             vec![]
         }
+        Msg::TileSaving(on) => {
+            if let Some(d) = &mut state.tile {
+                d.saving = on;
+            }
+            vec![]
+        }
         Msg::OpenMarkup(image, index) => {
             let slot = index.and_then(|i| Some((state.project.clone()?, i)));
             // an edited copy reopens on its original, as it was drawn
@@ -7084,6 +7092,9 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
             PickKind::IdeaImages => lib(state, LibOp::ImportImages(paths)),
             PickKind::GenerateRefs => update(state, Msg::DropRefs(paths)),
             PickKind::TileFile(format) => {
+                if let Some(d) = &mut state.tile {
+                    d.saving = false;
+                }
                 // the name says what's in the file: another image extension
                 // is replaced, anything else kept and added to
                 let mut path = paths.remove(0);
@@ -8496,7 +8507,7 @@ fn queue_sweep(state: &mut AppState, confirmed: bool) -> Vec<Effect> {
 /// Review's A/B compare (B stays the image it was opened on).
 /// The Tile dialog on this layout (`start`: Generate's start image).
 fn open_tile(state: &mut AppState, layout: crate::tile::TileLayout, start: Option<ImageRef>) {
-    state.tile = Some(TileDialog { layout, selected: None, working: 0, start });
+    state.tile = Some(TileDialog { layout, selected: None, working: 0, start, saving: false });
 }
 
 fn compare_against(state: &mut AppState, a: ImageRef) -> Vec<Effect> {

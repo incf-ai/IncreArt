@@ -205,6 +205,7 @@ const EXTRA_SCENES: &[&str] = &[
     "97d-tile-cell-menu",
     "97e-tile-text-title",
     "97h-tile-picker",
+    "97j-tile-save",
     "15b-crop-mark",
     "97f-project-runs",
     "97g-output-by-project-runs",
@@ -788,7 +789,8 @@ impl Tour {
             | "97c-tile-menu"
             | "97d-tile-cell-menu"
             | "97e-tile-text-title"
-            | "97h-tile-picker" => {
+            | "97h-tile-picker"
+            | "97j-tile-save" => {
                 // the drags' positions are those of one row per line at the
                 // default size
                 let mut v = vec![
@@ -821,6 +823,9 @@ impl Tour {
                     }
                     if name == "97h-tile-picker" {
                         v.push(Msg::TilePicker(Some((0, 2))));
+                    }
+                    if name == "97j-tile-save" {
+                        v.push(Msg::TileSaving(true));
                     }
                 }
                 v

@@ -11,7 +11,9 @@ use increart_gui_core::tile::{Geometry, NO_IMAGES, Tile, TileContent, TileImage,
 use increart_gui_core::{AppState, CaptionFill, Msg, PickKind, RefTo, SelectHow, Tab, TileDialog, TileTarget};
 
 use crate::textures::Textures;
-use crate::widgets::{ACCENT, BAD, GOOD, NEUTRAL, checkerboard, dialog_buttons, ic, image_cover, image_fit_bg, ph};
+use crate::widgets::{
+    ACCENT, BAD, GOOD, NEUTRAL, checkerboard, dialog_buttons, dialog_footer, ic, image_cover, image_fit_bg, ph,
+};
 
 /// The empty space of a pickable view: a click there clears the picks, a
 /// drag draws the rubber band. Register it before the images (it covers
@@ -385,10 +387,9 @@ pub fn window(ctx: &egui::Context, st: &AppState, tex: &mut Textures, out: &mut 
                 if ui.add_enabled(idle, egui::Button::new(ic(ph::COPY, "Copy"))).clicked() {
                     out.push(Msg::TileOut(TileTarget::Clipboard));
                 }
-                let format = st.config.tile.save_format.usable();
-                let save = egui::Button::new(ic(ph::FLOPPY_DISK, &format!("Save {}…", format.name())));
-                if ui.add_enabled(idle, save).on_hover_text("the format is set under Save in the settings").clicked() {
-                    out.push(Msg::Pick(PickKind::TileFile(format)));
+                let save = egui::Button::new(ic(ph::FLOPPY_DISK, "Save…"));
+                if ui.add_enabled(idle, save).on_hover_text("as a file: its format, quality and size").clicked() {
+                    out.push(Msg::TileSaving(true));
                 }
                 let lib = egui::Button::new(ic(ph::BOOKS, "Add to input library"));
                 if ui.add_enabled(idle, lib).on_hover_text("as a new idea, made of these images").clicked() {
@@ -448,6 +449,92 @@ pub fn window(ctx: &egui::Context, st: &AppState, tex: &mut Textures, out: &mut 
     let esc = || ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
     if m.is_top_modal && !m.any_popup_open && esc() {
         out.push(Msg::CloseTile);
+    }
+    if d.saving {
+        save_window(ctx, st, d, &root, tex, out);
+    }
+}
+
+/// Save…: the tiling's format and quality and about how large it will
+/// be, over the Tile window; Save as… opens the system's Save dialog.
+fn save_window(
+    ctx: &egui::Context,
+    st: &AppState,
+    d: &TileDialog,
+    root: &std::path::Path,
+    tex: &mut Textures,
+    out: &mut Vec<Msg>,
+) {
+    let mut s: TileSettings = st.config.tile.clone();
+    let g = Geometry::new(&d.layout, &s, largest(st, &d.layout, root, tex));
+    let m = egui::Modal::new(egui::Id::unique("tile_save")).show(ctx, |ui| {
+        ui.set_width(480.0);
+        ui.heading(ic(ph::FLOPPY_DISK, "Save the tiling"));
+        ui.weak(format!("{} × {} px, as one image file.", g.size.0, g.size.1));
+        ui.add_space(6.0);
+        egui::Grid::new("tile_save_grid").num_columns(2).spacing([10.0, 8.0]).show(ui, |ui| {
+            ui.label("Format");
+            ui.horizontal(|ui| {
+                let tips = |f: TileFormat| match f {
+                    TileFormat::Png => "lossless, readable everywhere",
+                    TileFormat::Webp => {
+                        "lossless at 100 % (about half PNG's size), lossy and small below; transparency kept"
+                    }
+                    TileFormat::Jpeg => "lossy and small; transparency becomes white",
+                    TileFormat::Avif => "lossy, smaller than JPEG at the same quality; slow to write when large",
+                };
+                let current = s.save_format.usable();
+                for &f in TileFormat::available() {
+                    if ui.selectable_label(current == f, f.name()).on_hover_text(tips(f)).clicked() {
+                        s.save_format = f;
+                    }
+                }
+            });
+            ui.end_row();
+            let format = s.save_format.usable();
+            if format.has_quality() {
+                ui.label("Quality");
+                crate::widgets::quality_slider(ui, format, s.quality_mut(format));
+                ui.end_row();
+            }
+            ui.label("Size");
+            let quality = s.quality(format);
+            crate::widgets::size_estimate(ui, st, increart_gui_core::EstimateFor::Tile, Some(format), quality, out);
+            ui.end_row();
+        });
+        let format = s.save_format.usable();
+        let webp_max = increart_core::webp::MAX_SIDE;
+        let too_large = format == TileFormat::Webp && g.size.0.max(g.size.1) > webp_max;
+        let enter = ui.input(|i| i.key_pressed(egui::Key::Enter));
+        ui.add_space(8.0);
+        dialog_footer(
+            ui,
+            |ui| {
+                if too_large {
+                    ui.colored_label(
+                        ui.visuals().warn_fg_color,
+                        format!("WebP is at most {webp_max} px on a side: scale it down, or another format"),
+                    );
+                }
+            },
+            |ui| {
+                let label = ic(ph::FLOPPY_DISK, &format!("Save {} as…   Enter", format.name()));
+                let r = ui.add_enabled(!too_large, egui::Button::new(RichText::new(label).strong()));
+                let r = r.on_hover_text("choose the folder and the name in the system's Save dialog");
+                if r.clicked() || (enter && !too_large) {
+                    out.push(Msg::Pick(PickKind::TileFile(format)));
+                }
+                if ui.button("Cancel   Esc").clicked() {
+                    out.push(Msg::TileSaving(false));
+                }
+            },
+        );
+    });
+    if s != st.config.tile {
+        out.push(Msg::TileSettings(s));
+    }
+    if m.should_close() {
+        out.push(Msg::TileSaving(false));
     }
 }
 
@@ -1015,32 +1102,6 @@ fn settings(
     .on_hover_text("each cell's size at 100 %; images fit (or fill) inside it");
     let g = Geometry::new(l, &s, big);
     ui.weak(format!("{} × {} px · {} cells of {} × {}", g.size.0, g.size.1, l.cols * l.rows(), g.cell.0, g.cell.1));
-
-    ui.add_space(8.0);
-    ui.label(RichText::new("Save").strong());
-    ui.horizontal_wrapped(|ui| {
-        let tips = |f: TileFormat| match f {
-            TileFormat::Png => "lossless, readable everywhere",
-            TileFormat::Webp => "lossless at 100 % (about half PNG's size), lossy and small below; transparency kept",
-            TileFormat::Jpeg => "lossy and small; transparency becomes white",
-            TileFormat::Avif => "lossy, smaller than JPEG at the same quality; slow to write when large",
-        };
-        let current = s.save_format.usable();
-        for &f in TileFormat::available() {
-            if ui.selectable_label(current == f, f.name()).on_hover_text(tips(f)).clicked() {
-                s.save_format = f;
-            }
-        }
-    });
-    let format = s.save_format.usable();
-    if format.has_quality() {
-        ui.horizontal(|ui| {
-            ui.label("quality");
-            crate::widgets::quality_slider(ui, format, s.quality_mut(format));
-        });
-    }
-    let quality = s.quality(format);
-    crate::widgets::size_estimate(ui, st, increart_gui_core::EstimateFor::Tile, Some(format), quality, out);
 
     ui.add_space(8.0);
     ui.label(RichText::new("Title").strong());

@@ -4064,7 +4064,11 @@ fn style_sweeps_queue_review_on_a_contact_sheet_and_reuse_a_style() {
     assert_eq!(shown, format!("#2 Clay · seed {seed} {{nope}}"));
     let out = tempfile::tempdir().unwrap();
     let file = out.path().join("tiles");
+    // Save… opens over the tiling; the file chosen closes it
+    h.send(Msg::TileSaving(true));
+    assert!(h.state.tile.as_ref().unwrap().saving);
     h.send(Msg::Picked(PickKind::TileFile(increart_core::config::TileFormat::Png), vec![file.clone()]));
+    assert!(!h.state.tile.as_ref().unwrap().saving);
     h.settle();
     let png = image::open(file.with_extension("png")).unwrap();
     assert!(png.width() > 0 && png.height() > 0, "{:?}", h.errors());

@@ -763,6 +763,9 @@ pub struct TileDialog {
     pub working: usize,
     /// Opened from Generate: its img2img start image (`{kind}` "start").
     pub start: Option<ImageRef>,
+    /// Save… is open (its format and quality, then the system's Save
+    /// dialog); closed when a file is chosen.
+    pub saving: bool,
 }
 
 /// What "Captions from" fills every tile's caption with.
