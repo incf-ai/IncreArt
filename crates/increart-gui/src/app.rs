@@ -892,10 +892,14 @@ fn export_window(ctx: &egui::Context, st: &AppState, e: &increart_gui_core::Expo
                             }
                         },
                     );
-                    if d.prefs.format.is_some_and(|f| f.usable().lossy()) {
-                        ui.add(egui::Slider::new(&mut d.prefs.quality, 1..=100).text("quality"));
+                    if let Some(f) = d.prefs.format.map(TileFormat::usable).filter(|f| f.has_quality()) {
+                        ui.label("quality");
+                        crate::widgets::quality_slider(ui, f, d.prefs.quality_mut(f));
                     }
                 });
+                let format = d.prefs.format.map(TileFormat::usable);
+                let quality = format.map_or(100, |f| d.prefs.quality(f));
+                crate::widgets::size_estimate(ui, st, increart_gui_core::EstimateFor::Export, format, quality, out);
                 let possible = d.prefs.metadata_possible();
                 let mut keep = d.prefs.keep_metadata && possible;
                 let r = ui.add_enabled(
@@ -903,7 +907,7 @@ fn export_window(ctx: &egui::Context, st: &AppState, e: &increart_gui_core::Expo
                     egui::Checkbox::new(&mut keep, "keep the metadata (recipe, sd-server parameters, source)"),
                 );
                 r.on_disabled_hover_text(
-                    "lossy WebP, JPEG and AVIF are written without it: export as PNG or WebP (lossless) to keep it",
+                    "lossy WebP, JPEG and AVIF are written without it: export as PNG, or WebP at 100 %, to keep it",
                 );
                 if possible {
                     d.prefs.keep_metadata = keep;

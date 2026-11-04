@@ -4,6 +4,7 @@
 
 use std::collections::HashSet;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use increart_core::config::{Config, MODEL_SLOTS, RecipePreset, SdServerConfig, ServerConfig, ServerPreset};
 use increart_core::engine::{Event, Stop};
@@ -979,6 +980,18 @@ pub enum Msg {
     ExportProgress(usize, usize),
     CancelExport,
     Exported(PathBuf, Result<increart_core::exportimages::Summary, String>),
+    // ---- size estimates (DESIGN.md, Size estimates)
+    /// The sizes shown now (format, quality), the first first; sent while
+    /// one isn't known.
+    WantSizes(EstimateFor, Vec<(increart_core::config::TileFormat, u8)>),
+    SizeSampled(EstimateFor, EstimateOf, Result<increart_core::estimate::Sample, String>),
+    SizeEstimated(
+        EstimateFor,
+        Arc<increart_core::estimate::Sample>,
+        increart_core::config::TileFormat,
+        u8,
+        Option<u64>,
+    ),
     // ---- file manager
     /// Open a folder (or a file's folder) in the system file manager; the
     /// path is relative to the library or absolute.
@@ -1136,6 +1149,20 @@ pub enum Effect {
     },
     CancelExport,
     SaveExportPrefs(PathBuf, increart_core::exportimages::Prefs),
+    /// A sample to estimate sizes from, on its own thread; answers
+    /// `SizeSampled`.
+    SampleSize {
+        what: EstimateFor,
+        of: EstimateOf,
+        root: PathBuf,
+    },
+    /// One size from a sample, on its own thread; answers `SizeEstimated`.
+    EstimateSize {
+        what: EstimateFor,
+        sample: Arc<increart_core::estimate::Sample>,
+        format: increart_core::config::TileFormat,
+        quality: u8,
+    },
     ShowInFileManager {
         path: PathBuf,
         command: String,
@@ -6129,6 +6156,59 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
             state.export = None;
             vec![]
         }
+        Msg::WantSizes(what, wanted) => {
+            let Some(of) = estimate_of(state, what) else { return vec![] };
+            let Some(root) = state.library.clone() else { return vec![] };
+            let e = estimate_mut(state, what);
+            e.wanted = wanted;
+            if e.of.as_ref() != Some(&of) {
+                *e = Estimate {
+                    of: Some(of.clone()),
+                    sampling: e.sampling,
+                    wanted: e.wanted.clone(),
+                    ..Estimate::default()
+                };
+                if !e.sampling {
+                    e.sampling = true;
+                    return vec![Effect::SampleSize { what, of, root }];
+                }
+                return vec![];
+            }
+            next_estimate(e, what)
+        }
+        Msg::SizeSampled(what, of, r) => {
+            let root = state.library.clone();
+            let e = estimate_mut(state, what);
+            e.sampling = false;
+            if e.of.as_ref() != Some(&of) {
+                // changed meanwhile: a sample of what it is now
+                return match (e.of.clone(), root) {
+                    (Some(of), Some(root)) => {
+                        e.sampling = true;
+                        vec![Effect::SampleSize { what, of, root }]
+                    }
+                    _ => vec![],
+                };
+            }
+            match r {
+                Ok(s) => {
+                    e.sample = Some(Arc::new(s));
+                    next_estimate(e, what)
+                }
+                Err(err) => {
+                    e.error = Some(err);
+                    vec![]
+                }
+            }
+        }
+        Msg::SizeEstimated(what, sample, format, quality, bytes) => {
+            let e = estimate_mut(state, what);
+            e.encoding = None;
+            if e.sample.as_ref().is_some_and(|s| Arc::ptr_eq(s, &sample)) {
+                e.sizes.push((format, quality, bytes));
+            }
+            next_estimate(e, what)
+        }
         Msg::ExportProgress(done, total) => {
             if let Some(x) = &mut state.exporting {
                 (x.done, x.total) = (done, total);
@@ -10301,6 +10381,43 @@ fn export_saved_as(e: &mut ExportDialog, file: &std::path::Path) {
     if let Some(stem) = increart_core::exportimages::file_name(&e.name) {
         e.name = stem;
     }
+}
+
+/// What `what`'s estimate is of now: the Tile window's layout and settings
+/// (format and quality aside), or the Export dialog's images.
+pub fn estimate_of(state: &AppState, what: EstimateFor) -> Option<EstimateOf> {
+    match what {
+        EstimateFor::Tile => {
+            let t = state.tile.as_ref()?;
+            let settings = increart_core::config::TileSettings {
+                save_format: Default::default(),
+                save_quality: 0,
+                save_webp_quality: 0,
+                ..state.config.tile.clone()
+            };
+            Some(EstimateOf::Tile(t.layout.clone(), settings))
+        }
+        EstimateFor::Export => {
+            let e = state.export.as_ref()?;
+            let images: Vec<ImageRef> = e.items.iter().filter_map(|i| i.image.clone()).collect();
+            (!images.is_empty()).then_some(EstimateOf::Export(images))
+        }
+    }
+}
+
+fn estimate_mut(state: &mut AppState, what: EstimateFor) -> &mut Estimate {
+    match what {
+        EstimateFor::Tile => &mut state.tile_estimate,
+        EstimateFor::Export => &mut state.export_estimate,
+    }
+}
+
+/// The first size wanted and not worked out yet, unless one is being.
+fn next_estimate(e: &mut Estimate, what: EstimateFor) -> Vec<Effect> {
+    let (None, Some(sample)) = (e.encoding, e.sample.clone()) else { return vec![] };
+    let Some(&(format, quality)) = e.wanted.iter().find(|(f, q)| e.size(*f, *q).is_none()) else { return vec![] };
+    e.encoding = Some((format, quality));
+    vec![Effect::EstimateSize { what, sample, format, quality }]
 }
 
 fn save_export_prefs(state: &AppState) -> Vec<Effect> {

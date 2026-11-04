@@ -68,7 +68,16 @@ impl Harness {
             if msgs.is_empty() {
                 // a library still opening sends nothing until it's open
                 let opening = matches!(&self.state.phase, Phase::Library(d) if d.busy);
-                if idle && self.state.busy == 0 && self.state.saving == 0 && !opening && self.state.archiving.is_none()
+                // size estimates answer on threads of their own
+                let estimating = [&self.state.tile_estimate, &self.state.export_estimate]
+                    .iter()
+                    .any(|e| e.sampling || e.encoding.is_some());
+                if idle
+                    && self.state.busy == 0
+                    && self.state.saving == 0
+                    && !opening
+                    && self.state.archiving.is_none()
+                    && !estimating
                 {
                     return;
                 }
@@ -361,6 +370,61 @@ fn ideas_exported_with_their_text() {
     h.settle();
     assert_eq!(std::fs::read_dir(&dest).unwrap().count(), 6);
     assert!(dest.join("otter with a teacup 2.txt").is_file());
+}
+
+#[test]
+fn export_sizes_estimated() {
+    use increart_core::config::TileFormat;
+    let mut h = Harness::new();
+    let dir = h._tmp.path().join("drop");
+    std::fs::create_dir_all(&dir).unwrap();
+    let noisy = |seed: u32| {
+        let mut s = seed;
+        image::RgbImage::from_fn(600, 400, |x, y| {
+            s = s.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            image::Rgb([(x / 3) as u8 ^ (s >> 28) as u8, (y / 2) as u8, (s >> 24) as u8 / 8])
+        })
+    };
+    noisy(1).save(dir.join("a.png")).unwrap();
+    noisy(2).save(dir.join("b.png")).unwrap();
+    h.send(Msg::DropFiles(vec![dir.join("a.png"), dir.join("b.png")]));
+    h.settle();
+    let images: Vec<_> = h
+        .state
+        .unreviewed_ideas()
+        .iter()
+        .flat_map(|e| e.idea.images.iter().map(|i| increart_core::ImageRef::input(i.clone())))
+        .collect();
+    assert_eq!(images.len(), 2);
+    h.send(Msg::OpenExport(images.clone(), "2 images".into()));
+    h.settle();
+
+    // as stored: the files' bytes exactly
+    h.send(Msg::WantSizes(EstimateFor::Export, vec![]));
+    h.settle();
+    let e = &h.state.export_estimate;
+    let stored: u64 = images.iter().map(|i| std::fs::metadata(i.path(&h.root)).unwrap().len()).sum();
+    assert_eq!(e.sample.as_ref().unwrap().stored, Some(stored));
+    assert_eq!(e.sample.as_ref().unwrap().pixels, 2 * 600 * 400);
+
+    // WebP at 80 % and lossless: worked out one after the other, lossy smaller
+    h.send(Msg::WantSizes(EstimateFor::Export, vec![(TileFormat::Webp, 80), (TileFormat::Webp, 100)]));
+    h.settle();
+    let e = &h.state.export_estimate;
+    let (lossy, lossless) =
+        (e.size(TileFormat::Webp, 80).unwrap().unwrap(), e.size(TileFormat::Webp, 100).unwrap().unwrap());
+    assert!(lossy < lossless, "{lossy} < {lossless}");
+    assert!(e.encoding.is_none());
+
+    // another export: a new sample, the old sizes gone
+    h.send(Msg::CloseExport);
+    h.send(Msg::OpenExport(images[..1].to_vec(), "1 image".into()));
+    h.send(Msg::WantSizes(EstimateFor::Export, vec![(TileFormat::Jpeg, 90)]));
+    h.settle();
+    let e = &h.state.export_estimate;
+    assert_eq!(e.sample.as_ref().unwrap().pixels, 600 * 400);
+    assert_eq!(e.size(TileFormat::Webp, 80), None);
+    assert!(e.size(TileFormat::Jpeg, 90).unwrap().unwrap() > 0);
 }
 
 #[test]

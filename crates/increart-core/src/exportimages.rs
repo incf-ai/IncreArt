@@ -87,8 +87,10 @@ pub struct Prefs {
     pub folders: bool,
     /// None: as stored (PNG or WebP).
     pub format: Option<TileFormat>,
-    /// For the lossy formats (lossy WebP, JPEG, AVIF), percent.
+    /// JPEG's and AVIF's quality, percent.
     pub quality: u8,
+    /// WebP's, percent: 100 is lossless (and keeps the metadata).
+    pub webp_quality: u8,
     pub keep_metadata: bool,
     /// An idea's text and tags as a `.txt` beside its images.
     pub idea_text: bool,
@@ -105,6 +107,7 @@ impl Default for Prefs {
             folders: true,
             format: None,
             quality: 90,
+            webp_quality: 100,
             keep_metadata: true,
             idea_text: false,
             existing: Existing::Number,
@@ -122,10 +125,23 @@ impl Prefs {
         crate::rsnfmt::write(path, self)
     }
 
-    /// Whether the metadata can be kept in the chosen format: PNG and WebP
-    /// carry it over, lossy WebP, JPEG and AVIF are written without.
+    /// Whether the metadata can be kept in the chosen format: PNG and
+    /// lossless WebP carry it over, lossy WebP, JPEG and AVIF are written
+    /// without.
     pub fn metadata_possible(&self) -> bool {
-        matches!(self.format.map(TileFormat::usable), None | Some(TileFormat::Png | TileFormat::Webp))
+        match self.format.map(TileFormat::usable) {
+            None | Some(TileFormat::Png) => true,
+            Some(f) => f.lossless_at(self.quality(f)),
+        }
+    }
+
+    /// The quality `format` is written at.
+    pub fn quality(&self, format: TileFormat) -> u8 {
+        if format == TileFormat::Webp { self.webp_quality } else { self.quality }
+    }
+
+    pub fn quality_mut(&mut self, format: TileFormat) -> &mut u8 {
+        if format == TileFormat::Webp { &mut self.webp_quality } else { &mut self.quality }
     }
 
     /// The extension a file is written with, `stored` its store format.
@@ -497,7 +513,7 @@ pub fn convert(bytes: &[u8], format: Option<TileFormat>, quality: u8, keep_metad
             None => Err("neither PNG nor WebP".into()),
         },
         Some(TileFormat::Png) => store(StoreFormat::Png),
-        Some(TileFormat::Webp) => store(StoreFormat::Webp),
+        Some(TileFormat::Webp) if quality >= 100 => store(StoreFormat::Webp),
         Some(f) => {
             let px = crate::import::decode_pixels(bytes).map_err(|e| e.to_string())?;
             let img = match px.channels {
@@ -561,7 +577,8 @@ pub fn write(
             let r = std::fs::read(from)
                 .map_err(|e| format!("{}: {e}", from.display()))
                 .and_then(|b| {
-                    convert(&b, prefs.format, prefs.quality, keep).map_err(|e| format!("{}: {e}", rel.display()))
+                    let quality = prefs.format.map_or(100, |f| prefs.quality(f));
+                    convert(&b, prefs.format, quality, keep).map_err(|e| format!("{}: {e}", rel.display()))
                 })
                 .and_then(|b| {
                     let to = parent(rel)?;
@@ -726,16 +743,18 @@ mod tests {
 
         assert_eq!(convert(&png, None, 90, true).unwrap(), png, "as stored: the same file");
         assert!(!has(&convert(&png, None, 90, false).unwrap()));
-        let webp = convert(&png, Some(TileFormat::Webp), 90, true).unwrap();
+        let webp = convert(&png, Some(TileFormat::Webp), 100, true).unwrap();
         assert_eq!(crate::container::format_of(&webp), Some(StoreFormat::Webp));
         assert!(has(&webp), "carried over");
         let jpeg = convert(&png, Some(TileFormat::Jpeg), 90, true).unwrap();
         assert_eq!(image::guess_format(&jpeg).unwrap(), image::ImageFormat::Jpeg);
-        let lossy = convert(&png, Some(TileFormat::WebpLossy), 60, true).unwrap();
+        let lossy = convert(&png, Some(TileFormat::Webp), 60, true).unwrap();
         let back = image::load_from_memory(&lossy).unwrap();
         assert_eq!((back.width(), back.height()), (4, 3), "a WebP any decoder reads");
         assert!(!lossy.windows(4).any(|w| w == b"PNGt"), "no metadata");
-        assert!(!Prefs { format: Some(TileFormat::WebpLossy), ..Prefs::default() }.metadata_possible());
+        let webp = Prefs { format: Some(TileFormat::Webp), ..Prefs::default() };
+        assert!(webp.metadata_possible(), "lossless at 100 %");
+        assert!(!Prefs { webp_quality: 99, ..webp }.metadata_possible());
     }
 
     #[test]
@@ -781,8 +800,13 @@ mod tests {
         // a field no longer there (one_name) is ignored, the rest kept
         let old = std::fs::read_to_string(&p).unwrap().replacen("dest:", "one_name: true,\n    dest:", 1);
         assert!(old.contains("one_name"));
-        std::fs::write(&p, old).unwrap();
+        std::fs::write(&p, &old).unwrap();
         assert_eq!(Prefs::load(&p), prefs);
+        // lossy WebP's own format, from before: WebP
+        let lossy = old.replace("Avif", "WebpLossy");
+        assert!(lossy.contains("WebpLossy"));
+        std::fs::write(&p, lossy).unwrap();
+        assert_eq!(Prefs::load(&p).format, Some(TileFormat::Webp));
         assert_eq!(Prefs::load(&dir.path().join("none.rsn")), Prefs::default());
         assert!(!Prefs { format: Some(TileFormat::Jpeg), ..Prefs::default() }.metadata_possible());
     }

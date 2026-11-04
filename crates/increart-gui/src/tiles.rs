@@ -1021,8 +1021,7 @@ fn settings(
     ui.horizontal_wrapped(|ui| {
         let tips = |f: TileFormat| match f {
             TileFormat::Png => "lossless, readable everywhere",
-            TileFormat::Webp => "lossless, about half PNG's size",
-            TileFormat::WebpLossy => "lossy and small, transparency kept",
+            TileFormat::Webp => "lossless at 100 % (about half PNG's size), lossy and small below; transparency kept",
             TileFormat::Jpeg => "lossy and small; transparency becomes white",
             TileFormat::Avif => "lossy, smaller than JPEG at the same quality; slow to write when large",
         };
@@ -1033,12 +1032,15 @@ fn settings(
             }
         }
     });
-    if s.save_format.usable().lossy() {
+    let format = s.save_format.usable();
+    if format.has_quality() {
         ui.horizontal(|ui| {
             ui.label("quality");
-            ui.add(egui::Slider::new(&mut s.save_quality, 1..=100).suffix(" %"));
+            crate::widgets::quality_slider(ui, format, s.quality_mut(format));
         });
     }
+    let quality = s.quality(format);
+    crate::widgets::size_estimate(ui, st, increart_gui_core::EstimateFor::Tile, Some(format), quality, out);
 
     ui.add_space(8.0);
     ui.label(RichText::new("Title").strong());

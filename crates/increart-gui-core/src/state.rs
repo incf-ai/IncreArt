@@ -634,6 +634,48 @@ impl ExportDialog {
     }
 }
 
+/// Which size estimate: Tile's Save, or the Export dialog's.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EstimateFor {
+    Tile,
+    Export,
+}
+
+/// What an estimate is of (DESIGN.md, Size estimates).
+#[derive(Clone, Debug, PartialEq)]
+pub enum EstimateOf {
+    /// The tiled image: its layout and settings (its format and quality
+    /// set aside).
+    Tile(crate::tile::TileLayout, increart_core::config::TileSettings),
+    /// An export's images.
+    Export(Vec<ImageRef>),
+}
+
+/// A size estimate: a sample of what it's of (made on a thread of its own
+/// once that changes), and the sizes worked out from it (one at a time,
+/// the ones wanted now first).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Estimate {
+    /// What the sample is (or is being made) of.
+    pub of: Option<EstimateOf>,
+    pub sample: Option<std::sync::Arc<increart_core::estimate::Sample>>,
+    /// A sample being made (of `of`, or of what it was before).
+    pub sampling: bool,
+    /// Bytes for a format at a quality; None: it couldn't be encoded.
+    pub sizes: Vec<(increart_core::config::TileFormat, u8, Option<u64>)>,
+    pub encoding: Option<(increart_core::config::TileFormat, u8)>,
+    /// What is shown now, in order.
+    pub wanted: Vec<(increart_core::config::TileFormat, u8)>,
+    pub error: Option<String>,
+}
+
+impl Estimate {
+    /// The size worked out for `format` at `quality`, if it is.
+    pub fn size(&self, format: increart_core::config::TileFormat, quality: u8) -> Option<Option<u64>> {
+        self.sizes.iter().find(|(f, q, _)| (*f, *q) == (format, quality)).map(|x| x.2)
+    }
+}
+
 /// An export being written: files done of how many.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Exporting {
@@ -3425,6 +3467,9 @@ pub struct AppState {
     pub export_prefs: increart_core::exportimages::Prefs,
     pub export_prefs_path: Option<PathBuf>,
     pub exporting: Option<Exporting>,
+    /// Rough file sizes for Tile's Save and the Export dialog.
+    pub tile_estimate: Estimate,
+    pub export_estimate: Estimate,
     /// Images picked in Review or the Output library's Grid, in the order
     /// picked: rated together, or tiled (DESIGN.md, Tiling).
     pub picked: Vec<ImageRef>,
@@ -3766,6 +3811,8 @@ impl AppState {
             export_prefs: Default::default(),
             export_prefs_path: None,
             exporting: None,
+            tile_estimate: Estimate::default(),
+            export_estimate: Estimate::default(),
             picked: vec![],
             tile: None,
             markup: None,

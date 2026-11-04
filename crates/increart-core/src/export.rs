@@ -8,8 +8,9 @@ use image::{ImageEncoder, RgbaImage};
 use crate::config::TileFormat;
 use crate::pixel::Pixels;
 
-/// `img` as `format`; `quality` (percent) is for the lossy ones. JPEG has
-/// no alpha: transparency is flattened onto white.
+/// `img` as `format`; `quality` (percent) is for those with one (WebP:
+/// 100 is lossless). JPEG has no alpha: transparency is flattened onto
+/// white.
 pub fn encode(img: &RgbaImage, format: TileFormat, quality: u8) -> Result<Vec<u8>, String> {
     let quality = quality.clamp(1, 100);
     let (w, h) = img.dimensions();
@@ -20,13 +21,11 @@ pub fn encode(img: &RgbaImage, format: TileFormat, quality: u8) -> Result<Vec<u8
         }
         TileFormat::Webp => {
             let px = Pixels { width: w, height: h, channels: 4, data: img.as_raw().clone() };
-            out = crate::webp::encode(&px, &[]).ok_or_else(|| {
-                format!("{w} × {h} is too large for WebP (at most {} on a side)", crate::webp::MAX_SIDE)
-            })?;
-        }
-        TileFormat::WebpLossy => {
-            let px = Pixels { width: w, height: h, channels: 4, data: img.as_raw().clone() };
-            out = crate::webp::encode_lossy(&px, quality).ok_or_else(|| {
+            let webp = match quality {
+                100 => crate::webp::encode(&px, &[]),
+                q => crate::webp::encode_lossy(&px, q),
+            };
+            out = webp.ok_or_else(|| {
                 format!("{w} × {h} is too large for WebP (at most {} on a side)", crate::webp::MAX_SIDE)
             })?;
         }
@@ -73,7 +72,7 @@ mod tests {
             }
             let back = image::load_from_memory(&bytes).unwrap();
             assert_eq!((back.width(), back.height()), (40, 30), "{f:?}");
-            if !f.lossy() {
+            if f.lossless_at(70) {
                 assert_eq!(back.to_rgba8(), img(), "{f:?} is lossless");
             }
         }
@@ -85,12 +84,14 @@ mod tests {
     #[test]
     fn quality_changes_the_size() {
         let big = RgbaImage::from_fn(256, 256, |x, y| image::Rgba([(x ^ y) as u8, (x * y) as u8, (x + y) as u8, 255]));
-        for f in [TileFormat::Jpeg, TileFormat::WebpLossy, TileFormat::Avif] {
+        for f in [TileFormat::Jpeg, TileFormat::Webp, TileFormat::Avif] {
             let small = encode(&big, f, 30).unwrap().len();
             let large = encode(&big, f, 95).unwrap().len();
             assert!(small < large, "{f:?}: {small} < {large}");
         }
-        let lossless = encode(&big, TileFormat::Webp, 30).unwrap().len();
-        assert!(encode(&big, TileFormat::WebpLossy, 80).unwrap().len() < lossless, "lossy WebP is smaller");
+        let lossless = encode(&big, TileFormat::Webp, 100).unwrap().len();
+        assert!(encode(&big, TileFormat::Webp, 80).unwrap().len() < lossless, "lossy WebP is smaller");
+        let back = image::load_from_memory(&encode(&img(), TileFormat::Webp, 100).unwrap()).unwrap();
+        assert_eq!(back.to_rgba8(), img(), "WebP at 100 % is lossless");
     }
 }

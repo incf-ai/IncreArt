@@ -19,6 +19,7 @@ pub mod config;
 pub mod container;
 pub mod engine;
 pub mod error;
+pub mod estimate;
 pub mod export;
 pub mod exportimages;
 pub mod fsutil;
