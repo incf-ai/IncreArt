@@ -625,8 +625,11 @@ fn finish_and_stop_keeps_the_images_being_generated() {
 fn finish_and_stop_cancels_the_waiting_job() {
     let s = setup();
     let a = Fake::start(LOADED);
+    // the generating one doesn't finish until the waiting one is cancelled
+    // (a slow machine could otherwise finish it, and start the next,
+    // before Finish is pressed)
     a.with(|st| {
-        st.steps = 30;
+        st.steps = u32::MAX;
         st.serial = true;
     });
     let run = new_run(&s, "qwen-image-21", 8, false);
@@ -645,6 +648,8 @@ fn finish_and_stop_cancels_the_waiting_job() {
     // cancel (a slow machine sends it later)
     wait_until(|| polled_jobs(&a) == 2, "both jobs polled");
     engine.cancel_run(&run, Stop::Finish);
+    wait_until(|| a.count("/cancel") == 1, "the waiting one cancelled");
+    a.with(|st| st.steps = 30);
     let events = collect(&engine, run_done(&run));
     assert_eq!(outputs(&events).len(), 1, "the generating image finished");
     assert_eq!(a.count("/cancel"), 1, "the waiting one cancelled");

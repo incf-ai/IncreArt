@@ -77,6 +77,7 @@ impl Harness {
                     && self.state.saving == 0
                     && !opening
                     && self.state.archiving.is_none()
+                    && !self.state.saving_bug_report
                     && !estimating
                 {
                     return;
