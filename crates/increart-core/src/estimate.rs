@@ -2,8 +2,12 @@
 //! patches of the image, at full resolution so their detail is the
 //! image's, encoded as the file would be; their bytes per pixel times the
 //! image's pixels. A guess within tens of percent: lossless coders do a
-//! little better on a whole image than on patches.
+//! little better on a whole image than on patches. Never the whole of a
+//! large image in memory: a sample is read (or, a tiling, drawn) a patch
+//! at a time, in a few tens of MB.
 
+use std::io::BufReader;
+use std::path::Path;
 use std::sync::Arc;
 
 use image::RgbaImage;
@@ -34,15 +38,17 @@ impl PartialEq for Sample {
     }
 }
 
-/// `n` patches spread evenly over `img` (a grid of them, each centred in
-/// its part); the whole image when it's small.
-pub fn patches(img: &RgbaImage, n: usize) -> Vec<Arc<RgbaImage>> {
-    let (w, h) = img.dimensions();
+/// An area of an image: x, y, width, height.
+pub type Rect = (u32, u32, u32, u32);
+
+/// Where `n` patches go in a `w` × `h` image, spread evenly over it (a
+/// grid of them, each centred in its part); all of it when it's small.
+pub fn patch_rects(w: u32, h: u32, n: usize) -> Vec<Rect> {
     if n == 0 || w == 0 || h == 0 {
         return vec![];
     }
     if (w as u64 * h as u64) <= (n as u64 * PATCH as u64 * PATCH as u64) {
-        return vec![Arc::new(img.clone())];
+        return vec![(0, 0, w, h)];
     }
     let cols = ((n as f64 * w as f64 / h as f64).sqrt().round() as u32).clamp(1, n as u32);
     let rows = (n as u32).div_ceil(cols);
@@ -57,10 +63,74 @@ pub fn patches(img: &RgbaImage, n: usize) -> Vec<Arc<RgbaImage>> {
             let cy = (h as u64 * (2 * r as u64 + 1) / (2 * rows as u64)) as u32;
             let x = cx.saturating_sub(pw / 2).min(w - pw);
             let y = cy.saturating_sub(ph / 2).min(h - ph);
-            out.push(Arc::new(image::imageops::crop_imm(img, x, y, pw, ph).to_image()));
+            out.push((x, y, pw, ph));
         }
     }
     out
+}
+
+/// `n` patches spread evenly over `img` ([`patch_rects`]).
+pub fn patches(img: &RgbaImage, n: usize) -> Vec<Arc<RgbaImage>> {
+    let crop = |&(x, y, w, h): &Rect| Arc::new(image::imageops::crop_imm(img, x, y, w, h).to_image());
+    patch_rects(img.width(), img.height(), n).iter().map(crop).collect()
+}
+
+/// Images up to this many pixels are read whole (16 MB, a 2048 × 2048);
+/// larger, a PNG a row at a time, keeping only the rows wanted.
+pub const WHOLE: u64 = 2048 * 2048;
+
+/// The parts `rects` (inside it) of the image file at `path`, without
+/// holding all of a large one. None for a large one that can't be read
+/// so: a WebP (its decoder holds all of it), an interlaced PNG.
+pub fn read_rects(path: &Path, rects: &[Rect]) -> Result<Option<Vec<RgbaImage>>, String> {
+    let err = |e: &dyn std::fmt::Display| format!("{}: {e}", path.display());
+    let (w, h) = image::image_dimensions(path).map_err(|e| err(&e))?;
+    let crop = |img: &RgbaImage| {
+        rects.iter().map(|&(x, y, rw, rh)| image::imageops::crop_imm(img, x, y, rw, rh).to_image()).collect()
+    };
+    if w as u64 * h as u64 <= WHOLE {
+        return Ok(Some(crop(&image::open(path).map_err(|e| err(&e))?.into_rgba8())));
+    }
+    let format = image::ImageReader::open(path).and_then(|r| r.with_guessed_format()).map_err(|e| err(&e))?;
+    if format.format() != Some(image::ImageFormat::Png) {
+        return Ok(None);
+    }
+    let file = std::fs::File::open(path).map_err(|e| err(&e))?;
+    let mut dec = png::Decoder::new(BufReader::new(file));
+    dec.set_transformations(png::Transformations::normalize_to_color8());
+    let mut reader = dec.read_info().map_err(|e| err(&e))?;
+    if reader.info().interlaced {
+        return Ok(None);
+    }
+    let channels = match reader.output_color_type().0 {
+        png::ColorType::Grayscale => 1,
+        png::ColorType::GrayscaleAlpha => 2,
+        png::ColorType::Rgb => 3,
+        png::ColorType::Rgba => 4,
+        png::ColorType::Indexed => return Ok(None),
+    };
+    let mut outs: Vec<RgbaImage> = rects.iter().map(|r| RgbaImage::new(r.2, r.3)).collect();
+    let last = rects.iter().map(|r| r.1 + r.3).max().unwrap_or(0);
+    for y in 0..last {
+        let row = reader.next_row().map_err(|e| err(&e))?.ok_or_else(|| err(&"ends early"))?;
+        let data = row.data();
+        for (&(rx, ry, rw, rh), out) in rects.iter().zip(&mut outs) {
+            if !(ry..ry + rh).contains(&y) {
+                continue;
+            }
+            for x in 0..rw {
+                let p = &data[(rx + x) as usize * channels..][..channels];
+                let px = match channels {
+                    1 => [p[0], p[0], p[0], 255],
+                    2 => [p[0], p[0], p[0], p[1]],
+                    3 => [p[0], p[1], p[2], 255],
+                    _ => [p[0], p[1], p[2], p[3]],
+                };
+                out.put_pixel(x, y - ry, image::Rgba(px));
+            }
+        }
+    }
+    Ok(Some(outs))
 }
 
 /// A sample of one image: its patches, standing for all of it.
@@ -73,7 +143,8 @@ pub const FILES: usize = 4;
 
 /// A sample of image files (an export): patches from up to [`FILES`] of
 /// them spread through the list, standing for all their pixels (each
-/// one's size from its header), and their bytes as they are.
+/// one's size from its header), and their bytes as they are. One that
+/// can't be read in parts ([`read_rects`]) is passed over.
 pub fn sample_files(paths: &[std::path::PathBuf]) -> Result<Sample, String> {
     let err = |p: &std::path::Path, e: &dyn std::fmt::Display| format!("{}: {e}", p.display());
     let (mut pixels, mut stored) = (0u64, 0u64);
@@ -86,15 +157,10 @@ pub fn sample_files(paths: &[std::path::PathBuf]) -> Result<Sample, String> {
     let mut out = vec![];
     for i in 0..k {
         let p = &paths[i * paths.len() / k];
-        let bytes = std::fs::read(p).map_err(|e| err(p, &e))?;
-        let px = crate::import::decode_pixels(&bytes).map_err(|e| err(p, &e))?;
-        let img = match px.channels {
-            4 => RgbaImage::from_raw(px.width, px.height, px.data),
-            _ => image::RgbImage::from_raw(px.width, px.height, px.data)
-                .map(|i| image::DynamicImage::ImageRgb8(i).to_rgba8()),
+        let (w, h) = image::image_dimensions(p).map_err(|e| err(p, &e))?;
+        if let Some(parts) = read_rects(p, &patch_rects(w, h, PATCHES / k))? {
+            out.extend(parts.into_iter().map(Arc::new));
         }
-        .ok_or_else(|| err(p, &"pixels don't fill the image"))?;
-        out.extend(patches(&img, PATCHES / k));
     }
     Ok(Sample { patches: out, pixels, stored: Some(stored) })
 }
@@ -138,7 +204,7 @@ mod tests {
         RgbaImage::from_fn(w, h, |x, y| {
             seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
             let n = (seed >> 27) as u8;
-            image::Rgba([(x / 8) as u8 ^ n, (y / 6) as u8 + n, ((x + y) / 10) as u8, 255])
+            image::Rgba([(x / 8) as u8 ^ n, ((y / 6) as u8).wrapping_add(n), ((x + y) / 10) as u8, 255])
         })
     }
 
@@ -186,6 +252,29 @@ mod tests {
         assert_eq!(s.patches.len(), FILES, "four of the six, each small enough to take whole");
         let guess = size(&s, TileFormat::Png, 100).unwrap() as f64;
         assert!((0.6..1.6).contains(&(guess / bytes as f64)), "{guess} for {bytes}");
+    }
+
+    #[test]
+    fn large_images_read_in_parts() {
+        let dir = tempfile::tempdir().unwrap();
+        let img = photo(2300, 1900);
+        let rects = patch_rects(2300, 1900, PATCHES);
+        let want: Vec<_> = patches(&img, PATCHES).iter().map(|p| (**p).clone()).collect();
+        let png = dir.path().join("big.png");
+        image::DynamicImage::ImageRgba8(img.clone()).save(&png).unwrap();
+        assert_eq!(read_rects(&png, &rects).unwrap().unwrap(), want, "a row at a time");
+        let rgb = dir.path().join("rgb.png");
+        image::DynamicImage::ImageRgba8(img.clone()).to_rgb8().save(&rgb).unwrap();
+        let got = read_rects(&rgb, &rects[..1]).unwrap().unwrap();
+        assert_eq!(got[0].get_pixel(3, 4).0[..3], want[0].get_pixel(3, 4).0[..3]);
+        assert_eq!(got[0].get_pixel(3, 4).0[3], 255);
+        let webp = dir.path().join("big.webp");
+        let px = crate::pixel::Pixels::from_image(&image::DynamicImage::ImageRgba8(img));
+        std::fs::write(&webp, crate::webp::encode(&px, &[]).unwrap()).unwrap();
+        assert_eq!(read_rects(&webp, &rects).unwrap(), None, "not without all of it");
+        let s = sample_files(&[png.clone(), webp]).unwrap();
+        assert_eq!(s.patches.len(), PATCHES / 2, "the WebP passed over");
+        assert_eq!(s.pixels, 2 * 2300 * 1900);
     }
 
     #[test]

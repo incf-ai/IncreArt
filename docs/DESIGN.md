@@ -3650,15 +3650,20 @@ the keys and mouse buttons go through that view's own history instead.
     and quality chosen, and, for lossy WebP, lossless beside ("≈ 12 MB ·
     lossless ≈ 31 MB"), so the slider shows what it saves. A sample is
     taken on a thread of its own when what is written changes (Tile: the
-    tiled image composed at full size, as Save does; Export: up to 4 of
-    the images, spread through them, and every image's size and bytes
-    from its file): up to 16 patches of 256 × 256 at full resolution,
-    spread over it, so their detail is the image's. Each size encodes the
-    patches as the file would be (AVIF, slow, its first 4) and scales
+    tiling; Export: up to 4 of the images, spread through them, and every
+    image's size and bytes from its file): up to 16 patches of 256 × 256
+    at full resolution, spread over it, so their detail is the image's.
+    Never the whole of a large image: a tiling's patches are drawn on
+    their own (as Save would, within half a pixel), each image read only
+    where they show it; an image over 2048 × 2048 is read a PNG row at a
+    time, keeping the rows wanted, and one that can't be (a WebP, whose
+    decoder holds all of it) is left out of the sample. A 10k × 10k tiling
+    is sampled in about 30 MB and well under a second. Each size encodes
+    the patches as the file would be (AVIF, slow, its first 4) and scales
     their bytes per pixel to all the pixels; one at a time, so while the
-    slider moves each one done is followed by where it is then. Rough: within
-    tens of percent (lossless formats do a little better on a whole
-    image). As stored is exact: the files' bytes.
+    slider moves each one done is followed by where it is then. Rough:
+    within tens of percent (lossless formats do a little better on a
+    whole image). As stored is exact: the files' bytes.
 - **Dialog buttons**, the same everywhere:
   - The footer row's ways to finish are right-aligned: the main action in
     the corner and bold, the other ways to finish to its left, then

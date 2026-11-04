@@ -503,9 +503,7 @@ impl Runtime {
             Effect::CancelExport => cancel(&self.export_cancel),
             Effect::SampleSize { what, of, root } => self.answer("size sample", move || {
                 let r = match &of {
-                    EstimateOf::Tile(layout, settings) => {
-                        crate::tile::compose(&root, layout, settings).map(|img| increart_core::estimate::sample(&img))
-                    }
+                    EstimateOf::Tile(layout, settings) => crate::tile::sample(&root, layout, settings),
                     EstimateOf::Export(images) => {
                         let paths: Vec<PathBuf> = images.iter().map(|i| i.path(&root)).collect();
                         increart_core::estimate::sample_files(&paths)
