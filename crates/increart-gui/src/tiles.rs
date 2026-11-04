@@ -734,7 +734,11 @@ fn preview(
         if resp.clicked() && !removed {
             out.push(Msg::TileSelect(Some(i)));
         }
-        resp.context_menu(|ui| tile_menu(ui, st, d, &g, i, out));
+        // a click inside (into the caption) leaves it open: its buttons
+        // close it themselves
+        egui::Popup::context_menu(&resp)
+            .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+            .show(|ui| tile_menu(ui, st, d, &g, i, out));
         if resp.drag_started() {
             ui.ctx().data_mut(|m| m.insert_temp(dragging, i));
         }

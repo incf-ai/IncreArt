@@ -206,6 +206,7 @@ const EXTRA_SCENES: &[&str] = &[
     "97e-tile-text-title",
     "97h-tile-picker",
     "97j-tile-save",
+    "97k-tile-caption-typed",
     "15b-crop-mark",
     "97f-project-runs",
     "97g-output-by-project-runs",
@@ -790,7 +791,8 @@ impl Tour {
             | "97d-tile-cell-menu"
             | "97e-tile-text-title"
             | "97h-tile-picker"
-            | "97j-tile-save" => {
+            | "97j-tile-save"
+            | "97k-tile-caption-typed" => {
                 // the drags' positions are those of one row per line at the
                 // default size
                 let mut v = vec![
@@ -823,6 +825,9 @@ impl Tour {
                     }
                     if name == "97h-tile-picker" {
                         v.push(Msg::TilePicker(Some((0, 2))));
+                    }
+                    if name == "97k-tile-caption-typed" {
+                        v.push(Msg::TileCaptions(increart_gui_core::CaptionFill::Clear));
                     }
                     if name == "97j-tile-save" {
                         v.push(Msg::TileSaving(true));
@@ -2309,6 +2314,31 @@ impl Tour {
                         _ => st.tile.as_ref().is_some_and(|t| (t.layout.tiles[0].col, t.layout.tiles[0].row) == (0, 2)),
                     };
                     eprintln!("CHECK {name}: {} ({} picked)", if ok { "ok" } else { "FAILED" }, st.picked.len());
+                }
+                _ => {}
+            }
+        }
+        if name == "97k-tile-caption-typed" {
+            // no captions yet: right-click a tile, click into its caption
+            // field, type; the menu stays open with the text in it
+            let (a, field) = (egui::pos2(480.0, 265.0), egui::pos2(560.0, 280.0));
+            let button =
+                |pos, b, pressed| egui::Event::PointerButton { pos, button: b, pressed, modifiers: Default::default() };
+            let (l, r) = (egui::PointerButton::Primary, egui::PointerButton::Secondary);
+            match self.settled {
+                5 if !self.clicked => self.inject = vec![egui::Event::PointerMoved(a), button(a, r, true)],
+                6 if !self.clicked => self.inject = vec![button(a, r, false)],
+                8 if !self.clicked => self.inject = vec![egui::Event::PointerMoved(field), button(field, l, true)],
+                9 if !self.clicked => self.inject = vec![button(field, l, false)],
+                11 if !self.clicked => self.inject = vec![egui::Event::Text("a".into())],
+                13 if !self.clicked => {
+                    self.inject = vec![egui::Event::Text("b".into())];
+                    self.clicked = true;
+                }
+                19 => {
+                    let typed = st.tile.as_ref().is_some_and(|t| t.layout.tiles.iter().any(|x| x.caption == "ab"));
+                    let ok = typed && egui::Popup::is_any_open(ctx);
+                    eprintln!("CHECK {name}: {}", if ok { "ok" } else { "FAILED" });
                 }
                 _ => {}
             }
