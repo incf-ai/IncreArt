@@ -3295,9 +3295,12 @@ the keys and mouse buttons go through that view's own history instead.
   (chips tagged `<image1>`…, "N / 9"), with **Add image file…** (system file
   picker; imported into the input store), **From library…** (a picker over
   nearly the whole window, browsing like the library screens: a source tree
-  with the input library and its collections, and the output library's
-  projects, collections and smart folders (by project as a tree, by date,
-  by source idea, transparent); a text filter (idea title, text and tags, or
+  laid out as the libraries' panes: the Idea inbox; the input library (All
+  ideas, Collections, its smart folders: by date, by source, by project, by
+  tag, with images, starred, not in a collection; edited copies); the
+  output library (All projects, Collections, its smart folders: by date, by
+  source idea, by project as a tree, by tag, transparent), each list closed
+  until one of it is picked; counts are images; a text filter (idea title, text and tags, or
   the run's prompt); Kept / Good / All for outputs; a thumbnail size slider.
   Click images to choose them, numbered with the `<imageN>` they will be;
   images already referenced are marked and can't be chosen; double-click

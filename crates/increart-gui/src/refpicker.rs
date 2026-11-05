@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 
 use eframe::egui::{self, Color32, FontId, Key, RichText, ScrollArea, Sense, Stroke, Vec2};
 use increart_core::{IdeaLoc, ImageRef};
-use increart_gui_core::{AppState, MAX_REFS, Msg, OutputSource, PickTarget, Ratings, RefSource, Smart};
+use increart_gui_core::{AppState, IdeaSmart, MAX_REFS, Msg, OutputSource, PickTarget, Ratings, RefSource, Smart};
 
 use crate::textures::Textures;
 use crate::widgets::{ACCENT, BAD, dialog_footer, ic, image_fit_bg, ph, short, verdict_color};
@@ -65,7 +65,9 @@ pub fn window(ctx: &egui::Context, st: &AppState, tex: &mut Textures, out: &mut 
                 ui.horizontal(|ui| {
                     let mut text = p.text.clone();
                     let hint = match p.source {
-                        RefSource::Inputs(_) | RefSource::Inbox | RefSource::Edited => "title, text or tag",
+                        RefSource::Inputs(_) | RefSource::InputSmart(_) | RefSource::Inbox | RefSource::Edited => {
+                            "title, text or tag"
+                        }
                         RefSource::Outputs(_) => "prompt text",
                         RefSource::TileInputs | RefSource::ImageInputs(_) | RefSource::ProjectInputs(_) => {
                             "title, text or prompt"
@@ -98,7 +100,7 @@ pub fn window(ctx: &egui::Context, st: &AppState, tex: &mut Textures, out: &mut 
                 ui.add_space(4.0);
                 if candidates.is_empty() {
                     ui.weak(match p.source {
-                        RefSource::Inputs(_) | RefSource::Inbox => "No input images here.",
+                        RefSource::Inputs(_) | RefSource::InputSmart(_) | RefSource::Inbox => "No input images here.",
                         RefSource::Edited => "No edited copies yet: Crop / mark… on an image makes one.",
                         RefSource::Outputs(_) => "No images here with these ratings.",
                         RefSource::TileInputs => "These images were made from text only.",
@@ -334,22 +336,81 @@ fn sources(
         st.index.ideas.iter().filter(|e| matches!(e.loc, IdeaLoc::Unreviewed)).map(|e| e.idea.images.len()).sum();
     ui.label(RichText::new("Idea inbox").strong());
     pick(ui, out, RefSource::Inbox, ic(ph::TRAY, &format!("Inbox ({inbox})")));
+
+    // as the Input library's pane: all, the collections, the smart folders
     ui.add_space(8.0);
     ui.label(RichText::new("Input library").strong());
     pick(ui, out, RefSource::Inputs(None), ic(ph::BOOKS, &format!("All ideas ({})", inputs_in(None))));
-    folder_tree(ui, &st.index.input_collection_folders, Path::new(""), "ref_inputs", &mut |ui, f| {
-        let n = inputs_in(Some(f));
-        let name = f.file_name().unwrap_or_default().to_string_lossy();
-        pick(ui, out, RefSource::Inputs(Some(f.to_path_buf())), ic(ph::FOLDER, &format!("{name} ({n})")));
+    let input_coll = matches!(at, RefSource::Inputs(Some(_)));
+    group(ui, "ref_in_coll", "Collections", input_coll, |ui| {
+        let any = RefSource::Inputs(Some(PathBuf::new()));
+        pick(ui, out, any, ic(ph::FOLDERS, &format!("All collections ({})", inputs_in(Some(Path::new(""))))));
+        folder_tree(ui, &st.index.input_collection_folders, Path::new(""), "ref_inputs", &mut |ui, f| {
+            let n = inputs_in(Some(f));
+            let name = f.file_name().unwrap_or_default().to_string_lossy();
+            pick(ui, out, RefSource::Inputs(Some(f.to_path_buf())), ic(ph::FOLDER, &format!("{name} ({n})")));
+        });
     });
+    // (images, as everywhere here: an idea can hold several)
+    let smart_in = |s: &IdeaSmart| -> usize { st.smart_ideas(s).iter().map(|e| e.idea.images.len()).sum() };
+    let in_smart = |f: fn(&IdeaSmart) -> bool| matches!(at, RefSource::InputSmart(s) if f(s));
+    ui.weak("Smart folders");
+    group(ui, "ref_in_day", "by date", in_smart(|s| matches!(s, IdeaSmart::Day(_))), |ui| {
+        for (day, _) in st.idea_days() {
+            let s = IdeaSmart::Day(day.clone());
+            let label = format!("{day} ({})", smart_in(&s));
+            pick(ui, out, RefSource::InputSmart(s), label);
+        }
+    });
+    group(ui, "ref_in_origin", "by source", in_smart(|s| matches!(s, IdeaSmart::Origin(_))), |ui| {
+        for (o, _) in st.idea_origins() {
+            let s = IdeaSmart::Origin(o);
+            let label = format!("{} ({})", o.label(), smart_in(&s));
+            pick(ui, out, RefSource::InputSmart(s), label);
+        }
+    });
+    group(ui, "ref_in_project", "by project", in_smart(|s| matches!(s, IdeaSmart::Project(_))), |ui| {
+        let projects = st.idea_projects();
+        if projects.is_empty() {
+            ui.weak("No idea has been used in a project yet.");
+        }
+        for (id, _) in projects {
+            let name = st.index.project(&id).map(|e| e.name()).unwrap_or_default();
+            let s = IdeaSmart::Project(id);
+            let label = ic(ph::ROCKET_LAUNCH, &format!("{} ({})", short(&name, 26), smart_in(&s)));
+            pick(ui, out, RefSource::InputSmart(s), label);
+        }
+    });
+    group(ui, "ref_in_tag", "by tag", in_smart(|s| matches!(s, IdeaSmart::Tag(_))), |ui| {
+        let tags = st.idea_tags();
+        if tags.is_empty() {
+            ui.weak("No idea has a tag yet.");
+        }
+        for (t, _) in tags {
+            let s = IdeaSmart::Tag(t.clone());
+            let label = ic(ph::TAG, &format!("{} ({})", short(&t, 26), smart_in(&s)));
+            pick(ui, out, RefSource::InputSmart(s), label);
+        }
+    });
+    for (s, name) in IdeaSmart::FLAT {
+        let icon = match s {
+            IdeaSmart::WithImages => ph::IMAGE,
+            IdeaSmart::Starred => ph::STAR,
+            _ => ph::FOLDER_DASHED,
+        };
+        let label = ic(icon, &format!("{name} ({})", smart_in(&s)));
+        pick(ui, out, RefSource::InputSmart(s), label);
+    }
     let edited = st.index.ideas.iter().filter(|e| e.loc == IdeaLoc::Edited).count();
     pick(ui, out, RefSource::Edited, ic(ph::PENCIL_SIMPLE, &format!("Edited copies, hidden ({edited})")));
 
+    // as the Output library's pane
     ui.add_space(8.0);
     ui.label(RichText::new("Output library").strong());
     let all = OutputSource::AllProjects;
     pick(ui, out, RefSource::Outputs(all.clone()), ic(ph::IMAGES, &format!("All projects ({})", outputs_in(&all))));
-    egui::CollapsingHeader::new("Collections").id_salt("ref_collections").show(ui, |ui| {
+    let output_coll = matches!(at, RefSource::Outputs(OutputSource::Collection(_)));
+    group(ui, "ref_collections", "Collections", output_coll, |ui| {
         let all = OutputSource::Collection(PathBuf::new());
         let label = ic(ph::FOLDERS, &format!("All collections ({})", outputs_in(&all)));
         pick(ui, out, RefSource::Outputs(all), label);
@@ -360,17 +421,16 @@ fn sources(
             pick(ui, out, RefSource::Outputs(s), label);
         });
     });
-    egui::CollapsingHeader::new("by project").id_salt("ref_by_project").default_open(true).show(ui, |ui| {
-        by_project(ui, st, Path::new(""), &mut |ui, s, label| pick(ui, out, RefSource::Outputs(s), label), &outputs_in);
-    });
-    egui::CollapsingHeader::new("by date").id_salt("ref_by_date").show(ui, |ui| {
+    let out_smart = |f: fn(&Smart) -> bool| matches!(at, RefSource::Outputs(OutputSource::Smart(s)) if f(s));
+    ui.weak("Smart folders");
+    group(ui, "ref_by_date", "by date", out_smart(|s| matches!(s, Smart::Day(_))), |ui| {
         for (day, _) in st.kept_days() {
             let s = OutputSource::Smart(Smart::Day(day.clone()));
             let label = format!("{day} ({})", outputs_in(&s));
             pick(ui, out, RefSource::Outputs(s), label);
         }
     });
-    egui::CollapsingHeader::new("by source idea").id_salt("ref_by_idea").show(ui, |ui| {
+    group(ui, "ref_by_idea", "by source idea", out_smart(|s| matches!(s, Smart::Idea(_))), |ui| {
         for (id, _) in st.kept_source_ideas() {
             let title =
                 st.idea(&id).map(|e| e.idea.title.clone()).filter(|t| !t.is_empty()).unwrap_or_else(|| id.to_string());
@@ -379,9 +439,42 @@ fn sources(
             pick(ui, out, RefSource::Outputs(s), label);
         }
     });
+    let by_projects = matches!(at, RefSource::Outputs(OutputSource::Project(_) | OutputSource::ProjectFolder(_)));
+    group(
+        ui,
+        "ref_by_project",
+        "by project",
+        by_projects || matches!(at, RefSource::Outputs(OutputSource::AllProjects)),
+        |ui| {
+            by_project(
+                ui,
+                st,
+                Path::new(""),
+                &mut |ui, s, label| pick(ui, out, RefSource::Outputs(s), label),
+                &outputs_in,
+            );
+        },
+    );
+    group(ui, "ref_by_tag", "by tag", out_smart(|s| matches!(s, Smart::Tag(_))), |ui| {
+        let tags = st.kept_tags();
+        if tags.is_empty() {
+            ui.weak("No kept image has a tag yet.");
+        }
+        for (t, _) in tags {
+            let s = OutputSource::Smart(Smart::Tag(t.clone()));
+            let label = ic(ph::TAG, &format!("{} ({})", short(&t, 26), outputs_in(&s)));
+            pick(ui, out, RefSource::Outputs(s), label);
+        }
+    });
     let s = OutputSource::Smart(Smart::Transparent);
     let label = ic(ph::CHECKERBOARD, &format!("transparent ({})", outputs_in(&s)));
     pick(ui, out, RefSource::Outputs(s), label);
+}
+
+/// A list in the sources (a library pane's smart folder or its
+/// collections): closed at first, open while one of it is picked.
+fn group(ui: &mut egui::Ui, salt: &str, title: &str, showing: bool, body: impl FnOnce(&mut egui::Ui)) {
+    egui::CollapsingHeader::new(title).id_salt(salt).default_open(showing).show(ui, body);
 }
 
 /// A folder tree (paths relative to its root), each folder a row from

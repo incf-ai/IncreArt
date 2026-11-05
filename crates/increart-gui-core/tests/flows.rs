@@ -708,6 +708,25 @@ fn input_smart_folders_in_the_pane_and_the_folder_view() {
     h.send(Msg::CollectIdeas("Smart".into(), vec![owl.clone()]));
     h.settle();
     assert!(h.errors().iter().any(|e| e.contains("reserved")), "{:?}", h.errors());
+
+    // the reference picker has them too: a starred idea with an image
+    let dir = h._tmp.path().join("drop");
+    std::fs::create_dir_all(&dir).unwrap();
+    image::RgbImage::from_pixel(8, 8, image::Rgb([200, 10, 10])).save(dir.join("red.png")).unwrap();
+    h.send(Msg::DropFiles(vec![dir.join("red.png")]));
+    h.settle();
+    let red = h.state.unreviewed_ideas()[0].idea.clone();
+    h.send(Msg::Restore(red.id.clone(), IdeaLoc::Library));
+    h.send(Msg::SetStar(red.id.clone(), true));
+    h.settle();
+    h.send(Msg::RefPicker(true));
+    let picked = |h: &mut Harness, s: IdeaSmart| {
+        h.send(Msg::RefPickerSource(RefSource::InputSmart(s)));
+        h.state.ref_candidates().into_iter().map(|c| c.image.id).collect::<Vec<_>>()
+    };
+    assert_eq!(picked(&mut h, IdeaSmart::Starred), red.images, "Owl is starred too, but has no image");
+    assert_eq!(picked(&mut h, IdeaSmart::WithImages), red.images);
+    assert!(picked(&mut h, IdeaSmart::Tag("animal".into())).is_empty());
 }
 
 #[test]

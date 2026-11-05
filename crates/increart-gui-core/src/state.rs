@@ -288,6 +288,8 @@ pub enum RefSource {
     /// The input library, or one of its folders (relative to
     /// `input/library/`).
     Inputs(Option<PathBuf>),
+    /// One of the input library's smart folders.
+    InputSmart(IdeaSmart),
     /// The Idea inbox.
     Inbox,
     Outputs(OutputSource),
@@ -4287,12 +4289,16 @@ impl AppState {
                     .filter(|c| q.is_empty() || has(&c.title) || has(&c.text))
                     .collect()
             }
-            RefSource::Inputs(_) | RefSource::Inbox | RefSource::Edited => {
+            RefSource::Inputs(_) | RefSource::InputSmart(_) | RefSource::Inbox | RefSource::Edited => {
                 let sel = match &p.source {
                     RefSource::Inputs(Some(sel)) => Some(sel.as_path()),
                     _ => None,
                 };
                 let in_sel = sel.map(|s| self.index.ideas_in_collection(Some(s))).unwrap_or_default();
+                let smart: std::collections::HashSet<&Id> = match &p.source {
+                    RefSource::InputSmart(s) => self.smart_ideas(s).into_iter().map(|e| &e.idea.id).collect(),
+                    _ => Default::default(),
+                };
                 let mut ideas: Vec<&IdeaEntry> = self
                     .index
                     .ideas
@@ -4301,6 +4307,7 @@ impl AppState {
                         (IdeaLoc::Unreviewed, RefSource::Inbox) | (IdeaLoc::Edited, RefSource::Edited) => true,
                         (IdeaLoc::Library, RefSource::Inputs(None)) => true,
                         (IdeaLoc::Library, RefSource::Inputs(Some(_))) => in_sel.contains(&e.idea.id),
+                        (IdeaLoc::Library, RefSource::InputSmart(_)) => smart.contains(&e.idea.id),
                         _ => false,
                     })
                     .filter(|e| {
