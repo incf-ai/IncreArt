@@ -211,6 +211,9 @@ const EXTRA_SCENES: &[&str] = &[
     "97k-tile-caption-typed",
     "97l-check-tile-gap-drag",
     "97m-check-tile-gutter-drag",
+    "97n-check-tile-double-click",
+    "97o-tile-pasted-full-size",
+    "97p-check-tile-text-double-click",
     "15b-crop-mark",
     "97f-project-runs",
     "97g-output-by-project-runs",
@@ -798,7 +801,10 @@ impl Tour {
             | "97j-tile-save"
             | "97k-tile-caption-typed"
             | "97l-check-tile-gap-drag"
-            | "97m-check-tile-gutter-drag" => {
+            | "97m-check-tile-gutter-drag"
+            | "97n-check-tile-double-click"
+            | "97o-tile-pasted-full-size"
+            | "97p-check-tile-text-double-click" => {
                 // the drags' positions are those of one row per line at the
                 // default size
                 let mut v = vec![
@@ -834,6 +840,17 @@ impl Tour {
                     }
                     if name == "97k-tile-caption-typed" {
                         v.push(Msg::TileCaptions(increart_gui_core::CaptionFill::Clear));
+                    }
+                    // the 7th tile, the first cell of the third row
+                    if name == "97o-tile-pasted-full-size" {
+                        let img = image::RgbaImage::from_fn(1600, 900, |x, y| {
+                            image::Rgba([(x * 255 / 1600) as u8, (y * 255 / 900) as u8, 160, 255])
+                        });
+                        let pasted = increart_gui_core::tile::TileImage(std::sync::Arc::new(img));
+                        v.push(Msg::TileAdd(vec![increart_gui_core::tile::TileContent::Pasted(pasted)], TileAt::End));
+                    }
+                    if name == "97p-check-tile-text-double-click" {
+                        v.push(Msg::TileAddText(TileAt::End));
                     }
                     if name == "97j-tile-save" {
                         v.push(Msg::TileSaving(true));
@@ -2345,6 +2362,49 @@ impl Tour {
                 _ => {}
             }
         }
+        if matches!(
+            name,
+            "97n-check-tile-double-click" | "97o-tile-pasted-full-size" | "97p-check-tile-text-double-click"
+        ) {
+            // double-click a tile: the first (a library image) full size; a
+            // pasted one full size; a text block's menu, typed into
+            let at = if name.starts_with("97n") { tile0 } else { spot(TileAt::Cell(0, 2)) };
+            let click = |pos, pressed| egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: Default::default(),
+            };
+            match (self.settled, at) {
+                (5, None) => eprintln!("CHECK {name}: FAILED (no tile drawn to click)"),
+                (5, Some(p)) if !self.clicked => self.inject = vec![egui::Event::PointerMoved(p), click(p, true)],
+                (6..=8, Some(p)) if !self.clicked => {
+                    self.inject = vec![click(p, self.settled == 7)];
+                    if self.settled == 8 {
+                        self.clicked = true;
+                        self.started = ctx.input(|i| i.time);
+                    }
+                }
+                (10, _) if self.clicked && name.starts_with("97p") => self.inject = vec![egui::Event::Text("!".into())],
+                (14, _) if self.clicked => {
+                    let first = st.tile.as_ref().and_then(|t| t.layout.tiles[0].image().cloned());
+                    let ok = match &name[..3] {
+                        "97n" => first.is_some() && st.preview == first,
+                        "97o" => st.preview_pasted.is_some(),
+                        _ => {
+                            let typed = st.tile.as_ref().is_some_and(|t| {
+                                t.layout.tiles.iter().any(|x| {
+                                    matches!(&x.content, increart_gui_core::tile::TileContent::Text { text, .. } if text == "Text!")
+                                })
+                            });
+                            typed && egui::Popup::is_any_open(ctx)
+                        }
+                    };
+                    eprintln!("CHECK {name}: {}", if ok { "ok" } else { "FAILED" });
+                }
+                _ => {}
+            }
+        }
         if name == "97k-tile-caption-typed" {
             // no captions yet: right-click a tile, click into its caption
             // field, type; the menu stays open with the text in it
@@ -2513,7 +2573,7 @@ impl Tour {
                     eprintln!(
                         "CHECK {name}: {} (preview still open: {})",
                         if ok { "ok" } else { "FAILED" },
-                        st.preview.is_some()
+                        st.previewing()
                     );
                 }
                 _ => {}
@@ -2576,12 +2636,12 @@ impl Tour {
                 3 => out.push(Msg::Preview(cell(0))),
                 6 => self.inject = vec![key(egui::Key::ArrowDown)],
                 10 => {
-                    let ok = st.preview.is_some() && st.preview == cell(1) && st.sheet_cell == (1, 0);
+                    let ok = st.previewing() && st.preview == cell(1) && st.sheet_cell == (1, 0);
                     eprintln!("CHECK {name} ↓: {} (cell {:?})", if ok { "ok" } else { "FAILED" }, st.sheet_cell);
                     self.inject = vec![key(egui::Key::ArrowUp)];
                 }
                 14 => {
-                    let ok = st.preview.is_some() && st.preview == cell(0) && st.sheet_cell == (0, 0);
+                    let ok = st.previewing() && st.preview == cell(0) && st.sheet_cell == (0, 0);
                     eprintln!("CHECK {name} ↑: {} (cell {:?})", if ok { "ok" } else { "FAILED" }, st.sheet_cell);
                 }
                 _ => {}
@@ -2635,7 +2695,7 @@ impl Tour {
                     self.clicked = true;
                 }
                 (12, _) => {
-                    let ok = st.preview.is_some() && st.preview == st.generate.refs().first().cloned();
+                    let ok = st.previewing() && st.preview == st.generate.refs().first().cloned();
                     eprintln!("CHECK {name}: {}", if ok { "ok" } else { "FAILED" });
                     if !ok {
                         eprintln!(
@@ -2656,7 +2716,7 @@ impl Tour {
                     }]
                 }
                 (20, _) => {
-                    eprintln!("CHECK {name} closes on Esc: {}", if st.preview.is_none() { "ok" } else { "FAILED" })
+                    eprintln!("CHECK {name} closes on Esc: {}", if !st.previewing() { "ok" } else { "FAILED" })
                 }
                 _ => {}
             }
@@ -2750,7 +2810,7 @@ impl Tour {
                 }
                 (12, _) if self.clicked => {
                     let ok = if double {
-                        st.preview.is_some() && st.output_selected.is_none()
+                        st.previewing() && st.output_selected.is_none()
                     } else {
                         let first = st.library_ideas().first().map(|e| e.idea.id.clone());
                         first.is_some() && st.lib_info == first
@@ -2758,7 +2818,7 @@ impl Tour {
                     eprintln!(
                         "CHECK {name}: {} (preview {}, output panel {}, library panel {})",
                         if ok { "ok" } else { "FAILED" },
-                        st.preview.is_some(),
+                        st.previewing(),
                         st.output_selected.is_some(),
                         st.lib_info.is_some()
                     );

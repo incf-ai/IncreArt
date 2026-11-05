@@ -794,6 +794,8 @@ pub enum Msg {
     SweepPicker,
     /// Shows an image large (`None` closes it).
     Preview(Option<ImageRef>),
+    /// A pasted image large (`None`: closed, as `Preview(None)`).
+    PreviewPasted(Option<crate::tile::TileImage>),
     /// Shows the image large, ← / → stepping through the list.
     PreviewAmong(Vec<ImageRef>, ImageRef),
     /// The large preview's next (1) or previous (-1) image in
@@ -5409,6 +5411,12 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
         Msg::Preview(image) => {
             state.preview = image;
             state.preview_among = None;
+            state.preview_pasted = None;
+            vec![]
+        }
+        Msg::PreviewPasted(image) => {
+            state.preview_pasted = image;
+            (state.preview, state.preview_among) = (None, None);
             vec![]
         }
         Msg::PreviewAmong(list, image) => {

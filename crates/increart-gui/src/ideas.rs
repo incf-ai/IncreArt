@@ -518,7 +518,7 @@ fn inbox_grid(ui: &mut egui::Ui, st: &AppState, tex: &mut Textures, out: &mut Ve
     let ideas = st.inbox_queue();
     let current = ideas.get(st.inbox_cursor).map(|e| e.idea.id.clone());
     let picks = &st.inbox_picked;
-    let modal = st.preview.is_some() || st.tile.is_some() || st.save_idea.is_some() || st.from_ideas.is_some();
+    let modal = st.previewing() || st.tile.is_some() || st.save_idea.is_some() || st.from_ideas.is_some();
     if !ui.ctx().egui_wants_keyboard_input() && !modal {
         ui.input(|i| {
             // with picks, they all go
@@ -1340,7 +1340,7 @@ fn lib_current(st: &AppState) -> Option<increart_core::Id> {
 /// The Input library Grid's keys: move (selecting the idea and showing it
 /// in the side panel), select all, new project, edit.
 fn library_keys(ui: &egui::Ui, st: &AppState, out: &mut Vec<Msg>) {
-    if ui.ctx().egui_wants_keyboard_input() || st.preview.is_some() || st.collect_ideas.is_some() {
+    if ui.ctx().egui_wants_keyboard_input() || st.previewing() || st.collect_ideas.is_some() {
         return;
     }
     let ideas: Vec<_> = st.library_ideas().into_iter().map(|e| e.idea.id.clone()).collect();

@@ -3497,6 +3497,8 @@ pub struct AppState {
     /// What the preview's ← / → step through when it was opened on a list
     /// of its own (an image sweep's images), not where it was opened.
     pub preview_among: Option<Vec<ImageRef>>,
+    /// A pasted image (the Tile window's) shown large, as `preview`.
+    pub preview_pasted: Option<crate::tile::TileImage>,
     /// The title dialog of an output image, while open.
     pub title_edit: Option<TitleEdit>,
     /// Generate's From library… picker, while open.
@@ -3830,6 +3832,7 @@ impl AppState {
             scale: None,
             preview: None,
             preview_among: None,
+            preview_pasted: None,
             ref_picker: None,
             ref_picker_source: None,
             title_edit: None,
@@ -4364,6 +4367,11 @@ impl AppState {
     }
 
     /// Where the preview is in [`Self::preview_list`]: (index, count).
+    /// Whether an image is shown large (`preview`, `preview_pasted`).
+    pub fn previewing(&self) -> bool {
+        self.preview.is_some() || self.preview_pasted.is_some()
+    }
+
     pub fn preview_position(&self) -> Option<(usize, usize)> {
         let p = self.preview.as_ref()?;
         if let Some(among) = &self.preview_among {

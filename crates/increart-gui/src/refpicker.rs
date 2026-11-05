@@ -229,7 +229,7 @@ pub fn window(ctx: &egui::Context, st: &AppState, tex: &mut Textures, out: &mut 
         }
     }
     // keys, unless the full-size preview is over it
-    if st.preview.is_none() {
+    if !st.previewing() {
         let (enter, esc) = ctx.input(|i| (i.key_pressed(Key::Enter), i.key_pressed(Key::Escape)));
         let typing = ctx.memory(|m| m.focused().is_some());
         if enter && !typing && !p.chosen.is_empty() {

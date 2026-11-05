@@ -153,7 +153,7 @@ fn copy_paths_text(ui: &egui::Ui, st: &AppState) {
 }
 
 fn keys(ui: &egui::Ui, st: &AppState, out: &mut Vec<Msg>) {
-    if ui.ctx().egui_wants_keyboard_input() || st.confirm.is_some() || st.preview.is_some() {
+    if ui.ctx().egui_wants_keyboard_input() || st.confirm.is_some() || st.previewing() {
         return;
     }
     let fv = &st.folder_view;

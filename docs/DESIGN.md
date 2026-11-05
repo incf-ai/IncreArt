@@ -2494,6 +2494,9 @@ out as one image.
   need). A tile across the line grows by it. Right-click (or double-click)
   there: **Add text here**, **Add images…**, **Paste image here**, the
   same, into a new line. Columns stop at 32 (no zones for more).
+- **Double-click a tile**: an image full size (the large preview, Esc back
+  to the Tile window; a pasted one too, without the right-click menu); a
+  text block opens its menu, typing into its text.
 - **Text blocks**: right-click an empty cell (or double-click it) → **Add
   text here**. A text block is a tile like an image (drag, span, remove)
   holding lines of text, word-wrapped and centred in its cells, in the

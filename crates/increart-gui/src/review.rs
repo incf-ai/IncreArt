@@ -25,7 +25,7 @@ pub const VERDICTS: [(&str, Verdict, egui::Color32); 3] =
 fn keys(ui: &egui::Ui, st: &AppState, out: &mut Vec<Msg>) {
     // the full-size preview or the picker is up: its keys are its own
     if ui.ctx().egui_wants_keyboard_input()
-        || st.preview.is_some()
+        || st.previewing()
         || st.ref_picker.is_some()
         || st.collect.is_some()
         || st.tagging.is_some()
@@ -1567,7 +1567,7 @@ pub fn output_library(ui: &mut egui::Ui, st: &AppState, tex: &mut Textures, out:
     let images = st.output_source_images();
     // F2: the selected image's title
     if st.output_tab == OutputTab::Grid
-        && st.preview.is_none()
+        && !st.previewing()
         && st.title_edit.is_none()
         && !ui.ctx().egui_wants_keyboard_input()
         && ui.input(|i| i.key_pressed(Key::F2))
@@ -1577,7 +1577,7 @@ pub fn output_library(ui: &mut egui::Ui, st: &AppState, tex: &mut Textures, out:
     }
     // L / Shift+L: the selected image (the picks: tiles::keys)
     if st.output_tab == OutputTab::Grid
-        && st.preview.is_none()
+        && !st.previewing()
         && st.title_edit.is_none()
         && st.tagging.is_none()
         && st.picked.is_empty()
@@ -1588,7 +1588,7 @@ pub fn output_library(ui: &mut egui::Ui, st: &AppState, tex: &mut Textures, out:
     }
     // the arrows and Home / End: the image selected, shown in the lineage panel
     if st.output_tab == OutputTab::Grid
-        && st.preview.is_none()
+        && !st.previewing()
         && st.title_edit.is_none()
         && st.ref_picker.is_none()
         && st.tagging.is_none()
@@ -1734,7 +1734,7 @@ fn output_compare(
 ) {
     let at = st.output_selected.as_ref().and_then(|s| images.iter().position(|o| &o.image == s));
     let b = st.output_selected.as_ref().and_then(|s| st.output_link(s));
-    let esc = st.preview.is_none() && st.ref_picker.is_none() && ui.input(|i| i.key_pressed(Key::Escape));
+    let esc = !st.previewing() && st.ref_picker.is_none() && ui.input(|i| i.key_pressed(Key::Escape));
     if esc {
         out.push(Msg::OutputCompare(None));
     }

@@ -227,7 +227,7 @@ pub fn menu(ui: &mut egui::Ui, st: &AppState, image: &ImageRef, out: &mut Vec<Ms
 /// taken.
 pub fn keys(ui: &egui::Ui, st: &AppState, out: &mut Vec<Msg>) -> bool {
     if ui.ctx().egui_wants_keyboard_input()
-        || st.preview.is_some()
+        || st.previewing()
         || st.tile.is_some()
         || st.tagging.is_some()
         || st.use_ref.is_some()
@@ -442,8 +442,9 @@ pub fn window(ctx: &egui::Context, st: &AppState, tex: &mut Textures, out: &mut 
             });
             ui.weak(
                 "Drag a tile onto another to swap them, onto an empty cell, or into the space around or \
-                     between them for a new column or row; click one to edit it. Right-click an empty cell or \
-                     that space to add text or images there; paste (Ctrl+V) or drop image files on either.",
+                     between them for a new column or row; click one to edit it, double-click to see it full \
+                     size. Right-click an empty cell or that space to add text or images there; paste (Ctrl+V) \
+                     or drop image files on either.",
             );
             preview(ui, st, d, &root, tex, out);
         });
@@ -691,6 +692,7 @@ fn preview(
     let l = &d.layout;
     if let Some(i) = d.selected
         && !ui.ctx().egui_wants_keyboard_input()
+        && !st.previewing()
         && ui.input(|x| x.key_pressed(Key::Delete) || x.key_pressed(Key::Backspace))
     {
         out.push(Msg::TileRemove(i));
@@ -817,11 +819,27 @@ fn preview(
         if resp.clicked() && !removed {
             out.push(Msg::TileSelect(Some(i)));
         }
+        // double-click: an image full size; a text block's menu, typing
+        // into its text
+        let mut open = false;
+        if resp.double_clicked() {
+            match &t.content {
+                TileContent::Image(image) => out.push(Msg::Preview(Some(image.clone()))),
+                TileContent::Pasted(img) => out.push(Msg::PreviewPasted(Some(img.clone()))),
+                TileContent::Text { .. } => {
+                    ui.ctx().data_mut(|m| m.insert_temp(egui::Id::unique("tile_text_focus"), i));
+                    open = true;
+                }
+            }
+        }
         // a click inside (into the caption) leaves it open: its buttons
         // close it themselves
-        egui::Popup::context_menu(&resp)
-            .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
-            .show(|ui| tile_menu(ui, st, d, &g, i, out));
+        let mut menu = egui::Popup::context_menu(&resp);
+        if open {
+            // (over its own: the second click closes it)
+            menu = menu.open_memory(egui::SetOpenCommand::Bool(true));
+        }
+        menu.close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| tile_menu(ui, st, d, &g, i, out));
         if resp.drag_started() {
             ui.ctx().data_mut(|m| m.insert_temp(dragging, i));
         }
@@ -876,7 +894,7 @@ fn preview(
         show(at);
     }
     let under = under.unwrap_or(TileAt::End);
-    let picker = st.ref_picker.is_some() || ui.ctx().memory(|m| m.focused().is_some());
+    let picker = st.ref_picker.is_some() || st.previewing() || ui.ctx().memory(|m| m.focused().is_some());
     if !picker {
         for e in events {
             match e {
@@ -1024,11 +1042,17 @@ fn add_files(st: &AppState, files: Vec<PathBuf>, at: TileAt, out: &mut Vec<Msg>)
 
 /// A pasted image's texture, made once (at most 1024 px).
 fn pasted_texture(ctx: &egui::Context, img: &TileImage) -> egui::TextureHandle {
-    let id = egui::Id::unique("tile_pasted").with(Arc::as_ptr(&img.0) as usize);
+    pasted_texture_at(ctx, img, 1024)
+}
+
+/// A pasted image's texture at most `max` px, made once (the large
+/// preview's: as large as the GPU takes).
+pub fn pasted_texture_at(ctx: &egui::Context, img: &TileImage, max: u32) -> egui::TextureHandle {
+    let id = egui::Id::unique("tile_pasted").with((Arc::as_ptr(&img.0) as usize, max));
     if let Some(t) = ctx.data(|d| d.get_temp::<egui::TextureHandle>(id)) {
         return t;
     }
-    let k = (1024.0 / img.0.width().max(img.0.height()) as f32).min(1.0);
+    let k = (max as f32 / img.0.width().max(img.0.height()) as f32).min(1.0);
     let (w, h) = ((img.0.width() as f32 * k).max(1.0) as u32, (img.0.height() as f32 * k).max(1.0) as u32);
     let small = image::imageops::thumbnail(&*img.0, w, h);
     let ci =
@@ -1097,7 +1121,13 @@ fn text_edit(ui: &mut egui::Ui, t: &Tile, g: &Geometry, i: usize, width: f32, ou
     let TileContent::Text { text, size } = &t.content else { return };
     let mut x = text.clone();
     let edit = egui::TextEdit::multiline(&mut x).hint_text("text").desired_rows(3).desired_width(width);
-    if ui.add(edit).changed() {
+    let r = ui.add(edit);
+    // just opened by a double-click on it
+    let focus = egui::Id::unique("tile_text_focus");
+    if ui.ctx().data_mut(|m| m.remove_temp::<usize>(focus)) == Some(i) {
+        r.request_focus();
+    }
+    if r.changed() {
         out.push(Msg::TileText(i, x));
     }
     let mut size = *size;

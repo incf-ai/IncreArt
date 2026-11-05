@@ -713,7 +713,7 @@ fn swept_placeholder(
                 ui.ctx().data_mut(|d| d.insert_temp(open, true));
             }
             if ui.ctx().data(|d| d.get_temp::<bool>(open)).is_some() {
-                swept_modal(ui.ctx(), st.preview.is_some(), root, tex, &swept, &names, out);
+                swept_modal(ui.ctx(), st.previewing(), root, tex, &swept, &names, out);
             }
             ui.vertical(|ui| {
                 ui.horizontal(|ui| {
@@ -1318,12 +1318,23 @@ pub fn retag_window(ctx: &egui::Context, st: &AppState, out: &mut Vec<Msg>) {
 /// no longer zooms), 4 or Ctrl+Z (undo), the bar's Good · Neutral · Bad · undo, or the
 /// right-click menu — and used (E, D, R, I, the menu). A click (when not
 /// zoomed in), Esc or a click outside closes it.
+/// A pasted image (the Tile window's) shows the same, without the menu.
 /// `keys_open` opens the shortcuts popover (for the tour).
 pub fn preview_window(ctx: &egui::Context, st: &AppState, tex: &mut Textures, keys_open: bool, out: &mut Vec<Msg>) {
-    let (Some(img), Some(root)) = (&st.preview, &st.library) else { return };
-    // the large version once it's loaded, the thumbnail until then
-    let t = tex.full_or_thumb(root, img);
-    let [w, h] = tex.dims(root, img).unwrap_or([1024, 1024]);
+    let Some(root) = &st.library else { return };
+    let (img, t, [w, h], key) = match (&st.preview, &st.preview_pasted) {
+        // the large version once it's loaded, the thumbnail until then
+        (Some(img), _) => {
+            let dims = tex.dims(root, img).unwrap_or([1024, 1024]);
+            (Some(img), tex.full_or_thumb(root, img), dims, egui::Id::unique(img))
+        }
+        (None, Some(p)) => {
+            let max = ctx.input(|i| i.max_texture_side) as u32;
+            let t = crate::tiles::pasted_texture_at(ctx, p, max);
+            (None, Some(t), [p.0.width(), p.0.height()], egui::Id::unique(std::sync::Arc::as_ptr(&p.0) as usize))
+        }
+        (None, None) => return,
+    };
     let full = egui::vec2(w as f32, h as f32);
     const BAR: f32 = 30.0;
     let room = ctx.content_rect().size() * 0.95 - egui::vec2(0.0, BAR);
@@ -1331,8 +1342,8 @@ pub fn preview_window(ctx: &egui::Context, st: &AppState, tex: &mut Textures, ke
     let view_id = egui::Id::unique("image_preview_view");
     let mut v = ctx
         .data(|d| d.get_temp::<PreviewView>(view_id))
-        .filter(|v| v.image == *img)
-        .unwrap_or_else(|| PreviewView::new(img.clone(), full, fit));
+        .filter(|v| v.image == key)
+        .unwrap_or_else(|| PreviewView::new(key, full, fit));
     v.fit = fit;
     // ← / →: the previous / next image where it was opened from, an output
     // there, so it can be rated (its verdict) and used
@@ -1350,12 +1361,12 @@ pub fn preview_window(ctx: &egui::Context, st: &AppState, tex: &mut Textures, ke
     // the Tag… or Use as a reference… modal over it: its keys are its own
     let tagging = st.tagging.is_some() || st.use_ref.is_some();
     // Review: U / R ask first, with a rating (the modal)
-    let review = st.tab == Tab::Review && st.output_link(img).is_some();
-    let output = st.output_link(img).is_some();
-    if output && !tagging {
+    let output = img.is_some_and(|img| st.output_link(img).is_some());
+    let review = st.tab == Tab::Review && output;
+    if let Some(img) = img.filter(|_| output && !tagging) {
         ctx.input(|i| crate::review::tag_keys(i, vec![img.clone()], out));
     }
-    if at.is_some() && !tagging {
+    if let Some(img) = img.filter(|_| at.is_some() && !tagging) {
         ctx.input(|i| {
             if i.key_pressed(egui::Key::ArrowLeft) {
                 out.push(Msg::PreviewStep(-1));
@@ -1462,35 +1473,39 @@ pub fn preview_window(ctx: &egui::Context, st: &AppState, tex: &mut Textures, ke
             let close = if zoomed_in { "drag to move · Esc to close" } else { "click or Esc to close" };
             let (hundred, menu) = if rates { ("", "rate and use") } else { (", 1 100%", "copy") };
             let rate = if rates { " · 1 / 2 / 3 Good / Neutral / Bad, 4 or Ctrl+Z undo" } else { "" };
+            // (a pasted image: no menu)
+            let menu = if img.is_some() { format!(" · right-click to {menu}") } else { String::new() };
             let resp = resp.on_hover_text(format!(
-                "{}\n{:.0}% · wheel or + / − zoom, 0 fit{hundred}{arrows}{rate} · {close} · right-click to {menu}",
+                "{}\n{:.0}% · wheel or + / − zoom, 0 fit{hundred}{arrows}{rate} · {close}{menu}",
                 crate::widgets::size_info(w, h),
                 scale * 100.0
             ));
-            resp.context_menu(|ui| {
-                if rates && ui.horizontal(|ui| verdict_buttons(ui, verdict.flatten(), false, out)).inner {
-                    ui.close();
-                }
-                // an output's tags and collections, as on its grid tile
-                if output {
-                    if rates {
-                        ui.separator();
-                    }
-                    if ui.button(ic(ph::TAG, "Tag…   L")).clicked() {
-                        out.push(Msg::TagImages(vec![img.clone()]));
+            if let Some(img) = img {
+                resp.context_menu(|ui| {
+                    if rates && ui.horizontal(|ui| verdict_buttons(ui, verdict.flatten(), false, out)).inner {
                         ui.close();
                     }
-                    crate::review::add_to_collection(ui, st, std::slice::from_ref(img), out);
-                    ui.separator();
-                }
-                if !rates {
-                    return crate::widgets::image_menu_items(ui, root, img, out);
-                }
-                if !output {
-                    ui.separator();
-                }
-                crate::review::use_menu(ui, st, root, img, out);
-            });
+                    // an output's tags and collections, as on its grid tile
+                    if output {
+                        if rates {
+                            ui.separator();
+                        }
+                        if ui.button(ic(ph::TAG, "Tag…   L")).clicked() {
+                            out.push(Msg::TagImages(vec![img.clone()]));
+                            ui.close();
+                        }
+                        crate::review::add_to_collection(ui, st, std::slice::from_ref(img), out);
+                        ui.separator();
+                    }
+                    if !rates {
+                        return crate::widgets::image_menu_items(ui, root, img, out);
+                    }
+                    if !output {
+                        ui.separator();
+                    }
+                    crate::review::use_menu(ui, st, root, img, out);
+                });
+            }
 
             let mut close_clicked = false;
             // the bar's choices (both its sides can't borrow `out`)
@@ -1512,10 +1527,12 @@ pub fn preview_window(ctx: &egui::Context, st: &AppState, tex: &mut Textures, ke
                             .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
                             .show(|ui| preview_keys(ui, at.is_some(), rows, rates, output, review));
                         ui.separator();
-                        if output && ui.small_button(ph::TAG).on_hover_text("tag it…   L").clicked() {
+                        if let Some(img) = img.filter(|_| output)
+                            && ui.small_button(ph::TAG).on_hover_text("tag it…   L").clicked()
+                        {
                             picked.push(Msg::TagImages(vec![img.clone()]));
                         }
-                        if rates {
+                        if let (true, Some(img)) = (rates, img) {
                             // right to left, so Good · Neutral · Bad read left to right
                             ui.menu_button(ph::DOTS_THREE, |ui| {
                                 crate::review::use_menu(ui, st, root, img, &mut picked)
@@ -1657,7 +1674,8 @@ fn verdict_buttons(ui: &mut egui::Ui, current: Option<Verdict>, rtl: bool, out: 
 /// The large preview's zoom and position, kept while it shows one image.
 #[derive(Clone)]
 struct PreviewView {
-    image: increart_core::ImageRef,
+    /// What it shows (an image, a pasted one).
+    image: egui::Id,
     full: egui::Vec2,
     /// The scale that fits the window (it follows the window's size).
     fit: f32,
@@ -1668,7 +1686,7 @@ struct PreviewView {
 }
 
 impl PreviewView {
-    fn new(image: increart_core::ImageRef, full: egui::Vec2, fit: f32) -> Self {
+    fn new(image: egui::Id, full: egui::Vec2, fit: f32) -> Self {
         PreviewView { image, full, fit, zoom: None, center: full / 2.0 }
     }
 

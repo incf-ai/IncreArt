@@ -4105,7 +4105,12 @@ fn style_sweeps_queue_review_on_a_contact_sheet_and_reuse_a_style() {
     assert_eq!((t.layout.tiles[i].col, t.layout.tiles[i].row), (0, 2), "the text has (1, 1): the next free");
     // pasted: a tile, captioned as such, composed but not a source
     let pasted = increart_gui_core::tile::TileImage(std::sync::Arc::new(image::RgbaImage::new(8, 8)));
-    h.send(Msg::TileAdd(vec![increart_gui_core::tile::TileContent::Pasted(pasted)], TileAt::End));
+    h.send(Msg::TileAdd(vec![increart_gui_core::tile::TileContent::Pasted(pasted.clone())], TileAt::End));
+    // full size (a double-click), closed as any preview
+    h.send(Msg::PreviewPasted(Some(pasted)));
+    assert!(h.state.previewing() && h.state.preview.is_none());
+    h.send(Msg::Preview(None));
+    assert!(!h.state.previewing());
     h.send(Msg::TileCaption(5, "by hand".into()));
     // the format and the fills are for generated images only: the input
     // and the pasted one (no seed, no run) keep their own captions
