@@ -29,6 +29,7 @@ const SCENES: &[&str] = &[
     "02c-koboldcpp-entry",
     "02d-model-presets-from-servers",
     "02e-model-wizard",
+    "02f-model-setup",
     "54-server-wizard",
     "54a-server-wizard-choose",
     "54c-server-wizard-pe-own-gpu",
@@ -1141,6 +1142,13 @@ impl Tour {
                     Msg::EditModelWizard(Box::new(w)),
                     Msg::WizardGpus(Ok(gpus), None),
                 ]
+            }
+            "02f-model-setup" => {
+                // Edit…: the built-in models page, the first three ticked
+                let Some(mut w) = st.model_wizard.clone() else { return vec![] };
+                w.editing = true;
+                w.tab = increart_gui_core::ModelSetupTab::Add;
+                vec![Msg::EditModelWizard(Box::new(w))]
             }
             "54-server-wizard" => {
                 // KoboldCpp: two 24 GB cards and an integrated GPU (not ticked)

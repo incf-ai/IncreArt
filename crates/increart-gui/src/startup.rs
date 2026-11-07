@@ -632,7 +632,7 @@ pub fn servers(ui: &mut egui::Ui, st: &AppState, d: &ServerDialog, out: &mut Vec
     let screen = ui.ctx().content_rect();
     let width = (screen.width() - 80.0).clamp(960.0, 1400.0);
     let half = (width - 32.0) / 2.0;
-    let table_height = (screen.height() - 600.0).clamp(150.0, 420.0);
+    let table_height = (screen.height() - 470.0).clamp(180.0, 560.0);
     centered(ui, "servers", width, |ui| {
         // the divider drawn after: a separator would stretch to the screen's height
         let r = ui

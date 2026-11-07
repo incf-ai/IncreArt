@@ -1052,6 +1052,143 @@ pub struct ModelWizard {
     pub gpus: Option<Result<Vec<increart_core::tiers::Gpu>, String>>,
     /// The download asked (its presets added).
     pub started: bool,
+    /// The **Set up models** window (Edit… on the Models half) is open.
+    pub editing: bool,
+    /// Its page.
+    pub tab: ModelSetupTab,
+    /// The lists' search, kind, fit filter and order.
+    pub search: String,
+    pub kind: ModelKind,
+    pub fits_only: bool,
+    pub sort: ModelSort,
+}
+
+/// The pages of **Set up models**.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ModelSetupTab {
+    #[default]
+    Folders,
+    Add,
+}
+
+/// What kind of model a preset is, for the Models lists' filter.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ModelKind {
+    #[default]
+    All,
+    /// Makes images from a prompt.
+    Image,
+    /// Changes a reference image (an edit recipe, Kontext).
+    Edit,
+    /// A model with a LoRA style on it.
+    Lora,
+}
+
+impl ModelKind {
+    pub const ALL: [ModelKind; 4] = [ModelKind::All, ModelKind::Image, ModelKind::Edit, ModelKind::Lora];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            ModelKind::All => "All kinds",
+            ModelKind::Image => "Image models",
+            ModelKind::Edit => "Edit models",
+            ModelKind::Lora => "LoRA styles",
+        }
+    }
+
+    pub fn of(p: &RecipePreset) -> ModelKind {
+        let r = p.recipe.to_lowercase();
+        if !p.loras.is_empty() {
+            ModelKind::Lora
+        } else if r.contains("edit") || r.contains("kontext") {
+            ModelKind::Edit
+        } else {
+            ModelKind::Image
+        }
+    }
+}
+
+/// The Models lists' order.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ModelSort {
+    /// As listed (yours as saved, the built-in ones as offered).
+    #[default]
+    Listed,
+    Name,
+    SmallFirst,
+    LargeFirst,
+}
+
+impl ModelSort {
+    pub const ALL: [ModelSort; 4] = [ModelSort::Listed, ModelSort::Name, ModelSort::SmallFirst, ModelSort::LargeFirst];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            ModelSort::Listed => "List order",
+            ModelSort::Name => "Name",
+            ModelSort::SmallFirst => "Smallest first",
+            ModelSort::LargeFirst => "Largest first",
+        }
+    }
+}
+
+/// The Models half's three lists, each a model and what it needs.
+#[derive(Clone, Debug, Default)]
+pub struct ModelLists<'a> {
+    /// Your models that aren't built-in ones (by name).
+    pub custom: Vec<(&'a RecipePreset, PresetNeeds)>,
+    /// Built-in ones in your models (your copy, as you may have changed it).
+    pub installed: Vec<(&'a RecipePreset, PresetNeeds)>,
+    /// Built-in ones not in your models.
+    pub available: Vec<(&'a RecipePreset, PresetNeeds)>,
+}
+
+impl<'a> ModelLists<'a> {
+    pub fn of(
+        recipes: &'a [RecipePreset],
+        catalogue: &'a [RecipePreset],
+        dirs: &[String],
+        sizes: &BTreeMap<String, Option<u64>>,
+    ) -> ModelLists<'a> {
+        let builtin = |name: &str| catalogue.iter().any(|c| c.name == name);
+        let needs = |p: &'a RecipePreset| (p, PresetNeeds::of(p, dirs, sizes));
+        ModelLists {
+            custom: recipes.iter().filter(|r| !builtin(&r.name)).map(needs).collect(),
+            installed: recipes.iter().filter(|r| builtin(&r.name)).map(needs).collect(),
+            available: catalogue.iter().filter(|c| !recipes.iter().any(|r| r.name == c.name)).map(needs).collect(),
+        }
+    }
+}
+
+impl ModelWizard {
+    /// Of `rows`, those the search, kind and fit filter let through, in the
+    /// chosen order; `vram`: each GPU's memory in GiB.
+    pub fn shown<'a>(
+        &self,
+        mut rows: Vec<(&'a RecipePreset, PresetNeeds)>,
+        vram: &[f64],
+    ) -> Vec<(&'a RecipePreset, PresetNeeds)> {
+        let words: Vec<String> = self.search.to_lowercase().split_whitespace().map(str::to_string).collect();
+        rows.retain(|(p, n)| {
+            let text = format!("{} {} {}", p.name, p.recipe, p.note).to_lowercase();
+            words.iter().all(|w| text.contains(w))
+                && (self.kind == ModelKind::All || ModelKind::of(p) == self.kind)
+                && (!self.fits_only || vram.iter().any(|v| n.fits(*v) == Some(true)))
+        });
+        match self.sort {
+            ModelSort::Listed => {}
+            ModelSort::Name => rows.sort_by_key(|(p, _)| p.name.to_lowercase()),
+            // sizes not known yet last
+            ModelSort::SmallFirst => rows.sort_by_key(|(_, n)| n.total_bytes.unwrap_or(u64::MAX)),
+            ModelSort::LargeFirst => rows.sort_by_key(|(_, n)| std::cmp::Reverse(n.total_bytes.unwrap_or(0))),
+        }
+        rows
+    }
+
+    /// Whether a filter hides anything.
+    pub fn filtering(&self) -> bool {
+        !self.search.trim().is_empty() || self.kind != ModelKind::All || self.fits_only
+    }
 }
 
 /// What a built-in preset needs from the model folders `dirs`.

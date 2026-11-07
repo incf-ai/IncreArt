@@ -72,9 +72,9 @@ fn the_folder_found_folders_and_picked_presets_become_the_setup() {
     // again while it downloads: refused
     update(&mut s, Msg::ModelWizardGo);
     assert!(s.messages.iter().any(|m| m.error && m.text.contains("under way")));
-    // closed: the download goes on
+    // the window closed: the download goes on, the Models half keeps its state
     update(&mut s, Msg::CloseModelWizard);
-    assert!(s.model_wizard.is_none() && s.preset_download.is_some());
+    assert!(s.model_wizard.as_ref().is_some_and(|w| !w.editing) && s.preset_download.is_some());
 }
 
 #[test]
@@ -98,11 +98,61 @@ fn sizes_are_asked_once_a_session() {
         panic!()
     };
     update(&mut s, Msg::DownloadSize(urls[0].clone(), Some(5)));
+    // the window closed and the Models half shown again: nothing asked again
     update(&mut s, Msg::CloseModelWizard);
+    assert!(update(&mut s, Msg::OpenModelWizard).is_empty());
+    // a new session's half (the state gone): only what isn't known
+    s.model_wizard = None;
     let fx = update(&mut s, Msg::OpenModelWizard);
     let Some(Effect::DownloadSizes(again)) = fx.into_iter().find(|f| matches!(f, Effect::DownloadSizes(_))) else {
         panic!()
     };
     assert_eq!(again.len(), urls.len() - 1);
     assert_eq!(s.model_wizard.as_ref().unwrap().sizes[&urls[0]], Some(5));
+}
+
+#[test]
+fn the_models_are_listed_as_yours_installed_and_not_and_filtered() {
+    use increart_core::config::RecipePreset;
+    let catalogue = increart_core::config::catalogue();
+    let mine = RecipePreset { name: "My own".into(), recipe: "z-image-turbo".into(), ..Default::default() };
+    let recipes = vec![mine, catalogue[1].clone()];
+    let sizes = std::collections::BTreeMap::new();
+    let lists = ModelLists::of(&recipes, &catalogue, &[], &sizes);
+    let names = |v: &[(&RecipePreset, PresetNeeds)]| v.iter().map(|(p, _)| p.name.clone()).collect::<Vec<_>>();
+    assert_eq!(names(&lists.custom), ["My own"]);
+    assert_eq!(names(&lists.installed), [catalogue[1].name.clone()]);
+    assert_eq!(lists.available.len(), catalogue.len() - 1);
+    assert!(!names(&lists.available).contains(&catalogue[1].name));
+    // search: every word, in the name, recipe or note
+    let mut w = ModelWizard { search: "qwen EDIT".into(), ..Default::default() };
+    let shown = names(&w.shown(lists.available.clone(), &[]));
+    assert!(!shown.is_empty() && shown.iter().all(|n| n.contains("Qwen-Image Edit")), "{shown:?}");
+    assert!(w.filtering());
+    // kind
+    w.search.clear();
+    w.kind = ModelKind::Lora;
+    let shown = w.shown(lists.available.clone(), &[]);
+    assert!(!shown.is_empty() && shown.iter().all(|(p, _)| !p.loras.is_empty()));
+    w.kind = ModelKind::Edit;
+    assert!(w.shown(lists.available.clone(), &[]).iter().any(|(p, _)| p.name == "FLUX.1 Kontext"));
+    // fits a GPU: sizes not known fit none
+    w.kind = ModelKind::All;
+    w.fits_only = true;
+    assert!(w.shown(lists.available.clone(), &[24.0]).is_empty());
+    // order: by name; largest first, sizes not known last
+    w.fits_only = false;
+    w.sort = ModelSort::Name;
+    let by_name = names(&w.shown(lists.available.clone(), &[]));
+    let mut sorted = by_name.clone();
+    sorted.sort_by_key(|n| n.to_lowercase());
+    assert_eq!(by_name, sorted);
+    let mut rows = lists.available.clone();
+    rows[3].1.total_bytes = Some(9);
+    rows[5].1.total_bytes = Some(20);
+    w.sort = ModelSort::LargeFirst;
+    let big = w.shown(rows.clone(), &[]);
+    assert_eq!((big[0].0.name.as_str(), big[1].0.name.as_str()), (rows[5].0.name.as_str(), rows[3].0.name.as_str()));
+    w.sort = ModelSort::SmallFirst;
+    assert_eq!(w.shown(rows, &[])[0].1.total_bytes, Some(9));
 }

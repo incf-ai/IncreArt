@@ -203,8 +203,8 @@ asks among them):
   files stay "model files". The code keeps the old names.
 - **Two halves**: on the left **Servers**, the server setups and opening
   one (the progress, while opening, below them); on the right **Models**
-  (see Setting up models below), always shown, with **Edit your models
-  (N)…** for the models editor. Server settings…, Logs… and the ways out
+  (see Setting up models below), always shown, greyed (and saying why)
+  until there's a server setup. Server settings…, Logs… and the ways out
   span both, below. The screen is as wide as the window allows (960–1400
   px); the divider is drawn after the halves, so it doesn't stretch the
   screen.
@@ -2790,9 +2790,27 @@ in the app's state folder (`$XDG_STATE_HOME/increart` when set, else
 - **Setting up models**: the servers screen's right half, **Models**
   (opened as the screen first shows; its state, `ModelWizard`, stays while
   the app runs, so a download's progress is there when the screen is
-  reopened). It says what it's for (the image models the servers can
-  load, each its files and settings; built-in ones added, only files not
-  already on the machine downloaded) and has three numbered steps:
+  reopened), read only:
+  - The model folders on one line, a filter row (search: every word in
+    the name, recipe or note; kind: image, edit (an edit recipe or
+    Kontext), LoRA style (`ModelKind::of`); **Fits a GPU**; sort: list
+    order, name, smallest or largest first, sizes not known last;
+    `ModelWizard::shown`), the GPUs, then three tables (`ModelLists`):
+    **Your custom models** (your models not named as a built-in one),
+    **Built-in models, installed** (your copy), **Built-in models, not
+    installed**; each with Model, Size, Files ("ready", "3 files missing",
+    "files here, not installed", "download 3 files (9.8 GB)") and Fits GPU,
+    and "(4 of 18 shown)" when filtered.
+  - **Model settings…** opens the models editor; **Edit…** opens **Set up
+    models**, a window of two pages (the same height, so it doesn't jump)
+    and Model settings…; Close or Esc closes it (a download goes on, shown
+    in the half too):
+  - **1. Model folders**: the download folder, your model folders in order
+    (changed in Server settings…), and folders found with model files.
+  - **2. Add built-in models**: the filter row and the built-in models,
+    ticked to install; **Download and install** (**Install** when
+    nothing's missing).
+  The pages' parts:
   - **1. Download folder**: where downloads go, the first model folder by default, else
     `~/models`; typed or Browse…. One not yet a model folder is added as
     the first (made if it isn't there); one already among them stays where

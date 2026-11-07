@@ -1874,8 +1874,11 @@ fn model_wizard(state: &mut AppState, msg: Msg) -> Vec<Effect> {
             fx
         }
         Msg::CloseModelWizard => {
-            // a download goes on (Model presets shows it; a message says when it's done)
-            state.model_wizard = None;
+            // the Set up models window; a download goes on (the Models half
+            // shows it; a message says when it's done)
+            if let Some(w) = &mut state.model_wizard {
+                w.editing = false;
+            }
             vec![]
         }
         _ => vec![],

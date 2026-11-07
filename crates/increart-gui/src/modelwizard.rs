@@ -1,39 +1,107 @@
 //! **Models**, the servers screen's right half (DESIGN.md, Setting up
-//! models): the folder the model files go in, folders found with some, and
-//! the built-in models to add, each with its size and whether it fits each
-//! GPU.
+//! models): your models and the built-in ones in three read-only lists
+//! (yours, built-in installed, built-in not installed) with search, filter
+//! and order; **Edit…** opens **Set up models**, a window with the model
+//! folders and the built-in models to add (downloading what isn't there).
 
 use eframe::egui::{self, RichText};
-use increart_gui_core::{AppState, Msg, PickKind, PresetNeeds};
+use increart_core::config::RecipePreset;
+use increart_core::tiers::Gpu;
+use increart_gui_core::{
+    AppState, ModelKind, ModelLists, ModelSetupTab, ModelSort, ModelWizard, Msg, PickKind, PresetNeeds,
+};
 
-use crate::widgets::{ACCENT, BAD, GOOD, NEUTRAL, ic, ph};
+use crate::widgets::{ACCENT, BAD, GOOD, NEUTRAL, dialog_footer, ic, ph};
 
 fn gb(b: u64) -> String {
     format!("{:.1} GB", b as f64 / 1e9)
 }
 
-/// The servers screen's right half: the models, where their files go, and
-/// built-in ones to add (downloading what isn't there). Opens its state
-/// (folders found, GPUs, sizes) the first time it's shown.
-pub fn panel(ui: &mut egui::Ui, st: &AppState, table_height: f32, out: &mut Vec<Msg>) {
+fn plural(n: usize) -> &'static str {
+    if n == 1 { "" } else { "s" }
+}
+
+/// The GPUs listed, or none while listing (or when they can't be).
+fn gpus_of(w: &ModelWizard) -> Vec<Gpu> {
+    match &w.gpus {
+        Some(Ok(g)) => g.clone(),
+        _ => vec![],
+    }
+}
+
+/// The GPUs on one line ("GPU 0: … (24 GB) · GPU 1: …"), or why not.
+fn gpu_line(ui: &mut egui::Ui, w: &ModelWizard) {
+    match &w.gpus {
+        None => {
+            ui.horizontal(|ui| {
+                ui.spinner();
+                ui.weak("Listing the GPUs…");
+            });
+        }
+        Some(Err(e)) => {
+            ui.weak(format!("The GPUs couldn't be listed ({e}), so there's no fit column."));
+        }
+        Some(Ok(g)) => {
+            let list: Vec<String> =
+                g.iter().map(|g| format!("GPU {}: {} ({:.0} GB)", g.number, g.name, g.vram_gib)).collect();
+            ui.weak(list.join("  ·  "));
+        }
+    }
+}
+
+/// The servers screen's right half: your models and the built-in ones,
+/// read only, greyed until there's a server setup. Opens its state (folders
+/// found, GPUs, sizes) the first time it's shown.
+pub fn panel(ui: &mut egui::Ui, st: &AppState, list_height: f32, out: &mut Vec<Msg>) {
     let Some(old) = &st.model_wizard else {
         out.push(Msg::OpenModelWizard);
         ui.spinner();
         return;
     };
     let mut w = old.clone();
-    let mut go = false;
+    let servers = !st.config.server_presets.is_empty();
+    let r = ui.add_enabled_ui(servers, |ui| overview(ui, st, &mut w, list_height, out));
+    if !servers {
+        // disabled widgets only fade a little: dim the half too, and say why
+        let rect = r.response.rect.expand(6.0);
+        ui.painter().rect_filled(rect, 6.0, egui::Color32::from_black_alpha(150));
+        let lines = ["Add a server setup first (on the left):", "models are set up for the servers that run them"];
+        for (i, line) in lines.into_iter().enumerate() {
+            ui.painter().text(
+                rect.center() + egui::vec2(0.0, (i as f32 - 0.5) * 22.0),
+                egui::Align2::CENTER_CENTER,
+                line,
+                egui::FontId::proportional(16.0),
+                egui::Color32::from_gray(210),
+            );
+        }
+    }
+    if w.editing && servers {
+        setup_window(ui.ctx(), st, &mut w, out);
+    }
+    if &w != old {
+        out.push(Msg::EditModelWizard(Box::new(w)));
+    }
+}
+
+fn overview(ui: &mut egui::Ui, st: &AppState, w: &mut ModelWizard, list_height: f32, out: &mut Vec<Msg>) {
     let catalogue = increart_core::config::catalogue();
     let model_dirs = &st.config.programs.model_dirs;
-    let dirs = w.folders(model_dirs);
-    let n = st.config.recipes.len();
+    let lists = ModelLists::of(&st.config.recipes, &catalogue, model_dirs, &w.sizes);
     egui::Sides::new().show(
         ui,
         |ui| ui.heading(ic(ph::CUBE, "Models")),
         |ui| {
             if ui
-                .button(ic(ph::PENCIL_SIMPLE, &format!("Edit your models ({n})…")))
-                .on_hover_text("each model's files and the settings it runs with; test one on a server")
+                .button(RichText::new(ic(ph::PENCIL_SIMPLE, "Edit…")).strong())
+                .on_hover_text("Set up models: the model folders, and built-in models to add and download")
+                .clicked()
+            {
+                w.editing = true;
+            }
+            if ui
+                .button(ic(ph::SLIDERS_HORIZONTAL, "Model settings…"))
+                .on_hover_text("each of your models' files and settings; make your own; test one on a server")
                 .clicked()
             {
                 out.push(Msg::OpenRecipes);
@@ -41,15 +109,330 @@ pub fn panel(ui: &mut egui::Ui, st: &AppState, table_height: f32, out: &mut Vec<
         },
     );
     ui.label(
-        "The image models the servers can load: each is its files and the settings it runs with. Add built-in \
-         ones below; only files that aren't already on this machine are downloaded.",
+        "The image models the servers can load, each its files and the settings it runs with. Edit… sets up the \
+         model folders and installs built-in models (downloading their files).",
     );
-    ui.add_space(10.0);
-    // 1: the folder
-    step(ui, "1", "Download folder", "where new model files are saved");
+    let dirs: Vec<&String> = model_dirs.iter().filter(|d| !d.trim().is_empty()).collect();
+    ui.weak(match dirs.as_slice() {
+        [] => "No model folders yet: Edit… to choose one.".to_string(),
+        [one] => format!("Model folder: {one}"),
+        [first, more @ ..] => format!("Model folders: {first} and {} more", more.len()),
+    });
+    ui.add_space(6.0);
+    filters(ui, w, "overview");
+    gpu_line(ui, w);
+    ui.add_space(4.0);
+    let gpus = gpus_of(w);
+    let vram: Vec<f64> = gpus.iter().map(|g| g.vram_gib).collect();
+    let sections = [
+        (
+            "Your custom models",
+            "models_custom",
+            &lists.custom,
+            Section::Custom,
+            "None: models you make in Model settings… (not built-in ones) are listed here.",
+        ),
+        (
+            "Built-in models, installed",
+            "models_installed",
+            &lists.installed,
+            Section::Installed,
+            "None yet: Edit… → 2. Add built-in models.",
+        ),
+        (
+            "Built-in models, not installed",
+            "models_available",
+            &lists.available,
+            Section::Available,
+            "None: every built-in model is installed.",
+        ),
+    ];
+    egui::ScrollArea::vertical()
+        .id_salt("models_overview")
+        .min_scrolled_height(list_height)
+        .max_height(list_height)
+        .show(ui, |ui| {
+            for (i, (title, id, all, section, none)) in sections.into_iter().enumerate() {
+                if i > 0 {
+                    ui.add_space(10.0);
+                }
+                let shown = w.shown(all.clone(), &vram);
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new(title).strong());
+                    let n = all.len();
+                    if shown.len() < n {
+                        ui.weak(format!("({} of {n} shown)", shown.len()));
+                    } else {
+                        ui.weak(format!("({n})"));
+                    }
+                });
+                if all.is_empty() {
+                    ui.weak(none);
+                } else {
+                    list_table(ui, id, &shown, &gpus, section);
+                }
+            }
+        });
+    ui.add_space(6.0);
+    download_line(ui, st, out);
+}
+
+/// Search, kind, fits a GPU, order: one row, for the lists and the window's.
+fn filters(ui: &mut egui::Ui, w: &mut ModelWizard, salt: &str) {
     ui.horizontal(|ui| {
-        let width = ui.available_width() - 110.0;
-        ui.add(egui::TextEdit::singleline(&mut w.dir).desired_width(width).hint_text("~/models"));
+        ui.label(ph::MAGNIFYING_GLASS);
+        ui.add(egui::TextEdit::singleline(&mut w.search).desired_width(160.0).hint_text("Search models"));
+        if !w.search.is_empty() && ui.small_button(ph::X).on_hover_text("clear the search").clicked() {
+            w.search.clear();
+        }
+        egui::ComboBox::from_id_salt(("model_kind", salt)).selected_text(w.kind.label()).show_ui(ui, |ui| {
+            for k in ModelKind::ALL {
+                ui.selectable_value(&mut w.kind, k, k.label());
+            }
+        });
+        ui.checkbox(&mut w.fits_only, "Fits a GPU").on_hover_text("only models whose files fit in a GPU's memory");
+        ui.weak("Sort:");
+        egui::ComboBox::from_id_salt(("model_sort", salt)).selected_text(w.sort.label()).show_ui(ui, |ui| {
+            for s in ModelSort::ALL {
+                ui.selectable_value(&mut w.sort, s, s.label());
+            }
+        });
+        if w.filtering() && ui.small_button("Show all").clicked() {
+            w.search.clear();
+            w.kind = ModelKind::All;
+            w.fits_only = false;
+        }
+    });
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum Section {
+    Custom,
+    Installed,
+    Available,
+}
+
+/// What a model's files need, as the Files column says it.
+fn status(needs: &PresetNeeds, section: Section) -> RichText {
+    if needs.unavailable {
+        let t = if section == Section::Custom { "files missing" } else { "not there, no download" };
+        return RichText::new(ic(ph::WARNING, t)).color(NEUTRAL);
+    }
+    if needs.downloads.is_empty() {
+        let t = if section == Section::Available { "files here, not installed" } else { "ready" };
+        return RichText::new(ic(ph::CHECK, t)).color(GOOD);
+    }
+    let n = needs.downloads.len();
+    let size = needs.download_bytes.map_or(String::new(), |b| format!(" ({})", gb(b)));
+    if section == Section::Available {
+        RichText::new(ic(ph::DOWNLOAD_SIMPLE, &format!("download {n} file{}{size}", plural(n))))
+    } else {
+        RichText::new(ic(ph::DOWNLOAD_SIMPLE, &format!("{n} file{} missing{size}", plural(n)))).color(NEUTRAL)
+    }
+}
+
+const NAME_W: f32 = 230.0;
+const SIZE_W: f32 = 62.0;
+const FILES_W: f32 = 190.0;
+
+fn heads(h: &mut egui_extras::TableRow, model_tip: &str) {
+    let heads = [
+        ("Model", model_tip),
+        ("Size", "all its files together, about the GPU memory it needs"),
+        ("Files", "whether its files are in your model folders, or what's downloaded"),
+        (
+            "Fits GPU",
+            "by GPU number (listed above): ✓ fits in its memory; ✗ too large, it'd spill to RAM (slow) if it runs \
+             at all",
+        ),
+    ];
+    for (title, tip) in heads {
+        h.col(|ui| {
+            let r = ui.strong(title);
+            if !tip.is_empty() {
+                r.on_hover_text(tip);
+            }
+        });
+    }
+}
+
+fn size_cell(ui: &mut egui::Ui, needs: &PresetNeeds) {
+    match needs.total_bytes {
+        Some(b) => ui.label(gb(b)),
+        None => ui.weak("…").on_hover_text("asking Hugging Face for the sizes"),
+    };
+}
+
+fn fits_cell(ui: &mut egui::Ui, needs: &PresetNeeds, gpus: &[Gpu]) {
+    if gpus.is_empty() {
+        ui.weak("—");
+    }
+    for g in gpus {
+        let label = if gpus.len() > 1 { format!("{} ", g.number) } else { String::new() };
+        match needs.fits(g.vram_gib) {
+            Some(true) => {
+                ui.label(RichText::new(format!("{label}✓")).color(GOOD))
+                    .on_hover_text(format!("fits {} ({:.0} GB)", g.name, g.vram_gib));
+            }
+            Some(false) => {
+                ui.label(RichText::new(format!("{label}✗")).color(BAD)).on_hover_text(format!(
+                    "larger than {} ({:.0} GB): spills to RAM, slow, if it runs at all",
+                    g.name, g.vram_gib
+                ));
+            }
+            None => {
+                ui.weak(format!("{label}…"));
+            }
+        }
+    }
+}
+
+fn tip(p: &RecipePreset) -> String {
+    if p.note.is_empty() { p.recipe.clone() } else { format!("{}\n{}", p.note, p.recipe) }
+}
+
+/// One of the read-only lists.
+fn list_table(ui: &mut egui::Ui, id: &str, rows: &[(&RecipePreset, PresetNeeds)], gpus: &[Gpu], section: Section) {
+    use egui_extras::{Column, TableBuilder};
+    if rows.is_empty() {
+        ui.weak("None match the filter.");
+        return;
+    }
+    TableBuilder::new(ui)
+        .id_salt(id)
+        .striped(true)
+        .vscroll(false)
+        .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
+        .column(Column::exact(NAME_W).clip(true))
+        .column(Column::exact(SIZE_W))
+        .column(Column::exact(FILES_W).clip(true))
+        .column(Column::remainder().at_least(100.0).clip(true))
+        .header(20.0, |mut h| heads(&mut h, ""))
+        .body(|mut body| {
+            for (p, needs) in rows {
+                body.row(22.0, |mut row| {
+                    row.col(|ui| {
+                        ui.label(&p.name).on_hover_text(tip(p));
+                    });
+                    row.col(|ui| size_cell(ui, needs));
+                    row.col(|ui| {
+                        ui.label(status(needs, section));
+                    });
+                    row.col(|ui| fits_cell(ui, needs, gpus));
+                });
+            }
+        });
+}
+
+/// A download under way: its progress and Cancel.
+fn download_line(ui: &mut egui::Ui, st: &AppState, out: &mut Vec<Msg>) {
+    if let Some(d) = &st.preset_download {
+        crate::startup::download_progress(ui, &d.files, &d.at);
+        if ui.button("Cancel download").clicked() {
+            out.push(Msg::CancelPresetDownload);
+        }
+    }
+}
+
+/// **Set up models**: the model folders, and the built-in models to add.
+fn setup_window(ctx: &egui::Context, st: &AppState, w: &mut ModelWizard, out: &mut Vec<Msg>) {
+    let (mut go, mut close) = (false, false);
+    egui::Modal::new(egui::Id::unique("model_setup")).show(ctx, |ui| {
+        ui.set_width(920.0);
+        ui.heading(ic(ph::CUBE, "Set up models"));
+        ui.label(
+            "Where the model files are, and the built-in models to install: only the files that aren't already in \
+             one of the model folders are downloaded.",
+        );
+        ui.add_space(8.0);
+        ui.horizontal(|ui| {
+            for (t, label) in
+                [(ModelSetupTab::Folders, "1. Model folders"), (ModelSetupTab::Add, "2. Add built-in models")]
+            {
+                if ui.selectable_label(w.tab == t, RichText::new(label).strong()).clicked() {
+                    w.tab = t;
+                }
+            }
+            ui.separator();
+            if ui
+                .button(ic(ph::SLIDERS_HORIZONTAL, "Model settings…"))
+                .on_hover_text("each of your models' files and settings; make your own; test one on a server")
+                .clicked()
+            {
+                out.push(Msg::OpenRecipes);
+            }
+        });
+        ui.separator();
+        let height = (ctx.content_rect().height() - 380.0).clamp(200.0, 520.0);
+        // pages as tall as each other, so the window doesn't jump
+        egui::ScrollArea::vertical().id_salt("model_setup_page").min_scrolled_height(height).max_height(height).show(
+            ui,
+            |ui| {
+                ui.set_min_height(height);
+                match w.tab {
+                    ModelSetupTab::Folders => folders_page(ui, st, w, out),
+                    ModelSetupTab::Add => add_page(ui, st, w),
+                }
+            },
+        );
+        ui.add_space(6.0);
+        let files = w.downloads(&st.config.programs.model_dirs);
+        let picked = w.picked.len();
+        download_line(ui, st, out);
+        if st.preset_download.is_none() && w.started {
+            ui.colored_label(GOOD, ic(ph::CHECK_CIRCLE, "Done: installed, their files in the model folders."));
+        }
+        dialog_footer(
+            ui,
+            |ui| {
+                let line = if picked > 0 {
+                    let known: Option<u64> =
+                        files.iter().try_fold(0u64, |n, d| Some(n + w.sizes.get(&d.url).copied().flatten()?));
+                    let s = plural(picked);
+                    match (files.len(), known) {
+                        (0, _) => format!("{picked} model{s}, files already here"),
+                        (n, Some(b)) => format!("{picked} model{s} · {n} files to download, {}", gb(b)),
+                        (n, None) => format!("{picked} model{s} · {n} files to download"),
+                    }
+                } else if w.tab == ModelSetupTab::Folders {
+                    "Next: 2. Add built-in models".to_string()
+                } else {
+                    "Tick models to install them.".to_string()
+                };
+                ui.label(RichText::new(line).color(if picked == 0 { NEUTRAL } else { ACCENT }));
+            },
+            |ui| {
+                close = ui.button("Close   Esc").clicked();
+                let label = if files.is_empty() { "Install" } else { "Download and install" };
+                let can = picked > 0 && !w.dir.trim().is_empty() && st.preset_download.is_none();
+                go = ui
+                    .add_enabled(can, egui::Button::new(RichText::new(ic(ph::DOWNLOAD_SIMPLE, label)).strong()))
+                    .clicked();
+            },
+        );
+    });
+    // Esc: not while the model settings are open over it
+    let esc = st.recipe_editor.is_none() && ctx.input(|i| i.key_pressed(egui::Key::Escape));
+    if go {
+        out.push(Msg::ModelWizardGo);
+    } else if close || esc {
+        w.editing = false;
+    }
+}
+
+/// A heading with what it's for.
+fn step(ui: &mut egui::Ui, title: &str, what: &str) {
+    ui.horizontal(|ui| {
+        ui.label(RichText::new(title).strong());
+        ui.weak(format!("— {what}"));
+    });
+}
+
+fn folders_page(ui: &mut egui::Ui, st: &AppState, w: &mut ModelWizard, out: &mut Vec<Msg>) {
+    let model_dirs = &st.config.programs.model_dirs;
+    step(ui, "Download folder", "where new model files are saved");
+    ui.horizontal(|ui| {
+        ui.add(egui::TextEdit::singleline(&mut w.dir).desired_width(620.0).hint_text("~/models"));
         if ui.button(ic(ph::FOLDER_OPEN, "Browse…")).clicked() {
             out.push(Msg::Pick(PickKind::ModelWizardDir));
         }
@@ -63,11 +446,29 @@ pub fn panel(ui: &mut egui::Ui, st: &AppState, table_height: f32, out: &mut Vec<
     } else if model_dirs.iter().any(|d| d == dir) {
         "Already one of your model folders."
     } else {
-        "Not a model folder yet: it's added as your first one (and made if it isn't there)."
+        "Not a model folder yet: it becomes your first one (made if it isn't there) when you install models."
     });
-    ui.add_space(10.0);
-    // 2: folders found
-    step(ui, "2", "Folders that already have model files", "ticked: used where they are, not copied");
+    ui.add_space(12.0);
+    step(ui, "Your model folders", "where the servers look for model files, in this order");
+    let dirs: Vec<&String> = model_dirs.iter().filter(|d| !d.trim().is_empty()).collect();
+    if dirs.is_empty() {
+        ui.weak("None yet.");
+    }
+    for d in dirs {
+        ui.label(ic(ph::FOLDER, d));
+    }
+    ui.horizontal(|ui| {
+        ui.weak("To take one out or reorder them:");
+        if ui.small_button(ic(ph::GEAR, "Server settings…")).clicked() {
+            out.push(Msg::ServerSettings(true));
+        }
+    });
+    ui.add_space(12.0);
+    step(
+        ui,
+        "Folders that already have model files",
+        "ticked ones become model folders when you install; their files are used where they are",
+    );
     match &w.found {
         None => {
             ui.horizontal(|ui| {
@@ -78,15 +479,14 @@ pub fn panel(ui: &mut egui::Ui, st: &AppState, table_height: f32, out: &mut Vec<
         Some(found) if found.is_empty() => {
             ui.weak(
                 "None found (looked for ComfyUI's, stable-diffusion.cpp's, KoboldCpp's and ~/models). That's fine: \
-                 models are downloaded into the folder above.",
+                 models are downloaded into the download folder.",
             );
         }
         Some(found) => {
             for f in found.clone() {
                 let already = model_dirs.iter().any(|d| d.trim() == f.path);
                 let mut on = already || w.add.contains(&f.path);
-                let s = if f.files == 1 { "" } else { "s" };
-                let text = format!("{}   ({} model file{s}, {})", f.path, f.files, gb(f.bytes));
+                let text = format!("{}   ({} model file{}, {})", f.path, f.files, plural(f.files), gb(f.bytes));
                 let r = ui.add_enabled(!already, egui::Checkbox::new(&mut on, text));
                 if already {
                     r.on_disabled_hover_text("already one of your model folders");
@@ -100,129 +500,42 @@ pub fn panel(ui: &mut egui::Ui, st: &AppState, table_height: f32, out: &mut Vec<
             }
         }
     }
-    ui.add_space(10.0);
-    // 3: the models
-    step(ui, "3", "Add built-in models", "tested on both servers; tick the ones you want");
-    let gpus: Vec<increart_core::tiers::Gpu> = match &w.gpus {
-        None => {
-            ui.horizontal(|ui| {
-                ui.spinner();
-                ui.weak("Listing the GPUs…");
-            });
-            vec![]
-        }
-        Some(Err(e)) => {
-            ui.weak(format!("The GPUs couldn't be listed ({e}), so there's no fit column."));
-            vec![]
-        }
-        Some(Ok(g)) => {
-            let list: Vec<String> =
-                g.iter().map(|g| format!("GPU {}: {} ({:.0} GB)", g.number, g.name, g.vram_gib)).collect();
-            ui.weak(list.join("  ·  "));
-            g.clone()
-        }
-    };
-    ui.add_space(4.0);
-    models_table(ui, st, &catalogue, &dirs, &gpus, table_height, &mut w);
-    ui.add_space(6.0);
-    // what it'll do
-    let files = w.downloads(model_dirs);
-    let picked = w.picked.len();
-    if let Some(d) = &st.preset_download {
-        crate::startup::download_progress(ui, &d.files, &d.at);
-        if ui.button("Cancel download").clicked() {
-            out.push(Msg::CancelPresetDownload);
-        }
-    } else if w.started {
-        ui.colored_label(GOOD, ic(ph::CHECK_CIRCLE, "Done: added to your models, their files in the folders."));
-    }
-    egui::Sides::new().show(
-        ui,
-        |ui| {
-            let s = if picked == 1 { "" } else { "s" };
-            let line = if picked == 0 {
-                "Tick models to add them.".to_string()
-            } else {
-                let known: Option<u64> =
-                    files.iter().try_fold(0u64, |n, d| Some(n + w.sizes.get(&d.url).copied().flatten()?));
-                match (files.len(), known) {
-                    (0, _) => format!("{picked} model{s}, files already here"),
-                    (n, Some(b)) => format!("{picked} model{s} · {n} files to download, {}", gb(b)),
-                    (n, None) => format!("{picked} model{s} · {n} files to download"),
-                }
-            };
-            ui.label(RichText::new(line).color(if picked == 0 { NEUTRAL } else { ACCENT }));
-        },
-        |ui| {
-            let label = if files.is_empty() { "Add to your models" } else { "Download and add" };
-            let can = picked > 0 && !w.dir.trim().is_empty() && st.preset_download.is_none();
-            go = ui
-                .add_enabled(can, egui::Button::new(RichText::new(ic(ph::DOWNLOAD_SIMPLE, label)).strong()))
-                .clicked();
-        },
-    );
-    if &w != old {
-        out.push(Msg::EditModelWizard(Box::new(w)));
-    }
-    if go {
-        out.push(Msg::ModelWizardGo);
-    }
 }
 
-/// A numbered section heading with what it's for.
-fn step(ui: &mut egui::Ui, n: &str, title: &str, what: &str) {
-    ui.horizontal(|ui| {
-        ui.label(RichText::new(format!("{n}.")).strong().color(ACCENT));
-        ui.label(RichText::new(title).strong());
-        ui.weak(format!("— {what}"));
-    });
-}
-
-/// The built-in presets: a row each with a header that stays put, at a
-/// fixed height so the window doesn't jump as sizes come in.
-fn models_table(
-    ui: &mut egui::Ui,
-    st: &AppState,
-    catalogue: &[increart_core::config::RecipePreset],
-    dirs: &[String],
-    gpus: &[increart_core::tiers::Gpu],
-    height: f32,
-    w: &mut increart_gui_core::ModelWizard,
-) {
+fn add_page(ui: &mut egui::Ui, st: &AppState, w: &mut ModelWizard) {
     use egui_extras::{Column, TableBuilder};
+    let catalogue = increart_core::config::catalogue();
+    let dirs = w.folders(&st.config.programs.model_dirs);
+    filters(ui, w, "setup");
+    gpu_line(ui, w);
+    ui.add_space(4.0);
+    let gpus = gpus_of(w);
+    let vram: Vec<f64> = gpus.iter().map(|g| g.vram_gib).collect();
+    let rows: Vec<(&RecipePreset, PresetNeeds)> =
+        catalogue.iter().map(|p| (p, PresetNeeds::of(p, &dirs, &w.sizes))).collect();
+    let all = rows.len();
+    let rows = w.shown(rows, &vram);
+    if rows.len() < all {
+        ui.weak(format!("{} of {all} shown", rows.len()));
+    }
+    if rows.is_empty() {
+        ui.weak("None match the filter.");
+        return;
+    }
     TableBuilder::new(ui)
-        .id_salt("model_wizard_table")
+        .id_salt("model_setup_add")
         .striped(true)
-        .vscroll(true)
-        .min_scrolled_height(height)
-        .max_scroll_height(height)
+        .vscroll(false)
         .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
-        .column(Column::exact(210.0).clip(true))
-        .column(Column::exact(62.0))
-        .column(Column::exact(190.0).clip(true))
-        .column(Column::remainder().at_least(120.0).clip(true))
+        .column(Column::exact(NAME_W + 60.0).clip(true))
+        .column(Column::exact(SIZE_W))
+        .column(Column::exact(FILES_W + 40.0).clip(true))
+        .column(Column::remainder().at_least(100.0).clip(true))
         .header(22.0, |mut h| {
-            let heads = [
-                (
-                    "Model",
-                    "tick to add it to your models; greyed: already added with its files, or it can't be downloaded",
-                ),
-                ("Size", "all its files together, about the GPU memory it needs"),
-                ("Files", "whether its files are already in your model folders, or what's downloaded"),
-                (
-                    "Fits GPU",
-                    "by GPU number (listed above): ✓ fits in its memory; ✗: too large, it'd spill to RAM (slow) if it runs at all",
-                ),
-            ];
-            for (title, tip) in heads {
-                h.col(|ui| {
-                    ui.strong(title).on_hover_text(tip);
-                });
-            }
+            heads(&mut h, "tick to install it; greyed: installed with its files, or it can't be downloaded")
         })
         .body(|mut body| {
-            for p in catalogue {
-                let needs = PresetNeeds::of(p, dirs, &w.sizes);
+            for (p, needs) in &rows {
                 let have = st.config.recipes.iter().any(|r| r.name == p.name);
                 let enabled = !needs.unavailable && !(have && needs.downloads.is_empty());
                 let mut on = w.picked.contains(&p.name);
@@ -237,14 +550,13 @@ fn models_table(
                         if have {
                             name = name.weak();
                         }
-                        let tip = if p.note.is_empty() { p.recipe.clone() } else { p.note.clone() };
                         let r = ui.add_enabled(enabled, egui::Checkbox::new(&mut on, name));
                         let why = if needs.unavailable {
                             "its files aren't in your model folders and there's no download for them"
                         } else {
-                            "already in your models, with its files"
+                            "installed, with its files"
                         };
-                        let r = r.on_hover_text(&tip).on_disabled_hover_text(format!("{tip}\n\n{why}"));
+                        let r = r.on_hover_text(tip(p)).on_disabled_hover_text(format!("{}\n\n{why}", tip(p)));
                         if r.changed() {
                             if on {
                                 w.picked.insert(p.name.clone());
@@ -253,50 +565,11 @@ fn models_table(
                             }
                         }
                     });
+                    row.col(|ui| size_cell(ui, needs));
                     row.col(|ui| {
-                        match needs.total_bytes {
-                            Some(b) => ui.label(gb(b)),
-                            None => ui.weak("…").on_hover_text("asking Hugging Face for the sizes"),
-                        };
+                        ui.label(status(needs, if have { Section::Installed } else { Section::Available }));
                     });
-                    row.col(|ui| {
-                        let status = if needs.unavailable {
-                            RichText::new("not there, no download").color(NEUTRAL)
-                        } else if needs.downloads.is_empty() {
-                            let t = if have { "added, files here" } else { "files here" };
-                            RichText::new(ic(ph::CHECK, t)).color(GOOD)
-                        } else {
-                            let n = needs.downloads.len();
-                            let s = if n == 1 { "" } else { "s" };
-                            let size = needs.download_bytes.map_or(String::new(), |b| format!(" ({})", gb(b)));
-                            let have = if have { ", added" } else { "" };
-                            RichText::new(ic(ph::DOWNLOAD_SIMPLE, &format!("download {n} file{s}{size}{have}")))
-                        };
-                        ui.label(status);
-                    });
-                    row.col(|ui| {
-                        if gpus.is_empty() {
-                            ui.weak("—");
-                        }
-                        for g in gpus {
-                            let label = if gpus.len() > 1 { format!("{} ", g.number) } else { String::new() };
-                            match needs.fits(g.vram_gib) {
-                                Some(true) => {
-                                    ui.label(RichText::new(format!("{label}✓")).color(GOOD))
-                                        .on_hover_text(format!("fits {} ({:.0} GB)", g.name, g.vram_gib));
-                                }
-                                Some(false) => {
-                                    ui.label(RichText::new(format!("{label}✗")).color(BAD)).on_hover_text(format!(
-                                        "larger than {} ({:.0} GB): spills to RAM, slow, if it runs at all",
-                                        g.name, g.vram_gib
-                                    ));
-                                }
-                                None => {
-                                    ui.weak(format!("{label}…"));
-                                }
-                            }
-                        }
-                    });
+                    row.col(|ui| fits_cell(ui, needs, &gpus));
                 });
             }
         });
