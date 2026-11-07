@@ -6,7 +6,7 @@
 
 use std::time::Duration;
 
-use increart_core::config::{SdServerConfig, ServerConfig};
+use increart_core::config::{Programs, ServerConfig};
 use increart_core::kobold::{KoboldRun, KoboldServer};
 use increart_core::pe::PeDevice;
 use increart_core::sdserver::{ApiError, ModelKey};
@@ -32,7 +32,7 @@ fn started_with_admin_and_stopped() {
         chat: None,
         swap: false,
     });
-    let shared = SdServerConfig { model_dirs: vec!["/nonexistent".into()], ..Default::default() };
+    let shared = Programs { model_dirs: vec!["/nonexistent".into()], ..Default::default() };
     let proc = increart_core::launcher::open(&server, &shared, &logs, Duration::from_secs(120)).unwrap();
     assert!(proc.launched());
     let c = proc.client.clone();

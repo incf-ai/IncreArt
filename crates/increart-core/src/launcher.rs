@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::Duration;
 
-use crate::config::{SdServerConfig, ServerConfig};
+use crate::config::{Programs, ServerConfig};
 use crate::sdserver::Client;
 
 #[derive(Debug, thiserror::Error)]
@@ -74,7 +74,7 @@ impl Drop for ServerProcess {
 }
 
 /// The command line for a `Start` server (empty for `Connect`).
-pub fn command_args(server: &ServerConfig, shared: &SdServerConfig) -> Vec<String> {
+pub fn command_args(server: &ServerConfig, shared: &Programs) -> Vec<String> {
     let ServerConfig::Start { host, port, device, args: own, .. } = server else { return vec![] };
     let backend = match visible_device(device) {
         Some((_, prefix, _)) => format!("{prefix}0"),
@@ -85,7 +85,7 @@ pub fn command_args(server: &ServerConfig, shared: &SdServerConfig) -> Vec<Strin
     for dir in shared.model_dirs.iter().filter(|d| !d.trim().is_empty()) {
         args.extend(["--model-dir".into(), dir.clone()]);
     }
-    args.extend(shared.args.iter().cloned());
+    args.extend(shared.sd_server.args.iter().cloned());
     args.extend(own.iter().cloned());
     args
 }
@@ -117,16 +117,12 @@ pub fn command_env(server: &ServerConfig) -> Vec<(String, String)> {
 /// The command line the app starts `server` with, as its log's header shows
 /// it ([`crate::process::command_text`]); `None` for one it connects to.
 /// `state_dir` holds a started KoboldCpp's admin folder.
-pub fn command_line(
-    server: &ServerConfig,
-    shared: &SdServerConfig,
-    state_dir: &Path,
-) -> Option<Result<String, String>> {
+pub fn command_line(server: &ServerConfig, shared: &Programs, state_dir: &Path) -> Option<Result<String, String>> {
     use crate::kobold::KoboldRun;
     use crate::pe::PeRun;
     let (cmd, args, env) = match server {
         ServerConfig::Start { .. } => {
-            (Ok(Command::new(shared.binary.trim())), command_args(server, shared), command_env(server))
+            (Ok(Command::new(shared.sd_server.binary.trim())), command_args(server, shared), command_env(server))
         }
         ServerConfig::Connect { .. } => return None,
         ServerConfig::Chat(s) => match &s.run {
@@ -156,7 +152,7 @@ pub fn command_line(
 /// from a crash) it is used as is.
 pub fn open(
     server: &ServerConfig,
-    shared: &SdServerConfig,
+    shared: &Programs,
     log_dir: &Path,
     wait: Duration,
 ) -> Result<ServerProcess, LaunchError> {
@@ -167,7 +163,7 @@ pub fn open(
 /// within 200 ms.
 pub fn open_cancellable(
     server: &ServerConfig,
-    shared: &SdServerConfig,
+    shared: &Programs,
     log_dir: &Path,
     wait: Duration,
     cancel: &std::sync::atomic::AtomicBool,
@@ -194,14 +190,14 @@ pub fn open_cancellable(
     fs::create_dir_all(log_dir)?;
     let log = log_path(log_dir, server);
     let mut out = OpenOptions::new().create(true).append(true).open(&log)?;
-    let mut cmd = Command::new(shared.binary.trim());
+    let mut cmd = Command::new(shared.sd_server.binary.trim());
     cmd.args(command_args(server, shared)).envs(command_env(server)).stdin(Stdio::null());
-    let pipe = crate::process::output_to(&mut cmd, &out, !shared.leave_running)?;
+    let pipe = crate::process::output_to(&mut cmd, &out, !shared.sd_server.leave_running)?;
     crate::process::background(&mut cmd, false);
     out.write_all(crate::process::log_header(&cmd).as_bytes())?;
     let start = out.metadata()?.len();
-    let program = shared.binary.trim().to_string();
-    let spawned = if shared.leave_running { cmd.spawn() } else { crate::process::spawn_with_app(cmd) };
+    let program = shared.sd_server.binary.trim().to_string();
+    let spawned = if shared.sd_server.leave_running { cmd.spawn() } else { crate::process::spawn_with_app(cmd) };
     let child = spawned.map_err(|e| {
         let why = crate::process::spawn_error(&program, &e);
         let _ = writeln!(out, "--- IncreArt: {why}");
@@ -221,7 +217,7 @@ pub fn open_cancellable(
 /// already answering on the port is used as is.
 fn open_kobold(
     k: &crate::kobold::KoboldServer,
-    shared: &SdServerConfig,
+    shared: &Programs,
     log_dir: &Path,
     wait: Duration,
     cancel: &std::sync::atomic::AtomicBool,
@@ -263,7 +259,7 @@ fn open_kobold(
         return Err(LaunchError::NotRunning { name, url: k.base_url() });
     };
     fs::create_dir_all(log_dir)?;
-    let (child, start) = crate::kobold::spawn(&binary, &args, &env, &log, !shared.leave_running)
+    let (child, start) = crate::kobold::spawn(&binary, &args, &env, &log, !shared.sd_server.leave_running)
         .map_err(|why| LaunchError::Spawn { name: name.clone(), why })?;
     proc.child = Some(child);
     proc.log = Some(log.clone());
@@ -415,7 +411,7 @@ mod tests {
             device: "ROCm1".into(),
             args: vec!["--offload-to-cpu".into()],
         };
-        let shared = SdServerConfig { model_dirs: vec!["/m".into()], ..Default::default() };
+        let shared = Programs { model_dirs: vec!["/m".into()], ..Default::default() };
         assert_eq!(
             command_args(&server, &shared).join(" "),
             "--listen-ip 127.0.0.1 --listen-port 1235 --backend ROCm0 --model-dir /m --fa --conditioning-cache-size 32 --offload-to-cpu"
@@ -436,8 +432,11 @@ mod tests {
 
     #[test]
     fn command_lines_as_logs_show_them() {
-        let shared =
-            SdServerConfig { binary: "/opt/sd server".into(), model_dirs: vec!["/m".into()], ..Default::default() };
+        let shared = Programs {
+            model_dirs: vec!["/m".into()],
+            sd_server: crate::config::SdServerConfig { binary: "/opt/sd server".into(), ..Default::default() },
+            ..Default::default()
+        };
         let server = ServerConfig::Start {
             name: "gpu1".into(),
             host: "127.0.0.1".into(),

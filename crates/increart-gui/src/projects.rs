@@ -1982,7 +1982,7 @@ pub fn recipes_window(ctx: &egui::Context, st: &AppState, out: &mut Vec<Msg>) {
                 );
                 ui.add_space(6.0);
                 ui.label(RichText::new("Files").strong());
-                let dirs = &st.config.programs.sd_server.model_dirs;
+                let dirs = &st.config.programs.model_dirs;
                 if dirs.iter().all(|d| d.trim().is_empty()) {
                     ui.colored_label(NEUTRAL, "No model directory yet: add the one holding the model files.");
                 }

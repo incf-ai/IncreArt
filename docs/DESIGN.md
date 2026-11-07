@@ -308,7 +308,7 @@ asks among them):
   `--version` (checked when the settings open, the field is left or a file
   picked) or why it can't run. **sd-server**: the binary and the devices
   (`sd-server --list-devices`, **List again**). **Both**: the **Models**
-  folders (`programs.sd_server.model_dirs`), a row each, in order: typed or Browse…,
+  folders (`programs.model_dirs`), a row each, in order: typed or Browse…,
   Show, ↑ / ↓ to search it earlier or later, × to drop it from the list (not
   from disk), and **Add folder…** (browses to another; one already listed
   isn't added twice). The wizard adds its download folder when it isn't
@@ -956,9 +956,9 @@ Config {
     ],
     last_preset: "Both GPUs",
     programs: Programs {
+        model_dirs: ["/path/to/ComfyUI/models"],  // both servers' model folders
         sd_server: SdServerSettings {
             binary: "/opt/sdcpp/build-hip/bin/sd-server",
-            model_dirs: ["/path/to/ComfyUI/models"],
             args: ["--fa", "--conditioning-cache-size", "32"],
             preview: "none",
             commit: "fd21ecf",
@@ -973,19 +973,20 @@ Config {
   `OpenAiChat`); `run: Launch {…}` is started by the app, `run: Connect {…}`
   already running. Configs from before (`Start`, `Connect`,
   `Kobold(KoboldServer …)`, `Chat(PeServer …)`, and `sdserver`, `koboldcpp`
-  and `recipes` at the top level) still load and are written this way at the
-  next save. Only how the file spells them changed: validation stamps still
+  and `recipes` at the top level, `model_dirs` inside `sd_server`) still
+  load and are written this way at the next save. Only how the file spells them changed: validation stamps still
   match.
 - An `SdServer` launched takes `host` (default `127.0.0.1`), `port`, `gpu`
   (`Rocm(0)`, `Vulkan(1)`, `Cuda(0)`, `Cpu(0)`, `Metal([])`, or
   `Backend("…")` for another `--list-devices` name) and optional per-server
   `args` (e.g. `--offload-to-cpu`). The command line is
   `--listen-ip host --listen-port port --backend device`, then a
-  `--model-dir` per `model_dirs` entry, then `programs.sd_server.args`, then the
+  `--model-dir` per `programs.model_dirs` entry, then `programs.sd_server.args`, then the
   server's own `args`. Output goes to `sd-server-<name>.log` in the app's log
   directory.
-- **Model directories** (`model_dirs`, edited in Server settings and Model
-  presets): a model
+- **Model directories** (`programs.model_dirs`, edited in Server settings
+  and Model presets; one list for both programs, beside their settings, not
+  in sd-server's): a model
   preset names each file by its path inside the folder that holds it
   (`vae/x.safetensors`), the first folder that has the path winning, as
   KoboldCpp searches them. sd-server names a file outside its first
@@ -1599,8 +1600,7 @@ its details window, and for every run at once in the Jobs header:
   another; its runs wait (shown as stuck) once no server is left.
 - **Which servers**: a model goes only to servers whose model list has all
   of its files: sd-server's `model-files`, a started KoboldCpp's model
-  folders less the files it can't load (sd-server's int8 safetensors), a
-  KoboldCpp started elsewhere only its running model. A server's list is
+  folders, a KoboldCpp started elsewhere only its running model. A server's list is
   read with its probe and again whenever runs are queued; a server that
   can't give one is tried with anything, as before. So a run of a model
   only one server has goes there, not to the first idle server (KoboldCpp
@@ -1615,6 +1615,14 @@ its details window, and for every run at once in the Jobs header:
   that lists them is left (a load there failed). Its file of that name may
   be another one (a user's connected KoboldCpp took the runs of an
   sd-server proxy's model and never finished them).
+- **Second choice**: a started KoboldCpp lists sd-server's int8
+  safetensors but loads them at full size (KoboldCpp 1.118 on: Qwen-Image's
+  grew to 29 GiB and failed; a small model's, Anima's, fits). It takes
+  such a model only while no server that lists the files without that can
+  (one that hasn't failed to load it), so an sd-server goes first and
+  KoboldCpp alone still runs it. It used to refuse them outright ("is in
+  sd-server's int8 format, which KoboldCpp can't load") though KoboldCpp
+  ran the reporter's Anima int8 file.
 - **A failing server is said**: one not answering its probe, failing to
   list its files, to load (not refusing: an error, a 5xx), to take a seed
   or to say how its jobs are is said once in the messages (and the logs

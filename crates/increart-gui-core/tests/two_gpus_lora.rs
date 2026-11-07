@@ -162,9 +162,9 @@ fn config(sd: &str, kcpp: &str, dirs: &[String], sd_device: &str, kcpp_gpu: u32)
             preset("ZIT Q8", Q8, false),
         ],
         programs: Programs {
+            model_dirs: dirs.to_vec(),
             sd_server: SdServerConfig {
                 binary: sd.into(),
-                model_dirs: dirs.to_vec(),
                 args: vec!["--fa".into()],
                 preview: "none".into(),
                 ..Default::default()

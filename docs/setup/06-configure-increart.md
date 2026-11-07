@@ -107,10 +107,10 @@ bare (`last_preset: "x"`); `Some(…)` is accepted too.
 | `recent_libraries` | list of paths | `[]` | libraries offered at start-up, newest first (max 10) |
 | `server_presets` | list of `ServerPreset { name, servers }` | `[]` | the servers screen's presets |
 | `last_preset` | preset name | none | used by `--servers last` and the main button |
-| `programs` | `Programs { sd_server, koboldcpp }` | see below | the programs every server entry shares |
-| `programs.sd_server` | `SdServerSettings { … }` | see below | shared by every sd-server **and** the models folders KoboldCpp loads from |
+| `programs` | `Programs { model_dirs, sd_server, koboldcpp }` | see below | the programs every server entry shares |
+| `programs.model_dirs` | list of paths | `[]` | the model folders, searched in order by sd-server (its `--model-dir`s) and KoboldCpp alike; LoRAs in each one's `loras/` (older configs had this inside `sd_server`: moved on load) |
+| `programs.sd_server` | `SdServerSettings { … }` | see below | shared by every sd-server |
 | `programs.sd_server.binary` | path or name on `PATH` | `"sd-server"` | |
-| `programs.sd_server.model_dirs` | list of paths | `[]` | `--model-dir` roots; also KoboldCpp's model folders |
 | `programs.sd_server.args` | list | `["--fa", "--conditioning-cache-size", "32"]` | for every sd-server |
 | `programs.sd_server.preview` | `none` / `proj` / `tae` / `vae` | `"none"` | preview sent with each sd-server job |
 | `programs.sd_server.commit` | string | `""` | sd.cpp commit, recorded in recipes |
@@ -202,9 +202,7 @@ Config {
     ],
     last_preset: "KoboldCpp Vulkan0",
     programs: Programs {
-        sd_server: SdServerSettings {
-            model_dirs: ["<home>/models"],        // KoboldCpp finds koboldcpp/… here
-        },
+        model_dirs: ["<home>/models"],            // KoboldCpp finds koboldcpp/… here
         koboldcpp: "<home>/koboldcpp/koboldcpp-linux-x64-nocuda",
     },
 }
@@ -235,9 +233,9 @@ Config {
     ],
     last_preset: "ROCm0 + ROCm1",
     programs: Programs {
+        model_dirs: ["<home>/models"],            // first root: holds diffusion_models/, text_encoders/, vae/
         sd_server: SdServerSettings {
             binary: "<home>/sdcpp/build-hip/bin/sd-server",
-            model_dirs: ["<home>/models"],        // first root: holds diffusion_models/, text_encoders/, vae/
             args: ["--fa", "--conditioning-cache-size", "32"],
             preview: "proj",
             commit: "fd21ecf",

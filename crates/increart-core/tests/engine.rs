@@ -819,6 +819,30 @@ fn an_int8_model_skips_koboldcpp_for_the_sd_server() {
     assert_eq!(proxy.count("models/load"), 1);
 }
 
+/// As reported (Anima's int8 file, small enough at full size): with no
+/// other server that lists it, KoboldCpp loads an int8 model itself.
+#[test]
+#[cfg(unix)]
+fn koboldcpp_alone_loads_an_int8_model() {
+    let s = setup();
+    let tmp = tempfile::tempdir().unwrap();
+    let k = FakeKobold::start("");
+    let admin = admin(&k, tmp.path());
+    let header = r#"{"w":{"dtype":"I8","shape":[2],"data_offsets":[0,2]}}"#;
+    let mut int8 = (header.len() as u64).to_le_bytes().to_vec();
+    int8.extend(header.as_bytes());
+    int8.extend([0u8; 2]);
+    let models = admin.model_dirs[0].clone();
+    std::fs::write(Path::new(&models).join(FILES[0].1), int8).unwrap();
+    let run = new_run(&s, "qwen-image-21", 2, false);
+    let engine = kobold_engine(&s, &k, Some(admin));
+    engine.queue_run(&run);
+    let events = collect(&engine, run_done(&run));
+    assert_eq!(outputs(&events).len(), 2);
+    assert_eq!(k.count("reload_config"), 1);
+    assert_eq!(k.with(|st| st.sdmodel.clone()), format!("{models}/{}", FILES[0].1));
+}
+
 #[test]
 #[cfg(unix)]
 fn koboldcpp_loads_the_model_and_generates() {

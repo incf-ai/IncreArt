@@ -17,7 +17,7 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
-use increart_core::config::{RecipePreset, SdServerConfig, ServerConfig};
+use increart_core::config::{RecipePreset, ServerConfig};
 use increart_core::engine::{Endpoint, Engine, EngineOptions, Event};
 use increart_core::launcher::{self, ServerProcess};
 use increart_core::model::{IdeaSource, LoraFile, Mode, ModelFile, ModelSelection, Sample, StoreFormat};
@@ -35,7 +35,7 @@ struct Session {
     /// The sd-servers open, each with what it was opened as.
     servers: Vec<Option<(ServerConfig, ServerProcess)>>,
     /// The shared settings `servers` were opened with.
-    opened_with: Option<SdServerConfig>,
+    opened_with: Option<increart_core::config::Programs>,
     engine: Option<Engine>,
     /// The opening attempt `servers` belongs to.
     attempt: u32,
@@ -1110,7 +1110,7 @@ fn list_loadable(ctx: &Ctx) {
 }
 
 /// Opens the servers of one attempt in parallel; reports each, then settles.
-fn open_servers(ctx: &Ctx, servers: Vec<ServerConfig>, cfg: SdServerConfig, attempt: u32) {
+fn open_servers(ctx: &Ctx, servers: Vec<ServerConfig>, cfg: increart_core::config::Programs, attempt: u32) {
     let (cancel, opening, kept, engine, old) = {
         let mut s = ctx.session.lock_or_recover();
         // the attempt before (if still opening) and the engine stop; the

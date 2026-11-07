@@ -596,7 +596,7 @@ fn kobold_fields(
             }
             if on != k.chat.is_some() {
                 // the wizard's Qwen3-VL, if it's downloaded
-                k.chat = on.then(|| match tiers::chat_files(&st.config.programs.sd_server.model_dirs) {
+                k.chat = on.then(|| match tiers::chat_files(&st.config.programs.model_dirs) {
                     Some((model, mmproj)) => KoboldChat { model, mmproj, context: 8192 },
                     None => KoboldChat::default(),
                 });
@@ -1117,8 +1117,8 @@ fn settings(ui: &mut egui::Ui, st: &AppState, d: &ServerDialog, out: &mut Vec<Ms
     }
     ui.add_space(12.0);
     ui.label(RichText::new(ic(ph::FOLDER, "Both")).strong());
-    models_field(ui, &mut c, MODEL_DIRS_NOTE, out);
-    let wizard = match c.model_dirs.first() {
+    models_list(ui, st, MODEL_DIRS_NOTE, out);
+    let wizard = match st.config.programs.model_dirs.first() {
         Some(d) => format!("into {}", std::path::Path::new(d).join(tiers::MODEL_SUBDIR).display()),
         None => format!("into {}/ in it", tiers::MODEL_SUBDIR),
     };
@@ -1207,7 +1207,7 @@ fn image_model_line(ui: &mut egui::Ui, out: &mut Vec<Msg>) {
 fn command_line(ui: &mut egui::Ui, st: &AppState, i: usize, s: &ServerConfig) {
     let log_dir = increart_gui_core::runtime::log_dir();
     let state_dir = log_dir.parent().unwrap_or(&log_dir);
-    let Some(line) = increart_core::launcher::command_line(s, &st.config.programs.sd_server, state_dir) else { return };
+    let Some(line) = increart_core::launcher::command_line(s, &st.config.programs, state_dir) else { return };
     egui::CollapsingHeader::new(ic(ph::TERMINAL, "Command line")).id_salt(("command line", i)).show(
         ui,
         |ui| match line {
@@ -1243,7 +1243,7 @@ fn leave_running_field(ui: &mut egui::Ui, c: &mut increart_core::config::SdServe
 fn sdserver_fields(ui: &mut egui::Ui, st: &AppState, out: &mut Vec<Msg>) {
     let mut c = st.config.programs.sd_server.clone();
     sdserver_binary_field(ui, &mut c, out);
-    models_field(ui, &mut c, MODEL_DIRS_NOTE, out);
+    models_list(ui, st, MODEL_DIRS_NOTE, out);
     leave_running_field(ui, &mut c);
     if c != st.config.programs.sd_server {
         out.push(Msg::SetSdServer(c));
@@ -1254,10 +1254,10 @@ fn sdserver_fields(ui: &mut egui::Ui, st: &AppState, out: &mut Vec<Msg>) {
 /// has it too, with `note` saying what they mean there): saved as it's
 /// changed.
 pub(crate) fn models_list(ui: &mut egui::Ui, st: &AppState, note: &str, out: &mut Vec<Msg>) {
-    let mut c = st.config.programs.sd_server.clone();
-    models_field(ui, &mut c, note, out);
-    if c != st.config.programs.sd_server {
-        out.push(Msg::SetSdServer(c));
+    let mut dirs = st.config.programs.model_dirs.clone();
+    models_field(ui, &mut dirs, note, out);
+    if dirs != st.config.programs.model_dirs {
+        out.push(Msg::SetModelDirs(dirs));
     }
 }
 
@@ -1265,32 +1265,32 @@ pub(crate) fn models_list(ui: &mut egui::Ui, st: &AppState, note: &str, out: &mu
 const MODEL_DIRS_NOTE: &str = "Searched in this order for model files and LoRAs (in each one's loras/): \
      a path in more than one is the first one's. sd-server is started with each.";
 
-/// The model directories, in order, in a frame of their own: sd-server's
-/// `--model-dir`s, where KoboldCpp's files and both servers' LoRAs are
-/// looked up too. Each can be typed, browsed to, moved or removed; Add
+/// The model directories, in order, in a frame of their own: where both
+/// servers' model files and LoRAs are looked up (sd-server's
+/// `--model-dir`s). Each can be typed, browsed to, moved or removed; Add
 /// folder… browses to another.
-fn models_field(ui: &mut egui::Ui, c: &mut increart_core::config::SdServerConfig, note: &str, out: &mut Vec<Msg>) {
+fn models_field(ui: &mut egui::Ui, dirs: &mut Vec<String>, note: &str, out: &mut Vec<Msg>) {
     egui::Frame::group(ui.style()).show(ui, |ui| {
         ui.label(RichText::new(ic(ph::FOLDERS, "Model directories")).strong());
         ui.add(egui::Label::new(RichText::new(note).weak()).wrap());
-        let n = c.model_dirs.len().max(1);
+        let n = dirs.len().max(1);
         let mut moved = None;
         // one width for every row (↑ ↓ × after each)
         let sp = ui.spacing().item_spacing.x;
         let w = ui.available_width() - 3.0 * (ui.spacing().interact_size.y + 8.0 + sp);
         for i in 0..n {
             ui.horizontal(|ui| {
-                let mut dir = c.model_dirs.get(i).cloned().unwrap_or_default();
+                let mut dir = dirs.get(i).cloned().unwrap_or_default();
                 ui.allocate_ui(egui::vec2(w, 18.0), |ui| {
                     path_edit(ui, &mut dir, models_hint(), PickKind::ModelDir(i), out)
                 });
-                if dir != c.model_dirs.get(i).cloned().unwrap_or_default() {
-                    match c.model_dirs.get_mut(i) {
+                if dir != dirs.get(i).cloned().unwrap_or_default() {
+                    match dirs.get_mut(i) {
                         Some(d) => *d = dir,
-                        None => c.model_dirs.push(dir),
+                        None => dirs.push(dir),
                     }
                 }
-                let many = c.model_dirs.len() > 1;
+                let many = dirs.len() > 1;
                 if ui
                     .add_enabled(many && i > 0, egui::Button::new(ph::ARROW_UP))
                     .on_hover_text("Search it earlier")
@@ -1299,30 +1299,30 @@ fn models_field(ui: &mut egui::Ui, c: &mut increart_core::config::SdServerConfig
                     moved = Some((i, i - 1));
                 }
                 if ui
-                    .add_enabled(many && i + 1 < c.model_dirs.len(), egui::Button::new(ph::ARROW_DOWN))
+                    .add_enabled(many && i + 1 < dirs.len(), egui::Button::new(ph::ARROW_DOWN))
                     .on_hover_text("Search it later")
                     .clicked()
                 {
                     moved = Some((i, i + 1));
                 }
                 if ui
-                    .add_enabled(i < c.model_dirs.len(), egui::Button::new(ph::X))
+                    .add_enabled(i < dirs.len(), egui::Button::new(ph::X))
                     .on_hover_text("Remove it from the list (the folder stays on disk)")
                     .clicked()
                 {
-                    c.model_dirs.remove(i);
+                    dirs.remove(i);
                 }
             });
         }
         if let Some((from, to)) = moved {
-            c.model_dirs.swap(from, to);
+            dirs.swap(from, to);
         }
         if ui
             .button(ic(ph::FOLDER_PLUS, "Add folder…"))
             .on_hover_text("Browse to another folder with model files")
             .clicked()
         {
-            out.push(Msg::Pick(PickKind::ModelDir(c.model_dirs.len())));
+            out.push(Msg::Pick(PickKind::ModelDir(dirs.len())));
         }
     });
 }
@@ -1352,7 +1352,7 @@ fn server_wizard(ctx: &egui::Context, st: &AppState, d: &ServerDialog, out: &mut
         if let Some(k) = &d.kobold {
             let binary = increart_gui_core::update::wizard_binary(k);
             let version = d.kobold_version.as_ref().filter(|(b, _)| *b == binary).map(|(_, r)| r);
-            kobold_wizard(ui, k, version, &st.config.programs.sd_server.model_dirs, out);
+            kobold_wizard(ui, k, version, &st.config.programs.model_dirs, out);
             return;
         }
         ui.label("IncreArt runs sd-server on your GPUs, one server per GPU.");

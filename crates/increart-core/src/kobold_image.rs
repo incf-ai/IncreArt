@@ -190,7 +190,7 @@ fn agent(total: Option<Duration>, stall: Option<Duration>) -> Agent {
 }
 
 /// A `.safetensors` with int8 weights (`I8` tensors, as sd-server's
-/// `int8_convrot` files have): KoboldCpp's image code can't load them.
+/// `int8_convrot` files have): KoboldCpp loads them at full size.
 pub fn int8_safetensors(path: &Path) -> bool {
     if path.extension().and_then(|e| e.to_str()) != Some("safetensors") {
         return false;
@@ -308,9 +308,10 @@ impl KoboldImage {
                 for dir in &admin.model_dirs {
                     model_ids(Path::new(dir), "", 3, &mut ids);
                 }
-                // sd-server's int8 files: KoboldCpp falls back to a
-                // full-size buffer for them (31 GB for Qwen-Image's)
-                let refused = ids
+                // sd-server's int8 files: KoboldCpp loads them at full
+                // size (31 GB for Qwen-Image's; a small model's fits), so
+                // a server that lists them as they are goes first
+                let second_choice = ids
                     .iter()
                     .filter(|id| {
                         admin
@@ -320,10 +321,11 @@ impl KoboldImage {
                             .find(|p| p.exists())
                             .is_some_and(|p| int8_safetensors(&p))
                     })
-                    .map(|id| (id.clone(), "is in sd-server's int8 format, which KoboldCpp can't load".to_string()))
+                    .map(|id| {
+                        (id.clone(), "is in sd-server's int8 format, which KoboldCpp loads at full size".to_string())
+                    })
                     .collect::<BTreeMap<_, _>>();
-                ids.retain(|id| !refused.contains_key(id));
-                Ok(Loadable::Files { ids, refused })
+                Ok(Loadable::Files { ids, refused: BTreeMap::new(), second_choice })
             }
             None => Ok(Loadable::Only(self.inner.running()?.map(|f| file_name(&f).to_string()))),
         }
@@ -557,13 +559,6 @@ impl Inner {
     fn load(&self, key: &ModelKey) -> ApiResult<ModelStatus> {
         let dirs = self.admin.as_ref().map(|a| a.model_dirs.clone()).unwrap_or_default();
         let flags = model_flags(key, &dirs).map_err(ApiError::InvalidModelConfig)?;
-        // as its model list says: restarting with one would only fail, slowly
-        if let Some((_, p)) = flags.iter().find(|(_, p)| int8_safetensors(Path::new(p))) {
-            return Err(ApiError::InvalidModelConfig(format!(
-                "{} is in sd-server's int8 format, which KoboldCpp can't load",
-                file_name(p)
-            )));
-        }
         let wanted = flags.iter().find(|(f, _)| f == "--sdmodel").map(|(_, p)| p.clone()).unwrap_or_default();
         if let Some(admin) = self.admin.as_ref().filter(|a| a.swap) {
             return self.load_swapping(admin, key, &flags, &wanted);

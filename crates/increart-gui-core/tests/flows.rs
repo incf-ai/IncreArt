@@ -1627,7 +1627,7 @@ fn the_shared_koboldcpp_binary_starts_new_entries_and_is_checked() {
     let dir = tempfile::tempdir().unwrap();
     let mut k = k.clone();
     k.chat = Some(increart_core::kobold::KoboldChat::default());
-    s.config.programs.sd_server.model_dirs = vec![dir.path().to_string_lossy().into()];
+    s.config.programs.model_dirs = vec![dir.path().to_string_lossy().into()];
     update(&mut s, Msg::EditServer(0, ServerConfig::Kobold(k)));
     let fx = update(&mut s, Msg::Pick(PickKind::Kobold(0, PeFile::Model)));
     assert_eq!(fx, [Effect::Pick { kind: PickKind::Kobold(0, PeFile::Model), start: Some(dir.path().into()) }]);
@@ -1662,7 +1662,7 @@ fn kobold_wizard_plans_by_vram_downloads_then_opens() {
     let gpu = |number, vram_gib, integrated| Gpu { number, name: format!("gpu{number}"), vram_gib, integrated };
     let mut s =
         dialog_state(vec![ServerPreset { name: "KoboldCpp Vulkan1".into(), servers: vec![start("x", 1)] }], None);
-    s.config.programs.sd_server.model_dirs = vec![];
+    s.config.programs.model_dirs = vec![];
     update(&mut s, Msg::ServerWizard(true));
     update(&mut s, Msg::WizardGpus(Ok(vec![gpu(0, 94.2, true), gpu(1, 29.9, false), gpu(2, 11.9, false)]), Some(64.0)));
     let mut k = *dialog(&s).kobold.clone().unwrap();
@@ -1812,7 +1812,7 @@ fn kobold_wizard_plans_by_vram_downloads_then_opens() {
     let fx = update(&mut s, Msg::WizardDownloaded(Ok(())));
     assert!(matches!(fx[0], Effect::SaveConfig(..)));
     assert!(matches!(fx.last(), Some(Effect::OpenServers { servers, .. }) if servers.len() == 2));
-    assert_eq!(s.config.programs.sd_server.model_dirs, [m]);
+    assert_eq!(s.config.programs.model_dirs, [m]);
     assert_eq!(s.config.programs.koboldcpp, "koboldcpp", "the wizard's binary kept");
     let recipe = s.config.recipes.iter().find(|r| r.name.contains("GGUF Q4_K")).expect("the recipe");
     assert_eq!(recipe.files["vae"], "koboldcpp/qwen_image_2.1_vae_bf16.safetensors");
@@ -1941,12 +1941,12 @@ fn picked_files() {
 
     let fx = h.send(Msg::Picked(PickKind::ModelDir(0), vec!["/models".into()]));
     assert!(fx.is_empty(), "no config path in tests: nothing saved");
-    assert_eq!(h.state.config.programs.sd_server.model_dirs, ["/models"]);
+    assert_eq!(h.state.config.programs.model_dirs, ["/models"]);
     h.send(Msg::Picked(PickKind::ModelDir(1), vec!["/more".into()]));
     h.send(Msg::Picked(PickKind::ModelDir(2), vec!["/models".into()]));
-    assert_eq!(h.state.config.programs.sd_server.model_dirs, ["/models", "/more"], "added once");
+    assert_eq!(h.state.config.programs.model_dirs, ["/models", "/more"], "added once");
     h.send(Msg::Picked(PickKind::ModelDir(0), vec!["/other".into()]));
-    assert_eq!(h.state.config.programs.sd_server.model_dirs, ["/other", "/more"], "replaced");
+    assert_eq!(h.state.config.programs.model_dirs, ["/other", "/more"], "replaced");
     h.send(Msg::Picked(PickKind::SdServerBinary, vec!["/opt/sd/sd-server".into()]));
     assert_eq!(h.state.config.programs.sd_server.binary, "/opt/sd/sd-server");
     assert!(h.send(Msg::Picked(PickKind::ImportFiles, vec![])).is_empty(), "cancelled");
@@ -7000,6 +7000,7 @@ fn generate_offers_the_model_presets_the_servers_can_run() {
     let refusing = Loadable::Files {
         ids: Default::default(),
         refused: [("int8.safetensors".to_string(), "is in sd-server's int8 format".to_string())].into(),
+        second_choice: Default::default(),
     };
     update(&mut s, Msg::ServerModels(vec![("gpu1".into(), refusing)]));
     assert_eq!(s.why_file_unlisted("int8.safetensors"), "gpu1: is in sd-server's int8 format");
@@ -7015,7 +7016,7 @@ fn a_model_preset_file_picked_is_named_inside_its_models_folder() {
     let dir = tempfile::tempdir().unwrap();
     let models = dir.path().join("models");
     let mut config = Config::default();
-    config.programs.sd_server.model_dirs = vec![models.to_string_lossy().into()];
+    config.programs.model_dirs = vec![models.to_string_lossy().into()];
     config.recipes = increart_core::config::builtin_recipes();
     let mut s = AppState::new(config, None);
     update(&mut s, Msg::OpenRecipes);
@@ -7041,7 +7042,7 @@ fn a_model_presets_lora_picked_is_named_inside_the_loras_folder() {
     let models = dir.path().join("models");
     std::fs::create_dir_all(models.join("loras")).unwrap();
     let mut config = Config::default();
-    config.programs.sd_server.model_dirs = vec![models.to_string_lossy().into()];
+    config.programs.model_dirs = vec![models.to_string_lossy().into()];
     config.recipes = increart_core::config::builtin_recipes();
     config.recipes[0].loras = vec![PresetLora { file: String::new(), weight: 1.0 }];
     let mut s = AppState::new(config, None);
@@ -7163,6 +7164,7 @@ fn queueing_a_preset_no_server_runs_asks_first() {
     let kobold = Loadable::Files {
         ids: ["q8.gguf".to_string()].into(),
         refused: [("int8.safetensors".to_string(), "is in sd-server's int8 format".to_string())].into(),
+        second_choice: Default::default(),
     };
     update(&mut h.state, Msg::ServerModels(vec![("kcpp".into(), kobold)]));
     assert_eq!(h.state.runnable_recipes(), vec![1]);

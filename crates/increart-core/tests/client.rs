@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use common::fake::Fake;
 #[cfg(unix)]
-use increart_core::config::{SdServerConfig, ServerConfig};
+use increart_core::config::{Programs, SdServerConfig, ServerConfig};
 #[cfg(unix)]
 use increart_core::launcher::{self, LaunchError};
 use increart_core::sdserver::{ApiError, Client, JobStatus, ModelKey};
@@ -85,7 +85,11 @@ fn start_connect_and_stop() {
     let tmp = tempfile::tempdir().unwrap();
     // answers `capabilities` on `--listen-port` (tests/bin/sd-server.rs)
     let bin = env!("CARGO_BIN_EXE_increart-test-sd-server");
-    let shared = SdServerConfig { binary: bin.into(), model_dirs: vec!["/models".into()], ..Default::default() };
+    let shared = Programs {
+        model_dirs: vec!["/models".into()],
+        sd_server: SdServerConfig { binary: bin.into(), ..Default::default() },
+        ..Default::default()
+    };
     let port = free_port();
     let start = ServerConfig::Start {
         name: "gpu0".into(),
@@ -126,7 +130,10 @@ fn start_connect_and_stop() {
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&slow, std::fs::Permissions::from_mode(0o755)).unwrap();
     }
-    let slow_cfg = SdServerConfig { binary: slow.to_string_lossy().into(), ..Default::default() };
+    let slow_cfg = Programs {
+        sd_server: SdServerConfig { binary: slow.to_string_lossy().into(), ..Default::default() },
+        ..Default::default()
+    };
     let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let c2 = cancel.clone();
     let slow_server = ServerConfig::Start {

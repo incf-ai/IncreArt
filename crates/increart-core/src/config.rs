@@ -718,6 +718,10 @@ impl Config {
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename = "Programs", default)]
 pub struct Programs {
+    /// Where model files and LoRAs (in each one's `loras/`) are looked up,
+    /// in order, by sd-server (its `--model-dir`s) and KoboldCpp alike.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub model_dirs: Vec<String>,
     #[serde(skip_serializing_if = "is_default")]
     pub sd_server: SdServerConfig,
     /// The KoboldCpp binary new KoboldCpp entries and the setup wizard
@@ -732,8 +736,10 @@ pub struct Programs {
 #[serde(rename = "SdServerSettings", default)]
 pub struct SdServerConfig {
     pub binary: String,
-    /// `--model-dir` roots, in order.
-    pub model_dirs: Vec<String>,
+    /// Older configs' model directories (now [`Programs::model_dirs`]):
+    /// read, moved by [`Config::normalize`], never written.
+    #[serde(rename = "model_dirs", skip_serializing)]
+    pub old_model_dirs: Vec<String>,
     /// Arguments for every server.
     pub args: Vec<String>,
     /// Preview mode requested with each job: `none`, `proj`, `tae` or `vae`.
@@ -750,7 +756,7 @@ impl Default for SdServerConfig {
     fn default() -> Self {
         SdServerConfig {
             binary: "sd-server".into(),
-            model_dirs: vec![],
+            old_model_dirs: vec![],
             args: ["--fa", "--conditioning-cache-size", "32"].map(String::from).to_vec(),
             preview: "none".into(),
             commit: String::new(),
@@ -1116,6 +1122,9 @@ impl Config {
         if let Some(k) = self.old_koboldcpp.take() {
             self.programs.koboldcpp = k;
         }
+        // (duplicates go in full_paths)
+        let old = std::mem::take(&mut self.programs.sd_server.old_model_dirs);
+        self.programs.model_dirs.extend(old);
         warnings.extend(self.move_pe_servers());
         let said = self.full_paths();
         self.fill_koboldcpp();
@@ -1168,11 +1177,11 @@ impl Config {
         let mut said = vec![];
         make_full(&mut self.programs.sd_server.binary, full_binary, &mut said);
         make_full(&mut self.programs.koboldcpp, full_binary, &mut said);
-        for d in &mut self.programs.sd_server.model_dirs {
+        for d in &mut self.programs.model_dirs {
             make_full(d, full_path, &mut said);
         }
         let mut seen = vec![];
-        self.programs.sd_server.model_dirs.retain(|d| {
+        self.programs.model_dirs.retain(|d| {
             !d.is_empty() && !seen.contains(d) && {
                 seen.push(d.clone());
                 true
@@ -1563,6 +1572,7 @@ mod tests {
         .unwrap();
         c.normalize();
         assert_eq!(c.programs.sd_server.binary, full_path("/opt/sd-server"), "the old field read");
+        assert_eq!(c.programs.model_dirs, [full_path("/models")], "its model directories shared by both servers");
         let both = c.preset("Both GPUs").unwrap();
         assert_eq!(both.servers[0].base_url(), "http://127.0.0.1:1234");
         assert_eq!(both.servers[1].device(), "ROCm1");
@@ -1574,6 +1584,30 @@ mod tests {
         );
         let again: Config = rsnfmt::from_str(&rsnfmt::to_string(&c).unwrap()).unwrap();
         assert_eq!(again, c);
+    }
+
+    /// The model directories as `programs.sd_server` had them: moved up to
+    /// `programs`, ahead of none lost, and written there only.
+    #[test]
+    fn model_dirs_out_of_sd_server() {
+        let mut c: Config = rsnfmt::from_str(
+            r#"Config { programs: Programs {
+                model_dirs: ["/a"],
+                sd_server: SdServerSettings { binary: "/opt/sd-server", model_dirs: ["/b", "/a"] },
+                koboldcpp: "/opt/koboldcpp",
+            } }"#,
+        )
+        .unwrap();
+        c.normalize();
+        assert_eq!(c.programs.model_dirs, [full_path("/a"), full_path("/b")], "the shared list first, once each");
+        assert!(c.programs.sd_server.old_model_dirs.is_empty());
+        let text = rsnfmt::to_string(&c).unwrap();
+        let (programs, sd_server) = text.split_once("SdServerSettings").unwrap();
+        assert!(programs.contains("model_dirs"), "{text}");
+        assert!(!sd_server.contains("model_dirs"), "{text}");
+        let mut again: Config = rsnfmt::from_str(&text).unwrap();
+        again.normalize();
+        assert_eq!(again.programs, c.programs);
     }
 
     /// Entries named for their program, read into the app's types; older
@@ -1817,7 +1851,7 @@ mod tests {
         .unwrap();
         let w = c.normalize();
         assert!(w.iter().any(|w| w.contains(&format!("models → {}", abs("models")))), "{w:?}");
-        assert_eq!(c.programs.sd_server.model_dirs, [abs("models")], "the empty and the repeated one dropped");
+        assert_eq!(c.programs.model_dirs, [abs("models")], "the empty and the repeated one dropped");
         assert_eq!(c.programs.sd_server.binary, "sd-server");
         let ServerConfig::Kobold(k) = &c.server_presets[0].servers[0] else { panic!() };
         let crate::kobold::KoboldRun::Start { binary, .. } = &k.run else { panic!() };

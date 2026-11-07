@@ -20,7 +20,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use increart_core::config::{SdServerConfig, ServerConfig};
+use increart_core::config::{Programs, ServerConfig};
 use increart_core::kobold::{KoboldChat, KoboldRun, KoboldServer};
 use increart_core::pe::{self, PeDevice, PeRun, PeServer, PeStart};
 use increart_core::request::{GenOptions, img_gen_body_from, warmup_body};
@@ -306,11 +306,11 @@ fn median(v: &[f64]) -> f64 {
 }
 
 fn open_image(c: &ImageCase, logs: &Path) -> Result<(increart_core::launcher::ServerProcess, f64), String> {
-    let mut shared = SdServerConfig { model_dirs: vec![path(MODELS)], ..Default::default() };
+    let mut shared = Programs { model_dirs: vec![path(MODELS)], ..Default::default() };
     let server = match c.server.as_str() {
         "sd" => {
-            shared.binary = c.binary.clone();
-            shared.args = c.args.clone();
+            shared.sd_server.binary = c.binary.clone();
+            shared.sd_server.args = c.args.clone();
             ServerConfig::Start {
                 name: format!("bench{}", c.port),
                 host: "127.0.0.1".into(),

@@ -129,8 +129,10 @@ impl From<&ModelSelection> for ModelKey {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Loadable {
     /// Model file IDs (sd-server's `model-files`, or the files in a started
-    /// KoboldCpp's model folders), and those it has but can't load, with why.
-    Files { ids: BTreeSet<String>, refused: BTreeMap<String, String> },
+    /// KoboldCpp's model folders), and those it has but can't load, with
+    /// why. `second_choice`: listed files it loads less well (why), left
+    /// to a server that lists the model's files without that, if one does.
+    Files { ids: BTreeSet<String>, refused: BTreeMap<String, String>, second_choice: BTreeMap<String, String> },
     /// KoboldCpp started elsewhere: only the diffusion model it runs (its
     /// file name), if any.
     Only(Option<String>),
@@ -138,7 +140,15 @@ pub enum Loadable {
 
 impl Loadable {
     pub fn files(ids: impl IntoIterator<Item = String>) -> Loadable {
-        Loadable::Files { ids: ids.into_iter().collect(), refused: BTreeMap::new() }
+        Loadable::Files { ids: ids.into_iter().collect(), refused: BTreeMap::new(), second_choice: BTreeMap::new() }
+    }
+
+    /// Why another server that lists a preset's files should load it
+    /// instead, if one should (a file it loads less well).
+    pub fn second_choice(&self, files: &BTreeMap<String, String>) -> Option<String> {
+        let Loadable::Files { second_choice, .. } = self else { return None };
+        let name = |p: &str| std::path::Path::new(p).file_name().and_then(|f| f.to_str()).unwrap_or(p).to_string();
+        files.values().find_map(|id| second_choice.get(id).map(|why| format!("{} {why}", name(id))))
     }
 
     /// Whether it can load all of a preset's files (slot → file ID).
@@ -150,7 +160,7 @@ impl Loadable {
     pub fn why_not(&self, files: &BTreeMap<String, String>) -> Option<String> {
         let name = |p: &str| std::path::Path::new(p).file_name().and_then(|f| f.to_str()).unwrap_or(p).to_string();
         match self {
-            Loadable::Files { ids, refused } => files.values().find_map(|id| {
+            Loadable::Files { ids, refused, .. } => files.values().find_map(|id| {
                 if let Some(why) = refused.get(id) {
                     Some(format!("{} {why}", name(id)))
                 } else if ids.contains(id) || std::path::Path::new(id).is_absolute() {
@@ -571,8 +581,11 @@ mod tests {
         let l = Loadable::Files {
             ids: ["q8.gguf".to_string()].into(),
             refused: [("d/int8.safetensors".to_string(), "is int8".to_string())].into(),
+            second_choice: [("q8.gguf".to_string(), "loads at full size".to_string())].into(),
         };
         assert!(l.runs(&files("q8.gguf")));
+        assert_eq!(l.second_choice(&files("q8.gguf")).as_deref(), Some("q8.gguf loads at full size"));
+        assert_eq!(Loadable::files(["q8.gguf".to_string()]).second_choice(&files("q8.gguf")), None);
         assert_eq!(l.why_not(&files("d/int8.safetensors")).as_deref(), Some("int8.safetensors is int8"));
         assert_eq!(l.why_not(&files("x.gguf")).as_deref(), Some("it doesn't have x.gguf"));
         let only = Loadable::Only(Some("/m/q8.gguf".into()));

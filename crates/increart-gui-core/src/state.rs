@@ -3313,7 +3313,7 @@ pub struct AppState {
     /// What each server can load, by name (asked once it's open).
     pub server_models: BTreeMap<String, increart_core::sdserver::Loadable>,
     /// The shared sd-server settings `servers` were opened with.
-    pub servers_opened_with: Option<increart_core::config::SdServerConfig>,
+    pub servers_opened_with: Option<increart_core::config::Programs>,
     pub engine_running: bool,
     /// The Test window of a server the app connects to.
     pub server_test: Option<ServerTest>,
@@ -3677,7 +3677,7 @@ impl AppState {
         if !refused.is_empty() {
             return refused.join("\n");
         }
-        if increart_core::config::model_file_on_disk(id, &self.config.programs.sd_server.model_dirs).is_none() {
+        if increart_core::config::model_file_on_disk(id, &self.config.programs.model_dirs).is_none() {
             "Not in the model directories, so no open server lists it".into()
         } else {
             "No open server lists it (a server you connect to lists its own model directories)".into()
@@ -4027,7 +4027,9 @@ impl AppState {
         if c.binary.contains('/') && !Path::new(&c.binary).is_file() {
             return Some(format!("sd-server not found at {}", c.binary));
         }
-        c.model_dirs
+        self.config
+            .programs
+            .model_dirs
             .iter()
             .find(|m| !m.trim().is_empty() && !Path::new(m).is_dir())
             .map(|m| format!("Model directory not found: {m}"))

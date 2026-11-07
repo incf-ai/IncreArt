@@ -249,16 +249,25 @@ impl Scheduler {
         if why.is_none() && matches!(srv.loadable, Some(Loadable::Only(_))) && self.listed_elsewhere(s, model) {
             return Some("it's matched by its running file's name only, and another server lists the files".into());
         }
+        // a file it loads less well (KoboldCpp, an int8 file): not while a
+        // server that loads them as they are can
+        if why.is_none()
+            && let Some(less) = srv.loadable.as_ref().and_then(|l| l.second_choice(&model.models))
+            && self.listed_elsewhere(s, model)
+        {
+            return Some(format!("{less}, and another server lists the files"));
+        }
         why
     }
 
-    /// Whether a server other than `s` lists all of `model`'s files and
-    /// hasn't failed to load it.
+    /// Whether a server other than `s` lists all of `model`'s files, none
+    /// as a second choice, and hasn't failed to load it.
     fn listed_elsewhere(&self, s: ServerIdx, model: &ModelKey) -> bool {
         self.servers.iter().enumerate().any(|(i, o)| {
             i != s
                 && !o.failed.contains_key(model)
-                && matches!(&o.loadable, Some(l @ Loadable::Files { .. }) if l.runs(&model.models))
+                && matches!(&o.loadable, Some(l @ Loadable::Files { .. })
+                    if l.runs(&model.models) && l.second_choice(&model.models).is_none())
         })
     }
 

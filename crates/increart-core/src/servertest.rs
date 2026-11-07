@@ -137,7 +137,7 @@ impl Test<'_> {
         match self.client.loadable() {
             Ok(l) => {
                 let what = match &l {
-                    Loadable::Files { ids, refused } => {
+                    Loadable::Files { ids, refused, .. } => {
                         let refused = if refused.is_empty() {
                             String::new()
                         } else {

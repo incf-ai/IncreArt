@@ -55,7 +55,7 @@ pub fn fingerprint(config: &Config, preset: &ServerPreset) -> String {
     h.update(serde_json::to_vec(&preset.servers).unwrap_or_default());
     if preset.servers.iter().any(|s| matches!(s, ServerConfig::Start { .. })) {
         let sd = &config.programs.sd_server;
-        h.update(serde_json::to_vec(&(&sd.binary, &sd.model_dirs, &sd.args)).unwrap_or_default());
+        h.update(serde_json::to_vec(&(&sd.binary, &config.programs.model_dirs, &sd.args)).unwrap_or_default());
     }
     if preset.servers.iter().any(|s| matches!(s, ServerConfig::Kobold(_)) && s.is_started()) {
         h.update(config.programs.koboldcpp.as_bytes());
