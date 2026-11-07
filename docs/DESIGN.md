@@ -2780,22 +2780,28 @@ in the app's state folder (`$XDG_STATE_HOME/increart` when set, else
   always logged, tagged `[test <preset> on <server>]`.
 - **Setting up models**: **Set up models…** (on the servers screen beside
   Model presets…, and in the sd-server wizard beside Edit model presets…)
-  opens one window:
-  - **Folder**: where downloads go, the first model folder by default, else
+  opens one window, which says what it's for (getting image models onto
+  this machine for the servers; each model ticked becomes a model preset,
+  only files not already in a model folder downloaded) and has three
+  numbered steps:
+  - **1. Download folder**: where downloads go, the first model folder by default, else
     `~/models`; typed or Browse…. One not yet a model folder is added as
     the first (made if it isn't there); one already among them stays where
     it is.
-  - **Found model files in**: folders other tools keep models in
+  - **2. Folders that already have model files**: folders other tools keep models in
     (ComfyUI's `models/`, stable-diffusion.cpp's, KoboldCpp's, `~/models`,
     …; `modelsetup::find_folders`, each once by its real path), with their
     model files' count and size, looked for off the UI thread. Those not
-    already model folders are listed, ticked: added as model folders, so
+    already model folders are ticked (those that are, greyed): added as model folders, so
     their files are used where they are (and not downloaded again).
-  - **Models**: the built-in presets, each with its files' size together
+  - **3. Models to add**: the built-in presets in a table (Model, Size,
+    Files, Fits your GPUs; the header stays put, each header says what its
+    column means on hover; a fixed height, so the window doesn't jump as
+    sizes come in), each with its files' size together
     (about the memory it takes: each slot's file there, else the one
-    fetched, and its LoRAs), what's needed ("files there", "3 files to
-    download, 9.8 GB", "in your presets"), and for each GPU (listed as the
-    KoboldCpp wizard lists them) whether it fits: its files under 95 % of
+    fetched, and its LoRAs), what's needed ("all there", "download 3
+    files (9.8 GB)", "set up (preset and files)"), and for each GPU (listed as the
+    KoboldCpp wizard lists them) whether it fits (✓/✗, "GPU 0 ✓" with more than one): its files under 95 % of
     the card's memory. Sizes of what isn't there are asked of Hugging Face
     (HEAD, a dozen at a time, once a session). One already a preset with
     its files there, or with a file neither there nor downloadable, can't
