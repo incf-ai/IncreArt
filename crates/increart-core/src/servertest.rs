@@ -15,6 +15,7 @@ use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
 
+use crate::config::RecipePreset;
 use crate::sdserver::{ApiError, Client, JobStatus, Loadable, ModelKey};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -48,7 +49,7 @@ const TITLES: [&str; 6] =
 /// (a load under way is waited for).
 pub fn run(
     client: &Client,
-    models: &[(String, ModelKey)],
+    models: &[RecipePreset],
     generate: Result<(), String>,
     cancel: &AtomicBool,
     report: &mut dyn FnMut(usize, Step),
@@ -60,10 +61,16 @@ pub fn run(
     if let Err(why) = generate {
         return t.skip_rest(&why);
     }
-    let pick = models
+    // each preset with the files it has (of each slot's choices)
+    let keys: Vec<(&str, ModelKey)> = models
         .iter()
-        .filter(|(_, m)| loadable.as_ref().is_none_or(|l| l.runs(&m.models)))
-        .min_by_key(|(_, m)| Some(m) != loaded.as_ref());
+        .filter(|p| loadable.as_ref().is_none_or(|l| l.runs_preset(p)))
+        .map(|p| {
+            let files = loadable.as_ref().map_or_else(|| p.files.clone(), |l| l.pick(p));
+            (p.name.as_str(), ModelKey { recipe: p.recipe.clone(), models: files })
+        })
+        .collect();
+    let pick = keys.iter().min_by_key(|(_, m)| Some(m) != loaded.as_ref());
     let Some((name, model)) = pick else {
         return t.skip_rest("none of the model presets' files are on it");
     };
@@ -122,14 +129,14 @@ impl Test<'_> {
     }
 
     /// Its list (`None` inside: it has none, any model may go to it).
-    fn list(&mut self, models: &[(String, ModelKey)]) -> Option<Option<Loadable>> {
+    fn list(&mut self, models: &[RecipePreset]) -> Option<Option<Loadable>> {
         self.start();
         let fits = |l: Option<&Loadable>| {
-            let (can, cannot): (Vec<_>, Vec<_>) = models.iter().partition(|(_, m)| l.is_none_or(|l| l.runs(&m.models)));
-            let names = |v: &[&(String, ModelKey)]| v.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>().join(", ");
+            let (can, cannot): (Vec<_>, Vec<_>) = models.iter().partition(|p| l.is_none_or(|l| l.runs_preset(p)));
+            let names = |v: &[&RecipePreset]| v.iter().map(|p| p.name.as_str()).collect::<Vec<_>>().join(", ");
             let why = cannot
                 .iter()
-                .filter_map(|(n, m)| Some(format!("{n}: {}", l?.why_not(&m.models)?)))
+                .filter_map(|p| Some(format!("{}: {}", p.name, l?.why_not_preset(p)?)))
                 .collect::<Vec<_>>()
                 .join("; ");
             (can.is_empty(), format!("model presets it can load: {}{}", or_none(&names(&can)), with("; not ", &why)))

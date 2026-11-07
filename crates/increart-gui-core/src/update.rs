@@ -484,6 +484,10 @@ pub enum Msg {
     /// Discard, `Del`): their project links; others are left. `Ctrl+Z`
     /// undoes it.
     DiscardImages(Vec<ImageRef>),
+    /// Fetch a model preset's files (its name, [`crate::state::missing_downloads`])
+    /// into the first model folder, reporting as the wizard's download does.
+    DownloadPresetFiles(String, Vec<increart_core::tiers::Download>),
+    CancelPresetDownload,
     /// A discarded image's link back in its project (Output library →
     /// Discarded).
     RestoreOutput(PathBuf),
@@ -1075,6 +1079,9 @@ pub enum Effect {
         model_dirs: Vec<String>,
     },
     CancelDownload,
+    /// Ask the open servers again what they can load (sd-server rescans its
+    /// folders), as [`Msg::ServerModels`].
+    ListLoadable,
     /// Open these sd-servers, stopping the engine and the servers in use
     /// that aren't among them (the ones that are, opened with the same
     /// settings, are kept as they are).
@@ -1109,7 +1116,7 @@ pub enum Effect {
     TestServer {
         run: u32,
         server: ServerConfig,
-        models: Vec<(String, increart_core::sdserver::ModelKey)>,
+        models: Vec<RecipePreset>,
         generate: Result<(), String>,
     },
     StopServerTest,
@@ -1333,7 +1340,7 @@ pub enum LibOp {
     CreateRun {
         project: Id,
         form: GenerateForm,
-        preset: RecipePreset,
+        preset: Box<RecipePreset>,
         model_dirs: Vec<String>,
         queue: bool,
         /// Handed back with the run, for the history's queued checkpoint.
@@ -1533,6 +1540,173 @@ fn ask_while_generating(state: &mut AppState, then: Msg) -> Vec<Effect> {
     vec![]
 }
 
+/// Queue's run, once checked: apart, to keep `update`'s frame small.
+#[inline(never)]
+fn queue_checked(state: &mut AppState) -> Vec<Effect> {
+    let Some(project) = state.project.clone() else {
+        state.messages_error("Select a project first");
+        return vec![];
+    };
+    let f = &state.generate;
+    if f.prompt.trim().is_empty() {
+        state.messages_error("The prompt is empty");
+        return vec![];
+    }
+    // the blanks filled from the blanks table
+    let filled = increart_core::prompts::fill_slots(f.prompt.clone(), &f.sweep.slots);
+    let unfilled = increart_core::prompts::slot_names([filled.as_str()]);
+    if let Some(n) = unfilled.first() {
+        let blank = format!("{{{n}}}");
+        let at = increart_core::prompts::slots(&f.prompt).into_iter().find(|r| f.prompt[r.clone()] == blank);
+        state.messages_error(format!("Fill in {blank} first (in the blanks table, or type over it)"));
+        if let Some(r) = at {
+            let chars = |b: usize| state.generate.prompt[..b].chars().count();
+            state.prompt_select = Some(chars(r.start)..chars(r.end));
+        }
+        return vec![];
+    }
+    let mut run = f.clone();
+    run.prompt = filled;
+    let f = &run;
+    if !f.width.is_multiple_of(32) || !f.height.is_multiple_of(32) || f.seeds == 0 {
+        state.messages_error("Size must be a multiple of 32 and seeds at least 1");
+        return vec![];
+    }
+    // with the files of each slot an open server has
+    let Some(preset) = state.config.recipes.get(f.preset).map(|p| state.resolve_preset(p)) else {
+        state.messages_error("No model preset");
+        return vec![];
+    };
+    // once per session: the run would only wait in the queue
+    if state.servers.is_empty() && state.background.is_none() && !state.no_server_warned {
+        state.no_server_warned = true;
+        state.no_server_warning = true;
+        return vec![];
+    }
+    if still_saving(state, &project, &f.label) {
+        return vec![];
+    }
+    let queued = Box::new(Queued { project: project.clone(), form: Box::new(f.to_draft(&state.config)) });
+    state.queueing.push((project.clone(), f.label.clone()));
+    let op = LibOp::CreateRun {
+        project,
+        form: f.clone(),
+        preset: Box::new(preset),
+        model_dirs: state.config.programs.model_dirs.clone(),
+        queue: state.engine_running,
+        queued,
+    };
+    if !state.engine_running {
+        state.messages_info("Run saved; it will be generated once servers are connected");
+    }
+    lib(state, op)
+}
+
+/// The KoboldCpp wizard's download (and Model presets', which reports the
+/// same way): apart, to keep `update`'s frame small.
+#[inline(never)]
+fn wizard_download(state: &mut AppState, msg: Msg) -> Vec<Effect> {
+    match msg {
+        m @ (Msg::WizardDownload(_) | Msg::WizardDownloaded(_)) if state.preset_download.is_some() => {
+            preset_downloads(state, m)
+        }
+        Msg::WizardDownload(p) => {
+            if let Phase::Servers(d) = &mut state.phase
+                && let Some((_, at)) = d.kobold.as_mut().and_then(|k| k.downloading.as_mut())
+            {
+                *at = p;
+            }
+            vec![]
+        }
+        Msg::CancelWizardDownload => vec![Effect::CancelDownload],
+        Msg::WizardDownloaded(r) => {
+            let Phase::Servers(d) = &mut state.phase else { return vec![] };
+            let Some(k) = &mut d.kobold else { return vec![] };
+            let Some((plan, _)) = k.downloading.take() else { return vec![] };
+            if let Err(e) = r {
+                k.error = Some(if e == "cancelled" { "Download cancelled; what's there is kept.".into() } else { e });
+                return vec![];
+            }
+            let dir = k.models_dir.trim().to_string();
+            d.draft.servers = plan.servers;
+            // the recipe's files are under the model directory
+            let c = &mut state.config;
+            c.programs.koboldcpp = k.binary.trim().to_string();
+            let open = k.open;
+            if !c.programs.model_dirs.contains(&dir) {
+                c.programs.model_dirs.push(dir);
+            }
+            match c.recipes.iter_mut().find(|r| r.name == plan.recipe.name) {
+                Some(r) => *r = plan.recipe,
+                None => c.recipes.push(plan.recipe),
+            }
+            if open {
+                return update(state, Msg::FinishServerWizard);
+            }
+            // saved, not opened: the servers screen shows it in the list
+            name_wizard_draft(state);
+            let Phase::Servers(d) = &mut state.phase else { return vec![] };
+            d.kobold = None;
+            update(state, Msg::SavePreset)
+        }
+        _ => vec![],
+    }
+}
+
+/// Model presets' **Download**: one download at a time (the wizard's too).
+#[inline(never)]
+fn preset_downloads(state: &mut AppState, msg: Msg) -> Vec<Effect> {
+    match msg {
+        Msg::DownloadPresetFiles(name, files) => {
+            let wizard =
+                matches!(&state.phase, Phase::Servers(d) if d.kobold.as_ref().is_some_and(|k| k.downloading.is_some()));
+            if state.preset_download.is_some() || wizard {
+                state.messages_error("A download is under way: wait for it or cancel it first");
+                return vec![];
+            }
+            let model_dirs = state.config.programs.model_dirs.clone();
+            let Some(dir) = model_dirs.iter().map(|d| d.trim()).find(|d| !d.is_empty()) else {
+                state.messages_error("Add a model folder first: the files go in the first one");
+                return vec![];
+            };
+            if files.is_empty() {
+                return vec![];
+            }
+            let dir = dir.to_string();
+            state.preset_download =
+                Some(crate::state::PresetDownload { name, files: files.clone(), at: Default::default() });
+            vec![Effect::DownloadModels { dir, files, model_dirs }]
+        }
+        Msg::CancelPresetDownload if state.preset_download.is_some() => vec![Effect::CancelDownload],
+        Msg::WizardDownload(p) => {
+            if let Some(d) = &mut state.preset_download {
+                d.at = p;
+            }
+            vec![]
+        }
+        Msg::WizardDownloaded(r) => {
+            let Some(d) = state.preset_download.take() else { return vec![] };
+            let n = d.files.len();
+            match r {
+                Ok(()) => {
+                    let s = if n == 1 { "" } else { "s" };
+                    state.messages_info(format!("{}: its {n} file{s} downloaded", d.name));
+                    vec![Effect::ListLoadable]
+                }
+                Err(e) if e == "cancelled" => {
+                    state.messages_info(format!("{}: download cancelled; what's there is kept", d.name));
+                    vec![Effect::ListLoadable]
+                }
+                Err(e) => {
+                    state.messages_error(format!("{}: download failed: {e}", d.name));
+                    vec![Effect::ListLoadable]
+                }
+            }
+        }
+        _ => vec![],
+    }
+}
+
 /// The warning before queueing a model preset no open server can run
 /// (e.g. sd-server's int8 files on KoboldCpp), with each server's reason.
 fn model_warning(state: &AppState) -> Option<String> {
@@ -1545,7 +1719,7 @@ fn model_warning(state: &AppState) -> Option<String> {
     };
     let lines: Vec<String> = used
         .iter()
-        .filter_map(|r| state.why_no_server_runs(&r.files).map(|why| format!("{}:\n  {}", r.name, why.join("\n  "))))
+        .filter_map(|r| state.why_no_server_runs(r).map(|why| format!("{}:\n  {}", r.name, why.join("\n  "))))
         .collect();
     if lines.is_empty() {
         return None;
@@ -2556,44 +2730,8 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
                 }
             }
         }
-        Msg::WizardDownload(p) => {
-            if let Phase::Servers(d) = &mut state.phase
-                && let Some((_, at)) = d.kobold.as_mut().and_then(|k| k.downloading.as_mut())
-            {
-                *at = p;
-            }
-            vec![]
-        }
-        Msg::CancelWizardDownload => vec![Effect::CancelDownload],
-        Msg::WizardDownloaded(r) => {
-            let Phase::Servers(d) = &mut state.phase else { return vec![] };
-            let Some(k) = &mut d.kobold else { return vec![] };
-            let Some((plan, _)) = k.downloading.take() else { return vec![] };
-            if let Err(e) = r {
-                k.error = Some(if e == "cancelled" { "Download cancelled; what's there is kept.".into() } else { e });
-                return vec![];
-            }
-            let dir = k.models_dir.trim().to_string();
-            d.draft.servers = plan.servers;
-            // the recipe's files are under the model directory
-            let c = &mut state.config;
-            c.programs.koboldcpp = k.binary.trim().to_string();
-            let open = k.open;
-            if !c.programs.model_dirs.contains(&dir) {
-                c.programs.model_dirs.push(dir);
-            }
-            match c.recipes.iter_mut().find(|r| r.name == plan.recipe.name) {
-                Some(r) => *r = plan.recipe,
-                None => c.recipes.push(plan.recipe),
-            }
-            if open {
-                return update(state, Msg::FinishServerWizard);
-            }
-            // saved, not opened: the servers screen shows it in the list
-            name_wizard_draft(state);
-            let Phase::Servers(d) = &mut state.phase else { return vec![] };
-            d.kobold = None;
-            update(state, Msg::SavePreset)
+        m @ (Msg::WizardDownload(_) | Msg::CancelWizardDownload | Msg::WizardDownloaded(_)) => {
+            wizard_download(state, m)
         }
         Msg::DraftDevice(device, on) => {
             let Phase::Servers(d) = &mut state.phase else { return vec![] };
@@ -2911,15 +3049,7 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
             } else {
                 Ok(())
             };
-            let models = state
-                .config
-                .recipes
-                .iter()
-                .map(|r| {
-                    let key = increart_core::sdserver::ModelKey { recipe: r.recipe.clone(), models: r.files.clone() };
-                    (r.name.clone(), key)
-                })
-                .collect();
+            let models = state.config.recipes.clone();
             state.server_test =
                 Some(crate::state::ServerTest { run, name: server.name().to_string(), steps: vec![], done: false });
             let mut fx = vec![];
@@ -3561,7 +3691,7 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
         | Msg::RestoreIdeas(..)
         | Msg::RestoreOutputs(_)
         | Msg::DeleteDiscardedOutputs(_)) => discards(state, m),
-
+        m @ (Msg::DownloadPresetFiles(..) | Msg::CancelPresetDownload) => preset_downloads(state, m),
         // ------------------------------------------------ input library
         Msg::LibFolder(f) => {
             // on the Folder tab, the folder view goes there too
@@ -6489,64 +6619,7 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
             state.sweep_order_asked = false;
             fx
         }
-        Msg::QueueChecked => {
-            let Some(project) = state.project.clone() else {
-                state.messages_error("Select a project first");
-                return vec![];
-            };
-            let f = &state.generate;
-            if f.prompt.trim().is_empty() {
-                state.messages_error("The prompt is empty");
-                return vec![];
-            }
-            // the blanks filled from the blanks table
-            let filled = increart_core::prompts::fill_slots(f.prompt.clone(), &f.sweep.slots);
-            let unfilled = increart_core::prompts::slot_names([filled.as_str()]);
-            if let Some(n) = unfilled.first() {
-                let blank = format!("{{{n}}}");
-                let at = increart_core::prompts::slots(&f.prompt).into_iter().find(|r| f.prompt[r.clone()] == blank);
-                state.messages_error(format!("Fill in {blank} first (in the blanks table, or type over it)"));
-                if let Some(r) = at {
-                    let chars = |b: usize| state.generate.prompt[..b].chars().count();
-                    state.prompt_select = Some(chars(r.start)..chars(r.end));
-                }
-                return vec![];
-            }
-            let mut run = f.clone();
-            run.prompt = filled;
-            let f = &run;
-            if !f.width.is_multiple_of(32) || !f.height.is_multiple_of(32) || f.seeds == 0 {
-                state.messages_error("Size must be a multiple of 32 and seeds at least 1");
-                return vec![];
-            }
-            let Some(preset) = state.config.recipes.get(f.preset).cloned() else {
-                state.messages_error("No model preset");
-                return vec![];
-            };
-            // once per session: the run would only wait in the queue
-            if state.servers.is_empty() && state.background.is_none() && !state.no_server_warned {
-                state.no_server_warned = true;
-                state.no_server_warning = true;
-                return vec![];
-            }
-            if still_saving(state, &project, &f.label) {
-                return vec![];
-            }
-            let queued = Box::new(Queued { project: project.clone(), form: Box::new(f.to_draft(&state.config)) });
-            state.queueing.push((project.clone(), f.label.clone()));
-            let op = LibOp::CreateRun {
-                project,
-                form: f.clone(),
-                preset,
-                model_dirs: state.config.programs.model_dirs.clone(),
-                queue: state.engine_running,
-                queued,
-            };
-            if !state.engine_running {
-                state.messages_info("Run saved; it will be generated once servers are connected");
-            }
-            lib(state, op)
-        }
+        Msg::QueueChecked => queue_checked(state),
         Msg::CancelRun(id, how) => {
             // its GPUs going quiet is no news (Finish & stop still says
             // when the last images are done)
@@ -7852,7 +7925,8 @@ pub fn collection_name_problem(state: &AppState, parent: &std::path::Path, name:
 fn discards(state: &mut AppState, msg: Msg) -> Vec<Effect> {
     match msg {
         Msg::DiscardImages(images) => {
-            let links: Vec<PathBuf> = images.iter().filter_map(|i| state.output_link(i)).map(|o| o.path.clone()).collect();
+            let links: Vec<PathBuf> =
+                images.iter().filter_map(|i| state.output_link(i)).map(|o| o.path.clone()).collect();
             if links.is_empty() {
                 return vec![];
             }
@@ -7876,7 +7950,9 @@ fn discards(state: &mut AppState, msg: Msg) -> Vec<Effect> {
             each(state, ids.into_iter().map(LibOp::DeleteDiscarded).collect())
         }
         Msg::DeleteDiscardedIdeas(ids) => each(state, ids.into_iter().map(LibOp::DeleteDiscarded).collect()),
-        Msg::RestoreIdeas(ids, loc) => each(state, ids.into_iter().map(|id| LibOp::MoveIdea(id, loc.clone())).collect()),
+        Msg::RestoreIdeas(ids, loc) => {
+            each(state, ids.into_iter().map(|id| LibOp::MoveIdea(id, loc.clone())).collect())
+        }
         Msg::RestoreOutputs(links) if !links.is_empty() => lib(state, LibOp::RestoreOutputs(links)),
         Msg::DeleteDiscardedOutputs(links) if !links.is_empty() => lib(state, LibOp::DeleteDiscardedOutputs(links)),
         _ => vec![],
@@ -8640,7 +8716,7 @@ fn queue_sweep(state: &mut AppState, confirmed: bool) -> Vec<Effect> {
     let Some(runs) = runs
         .into_iter()
         .map(|(f, t)| {
-            let preset = state.config.recipes.get(f.preset).cloned()?;
+            let preset = state.resolve_preset(state.config.recipes.get(f.preset)?);
             Some((f, t, preset))
         })
         .collect::<Option<Vec<_>>>()

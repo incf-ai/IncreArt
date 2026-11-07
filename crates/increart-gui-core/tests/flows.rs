@@ -7112,7 +7112,7 @@ fn a_model_presets_lora_picked_is_named_inside_the_loras_folder() {
     let mut config = Config::default();
     config.programs.model_dirs = vec![models.to_string_lossy().into()];
     config.recipes = increart_core::config::builtin_recipes();
-    config.recipes[0].loras = vec![PresetLora { file: String::new(), weight: 1.0 }];
+    config.recipes[0].loras = vec![PresetLora { file: String::new(), weight: 1.0, trigger: String::new() }];
     let mut s = AppState::new(config, None);
     update(&mut s, Msg::OpenRecipes);
     // starts in the loras folder
@@ -8432,4 +8432,115 @@ fn a_run_being_saved_says_what_it_is_doing() {
     assert_eq!(s.queueing_notes.get(&(project.clone(), "r02".into())).map(|(_, f)| *f), Some(0.5));
     update(&mut s, Msg::OpDone(Err("disk full".into()), None));
     assert!(s.queueing.is_empty() && s.queueing_notes.is_empty(), "failed: Queue works again");
+}
+
+/// A preset's other files per slot: each server is offered the ones it has
+/// (sd-server the int8 files, KoboldCpp the GGUFs), the run takes those the
+/// open servers have (else those in a model folder), and a LoRA's trigger
+/// words go before its prompt.
+#[test]
+fn a_preset_runs_with_the_files_there_and_its_loras_trigger() {
+    use increart_core::config::PresetLora;
+    use increart_core::sdserver::Loadable;
+    let mut h = Harness::new();
+    let models = h._tmp.path().join("models");
+    let gguf = "diffusion_models/qwen_image_2.1-Q4_K.gguf";
+    std::fs::create_dir_all(models.join("diffusion_models")).unwrap();
+    std::fs::write(models.join(gguf), b"gguf").unwrap();
+    h.state.config.programs.model_dirs = vec![models.to_string_lossy().into()];
+    h.state.config.recipes = increart_core::config::builtin_recipes();
+    let lora = PresetLora { file: "loras/px.safetensors".into(), weight: 1.0, trigger: "Pixel art style.".into() };
+    h.state.config.recipes[0].loras = vec![lora];
+    let p = h.state.config.recipes[0].clone();
+
+    // no server: the files in a model folder (the GGUF), the others as written
+    let r = h.state.resolve_preset(&p);
+    assert_eq!(r.files["diffusion_model"], gguf);
+    assert_eq!(r.files["llm"], p.files["llm"]);
+
+    // what's left to download: the llm's GGUF (the int8 has no download), the vae
+    let missing: Vec<String> =
+        missing_downloads(&p, &h.state.config.programs.model_dirs).into_iter().map(|d| d.file).collect();
+    assert_eq!(missing, ["text_encoders/Qwen3VL-8B-Instruct-Q4_K_M.gguf", "vae/qwen_image_2.1_vae_bf16.safetensors"]);
+
+    // a KoboldCpp with both (the int8 a second choice): the GGUFs
+    let ggufs: Vec<String> = p.alternatives.values().flatten().cloned().chain([p.files["vae"].clone()]).collect();
+    let kcpp = Loadable::Files {
+        ids: p.files.values().cloned().chain(ggufs).collect(),
+        refused: Default::default(),
+        second_choice: p.files.values().filter(|f| f.contains("int8")).map(|f| (f.clone(), "int8".into())).collect(),
+    };
+    let server = |name: &str| ServerStatus {
+        config: None,
+        name: name.into(),
+        device: String::new(),
+        state: "ready".into(),
+        model: None,
+        idle_since: None,
+        worked: false,
+    };
+    h.state.servers = vec![server("kcpp")];
+    update(&mut h.state, Msg::ServerModels(vec![("kcpp".into(), kcpp.clone())]));
+    assert_eq!(h.state.runnable_recipes(), vec![0]);
+    assert_eq!(h.state.servers_running(&p), ["kcpp"]);
+    let r = h.state.resolve_preset(&p);
+    assert_eq!(r.files["diffusion_model"], gguf);
+    assert_eq!(r.files["llm"], "text_encoders/Qwen3VL-8B-Instruct-Q4_K_M.gguf");
+    // with an sd-server that has the int8 files: those (it loads them best)
+    h.state.servers.push(server("sd"));
+    update(&mut h.state, Msg::ServerModels(vec![("sd".into(), Loadable::files(p.files.values().cloned()))]));
+    assert_eq!(h.state.resolve_preset(&p).files, p.files);
+    // a server with none of a slot's files says why by the preferred one
+    h.state.servers = vec![server("bare")];
+    update(&mut h.state, Msg::ServerModels(vec![("bare".into(), Loadable::files([gguf.to_string()]))]));
+    let why = h.state.why_no_server_runs(&p).unwrap();
+    assert!(why[0].contains("qwen3vl_8b_int8"), "{why:?}");
+    h.state.servers.clear();
+    h.state.server_models.clear();
+
+    // queued with no server: the run loads the GGUF found, the trigger first
+    h.send(Msg::NewProject(PathBuf::new()));
+    h.send(Msg::CommitRename);
+    h.settle();
+    let mut f = h.state.generate.clone();
+    (f.prompt, f.seeds, f.preset) = ("a lighthouse".into(), 1, 0);
+    h.send(Msg::Generate(f));
+    h.send(Msg::QueueGenerate);
+    h.settle();
+    assert!(h.errors().is_empty(), "{:?}", h.errors());
+    let run = h.state.project_entry().unwrap().runs.last().unwrap().clone();
+    assert_eq!(run.prompt, "Pixel art style. a lighthouse");
+    assert_eq!(run.model.files["diffusion_model"].id, gguf);
+    assert_eq!(run.model.loras[0].id, "loras/px.safetensors");
+    assert_eq!(h.state.generate.prompt, "a lighthouse", "the form keeps the prompt as typed");
+}
+
+/// Model presets' Download: into the first model folder, through the
+/// wizard's downloader, one at a time; done, the servers list again.
+#[test]
+fn a_presets_missing_files_downloaded() {
+    let mut s = AppState::new(Config::default(), None);
+    let p = increart_core::config::builtin_recipes().remove(0);
+    let files = missing_downloads(&p, &[]);
+    update(&mut s, Msg::DownloadPresetFiles(p.name.clone(), files.clone()));
+    assert!(s.preset_download.is_none());
+    assert!(s.messages.iter().any(|m| m.error && m.text.contains("Add a model folder")));
+
+    s.config.programs.model_dirs = vec![String::new(), "/m".into()];
+    let fx = update(&mut s, Msg::DownloadPresetFiles(p.name.clone(), files.clone()));
+    let [Effect::DownloadModels { dir, files: got, .. }] = fx.as_slice() else { panic!("{fx:?}") };
+    assert_eq!((dir.as_str(), got), ("/m", &files));
+    // one at a time
+    assert!(update(&mut s, Msg::DownloadPresetFiles(p.name.clone(), files.clone())).is_empty());
+    let at = WizardDownload { file: 1, done: 5, ..Default::default() };
+    update(&mut s, Msg::WizardDownload(at.clone()));
+    assert_eq!(s.preset_download.as_ref().unwrap().at, at);
+    assert_eq!(update(&mut s, Msg::CancelPresetDownload), [Effect::CancelDownload]);
+    let fx = update(&mut s, Msg::WizardDownloaded(Err("cancelled".into())));
+    assert_eq!(fx, [Effect::ListLoadable]);
+    assert!(s.preset_download.is_none());
+    assert!(s.messages.iter().any(|m| m.text.contains("download cancelled")));
+    update(&mut s, Msg::DownloadPresetFiles(p.name.clone(), files.clone()));
+    assert_eq!(update(&mut s, Msg::WizardDownloaded(Ok(()))), [Effect::ListLoadable]);
+    assert!(s.messages.iter().any(|m| m.text == format!("{}: its {} files downloaded", p.name, files.len())));
 }

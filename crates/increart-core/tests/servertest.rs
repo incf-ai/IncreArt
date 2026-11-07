@@ -5,14 +5,19 @@ mod common;
 use std::sync::atomic::AtomicBool;
 
 use common::fake::Fake;
-use increart_core::sdserver::{Client, ModelKey};
+use increart_core::config::RecipePreset;
+use increart_core::sdserver::Client;
 use increart_core::servertest::{Outcome, Step, as_text, run};
 use serde_json::json;
 
-fn models() -> Vec<(String, ModelKey)> {
-    let key =
-        |file: &str| ModelKey { recipe: "krea2".into(), models: [("diffusion_model".into(), file.into())].into() };
-    vec![("krea2".into(), key("krea2.safetensors")), ("other".into(), key("missing.safetensors"))]
+fn models() -> Vec<RecipePreset> {
+    let preset = |name: &str, file: &str| RecipePreset {
+        name: name.into(),
+        recipe: "krea2".into(),
+        files: [("diffusion_model".into(), file.into())].into(),
+        ..Default::default()
+    };
+    vec![preset("krea2", "krea2.safetensors"), preset("other", "missing.safetensors")]
 }
 
 fn test(fake: &Fake, generate: Result<(), String>) -> Vec<Step> {

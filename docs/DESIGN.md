@@ -2122,6 +2122,45 @@ and its tooltip says how many more are generating.
   the form takes them, and if it was deleted the first preset is chosen.
   Other projects' drafts name their preset, so a rename moves them to the
   form's current one when opened. **Reset to built-ins** replaces the list.
+- **Preset format** (config `model_presets`, `ModelPreset`): besides
+  `name`, `recipe`, `files` (slot → file ID), `steps`, `cfg`, `flow_shift`,
+  `custom_sigmas`, `sampler`, `scheduler` and `loras`, a preset may have
+  - `alternatives`: slot → more file IDs, in order of preference after the
+    one in `files` (Qwen-Image 2.1's built-in: sd-server's int8 files, then
+    the GGUFs KoboldCpp loads). Each open server is offered the first file of
+    each slot it has (one it loads less well, like int8 on KoboldCpp, only if
+    it has no other); a preset is runnable when some server has one of each
+    slot's files. A queued run takes the set the most open servers can run
+    (the first server's on a tie), else each slot's first file in a model
+    folder, else `files` as written; the run records the files it took.
+  - `downloads`: file ID → URL, for its files, alternatives and LoRAs.
+  - `note`: a line on what it is (the built-in ones say where they were
+    tested).
+  - A LoRA's `trigger`: the words it was trained on. They go before the
+    run's prompt ("Pixel art style. a lighthouse") when the prompt hasn't
+    them (any case); the form keeps the prompt as typed.
+- In the editor: **Note**; under Files, **Other files per slot** (a line of
+  comma-separated file IDs per slot; open when any are set; one no open
+  server lists in amber, why on hover); "N files not in a model folder ·
+  **Download N files**" when the preset says where to download them (each
+  slot's file, or the first of its choices with a download, unless one of
+  its choices is there; the LoRAs): fetched into the first model folder by
+  the KoboldCpp wizard's downloader (a file of the same name and size found
+  in a model folder or Hugging Face's cache is linked instead; a `.part`
+  carries on), with its progress and **Cancel**; one download at a time.
+  When it ends the open servers are asked again what they can load
+  (sd-server rescans its folders). Each LoRA row has a **trigger words**
+  field.
+- **Built-in presets…** (in the editor's footer) shows, in the editor's
+  place, the presets shipped in `increart-core/presets/builtin.rsn`: each
+  tested model (Z-Image Turbo, Anima Turbo, FLUX.2 Klein 4B and 9B, FLUX.3
+  Klein, Krea 2 Turbo and Turbo Edit, MOSS-Image SFT, Qwen-Image 2.1,
+  FLUX.1 dev and Kontext, Fibo 2 Edit Turbo, Qwen-Image Edit 2509 and 2511),
+  then each with a sample LoRA ("Z-Image Turbo · pixel art"), every one
+  made on sd-server and on KoboldCpp 1.124.2 with and without its LoRA.
+  A row says whether an open server runs it ("runs on …"), its files are
+  there, or **Download N files**; **Add** puts it in the list (Save keeps
+  it), **Show** selects one already there. **Back to the list** returns.
   Above the file rows is the model directories list, Server settings' own
   editor (type, browse, ↑ ↓ to reorder, × to remove, Add folder…), saved
   as it's changed (Cancel doesn't undo it), with what the order means: a

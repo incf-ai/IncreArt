@@ -128,7 +128,8 @@ fn discarded(ui: &mut egui::Ui, st: &AppState, tex: &mut Textures, out: &mut Vec
     }
     let all: Vec<increart_core::Id> = ds.iter().map(|d| d.entry.project.id.clone()).collect();
     let mut picks = crate::discards::Picks::load(ui, "projects", &all);
-    let hint = "Restore puts a project back in its folder (the top level if that's gone); its pending seeds generate again.";
+    let hint =
+        "Restore puts a project back in its folder (the top level if that's gone); its pending seeds generate again.";
     let mut action = crate::discards::bar(ui, "projects", hint, picks.sel.len(), all.len(), "project");
     let bg = picks.background(ui);
     ScrollArea::vertical().auto_shrink([false, true]).show(ui, |ui| {
@@ -1920,249 +1921,285 @@ pub fn recipes_window(ctx: &egui::Context, st: &AppState, out: &mut Vec<Msg>) {
         ui.weak("Generate's Model list: what each loads and its default settings. Saved to config.rsn.");
         ui.add_space(4.0);
         let mut action: Option<(usize, &str)> = None;
-        ui.horizontal_top(|ui| {
-            // the list
-            ui.vertical(|ui| {
-                ui.set_width(220.0);
-                for (i, r) in e.rows.iter().enumerate() {
-                    let on = st.servers_running(&r.preset.files);
-                    let mark = if on.is_empty() {
-                        RichText::new(ph::CIRCLE).weak()
-                    } else {
-                        RichText::new(ph::CHECK_CIRCLE).color(GOOD)
-                    };
-                    ui.horizontal(|ui| {
-                        ui.label(mark).on_hover_text(if on.is_empty() {
-                            match st.why_no_server_runs(&r.preset.files) {
-                                Some(why) => format!("no open server can run it:\n{}", why.join("\n")),
-                                None => "no open server has said what it can load".to_string(),
+        if e.builtin {
+            builtin_presets(ui, st, &mut e, out);
+        } else {
+            ui.horizontal_top(|ui| {
+                // the list
+                ui.vertical(|ui| {
+                    ui.set_width(220.0);
+                    for (i, r) in e.rows.iter().enumerate() {
+                        let on = st.servers_running(&r.preset);
+                        let mark = if on.is_empty() {
+                            RichText::new(ph::CIRCLE).weak()
+                        } else {
+                            RichText::new(ph::CHECK_CIRCLE).color(GOOD)
+                        };
+                        ui.horizontal(|ui| {
+                            ui.label(mark).on_hover_text(if on.is_empty() {
+                                match st.why_no_server_runs(&r.preset) {
+                                    Some(why) => format!("no open server can run it:\n{}", why.join("\n")),
+                                    None => "no open server has said what it can load".to_string(),
+                                }
+                            } else {
+                                format!("runs on {}", on.join(", "))
+                            });
+                            let name =
+                                if r.preset.name.trim().is_empty() { "(no name)" } else { r.preset.name.as_str() };
+                            if ui.selectable_label(i == e.selected, name).clicked() {
+                                action = Some((i, "select"));
                             }
-                        } else {
-                            format!("runs on {}", on.join(", "))
                         });
-                        let name = if r.preset.name.trim().is_empty() { "(no name)" } else { r.preset.name.as_str() };
-                        if ui.selectable_label(i == e.selected, name).clicked() {
-                            action = Some((i, "select"));
-                        }
-                    });
-                }
-                ui.add_space(4.0);
-                ui.horizontal(|ui| {
-                    let i = e.selected;
-                    for (icon, tip, what) in [
-                        (ph::PLUS, "new (a copy of the selected one's files)", "new"),
-                        (ph::COPY, "duplicate", "dup"),
-                        (ph::ARROW_UP, "move up", "up"),
-                        (ph::ARROW_DOWN, "move down", "down"),
-                        (ph::TRASH, "delete", "del"),
-                    ] {
-                        if ui.small_button(icon).on_hover_text(tip).clicked() {
-                            action = Some((i, what));
-                        }
                     }
-                });
-            });
-            ui.add_space(12.0);
-            // the selected one
-            let Some(r) = e.rows.get_mut(e.selected) else { return };
-            ui.vertical(|ui| {
-                let p = &mut r.preset;
-                egui::Grid::new("recipe").num_columns(2).spacing([10.0, 6.0]).show(ui, |ui| {
-                    ui.label("Name");
-                    ui.add(egui::TextEdit::singleline(&mut p.name).desired_width(320.0));
-                    ui.end_row();
-                    ui.label("Recipe").on_hover_text("sd-server's recipe for these files, e.g. qwen-image-21");
-                    ui.add(egui::TextEdit::singleline(&mut p.recipe).desired_width(320.0).hint_text("qwen-image-21"));
-                    ui.end_row();
-                    ui.label("Steps");
-                    ui.add(egui::DragValue::new(&mut p.steps).range(1..=200));
-                    ui.end_row();
-                    ui.label("CFG");
-                    ui.add(egui::DragValue::new(&mut p.cfg).range(0.0..=30.0).speed(0.1).max_decimals(2));
-                    ui.end_row();
-                    ui.label("Flow shift");
+                    ui.add_space(4.0);
                     ui.horizontal(|ui| {
-                        let mut on = p.flow_shift.is_some();
-                        if ui.checkbox(&mut on, "").on_hover_text("off: the recipe's").changed() {
-                            p.flow_shift = on.then_some(3.0);
-                        }
-                        if let Some(v) = &mut p.flow_shift {
-                            ui.add(egui::DragValue::new(v).range(0.01..=20.0).speed(0.05).max_decimals(2));
-                        } else {
-                            ui.weak("the recipe's");
+                        let i = e.selected;
+                        for (icon, tip, what) in [
+                            (ph::PLUS, "new (a copy of the selected one's files)", "new"),
+                            (ph::COPY, "duplicate", "dup"),
+                            (ph::ARROW_UP, "move up", "up"),
+                            (ph::ARROW_DOWN, "move down", "down"),
+                            (ph::TRASH, "delete", "del"),
+                        ] {
+                            if ui.small_button(icon).on_hover_text(tip).clicked() {
+                                action = Some((i, what));
+                            }
                         }
                     });
-                    ui.end_row();
-                    ui.label("Sampler");
-                    sampler_combo(ui, "preset_sampler", &mut p.sampler);
-                    ui.end_row();
-                    ui.label("Scheduler");
-                    scheduler_combo(ui, "preset_scheduler", &mut p.scheduler);
-                    ui.end_row();
-                    ui.label("Sigmas").on_hover_text("a custom schedule, comma-separated; empty: the recipe's");
-                    ui.add(egui::TextEdit::singleline(&mut r.sigmas).desired_width(320.0).hint_text("the recipe's"));
-                    ui.end_row();
                 });
-                let p = &mut r.preset;
-                ui.add_space(6.0);
-                crate::startup::models_list(
-                    ui,
-                    st,
-                    "A preset's files are found in these, searched in this order. Each is written \
+                ui.add_space(12.0);
+                // the selected one
+                let Some(r) = e.rows.get_mut(e.selected) else { return };
+                ui.vertical(|ui| {
+                    let p = &mut r.preset;
+                    egui::Grid::new("recipe").num_columns(2).spacing([10.0, 6.0]).show(ui, |ui| {
+                        ui.label("Name");
+                        ui.add(egui::TextEdit::singleline(&mut p.name).desired_width(320.0));
+                        ui.end_row();
+                        ui.label("Recipe").on_hover_text("sd-server's recipe for these files, e.g. qwen-image-21");
+                        ui.add(
+                            egui::TextEdit::singleline(&mut p.recipe).desired_width(320.0).hint_text("qwen-image-21"),
+                        );
+                        ui.end_row();
+                        ui.label("Steps");
+                        ui.add(egui::DragValue::new(&mut p.steps).range(1..=200));
+                        ui.end_row();
+                        ui.label("CFG");
+                        ui.add(egui::DragValue::new(&mut p.cfg).range(0.0..=30.0).speed(0.1).max_decimals(2));
+                        ui.end_row();
+                        ui.label("Flow shift");
+                        ui.horizontal(|ui| {
+                            let mut on = p.flow_shift.is_some();
+                            if ui.checkbox(&mut on, "").on_hover_text("off: the recipe's").changed() {
+                                p.flow_shift = on.then_some(3.0);
+                            }
+                            if let Some(v) = &mut p.flow_shift {
+                                ui.add(egui::DragValue::new(v).range(0.01..=20.0).speed(0.05).max_decimals(2));
+                            } else {
+                                ui.weak("the recipe's");
+                            }
+                        });
+                        ui.end_row();
+                        ui.label("Sampler");
+                        sampler_combo(ui, "preset_sampler", &mut p.sampler);
+                        ui.end_row();
+                        ui.label("Scheduler");
+                        scheduler_combo(ui, "preset_scheduler", &mut p.scheduler);
+                        ui.end_row();
+                        ui.label("Sigmas").on_hover_text("a custom schedule, comma-separated; empty: the recipe's");
+                        ui.add(
+                            egui::TextEdit::singleline(&mut r.sigmas).desired_width(320.0).hint_text("the recipe's"),
+                        );
+                        ui.end_row();
+                        ui.label("Note");
+                        ui.add(
+                            egui::TextEdit::singleline(&mut p.note)
+                                .desired_width(320.0)
+                                .hint_text("what it is, where it was tested"),
+                        );
+                        ui.end_row();
+                    });
+                    let p = &mut r.preset;
+                    ui.add_space(6.0);
+                    crate::startup::models_list(
+                        ui,
+                        st,
+                        "A preset's files are found in these, searched in this order. Each is written \
                      relative to its folder (vae/x.safetensors), so a preset keeps working wherever the \
                      folders are; a path in more than one folder is the first one's. LoRAs are in each \
                      folder's loras/. The list is Server settings' own, for every preset and both servers, \
                      and saved as it's changed (Cancel keeps it); a running sd-server sees a change once \
                      it's restarted.",
-                    &mut picks,
-                );
-                ui.add_space(6.0);
-                ui.label(RichText::new("Files").strong());
-                let dirs = &st.config.programs.model_dirs;
-                if dirs.iter().all(|d| d.trim().is_empty()) {
-                    ui.colored_label(NEUTRAL, "No model directory yet: add the one holding the model files.");
-                }
-                if let Some(why) = &e.error {
-                    ui.add(egui::Label::new(RichText::new(why).color(BAD)).wrap());
-                }
-                let mut remove = None;
-                let slots: Vec<(String, String)> = p.files.clone().into_iter().collect();
-                egui::Grid::new("recipe_files").num_columns(6).spacing([6.0, 4.0]).show(ui, |ui| {
-                    for (slot, file) in &slots {
-                        let mut s = slot.clone();
-                        ComboBox::from_id_salt(("slot", slot)).selected_text(&s).width(120.0).show_ui(ui, |ui| {
-                            for name in MODEL_SLOTS {
-                                if name == slot || !p.files.contains_key(name) {
-                                    ui.selectable_value(&mut s, name.to_string(), name);
-                                }
-                            }
-                        });
-                        let mut f = file.clone();
-                        let known = files.contains(f.as_str()) || std::path::Path::new(&f).is_absolute();
-                        let edit = egui::TextEdit::singleline(&mut f);
-                        let r = if known || files.is_empty() {
-                            ui.add_sized([300.0, 20.0], edit)
-                        } else {
-                            ui.add_sized([300.0, 20.0], edit.text_color(NEUTRAL))
-                                .on_hover_text(st.why_file_unlisted(&f))
-                        };
-                        // a full path inside a model directory: written relative to it
-                        if r.lost_focus()
-                            && Path::new(&f).is_absolute()
-                            && let Ok(id) = increart_core::config::model_file_id(Path::new(&f), dirs)
-                        {
-                            f = id;
-                        }
-                        if files.is_empty() {
-                            ui.label("");
-                        } else {
-                            ui.menu_button(ph::CARET_DOWN, |ui| {
-                                ScrollArea::vertical().max_height(320.0).show(ui, |ui| {
-                                    for id in &files {
-                                        if ui.selectable_label(*id == f, *id).clicked() {
-                                            f = id.to_string();
-                                            ui.close();
-                                        }
-                                    }
-                                });
-                            })
-                            .response
-                            .on_hover_text("the files the open servers list");
-                        }
-                        let at = MODEL_SLOTS.iter().position(|n| *n == s.as_str()).unwrap_or(0);
-                        if ui.small_button(ph::FOLDER_OPEN).on_hover_text("Browse… (in a model directory)").clicked()
-                        {
-                            picks.push(Msg::Pick(PickKind::RecipeFile(at)));
-                        }
-                        let on_disk = increart_core::config::model_file_on_disk(&f, dirs);
-                        let tip = match &on_disk {
-                            Some(p) => format!("Found at {}: show it in the file manager", p.display()),
-                            None => "Not found in any model directory".into(),
-                        };
-                        let show = ui.add_enabled(on_disk.is_some(), egui::Button::new(ph::ARROW_SQUARE_OUT).small());
-                        if show.on_hover_text(&tip).on_disabled_hover_text(&tip).clicked()
-                            && let Some(p) = on_disk
-                        {
-                            picks.push(Msg::ShowInFileManager(p));
-                        }
-                        if ui.small_button(ph::TRASH).on_hover_text("remove").clicked() {
-                            remove = Some(slot.clone());
-                        }
-                        ui.end_row();
-                        if s != *slot {
-                            p.files.remove(slot);
-                            p.files.insert(s, f);
-                        } else if f != *file {
-                            p.files.insert(s, f);
-                        }
+                        &mut picks,
+                    );
+                    ui.add_space(6.0);
+                    ui.label(RichText::new("Files").strong());
+                    let dirs = &st.config.programs.model_dirs;
+                    if dirs.iter().all(|d| d.trim().is_empty()) {
+                        ui.colored_label(NEUTRAL, "No model directory yet: add the one holding the model files.");
                     }
-                });
-                if let Some(slot) = remove {
-                    p.files.remove(&slot);
-                }
-                if let Some(free) = MODEL_SLOTS.iter().find(|s| !p.files.contains_key(**s))
-                    && ui.small_button(ic(ph::PLUS, "File")).clicked()
-                {
-                    p.files.insert(free.to_string(), String::new());
-                }
-                ui.add_space(6.0);
-                ui.label(RichText::new("LoRAs").strong());
-                ui.add(
-                    egui::Label::new(
-                        RichText::new(
-                            "Applied to every image at their weight, with no reload. They go in a model \
+                    if let Some(why) = &e.error {
+                        ui.add(egui::Label::new(RichText::new(why).color(BAD)).wrap());
+                    }
+                    let mut remove = None;
+                    let slots: Vec<(String, String)> = p.files.clone().into_iter().collect();
+                    egui::Grid::new("recipe_files").num_columns(6).spacing([6.0, 4.0]).show(ui, |ui| {
+                        for (slot, file) in &slots {
+                            let mut s = slot.clone();
+                            ComboBox::from_id_salt(("slot", slot)).selected_text(&s).width(120.0).show_ui(ui, |ui| {
+                                for name in MODEL_SLOTS {
+                                    if name == slot || !p.files.contains_key(name) {
+                                        ui.selectable_value(&mut s, name.to_string(), name);
+                                    }
+                                }
+                            });
+                            let mut f = file.clone();
+                            let known = files.contains(f.as_str()) || std::path::Path::new(&f).is_absolute();
+                            let edit = egui::TextEdit::singleline(&mut f);
+                            let r = if known || files.is_empty() {
+                                ui.add_sized([300.0, 20.0], edit)
+                            } else {
+                                ui.add_sized([300.0, 20.0], edit.text_color(NEUTRAL))
+                                    .on_hover_text(st.why_file_unlisted(&f))
+                            };
+                            // a full path inside a model directory: written relative to it
+                            if r.lost_focus()
+                                && Path::new(&f).is_absolute()
+                                && let Ok(id) = increart_core::config::model_file_id(Path::new(&f), dirs)
+                            {
+                                f = id;
+                            }
+                            if files.is_empty() {
+                                ui.label("");
+                            } else {
+                                ui.menu_button(ph::CARET_DOWN, |ui| {
+                                    ScrollArea::vertical().max_height(320.0).show(ui, |ui| {
+                                        for id in &files {
+                                            if ui.selectable_label(*id == f, *id).clicked() {
+                                                f = id.to_string();
+                                                ui.close();
+                                            }
+                                        }
+                                    });
+                                })
+                                .response
+                                .on_hover_text("the files the open servers list");
+                            }
+                            let at = MODEL_SLOTS.iter().position(|n| *n == s.as_str()).unwrap_or(0);
+                            if ui
+                                .small_button(ph::FOLDER_OPEN)
+                                .on_hover_text("Browse… (in a model directory)")
+                                .clicked()
+                            {
+                                picks.push(Msg::Pick(PickKind::RecipeFile(at)));
+                            }
+                            let on_disk = increart_core::config::model_file_on_disk(&f, dirs);
+                            let tip = match &on_disk {
+                                Some(p) => format!("Found at {}: show it in the file manager", p.display()),
+                                None => "Not found in any model directory".into(),
+                            };
+                            let show =
+                                ui.add_enabled(on_disk.is_some(), egui::Button::new(ph::ARROW_SQUARE_OUT).small());
+                            if show.on_hover_text(&tip).on_disabled_hover_text(&tip).clicked()
+                                && let Some(p) = on_disk
+                            {
+                                picks.push(Msg::ShowInFileManager(p));
+                            }
+                            if ui.small_button(ph::TRASH).on_hover_text("remove").clicked() {
+                                remove = Some(slot.clone());
+                            }
+                            ui.end_row();
+                            if s != *slot {
+                                p.files.remove(slot);
+                                p.files.insert(s, f);
+                            } else if f != *file {
+                                p.files.insert(s, f);
+                            }
+                        }
+                    });
+                    if let Some(slot) = remove {
+                        p.files.remove(&slot);
+                    }
+                    if let Some(free) = MODEL_SLOTS.iter().find(|s| !p.files.contains_key(**s))
+                        && ui.small_button(ic(ph::PLUS, "File")).clicked()
+                    {
+                        p.files.insert(free.to_string(), String::new());
+                    }
+                    other_files(ui, st, p, &files);
+                    preset_download(ui, st, p, out);
+                    ui.add_space(6.0);
+                    ui.label(RichText::new("LoRAs").strong());
+                    ui.add(
+                        egui::Label::new(
+                            RichText::new(
+                                "Applied to every image at their weight, with no reload. They go in a model \
                              directory's loras folder (loras/x.safetensors), any of the folders above; KoboldCpp sees \
                              the ones there when it loads the model, at most one folder down.",
+                            )
+                            .weak(),
                         )
-                        .weak(),
-                    )
-                    .wrap(),
-                );
-                let lora_dirs = &dirs[..dirs.len().min(1)];
-                let mut remove = None;
-                egui::Grid::new("recipe_loras").num_columns(5).spacing([6.0, 4.0]).show(ui, |ui| {
-                    for (i, l) in p.loras.iter_mut().enumerate() {
-                        let r = ui.add_sized(
-                            [426.0, 20.0],
-                            egui::TextEdit::singleline(&mut l.file).hint_text("loras/style.safetensors"),
-                        );
-                        if r.lost_focus()
-                            && Path::new(&l.file).is_absolute()
-                            && let Ok(id) = increart_core::config::lora_file_id(Path::new(&l.file), dirs)
-                        {
-                            l.file = id;
+                        .wrap(),
+                    );
+                    let lora_dirs = &dirs[..dirs.len().min(1)];
+                    let mut remove = None;
+                    egui::Grid::new("recipe_loras").num_columns(6).spacing([6.0, 4.0]).show(ui, |ui| {
+                        for (i, l) in p.loras.iter_mut().enumerate() {
+                            let r = ui.add_sized(
+                                [280.0, 20.0],
+                                egui::TextEdit::singleline(&mut l.file).hint_text("loras/style.safetensors"),
+                            );
+                            ui.add_sized(
+                                [140.0, 20.0],
+                                egui::TextEdit::singleline(&mut l.trigger).hint_text("trigger words"),
+                            )
+                            .on_hover_text(
+                                "words it was trained on: put before the prompt (each image's) when the prompt \
+                                 hasn't them",
+                            );
+                            if r.lost_focus()
+                                && Path::new(&l.file).is_absolute()
+                                && let Ok(id) = increart_core::config::lora_file_id(Path::new(&l.file), dirs)
+                            {
+                                l.file = id;
+                            }
+                            ui.add(egui::DragValue::new(&mut l.weight).range(-4.0..=4.0).speed(0.01).max_decimals(2))
+                                .on_hover_text("weight: 1 as trained, 0 off, below 0 against it");
+                            if ui.small_button(ph::FOLDER_OPEN).on_hover_text("Browse… (in the loras folder)").clicked()
+                            {
+                                picks.push(Msg::Pick(PickKind::RecipeLora(i)));
+                            }
+                            let on_disk = increart_core::config::model_file_on_disk(&l.file, lora_dirs);
+                            let tip = if on_disk.is_some() {
+                                "Show it in the file manager"
+                            } else {
+                                "Not found in the loras folder"
+                            };
+                            let show =
+                                ui.add_enabled(on_disk.is_some(), egui::Button::new(ph::ARROW_SQUARE_OUT).small());
+                            if show.on_hover_text(tip).on_disabled_hover_text(tip).clicked()
+                                && let Some(p) = on_disk
+                            {
+                                picks.push(Msg::ShowInFileManager(p));
+                            }
+                            if ui.small_button(ph::TRASH).on_hover_text("remove").clicked() {
+                                remove = Some(i);
+                            }
+                            ui.end_row();
                         }
-                        ui.add(egui::DragValue::new(&mut l.weight).range(-4.0..=4.0).speed(0.01).max_decimals(2))
-                            .on_hover_text("weight: 1 as trained, 0 off, below 0 against it");
-                        if ui.small_button(ph::FOLDER_OPEN).on_hover_text("Browse… (in the loras folder)").clicked() {
-                            picks.push(Msg::Pick(PickKind::RecipeLora(i)));
-                        }
-                        let on_disk = increart_core::config::model_file_on_disk(&l.file, lora_dirs);
-                        let tip = if on_disk.is_some() {
-                            "Show it in the file manager"
-                        } else {
-                            "Not found in the loras folder"
-                        };
-                        let show = ui.add_enabled(on_disk.is_some(), egui::Button::new(ph::ARROW_SQUARE_OUT).small());
-                        if show.on_hover_text(tip).on_disabled_hover_text(tip).clicked()
-                            && let Some(p) = on_disk
-                        {
-                            picks.push(Msg::ShowInFileManager(p));
-                        }
-                        if ui.small_button(ph::TRASH).on_hover_text("remove").clicked() {
-                            remove = Some(i);
-                        }
-                        ui.end_row();
+                    });
+                    if let Some(i) = remove {
+                        p.loras.remove(i);
+                    }
+                    if ui.small_button(ic(ph::PLUS, "LoRA")).clicked() {
+                        p.loras.push(increart_core::config::PresetLora {
+                            file: String::new(),
+                            weight: 1.0,
+                            trigger: String::new(),
+                        });
                     }
                 });
-                if let Some(i) = remove {
-                    p.loras.remove(i);
-                }
-                if ui.small_button(ic(ph::PLUS, "LoRA")).clicked() {
-                    p.loras.push(increart_core::config::PresetLora { file: String::new(), weight: 1.0 });
-                }
             });
-        });
+        }
         match action {
             Some((i, "select")) => {
                 e.selected = i;
@@ -2207,6 +2244,13 @@ pub fn recipes_window(ctx: &egui::Context, st: &AppState, out: &mut Vec<Msg>) {
         dialog_footer(
             ui,
             |ui| {
+                if ui
+                    .selectable_label(e.builtin, ic(ph::LIST_PLUS, "Built-in presets…"))
+                    .on_hover_text("presets tested on sd-server and KoboldCpp, with their downloads")
+                    .clicked()
+                {
+                    e.builtin = !e.builtin;
+                }
                 if ui.button("Reset to built-ins").on_hover_text("replaces the whole list").clicked() {
                     e = increart_gui_core::RecipeEditor::new(&increart_core::config::builtin_recipes(), 0);
                     e.rows.iter_mut().for_each(|r| r.origin = None);
@@ -2230,6 +2274,191 @@ pub fn recipes_window(ctx: &egui::Context, st: &AppState, out: &mut Vec<Msg>) {
         out.push(Msg::SaveRecipes);
     } else if cancel || ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
         out.push(Msg::CloseRecipes);
+    }
+}
+
+/// A preset's other files per slot, taken in order when no open server has
+/// the first: one comma-separated line per slot.
+fn other_files(
+    ui: &mut egui::Ui,
+    st: &AppState,
+    p: &mut increart_core::config::RecipePreset,
+    files: &std::collections::BTreeSet<&str>,
+) {
+    let any = p.alternatives.values().any(|v| !v.is_empty());
+    egui::CollapsingHeader::new("Other files per slot").id_salt(("other_files", any)).default_open(any).show(
+        ui,
+        |ui| {
+            ui.weak(
+                "Taken in this order when no open server has a slot's file above (e.g. a GGUF for KoboldCpp \
+                 instead of sd-server's int8 file). Comma-separated file IDs.",
+            );
+            egui::Grid::new("recipe_alternatives").num_columns(2).spacing([6.0, 4.0]).show(ui, |ui| {
+                for slot in p.files.keys().cloned().collect::<Vec<_>>() {
+                    ui.label(&slot);
+                    let mut text = p.alternatives.get(&slot).map(|v| v.join(", ")).unwrap_or_default();
+                    let unlisted: Vec<&String> = p
+                        .alternatives
+                        .get(&slot)
+                        .into_iter()
+                        .flatten()
+                        .filter(|f| !files.is_empty() && !files.contains(f.as_str()))
+                        .collect();
+                    let edit = egui::TextEdit::singleline(&mut text).desired_width(460.0).hint_text("none");
+                    let r = if unlisted.is_empty() {
+                        ui.add(edit)
+                    } else {
+                        let why: Vec<String> =
+                            unlisted.iter().map(|f| format!("{f}: {}", st.why_file_unlisted(f))).collect();
+                        ui.add(edit.text_color(NEUTRAL)).on_hover_text(why.join("\n"))
+                    };
+                    if r.changed() {
+                        let list: Vec<String> =
+                            text.split(',').map(|f| f.trim().to_string()).filter(|f| !f.is_empty()).collect();
+                        if list.is_empty() {
+                            p.alternatives.remove(&slot);
+                        } else {
+                            p.alternatives.insert(slot.clone(), list);
+                        }
+                    }
+                    ui.end_row();
+                }
+            });
+            // a slot removed above takes its other files with it
+            let slots: Vec<String> = p.files.keys().cloned().collect();
+            p.alternatives.retain(|s, _| slots.contains(s));
+        },
+    );
+}
+
+/// The files a preset says where to download that aren't in a model
+/// folder: **Download** (into the first folder), or the one under way.
+fn preset_download(ui: &mut egui::Ui, st: &AppState, p: &increart_core::config::RecipePreset, out: &mut Vec<Msg>) {
+    let dirs = &st.config.programs.model_dirs;
+    if let Some(d) = &st.preset_download {
+        ui.add_space(4.0);
+        ui.group(|ui| {
+            ui.horizontal(|ui| {
+                ui.label(RichText::new(format!("Downloading {}", d.name)).strong());
+                if ui.button("Cancel").clicked() {
+                    out.push(Msg::CancelPresetDownload);
+                }
+            });
+            crate::startup::download_progress(ui, &d.files, &d.at);
+        });
+        return;
+    }
+    let missing = increart_gui_core::missing_downloads(p, dirs);
+    if missing.is_empty() {
+        return;
+    }
+    let Some(dir) = dirs.iter().find(|d| !d.trim().is_empty()) else { return };
+    let n = missing.len();
+    let s = if n == 1 { "" } else { "s" };
+    let list: Vec<&str> = missing.iter().map(|d| d.file.as_str()).collect();
+    ui.horizontal(|ui| {
+        ui.colored_label(NEUTRAL, format!("{n} file{s} not in a model folder"));
+        if ui
+            .button(ic(ph::DOWNLOAD_SIMPLE, &format!("Download {n} file{s}")))
+            .on_hover_text(format!(
+                "into {dir} (one found elsewhere on disk, same name and size, is linked instead):\n{}",
+                list.join("\n")
+            ))
+            .clicked()
+        {
+            out.push(Msg::DownloadPresetFiles(p.name.clone(), missing.clone()));
+        }
+    });
+}
+
+/// **Built-in presets**: the tested presets, each with whether its files
+/// are there, to add to the list (Save keeps them).
+fn builtin_presets(ui: &mut egui::Ui, st: &AppState, e: &mut increart_gui_core::RecipeEditor, out: &mut Vec<Msg>) {
+    if !e.builtin {
+        return;
+    }
+    let catalogue = increart_core::config::catalogue();
+    let dirs = &st.config.programs.model_dirs;
+    ui.horizontal(|ui| {
+        if ui.button(ic(ph::ARROW_LEFT, "Back to the list")).clicked() {
+            e.builtin = false;
+        }
+        ui.label(RichText::new(ic(ph::LIST_PLUS, "Built-in presets")).strong());
+    });
+    ui.weak(
+        "Tested on sd-server and KoboldCpp. Add puts one in the list (Save keeps it); Download fetches its files \
+         into the first model folder (one found elsewhere on disk is linked instead). The · variants add a LoRA, \
+         its trigger words put before the prompt.",
+    );
+    ui.add_space(4.0);
+    let height = (ui.ctx().content_rect().height() - 260.0).max(240.0);
+    ScrollArea::vertical().id_salt("builtin_presets").max_height(height).show(ui, |ui| {
+        ui.set_width(ui.available_width());
+        egui::Grid::new("builtin_presets_grid").num_columns(3).spacing([16.0, 8.0]).striped(true).show(ui, |ui| {
+            for p in &catalogue {
+                ui.vertical(|ui| {
+                    ui.set_min_width(470.0);
+                    ui.label(RichText::new(&p.name).strong());
+                    let what = match p.loras.first() {
+                        Some(l) if l.trigger.is_empty() => format!("LoRA {}", l.file),
+                        Some(l) => format!("LoRA {} · trigger “{}”", l.file, l.trigger),
+                        None => format!("{} · {} steps · cfg {}", p.recipe, p.steps, p.cfg),
+                    };
+                    ui.weak(what).on_hover_text(&p.note);
+                });
+                let missing = increart_gui_core::missing_downloads(p, dirs);
+                let runs = st.servers_running(p);
+                ui.horizontal(|ui| {
+                    ui.set_min_width(170.0);
+                    if !runs.is_empty() {
+                        ui.colored_label(GOOD, ic(ph::CHECK_CIRCLE, &format!("runs on {}", runs.join(", "))));
+                    } else if missing.is_empty() {
+                        ui.label(ic(ph::CHECK, "files there"));
+                    } else {
+                        let list: Vec<&str> = missing.iter().map(|d| d.file.as_str()).collect();
+                        let busy = st.preset_download.is_some();
+                        let n = missing.len();
+                        let label = format!("Download {n} file{}", if n == 1 { "" } else { "s" });
+                        let b = ui
+                            .add_enabled(!busy, egui::Button::new(ic(ph::DOWNLOAD_SIMPLE, &label)).small())
+                            .on_hover_text(list.join("\n"))
+                            .on_disabled_hover_text("a download is under way");
+                        if b.clicked() {
+                            out.push(Msg::DownloadPresetFiles(p.name.clone(), missing.clone()));
+                        }
+                    }
+                });
+                match e.rows.iter().position(|r| r.preset.name == p.name) {
+                    Some(i) => {
+                        if ui.small_button("Show").on_hover_text("in the list already: edit it").clicked() {
+                            e.selected = i;
+                            e.builtin = false;
+                        }
+                    }
+                    None => {
+                        if ui.small_button(ic(ph::PLUS, "Add")).clicked() {
+                            e.rows.push(increart_gui_core::RecipeRow {
+                                preset: p.clone(),
+                                origin: None,
+                                sigmas: String::new(),
+                            });
+                            e.selected = e.rows.len() - 1;
+                        }
+                    }
+                }
+                ui.end_row();
+            }
+        });
+    });
+    if let Some(d) = &st.preset_download {
+        ui.add_space(4.0);
+        ui.horizontal(|ui| {
+            ui.label(RichText::new(format!("Downloading {}", d.name)).strong());
+            if ui.button("Cancel").clicked() {
+                out.push(Msg::CancelPresetDownload);
+            }
+        });
+        crate::startup::download_progress(ui, &d.files, &d.at);
     }
 }
 
@@ -2526,7 +2755,7 @@ fn model_choice(ui: &mut egui::Ui, st: &AppState, chosen: usize, out: &mut Vec<M
             let why: Vec<String> = recipes
                 .iter()
                 .filter(|r| hidden.contains(&r.name.as_str()))
-                .filter_map(|r| st.why_no_server_runs(&r.files).map(|w| format!("{}:\n  {}", r.name, w.join("\n  "))))
+                .filter_map(|r| st.why_no_server_runs(r).map(|w| format!("{}:\n  {}", r.name, w.join("\n  "))))
                 .collect();
             let l = ui.weak(format!("Not on these servers: {}", hidden.join(", ")));
             if !why.is_empty() {
@@ -3976,13 +4205,10 @@ pub fn job_window(ctx: &egui::Context, st: &AppState, tex: &mut Textures, out: &
                 ("model", run.model.recipe.clone()),
                 ("size", crate::widgets::size_info(run.width, run.height)),
                 ("steps / cfg", format!("{} / {}", s.steps, s.cfg)),
-                (
-                    "sampler",
-                    {
-                        let d = |x: &str| if x.is_empty() { "model default".to_string() } else { x.to_string() };
-                        format!("{} · {}", d(&s.method), d(&s.scheduler))
-                    },
-                ),
+                ("sampler", {
+                    let d = |x: &str| if x.is_empty() { "model default".to_string() } else { x.to_string() };
+                    format!("{} · {}", d(&s.method), d(&s.scheduler))
+                }),
                 ("flow shift", s.flow_shift.map_or("recipe schedule".into(), |f| f.to_string())),
                 ("alpha", if run.alpha { "transparent background".into() } else { "no".into() }),
                 ("seeds", if seeds.is_empty() { "none queued".into() } else { seeds.join(" · ") }),
@@ -4099,6 +4325,40 @@ pub fn job_window(ctx: &egui::Context, st: &AppState, tex: &mut Textures, out: &
     }
 }
 
+/// A combo of stable-diffusion.cpp's samplers, and the model's default
+/// (empty).
+pub fn sampler_combo(ui: &mut egui::Ui, id: &str, v: &mut String) {
+    name_combo(ui, id, v, &increart_core::config::SAMPLERS)
+        .on_hover_text("how each step moves the image; the model's default is the one its recipe names (euler mostly)");
+}
+
+/// A combo of stable-diffusion.cpp's noise schedules, and the model's
+/// default (empty).
+pub fn scheduler_combo(ui: &mut egui::Ui, id: &str, v: &mut String) {
+    name_combo(ui, id, v, &increart_core::config::SCHEDULERS).on_hover_text(
+        "how much noise is left at each step; the model's default suits it (flow models have their own)",
+    );
+}
+
+fn name_combo(ui: &mut egui::Ui, id: &str, v: &mut String, names: &[&str]) -> egui::Response {
+    let shown = if v.is_empty() { "model default" } else { v.as_str() };
+    egui::ComboBox::from_id_salt(id)
+        .selected_text(shown)
+        .height(400.0)
+        .show_ui(ui, |ui| {
+            ui.selectable_value(v, String::new(), "model default");
+            // a name this list doesn't know (a newer server's) stays choosable
+            if !v.is_empty() && !names.contains(&v.as_str()) {
+                let other = v.clone();
+                ui.selectable_value(v, other.clone(), other);
+            }
+            for n in names {
+                ui.selectable_value(v, n.to_string(), *n);
+            }
+        })
+        .response
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -4124,37 +4384,4 @@ mod tests {
         f.prompt.clear();
         assert_eq!(tag(&f, Some(0..0)), ("<image1>".into(), 8));
     }
-}
-
-/// A combo of stable-diffusion.cpp's samplers, and the model's default
-/// (empty).
-pub fn sampler_combo(ui: &mut egui::Ui, id: &str, v: &mut String) {
-    name_combo(ui, id, v, &increart_core::config::SAMPLERS)
-        .on_hover_text("how each step moves the image; the model's default is the one its recipe names (euler mostly)");
-}
-
-/// A combo of stable-diffusion.cpp's noise schedules, and the model's
-/// default (empty).
-pub fn scheduler_combo(ui: &mut egui::Ui, id: &str, v: &mut String) {
-    name_combo(ui, id, v, &increart_core::config::SCHEDULERS)
-        .on_hover_text("how much noise is left at each step; the model's default suits it (flow models have their own)");
-}
-
-fn name_combo(ui: &mut egui::Ui, id: &str, v: &mut String, names: &[&str]) -> egui::Response {
-    let shown = if v.is_empty() { "model default" } else { v.as_str() };
-    egui::ComboBox::from_id_salt(id)
-        .selected_text(shown)
-        .height(400.0)
-        .show_ui(ui, |ui| {
-            ui.selectable_value(v, String::new(), "model default");
-            // a name this list doesn't know (a newer server's) stays choosable
-            if !v.is_empty() && !names.contains(&v.as_str()) {
-                let other = v.clone();
-                ui.selectable_value(v, other.clone(), other);
-            }
-            for n in names {
-                ui.selectable_value(v, n.to_string(), *n);
-            }
-        })
-        .response
 }

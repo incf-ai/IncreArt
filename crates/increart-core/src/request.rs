@@ -196,8 +196,14 @@ mod tests {
     #[test]
     fn the_sampler_sent_unless_the_models_own() {
         use crate::model::Sample;
-        let mut s =
-            Sample { method: String::new(), scheduler: String::new(), steps: 8, cfg: 1.0, flow_shift: None, custom_sigmas: vec![] };
+        let mut s = Sample {
+            method: String::new(),
+            scheduler: String::new(),
+            steps: 8,
+            cfg: 1.0,
+            flow_shift: None,
+            custom_sigmas: vec![],
+        };
         let p = sample_params(&s);
         assert!(p.get("sample_method").is_none() && p.get("scheduler").is_none(), "{p}");
         (s.method, s.scheduler) = ("euler_a".into(), "karras".into());

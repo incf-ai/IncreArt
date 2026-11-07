@@ -1,0 +1,504 @@
+// The model presets IncreArt offers to add (Model presets → Built-in presets…):
+// each tested on sd-server and KoboldCpp, with where to download its files.
+[
+    ModelPreset {
+        name: "Z-Image Turbo",
+        recipe: "z-image-turbo",
+        files: {
+            "diffusion_model": "diffusion_models/z_image_turbo-Q4_0.gguf",
+            "llm": "text_encoders/Qwen3-4B-Instruct-2507-Q4_K_S.gguf",
+            "vae": "vae/flux1vae.safetensors"
+        },
+        steps: 9,
+        cfg: 1,
+        downloads: {
+            "diffusion_models/z_image_turbo-Q4_0.gguf": "https://huggingface.co/leejet/Z-Image-Turbo-GGUF/resolve/main/z_image_turbo-Q4_0.gguf",
+            "text_encoders/Qwen3-4B-Instruct-2507-Q4_K_S.gguf": "https://huggingface.co/unsloth/Qwen3-4B-Instruct-2507-GGUF/resolve/main/Qwen3-4B-Instruct-2507-Q4_K_S.gguf",
+            "vae/flux1vae.safetensors": "https://huggingface.co/koboldcpp/GGUFDumps/resolve/main/flux1vae.safetensors"
+        },
+        note: "Tested on sd-server (fd21ecf) and KoboldCpp 1.124.2."
+    },
+    ModelPreset {
+        name: "Anima Turbo",
+        recipe: "anima",
+        files: {
+            "diffusion_model": "diffusion_models/anima-turbo-v1.0-Q6_K.gguf",
+            "llm": "text_encoders/qwen_3_06b_base.safetensors",
+            "vae": "vae/qwen_image_vae.safetensors"
+        },
+        steps: 12,
+        cfg: 1,
+        downloads: {
+            "diffusion_models/anima-turbo-v1.0-Q6_K.gguf": "https://huggingface.co/Abiray/Anima-turbo-v1.0-GGUF/resolve/main/anima-turbo-v1.0-Q6_K.gguf",
+            "text_encoders/qwen_3_06b_base.safetensors": "https://huggingface.co/Abiray/Anima-turbo-v1.0-GGUF/resolve/main/split_files/text_encoders/qwen_3_06b_base.safetensors",
+            "vae/qwen_image_vae.safetensors": "https://huggingface.co/Abiray/Anima-turbo-v1.0-GGUF/resolve/main/split_files/vae/qwen_image_vae.safetensors"
+        },
+        note: "Tested on sd-server (fd21ecf) and KoboldCpp 1.124.2."
+    },
+    ModelPreset {
+        name: "FLUX.2 Klein 4B",
+        recipe: "flux2-klein-4b",
+        files: {
+            "diffusion_model": "diffusion_models/flux-2-klein-4b-Q4_0.gguf",
+            "llm": "text_encoders/Qwen3-4B-Q4_K_M.gguf",
+            "vae": "vae/flux2vae.safetensors"
+        },
+        steps: 4,
+        cfg: 1,
+        downloads: {
+            "diffusion_models/flux-2-klein-4b-Q4_0.gguf": "https://huggingface.co/leejet/FLUX.2-klein-4B-GGUF/resolve/main/flux-2-klein-4b-Q4_0.gguf",
+            "text_encoders/Qwen3-4B-Q4_K_M.gguf": "https://huggingface.co/unsloth/Qwen3-4B-GGUF/resolve/main/Qwen3-4B-Q4_K_M.gguf",
+            "vae/flux2vae.safetensors": "https://huggingface.co/koboldcpp/imgmodel/resolve/main/flux2klein4b/flux2vae.safetensors"
+        },
+        note: "Tested on sd-server (fd21ecf) and KoboldCpp 1.124.2."
+    },
+    ModelPreset {
+        name: "FLUX.3 Klein",
+        recipe: "flux3-klein",
+        files: {
+            "diffusion_model": "diffusion_models/flux3-image-klein-Q4_K.gguf",
+            "llm": "text_encoders/Qwen3VL-4B-Instruct-Q4_K_M.gguf",
+            "vae": "vae/flux2vae.safetensors"
+        },
+        steps: 16,
+        cfg: 1,
+        downloads: {
+            "diffusion_models/flux3-image-klein-Q4_K.gguf": "https://huggingface.co/leejet/flux-3-image-klein-GGUF/resolve/main/flux3-image-klein-Q4_K.gguf",
+            "text_encoders/Qwen3VL-4B-Instruct-Q4_K_M.gguf": "https://huggingface.co/koboldcpp/imgmodel/resolve/main/fibo2-edit-turbo/Qwen3VL-4B-Instruct-Q4_K_M.gguf",
+            "vae/flux2vae.safetensors": "https://huggingface.co/koboldcpp/imgmodel/resolve/main/flux2klein4b/flux2vae.safetensors"
+        },
+        note: "Tested on sd-server (fd21ecf) and KoboldCpp 1.124.2."
+    },
+    ModelPreset {
+        name: "Krea 2 Turbo",
+        recipe: "krea2-turbo",
+        files: {
+            "diffusion_model": "diffusion_models/Krea-2-Turbo-Q4_K_M.gguf",
+            "llm": "text_encoders/Qwen3VL-4B-Instruct-Q4_K_M.gguf",
+            "vae": "vae/wan_2.1_vae.safetensors"
+        },
+        steps: 8,
+        cfg: 1,
+        downloads: {
+            "diffusion_models/Krea-2-Turbo-Q4_K_M.gguf": "https://huggingface.co/realrebelai/KREA-2_GGUFs/resolve/main/TURBO/Krea-2-Turbo-Q4_K_M.gguf",
+            "text_encoders/Qwen3VL-4B-Instruct-Q4_K_M.gguf": "https://huggingface.co/koboldcpp/imgmodel/resolve/main/fibo2-edit-turbo/Qwen3VL-4B-Instruct-Q4_K_M.gguf",
+            "vae/wan_2.1_vae.safetensors": "https://huggingface.co/Comfy-Org/Wan_2.1_ComfyUI_repackaged/resolve/main/split_files/vae/wan_2.1_vae.safetensors"
+        },
+        note: "Tested on sd-server (fd21ecf) and KoboldCpp 1.124.2."
+    },
+    ModelPreset {
+        name: "Krea 2 Turbo Edit",
+        recipe: "krea2-turbo-edit",
+        files: {
+            "diffusion_model": "diffusion_models/Krea-2-Turbo-Q4_K_M.gguf",
+            "llm": "text_encoders/Qwen3VL-4B-Instruct-Q4_K_M.gguf",
+            "llm_vision": "text_encoders/mmproj-Qwen3VL-4B-Instruct-Q8_0.gguf",
+            "vae": "vae/wan_2.1_vae.safetensors"
+        },
+        steps: 8,
+        cfg: 1,
+        downloads: {
+            "diffusion_models/Krea-2-Turbo-Q4_K_M.gguf": "https://huggingface.co/realrebelai/KREA-2_GGUFs/resolve/main/TURBO/Krea-2-Turbo-Q4_K_M.gguf",
+            "text_encoders/Qwen3VL-4B-Instruct-Q4_K_M.gguf": "https://huggingface.co/koboldcpp/imgmodel/resolve/main/fibo2-edit-turbo/Qwen3VL-4B-Instruct-Q4_K_M.gguf",
+            "text_encoders/mmproj-Qwen3VL-4B-Instruct-Q8_0.gguf": "https://huggingface.co/koboldcpp/imgmodel/resolve/main/fibo2-edit-turbo/mmproj-Qwen3VL-4B-Instruct-Q8_0.gguf",
+            "vae/wan_2.1_vae.safetensors": "https://huggingface.co/Comfy-Org/Wan_2.1_ComfyUI_repackaged/resolve/main/split_files/vae/wan_2.1_vae.safetensors"
+        },
+        note: "Edits the start image or reference images. Tested on sd-server (fd21ecf) and KoboldCpp 1.124.2."
+    },
+    ModelPreset {
+        name: "MOSS-Image SFT",
+        recipe: "moss-image-sft",
+        files: {
+            "diffusion_model": "diffusion_models/MOSS-Image-SFT-Q5_K.gguf",
+            "llm": "text_encoders/Qwen3.5-9B-Q4_K_S.gguf",
+            "tokenizer": "tokenizers/tokenizer_qwen3.5.json",
+            "vae": "vae/flux2vae.safetensors"
+        },
+        steps: 20,
+        cfg: 3,
+        flow_shift: 5,
+        downloads: {
+            "diffusion_models/MOSS-Image-SFT-Q5_K.gguf": "https://huggingface.co/leejet/MOSS-Image-SFT-GGUF/resolve/main/MOSS-Image-SFT-Q5_K.gguf",
+            "text_encoders/Qwen3.5-9B-Q4_K_S.gguf": "https://huggingface.co/unsloth/Qwen3.5-9B-GGUF/resolve/main/Qwen3.5-9B-Q4_K_S.gguf",
+            "tokenizers/tokenizer_qwen3.5.json": "https://huggingface.co/OpenMOSS-Team/MOSS-Image-Base/resolve/main/tokenizer/tokenizer.json",
+            "vae/flux2vae.safetensors": "https://huggingface.co/koboldcpp/imgmodel/resolve/main/flux2klein4b/flux2vae.safetensors"
+        },
+        note: "Tested on sd-server (fd21ecf) and KoboldCpp 1.124.2."
+    },
+    ModelPreset {
+        name: "Qwen-Image 2.1",
+        recipe: "qwen-image-21",
+        files: {
+            "diffusion_model": "diffusion_models/qwen_image_2.1-Q4_K.gguf",
+            "llm": "text_encoders/Qwen3VL-8B-Instruct-Q4_K_M.gguf",
+            "llm_vision": "text_encoders/mmproj-Qwen3VL-8B-Instruct-Q8_0.gguf",
+            "vae": "vae/qwen_image_2.1_vae_bf16.safetensors"
+        },
+        steps: 20,
+        cfg: 2,
+        downloads: {
+            "diffusion_models/qwen_image_2.1-Q4_K.gguf": "https://huggingface.co/leejet/Qwen-Image-2.1-GGUF/resolve/main/qwen_image_2.1-Q4_K.gguf",
+            "text_encoders/Qwen3VL-8B-Instruct-Q4_K_M.gguf": "https://huggingface.co/Qwen/Qwen3-VL-8B-Instruct-GGUF/resolve/main/Qwen3VL-8B-Instruct-Q4_K_M.gguf",
+            "text_encoders/mmproj-Qwen3VL-8B-Instruct-Q8_0.gguf": "https://huggingface.co/Qwen/Qwen3-VL-8B-Instruct-GGUF/resolve/main/mmproj-Qwen3VL-8B-Instruct-Q8_0.gguf",
+            "vae/qwen_image_2.1_vae_bf16.safetensors": "https://huggingface.co/Comfy-Org/Qwen-Image-2.1/resolve/main/vae/qwen_image_2.1_vae_bf16.safetensors"
+        },
+        note: "Tested on sd-server (fd21ecf) and KoboldCpp 1.124.2."
+    },
+    ModelPreset {
+        name: "FLUX.2 Klein 9B",
+        recipe: "flux2-klein-9b",
+        files: {
+            "diffusion_model": "diffusion_models/flux-2-klein-9b-Q4_0.gguf",
+            "llm": "text_encoders/Qwen3-8B-Q4_K_M.gguf",
+            "vae": "vae/flux2vae.safetensors"
+        },
+        steps: 4,
+        cfg: 1,
+        downloads: {
+            "diffusion_models/flux-2-klein-9b-Q4_0.gguf": "https://huggingface.co/leejet/FLUX.2-klein-9B-GGUF/resolve/main/flux-2-klein-9b-Q4_0.gguf",
+            "text_encoders/Qwen3-8B-Q4_K_M.gguf": "https://huggingface.co/unsloth/Qwen3-8B-GGUF/resolve/main/Qwen3-8B-Q4_K_M.gguf",
+            "vae/flux2vae.safetensors": "https://huggingface.co/koboldcpp/imgmodel/resolve/main/flux2klein4b/flux2vae.safetensors"
+        },
+        note: "Tested on sd-server (fd21ecf) and KoboldCpp 1.124.2."
+    },
+    ModelPreset {
+        name: "FLUX.1 dev",
+        recipe: "flux1-dev",
+        files: {
+            "diffusion_model": "diffusion_models/flux1-dev-q4_k.gguf",
+            "clip_l": "text_encoders/clip_l.safetensors",
+            "t5xxl": "text_encoders/t5xxl_fp8_e4m3fn.safetensors",
+            "vae": "vae/flux1vae.safetensors"
+        },
+        steps: 20,
+        cfg: 1,
+        downloads: {
+            "diffusion_models/flux1-dev-q4_k.gguf": "https://huggingface.co/leejet/FLUX.1-dev-gguf/resolve/main/flux1-dev-q4_k.gguf",
+            "text_encoders/clip_l.safetensors": "https://huggingface.co/camenduru/FLUX.1-dev/resolve/main/clip_l.safetensors",
+            "text_encoders/t5xxl_fp8_e4m3fn.safetensors": "https://huggingface.co/camenduru/FLUX.1-dev/resolve/main/t5xxl_fp8_e4m3fn.safetensors",
+            "vae/flux1vae.safetensors": "https://huggingface.co/koboldcpp/GGUFDumps/resolve/main/flux1vae.safetensors"
+        },
+        note: "Tested on sd-server (fd21ecf) and KoboldCpp 1.124.2."
+    },
+    ModelPreset {
+        name: "FLUX.1 Kontext",
+        recipe: "flux1-kontext",
+        files: {
+            "diffusion_model": "diffusion_models/flux1-kontext-dev-Q4_K_S.gguf",
+            "clip_l": "text_encoders/clip_l.safetensors",
+            "t5xxl": "text_encoders/t5xxl_fp8_e4m3fn.safetensors",
+            "vae": "vae/flux1vae.safetensors"
+        },
+        steps: 20,
+        cfg: 1,
+        downloads: {
+            "diffusion_models/flux1-kontext-dev-Q4_K_S.gguf": "https://huggingface.co/bullerwins/FLUX.1-Kontext-dev-GGUF/resolve/main/flux1-kontext-dev-Q4_K_S.gguf",
+            "text_encoders/clip_l.safetensors": "https://huggingface.co/camenduru/FLUX.1-dev/resolve/main/clip_l.safetensors",
+            "text_encoders/t5xxl_fp8_e4m3fn.safetensors": "https://huggingface.co/camenduru/FLUX.1-dev/resolve/main/t5xxl_fp8_e4m3fn.safetensors",
+            "vae/flux1vae.safetensors": "https://huggingface.co/koboldcpp/GGUFDumps/resolve/main/flux1vae.safetensors"
+        },
+        note: "Edits the start image or reference images. Tested on sd-server (fd21ecf) and KoboldCpp 1.124.2."
+    },
+    ModelPreset {
+        name: "Fibo 2 Edit Turbo",
+        recipe: "fibo2-edit-turbo",
+        files: {
+            "diffusion_model": "diffusion_models/fibo2_edit_turbo-Q4_K_M.gguf",
+            "llm": "text_encoders/Qwen3VL-4B-Instruct-Q4_K_M.gguf",
+            "llm_vision": "text_encoders/mmproj-Qwen3VL-4B-Instruct-Q8_0.gguf",
+            "vae": "vae/flux2vae_fibo2.safetensors"
+        },
+        steps: 4,
+        cfg: 1,
+        downloads: {
+            "diffusion_models/fibo2_edit_turbo-Q4_K_M.gguf": "https://huggingface.co/koboldcpp/imgmodel/resolve/main/fibo2-edit-turbo/fibo2_edit_turbo-Q4_K_M.gguf",
+            "text_encoders/Qwen3VL-4B-Instruct-Q4_K_M.gguf": "https://huggingface.co/koboldcpp/imgmodel/resolve/main/fibo2-edit-turbo/Qwen3VL-4B-Instruct-Q4_K_M.gguf",
+            "text_encoders/mmproj-Qwen3VL-4B-Instruct-Q8_0.gguf": "https://huggingface.co/koboldcpp/imgmodel/resolve/main/fibo2-edit-turbo/mmproj-Qwen3VL-4B-Instruct-Q8_0.gguf",
+            "vae/flux2vae_fibo2.safetensors": "https://huggingface.co/koboldcpp/imgmodel/resolve/main/fibo2-edit-turbo/flux2vae.safetensors"
+        },
+        note: "Edits the start image or reference images. Tested on sd-server (fd21ecf) and KoboldCpp 1.124.2."
+    },
+    ModelPreset {
+        name: "Qwen-Image Edit 2509",
+        recipe: "qwen-image-edit-2509",
+        files: {
+            "diffusion_model": "diffusion_models/Qwen-Image-Edit-2509-Q5_0.gguf",
+            "llm": "text_encoders/Qwen2.5-VL-7B-Instruct-abliterated.Q4_K_S.gguf",
+            "llm_vision": "text_encoders/Qwen2.5-VL-7B-Instruct-abliterated.mmproj-Q8_0.gguf",
+            "vae": "vae/qwen_image_vae.safetensors"
+        },
+        steps: 20,
+        cfg: 4,
+        flow_shift: 3,
+        downloads: {
+            "diffusion_models/Qwen-Image-Edit-2509-Q5_0.gguf": "https://huggingface.co/QuantStack/Qwen-Image-Edit-2509-GGUF/resolve/beaefa5155d54be12ee8be359053ff87e5c8f9ab/Qwen-Image-Edit-2509-Q5_0.gguf",
+            "text_encoders/Qwen2.5-VL-7B-Instruct-abliterated.Q4_K_S.gguf": "https://huggingface.co/mradermacher/Qwen2.5-VL-7B-Instruct-abliterated-GGUF/resolve/main/Qwen2.5-VL-7B-Instruct-abliterated.Q4_K_S.gguf",
+            "text_encoders/Qwen2.5-VL-7B-Instruct-abliterated.mmproj-Q8_0.gguf": "https://huggingface.co/mradermacher/Qwen2.5-VL-7B-Instruct-abliterated-GGUF/resolve/main/Qwen2.5-VL-7B-Instruct-abliterated.mmproj-Q8_0.gguf",
+            "vae/qwen_image_vae.safetensors": "https://huggingface.co/Abiray/Anima-turbo-v1.0-GGUF/resolve/main/split_files/vae/qwen_image_vae.safetensors"
+        },
+        note: "Edits the start image or reference images. Tested on sd-server (fd21ecf) and KoboldCpp 1.124.2."
+    },
+    ModelPreset {
+        name: "Qwen-Image Edit 2511",
+        recipe: "qwen-image-edit-2511",
+        files: {
+            "diffusion_model": "diffusion_models/Qwen-Image-Edit-2511-Q5_0.gguf",
+            "llm": "text_encoders/Qwen2.5-VL-7B-Instruct-abliterated.Q4_K_S.gguf",
+            "llm_vision": "text_encoders/Qwen2.5-VL-7B-Instruct-abliterated.mmproj-Q8_0.gguf",
+            "vae": "vae/qwen_image_vae.safetensors"
+        },
+        steps: 20,
+        cfg: 4,
+        flow_shift: 3,
+        downloads: {
+            "diffusion_models/Qwen-Image-Edit-2511-Q5_0.gguf": "https://huggingface.co/vantagewithai/Qwen-Image-Edit-2511-GGUF/resolve/main/Qwen-Image-Edit-2511-Q5_0.gguf",
+            "text_encoders/Qwen2.5-VL-7B-Instruct-abliterated.Q4_K_S.gguf": "https://huggingface.co/mradermacher/Qwen2.5-VL-7B-Instruct-abliterated-GGUF/resolve/main/Qwen2.5-VL-7B-Instruct-abliterated.Q4_K_S.gguf",
+            "text_encoders/Qwen2.5-VL-7B-Instruct-abliterated.mmproj-Q8_0.gguf": "https://huggingface.co/mradermacher/Qwen2.5-VL-7B-Instruct-abliterated-GGUF/resolve/main/Qwen2.5-VL-7B-Instruct-abliterated.mmproj-Q8_0.gguf",
+            "vae/qwen_image_vae.safetensors": "https://huggingface.co/Abiray/Anima-turbo-v1.0-GGUF/resolve/main/split_files/vae/qwen_image_vae.safetensors"
+        },
+        note: "Edits the start image or reference images. Tested on sd-server (fd21ecf) and KoboldCpp 1.124.2."
+    },
+    ModelPreset {
+        name: "Z-Image Turbo · pixel art",
+        recipe: "z-image-turbo",
+        files: {
+            "diffusion_model": "diffusion_models/z_image_turbo-Q4_0.gguf",
+            "llm": "text_encoders/Qwen3-4B-Instruct-2507-Q4_K_S.gguf",
+            "vae": "vae/flux1vae.safetensors"
+        },
+        steps: 9,
+        cfg: 1,
+        loras: [Lora { file: "loras/zimage_pixel_art.safetensors", weight: 1, trigger: "Pixel art style." }],
+        downloads: {
+            "diffusion_models/z_image_turbo-Q4_0.gguf": "https://huggingface.co/leejet/Z-Image-Turbo-GGUF/resolve/main/z_image_turbo-Q4_0.gguf",
+            "text_encoders/Qwen3-4B-Instruct-2507-Q4_K_S.gguf": "https://huggingface.co/unsloth/Qwen3-4B-Instruct-2507-GGUF/resolve/main/Qwen3-4B-Instruct-2507-Q4_K_S.gguf",
+            "vae/flux1vae.safetensors": "https://huggingface.co/koboldcpp/GGUFDumps/resolve/main/flux1vae.safetensors",
+            "loras/zimage_pixel_art.safetensors": "https://huggingface.co/tarn59/pixel_art_style_lora_z_image_turbo/resolve/main/pixel_art_style_z_image_turbo.safetensors"
+        },
+        note: "With a LoRA (pixel art). Tested on sd-server (fd21ecf) and KoboldCpp 1.124.2."
+    },
+    ModelPreset {
+        name: "Anima Turbo · darkness",
+        recipe: "anima",
+        files: {
+            "diffusion_model": "diffusion_models/anima-turbo-v1.0-Q6_K.gguf",
+            "llm": "text_encoders/qwen_3_06b_base.safetensors",
+            "vae": "vae/qwen_image_vae.safetensors"
+        },
+        steps: 12,
+        cfg: 1,
+        loras: [Lora { file: "loras/anima_darkness_v10.safetensors", weight: 1 }],
+        downloads: {
+            "diffusion_models/anima-turbo-v1.0-Q6_K.gguf": "https://huggingface.co/Abiray/Anima-turbo-v1.0-GGUF/resolve/main/anima-turbo-v1.0-Q6_K.gguf",
+            "text_encoders/qwen_3_06b_base.safetensors": "https://huggingface.co/Abiray/Anima-turbo-v1.0-GGUF/resolve/main/split_files/text_encoders/qwen_3_06b_base.safetensors",
+            "vae/qwen_image_vae.safetensors": "https://huggingface.co/Abiray/Anima-turbo-v1.0-GGUF/resolve/main/split_files/vae/qwen_image_vae.safetensors",
+            "loras/anima_darkness_v10.safetensors": "https://huggingface.co/JujoHotaru/anima_lora/resolve/main/darkness_anima_v10.safetensors"
+        },
+        note: "With a LoRA (darkness). Tested on sd-server (fd21ecf) and KoboldCpp 1.124.2."
+    },
+    ModelPreset {
+        name: "FLUX.2 Klein 4B · anime",
+        recipe: "flux2-klein-4b",
+        files: {
+            "diffusion_model": "diffusion_models/flux-2-klein-4b-Q4_0.gguf",
+            "llm": "text_encoders/Qwen3-4B-Q4_K_M.gguf",
+            "vae": "vae/flux2vae.safetensors"
+        },
+        steps: 4,
+        cfg: 1,
+        loras: [Lora { file: "loras/klein4b_koni_anime.safetensors", weight: 1, trigger: "anime_style" }],
+        downloads: {
+            "diffusion_models/flux-2-klein-4b-Q4_0.gguf": "https://huggingface.co/leejet/FLUX.2-klein-4B-GGUF/resolve/main/flux-2-klein-4b-Q4_0.gguf",
+            "text_encoders/Qwen3-4B-Q4_K_M.gguf": "https://huggingface.co/unsloth/Qwen3-4B-GGUF/resolve/main/Qwen3-4B-Q4_K_M.gguf",
+            "vae/flux2vae.safetensors": "https://huggingface.co/koboldcpp/imgmodel/resolve/main/flux2klein4b/flux2vae.safetensors",
+            "loras/klein4b_koni_anime.safetensors": "https://huggingface.co/Sawata97/flux2_4b_koni_animestyle/resolve/main/Flux_klein_4b_anime_Koni.safetensors"
+        },
+        note: "With a LoRA (anime). Tested on sd-server (fd21ecf) and KoboldCpp 1.124.2."
+    },
+    ModelPreset {
+        name: "FLUX.3 Klein · Hammershøi",
+        recipe: "flux3-klein",
+        files: {
+            "diffusion_model": "diffusion_models/flux3-image-klein-Q4_K.gguf",
+            "llm": "text_encoders/Qwen3VL-4B-Instruct-Q4_K_M.gguf",
+            "vae": "vae/flux2vae.safetensors"
+        },
+        steps: 16,
+        cfg: 1,
+        loras: [Lora { file: "loras/flux3_klein_hammershoi.safetensors", weight: 1, trigger: "hmrsh style" }],
+        downloads: {
+            "diffusion_models/flux3-image-klein-Q4_K.gguf": "https://huggingface.co/leejet/flux-3-image-klein-GGUF/resolve/main/flux3-image-klein-Q4_K.gguf",
+            "text_encoders/Qwen3VL-4B-Instruct-Q4_K_M.gguf": "https://huggingface.co/koboldcpp/imgmodel/resolve/main/fibo2-edit-turbo/Qwen3VL-4B-Instruct-Q4_K_M.gguf",
+            "vae/flux2vae.safetensors": "https://huggingface.co/koboldcpp/imgmodel/resolve/main/flux2klein4b/flux2vae.safetensors",
+            "loras/flux3_klein_hammershoi.safetensors": "https://huggingface.co/jejunepixels/Hammershoi-Flux3-LoRA/resolve/main/Hammershoi_flux3_klein.safetensors"
+        },
+        note: "With a LoRA (Hammershøi). Tested on sd-server (fd21ecf) and KoboldCpp 1.124.2."
+    },
+    ModelPreset {
+        name: "Krea 2 Turbo · retro anime",
+        recipe: "krea2-turbo",
+        files: {
+            "diffusion_model": "diffusion_models/Krea-2-Turbo-Q4_K_M.gguf",
+            "llm": "text_encoders/Qwen3VL-4B-Instruct-Q4_K_M.gguf",
+            "vae": "vae/wan_2.1_vae.safetensors"
+        },
+        steps: 8,
+        cfg: 1,
+        loras: [Lora { file: "loras/krea2_retroanime.safetensors", weight: 1, trigger: "Purple retro anime style" }],
+        downloads: {
+            "diffusion_models/Krea-2-Turbo-Q4_K_M.gguf": "https://huggingface.co/realrebelai/KREA-2_GGUFs/resolve/main/TURBO/Krea-2-Turbo-Q4_K_M.gguf",
+            "text_encoders/Qwen3VL-4B-Instruct-Q4_K_M.gguf": "https://huggingface.co/koboldcpp/imgmodel/resolve/main/fibo2-edit-turbo/Qwen3VL-4B-Instruct-Q4_K_M.gguf",
+            "vae/wan_2.1_vae.safetensors": "https://huggingface.co/Comfy-Org/Wan_2.1_ComfyUI_repackaged/resolve/main/split_files/vae/wan_2.1_vae.safetensors",
+            "loras/krea2_retroanime.safetensors": "https://huggingface.co/krea/Krea-2-LoRA-retroanime/resolve/main/retroanime.safetensors"
+        },
+        note: "With a LoRA (retro anime). Tested on sd-server (fd21ecf) and KoboldCpp 1.124.2."
+    },
+    ModelPreset {
+        name: "MOSS-Image SFT · gouache",
+        recipe: "moss-image-sft",
+        files: {
+            "diffusion_model": "diffusion_models/MOSS-Image-SFT-Q5_K.gguf",
+            "llm": "text_encoders/Qwen3.5-9B-Q4_K_S.gguf",
+            "tokenizer": "tokenizers/tokenizer_qwen3.5.json",
+            "vae": "vae/flux2vae.safetensors"
+        },
+        steps: 20,
+        cfg: 3,
+        flow_shift: 5,
+        loras: [Lora { file: "loras/moss_gouache.safetensors", weight: 1, trigger: "moss_vgouache_style" }],
+        downloads: {
+            "diffusion_models/MOSS-Image-SFT-Q5_K.gguf": "https://huggingface.co/leejet/MOSS-Image-SFT-GGUF/resolve/main/MOSS-Image-SFT-Q5_K.gguf",
+            "text_encoders/Qwen3.5-9B-Q4_K_S.gguf": "https://huggingface.co/unsloth/Qwen3.5-9B-GGUF/resolve/main/Qwen3.5-9B-Q4_K_S.gguf",
+            "tokenizers/tokenizer_qwen3.5.json": "https://huggingface.co/OpenMOSS-Team/MOSS-Image-Base/resolve/main/tokenizer/tokenizer.json",
+            "vae/flux2vae.safetensors": "https://huggingface.co/koboldcpp/imgmodel/resolve/main/flux2klein4b/flux2vae.safetensors",
+            "loras/moss_gouache.safetensors": "https://huggingface.co/axiomofmind/Moss-image-gouache-lora/resolve/main/MOSS-Image-Gouache-LoRA-ComfyUI.safetensors"
+        },
+        note: "With a LoRA (gouache). Tested on sd-server (fd21ecf) and KoboldCpp 1.124.2."
+    },
+    ModelPreset {
+        name: "Qwen-Image 2.1 · radiance chrome",
+        recipe: "qwen-image-21",
+        files: {
+            "diffusion_model": "diffusion_models/qwen_image_2.1-Q4_K.gguf",
+            "llm": "text_encoders/Qwen3VL-8B-Instruct-Q4_K_M.gguf",
+            "llm_vision": "text_encoders/mmproj-Qwen3VL-8B-Instruct-Q8_0.gguf",
+            "vae": "vae/qwen_image_2.1_vae_bf16.safetensors"
+        },
+        steps: 20,
+        cfg: 2,
+        loras: [Lora { file: "loras/qwen_image_21_radiance_chrome.safetensors", weight: 1 }],
+        downloads: {
+            "diffusion_models/qwen_image_2.1-Q4_K.gguf": "https://huggingface.co/leejet/Qwen-Image-2.1-GGUF/resolve/main/qwen_image_2.1-Q4_K.gguf",
+            "text_encoders/Qwen3VL-8B-Instruct-Q4_K_M.gguf": "https://huggingface.co/Qwen/Qwen3-VL-8B-Instruct-GGUF/resolve/main/Qwen3VL-8B-Instruct-Q4_K_M.gguf",
+            "text_encoders/mmproj-Qwen3VL-8B-Instruct-Q8_0.gguf": "https://huggingface.co/Qwen/Qwen3-VL-8B-Instruct-GGUF/resolve/main/mmproj-Qwen3VL-8B-Instruct-Q8_0.gguf",
+            "vae/qwen_image_2.1_vae_bf16.safetensors": "https://huggingface.co/Comfy-Org/Qwen-Image-2.1/resolve/main/vae/qwen_image_2.1_vae_bf16.safetensors",
+            "loras/qwen_image_21_radiance_chrome.safetensors": "https://huggingface.co/AIImageStudio/RadianceChromeVoluptuous_QwenImage2.1_v1.0/resolve/main/RadianceChromeVoluptuous_QwenImage2.1_v1.0.safetensors"
+        },
+        note: "With a LoRA (radiance chrome). Tested on sd-server (fd21ecf) and KoboldCpp 1.124.2."
+    },
+    ModelPreset {
+        name: "FLUX.2 Klein 9B · film still",
+        recipe: "flux2-klein-9b",
+        files: {
+            "diffusion_model": "diffusion_models/flux-2-klein-9b-Q4_0.gguf",
+            "llm": "text_encoders/Qwen3-8B-Q4_K_M.gguf",
+            "vae": "vae/flux2vae.safetensors"
+        },
+        steps: 4,
+        cfg: 1,
+        loras: [Lora { file: "loras/klein9b_filmstill_redmond.safetensors", weight: 1, trigger: "Cinematic, Film Still." }],
+        downloads: {
+            "diffusion_models/flux-2-klein-9b-Q4_0.gguf": "https://huggingface.co/leejet/FLUX.2-klein-9B-GGUF/resolve/main/flux-2-klein-9b-Q4_0.gguf",
+            "text_encoders/Qwen3-8B-Q4_K_M.gguf": "https://huggingface.co/unsloth/Qwen3-8B-GGUF/resolve/main/Qwen3-8B-Q4_K_M.gguf",
+            "vae/flux2vae.safetensors": "https://huggingface.co/koboldcpp/imgmodel/resolve/main/flux2klein4b/flux2vae.safetensors",
+            "loras/klein9b_filmstill_redmond.safetensors": "https://huggingface.co/artificialguybr/CINEMATIC-FILMSTILL-REDMOND-FLUXKLEIN9B/resolve/main/%5BFLUX.2.Klein%5DFilmStill_Redmond.safetensors"
+        },
+        note: "With a LoRA (film still). Tested on sd-server (fd21ecf) and KoboldCpp 1.124.2."
+    },
+    ModelPreset {
+        name: "FLUX.1 dev · Disney",
+        recipe: "flux1-dev",
+        files: {
+            "diffusion_model": "diffusion_models/flux1-dev-q4_k.gguf",
+            "clip_l": "text_encoders/clip_l.safetensors",
+            "t5xxl": "text_encoders/t5xxl_fp8_e4m3fn.safetensors",
+            "vae": "vae/flux1vae.safetensors"
+        },
+        steps: 20,
+        cfg: 1,
+        loras: [Lora { file: "loras/flux1_disney_comfy.safetensors", weight: 1 }],
+        downloads: {
+            "diffusion_models/flux1-dev-q4_k.gguf": "https://huggingface.co/leejet/FLUX.1-dev-gguf/resolve/main/flux1-dev-q4_k.gguf",
+            "text_encoders/clip_l.safetensors": "https://huggingface.co/camenduru/FLUX.1-dev/resolve/main/clip_l.safetensors",
+            "text_encoders/t5xxl_fp8_e4m3fn.safetensors": "https://huggingface.co/camenduru/FLUX.1-dev/resolve/main/t5xxl_fp8_e4m3fn.safetensors",
+            "vae/flux1vae.safetensors": "https://huggingface.co/koboldcpp/GGUFDumps/resolve/main/flux1vae.safetensors",
+            "loras/flux1_disney_comfy.safetensors": "https://huggingface.co/XLabs-AI/flux-lora-collection/resolve/main/disney_lora_comfy_converted.safetensors"
+        },
+        note: "With a LoRA (Disney). Tested on sd-server (fd21ecf) and KoboldCpp 1.124.2."
+    },
+    ModelPreset {
+        name: "FLUX.1 Kontext · to Ghibli",
+        recipe: "flux1-kontext",
+        files: {
+            "diffusion_model": "diffusion_models/flux1-kontext-dev-Q4_K_S.gguf",
+            "clip_l": "text_encoders/clip_l.safetensors",
+            "t5xxl": "text_encoders/t5xxl_fp8_e4m3fn.safetensors",
+            "vae": "vae/flux1vae.safetensors"
+        },
+        steps: 20,
+        cfg: 1,
+        loras: [Lora { file: "loras/kontext_ghibli.safetensors", weight: 1, trigger: "Turn this image into the Ghibli style." }],
+        downloads: {
+            "diffusion_models/flux1-kontext-dev-Q4_K_S.gguf": "https://huggingface.co/bullerwins/FLUX.1-Kontext-dev-GGUF/resolve/main/flux1-kontext-dev-Q4_K_S.gguf",
+            "text_encoders/clip_l.safetensors": "https://huggingface.co/camenduru/FLUX.1-dev/resolve/main/clip_l.safetensors",
+            "text_encoders/t5xxl_fp8_e4m3fn.safetensors": "https://huggingface.co/camenduru/FLUX.1-dev/resolve/main/t5xxl_fp8_e4m3fn.safetensors",
+            "vae/flux1vae.safetensors": "https://huggingface.co/koboldcpp/GGUFDumps/resolve/main/flux1vae.safetensors",
+            "loras/kontext_ghibli.safetensors": "https://huggingface.co/Owen777/Kontext-Style-Loras/resolve/main/Ghibli_lora_weights.safetensors"
+        },
+        note: "With a LoRA (to Ghibli). Edits the start image or reference images. Tested on sd-server (fd21ecf) and KoboldCpp 1.124.2."
+    },
+    ModelPreset {
+        name: "Qwen-Image Edit 2509 · photo to anime",
+        recipe: "qwen-image-edit-2509",
+        files: {
+            "diffusion_model": "diffusion_models/Qwen-Image-Edit-2509-Q5_0.gguf",
+            "llm": "text_encoders/Qwen2.5-VL-7B-Instruct-abliterated.Q4_K_S.gguf",
+            "llm_vision": "text_encoders/Qwen2.5-VL-7B-Instruct-abliterated.mmproj-Q8_0.gguf",
+            "vae": "vae/qwen_image_vae.safetensors"
+        },
+        steps: 20,
+        cfg: 4,
+        flow_shift: 3,
+        loras: [Lora { file: "loras/qwen_edit_2509_photo_to_anime.safetensors", weight: 1, trigger: "transform into anime" }],
+        downloads: {
+            "diffusion_models/Qwen-Image-Edit-2509-Q5_0.gguf": "https://huggingface.co/QuantStack/Qwen-Image-Edit-2509-GGUF/resolve/beaefa5155d54be12ee8be359053ff87e5c8f9ab/Qwen-Image-Edit-2509-Q5_0.gguf",
+            "text_encoders/Qwen2.5-VL-7B-Instruct-abliterated.Q4_K_S.gguf": "https://huggingface.co/mradermacher/Qwen2.5-VL-7B-Instruct-abliterated-GGUF/resolve/main/Qwen2.5-VL-7B-Instruct-abliterated.Q4_K_S.gguf",
+            "text_encoders/Qwen2.5-VL-7B-Instruct-abliterated.mmproj-Q8_0.gguf": "https://huggingface.co/mradermacher/Qwen2.5-VL-7B-Instruct-abliterated-GGUF/resolve/main/Qwen2.5-VL-7B-Instruct-abliterated.mmproj-Q8_0.gguf",
+            "vae/qwen_image_vae.safetensors": "https://huggingface.co/Abiray/Anima-turbo-v1.0-GGUF/resolve/main/split_files/vae/qwen_image_vae.safetensors",
+            "loras/qwen_edit_2509_photo_to_anime.safetensors": "https://huggingface.co/autoweeb/Qwen-Image-Edit-2509-Photo-to-Anime/resolve/main/Qwen-Image-Edit-2509-Photo-to-Anime_000001000.safetensors"
+        },
+        note: "With a LoRA (photo to anime). Edits the start image or reference images. Tested on sd-server (fd21ecf) and KoboldCpp 1.124.2."
+    },
+    ModelPreset {
+        name: "Qwen-Image Edit 2511 · multiple angles",
+        recipe: "qwen-image-edit-2511",
+        files: {
+            "diffusion_model": "diffusion_models/Qwen-Image-Edit-2511-Q5_0.gguf",
+            "llm": "text_encoders/Qwen2.5-VL-7B-Instruct-abliterated.Q4_K_S.gguf",
+            "llm_vision": "text_encoders/Qwen2.5-VL-7B-Instruct-abliterated.mmproj-Q8_0.gguf",
+            "vae": "vae/qwen_image_vae.safetensors"
+        },
+        steps: 20,
+        cfg: 4,
+        flow_shift: 3,
+        loras: [Lora { file: "loras/qwen_edit_2511_multiple_angles.safetensors", weight: 1, trigger: "view the scene from a high angle, looking down" }],
+        downloads: {
+            "diffusion_models/Qwen-Image-Edit-2511-Q5_0.gguf": "https://huggingface.co/vantagewithai/Qwen-Image-Edit-2511-GGUF/resolve/main/Qwen-Image-Edit-2511-Q5_0.gguf",
+            "text_encoders/Qwen2.5-VL-7B-Instruct-abliterated.Q4_K_S.gguf": "https://huggingface.co/mradermacher/Qwen2.5-VL-7B-Instruct-abliterated-GGUF/resolve/main/Qwen2.5-VL-7B-Instruct-abliterated.Q4_K_S.gguf",
+            "text_encoders/Qwen2.5-VL-7B-Instruct-abliterated.mmproj-Q8_0.gguf": "https://huggingface.co/mradermacher/Qwen2.5-VL-7B-Instruct-abliterated-GGUF/resolve/main/Qwen2.5-VL-7B-Instruct-abliterated.mmproj-Q8_0.gguf",
+            "vae/qwen_image_vae.safetensors": "https://huggingface.co/Abiray/Anima-turbo-v1.0-GGUF/resolve/main/split_files/vae/qwen_image_vae.safetensors",
+            "loras/qwen_edit_2511_multiple_angles.safetensors": "https://huggingface.co/fal/Qwen-Image-Edit-2511-Multiple-Angles-LoRA/resolve/main/qwen-image-edit-2511-multiple-angles-lora.safetensors"
+        },
+        note: "With a LoRA (multiple angles). Edits the start image or reference images. Tested on sd-server (fd21ecf) and KoboldCpp 1.124.2."
+    }
+]

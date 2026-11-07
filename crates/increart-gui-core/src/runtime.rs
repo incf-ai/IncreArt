@@ -206,7 +206,7 @@ impl Runtime {
                         let _ = wctx.tx.send(m);
                     }
                     if started {
-                        list_loadable(&wctx);
+                        list_loadable(&wctx, false);
                     }
                     (wctx.wake)();
                 }
@@ -355,6 +355,7 @@ impl Runtime {
                 });
             }
             Effect::CancelDownload => cancel(&self.download_cancel),
+            Effect::ListLoadable => list_loadable(&self.ctx, true),
             Effect::TestServer { run, server, models, generate } => {
                 let (tx, wake) = (self.ctx.tx.clone(), self.ctx.wake.clone());
                 let cancel = new_cancel(&self.server_test_cancel);
@@ -1092,7 +1093,7 @@ fn pick(kind: PickKind, start: Option<PathBuf>) -> Vec<PathBuf> {
 
 /// What each open server can load, for the model presets it can run, as
 /// [`Msg::ServerModels`] (asked in the background: model folders are walked).
-fn list_loadable(ctx: &Ctx) {
+fn list_loadable(ctx: &Ctx, refresh: bool) {
     let clients: Vec<_> = ctx
         .session
         .lock_or_recover()
@@ -1103,7 +1104,15 @@ fn list_loadable(ctx: &Ctx) {
         .collect();
     let (tx, wake) = (ctx.tx.clone(), ctx.wake.clone());
     std::thread::spawn(move || {
-        let found = clients.into_iter().filter_map(|(name, c)| c.loadable().ok().map(|l| (name, l))).collect();
+        let found = clients
+            .into_iter()
+            .filter_map(|(name, c)| {
+                if refresh {
+                    let _ = c.refresh_models();
+                }
+                c.loadable().ok().map(|l| (name, l))
+            })
+            .collect();
         let _ = tx.send(Msg::ServerModels(found));
         wake();
     });
@@ -1746,6 +1755,7 @@ fn work_on(ctx: &Ctx, fx: Effect) -> Vec<Msg> {
         | Effect::KoboldVersion(_)
         | Effect::DownloadModels { .. }
         | Effect::CancelDownload
+        | Effect::ListLoadable
         | Effect::TestServer { .. }
         | Effect::StopServerTest
         | Effect::ApiTestList { .. }
@@ -2169,7 +2179,12 @@ pub fn lib_op(lib: &mut Library, op: LibOp) -> Result<OpOk, String> {
                     }
                 }
             }
-            Ok(OpOk::Reviewed { done: vec![], made: ReviewUndo { discarded, ..Default::default() }, undo: false, error: None })
+            Ok(OpOk::Reviewed {
+                done: vec![],
+                made: ReviewUndo { discarded, ..Default::default() },
+                undo: false,
+                error: None,
+            })
         }
         LibOp::RestoreOutputs(links) => {
             for l in links {
@@ -2310,7 +2325,7 @@ fn new_project_from_ideas(lib: &mut Library, ids: &[Id], folder: &Path, name: &s
 /// and the engine (starting the runs queued before) needs the library.
 fn hash_ahead(ctx: &Ctx, lib: &Mutex<Library>, op: &LibOp) {
     let (presets, model_dirs, queued): (Vec<&RecipePreset>, _, _) = match op {
-        LibOp::CreateRun { preset, model_dirs, queued, .. } => (vec![preset], model_dirs, queued),
+        LibOp::CreateRun { preset, model_dirs, queued, .. } => (vec![&**preset], model_dirs, queued),
         LibOp::CreateSweep { runs, model_dirs, queued, .. } => {
             (runs.iter().map(|(_, _, p)| p).collect(), model_dirs, queued)
         }
@@ -2369,7 +2384,7 @@ fn new_run(lib: &Library, f: &GenerateForm, preset: &RecipePreset, model_dirs: &
     NewRun {
         sweep: None,
         label: f.label.clone(),
-        prompt: f.prompt.clone(),
+        prompt: preset.prompt_with_triggers(&f.prompt),
         negative_prompt: f.negative.clone(),
         // the prompt as typed (the old Transparent wrapper broke edits)
         alpha: false,

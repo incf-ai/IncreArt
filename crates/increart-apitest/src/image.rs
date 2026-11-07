@@ -216,7 +216,15 @@ pub fn load_missing(cx: &mut Ctx, t: Target) -> Verdict {
 
 pub fn basic(cx: &mut Ctx, t: Target) -> Verdict {
     let client = tried!(cx.client(tried!(server(t))));
-    let models: Vec<(String, ModelKey)> = cx.models.iter().map(|m| (m.preset.name.clone(), m.key.clone())).collect();
+    let models: Vec<increart_core::config::RecipePreset> = cx
+        .models
+        .iter()
+        .map(|m| increart_core::config::RecipePreset {
+            recipe: m.key.recipe.clone(),
+            files: m.key.models.clone(),
+            ..m.preset.clone()
+        })
+        .collect();
     let mut steps: Vec<servertest::Step> = vec![];
     let cx = &*cx;
     servertest::run(&client, &models, Ok(()), cx.cancel, &mut |i, step| {

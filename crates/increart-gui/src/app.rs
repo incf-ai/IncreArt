@@ -367,7 +367,7 @@ fn server_statuses(ui: &mut egui::Ui, st: &AppState, out: &mut Vec<Msg>, compact
             let role = match st.server_models.get(&s.name) {
                 Some(l) => {
                     let runs: Vec<&str> =
-                        st.config.recipes.iter().filter(|r| l.runs(&r.files)).map(|r| r.name.as_str()).collect();
+                        st.config.recipes.iter().filter(|r| l.runs_preset(r)).map(|r| r.name.as_str()).collect();
                     if runs.is_empty() {
                         "generates images: none of the model presets (it lacks their files)".to_string()
                     } else {

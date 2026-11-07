@@ -151,6 +151,50 @@ impl Loadable {
         files.values().find_map(|id| second_choice.get(id).map(|why| format!("{} {why}", name(id))))
     }
 
+    /// Whether it has a file of a slot and can load it; a second choice
+    /// counts only with `second`.
+    pub fn has(&self, slot: &str, id: &str, second: bool) -> bool {
+        let name = |p: &str| std::path::Path::new(p).file_name().and_then(|f| f.to_str()).unwrap_or(p).to_string();
+        match self {
+            Loadable::Files { ids, refused, second_choice } => {
+                (ids.contains(id) || std::path::Path::new(id).is_absolute())
+                    && !refused.contains_key(id)
+                    && (second || !second_choice.contains_key(id))
+            }
+            Loadable::Only(running) => {
+                matches!(slot, "diffusion_model" | "model") && running.as_deref().is_some_and(|r| name(r) == name(id))
+            }
+        }
+    }
+
+    /// A preset's files as it would load them: each slot's first choice it
+    /// has, one it loads less well only if it has no other.
+    pub fn pick(&self, p: &crate::config::RecipePreset) -> BTreeMap<String, String> {
+        p.files
+            .iter()
+            .map(|(slot, id)| {
+                let choices: Vec<&String> = p.choices(slot).collect();
+                let pick = choices
+                    .iter()
+                    .find(|f| self.has(slot, f, false))
+                    .or_else(|| choices.iter().find(|f| self.has(slot, f, true)))
+                    .copied()
+                    .unwrap_or(id);
+                (slot.clone(), pick.clone())
+            })
+            .collect()
+    }
+
+    /// Whether it can load a preset, with one of each slot's choices.
+    pub fn runs_preset(&self, p: &crate::config::RecipePreset) -> bool {
+        self.runs(&self.pick(p))
+    }
+
+    /// Why it can't load a preset with any of its choices.
+    pub fn why_not_preset(&self, p: &crate::config::RecipePreset) -> Option<String> {
+        self.why_not(&self.pick(p))
+    }
+
     /// Whether it can load all of a preset's files (slot → file ID).
     pub fn runs(&self, files: &BTreeMap<String, String>) -> bool {
         self.why_not(files).is_none()
@@ -639,5 +683,34 @@ mod tests {
         )
         .unwrap();
         assert_eq!(status.loaded().unwrap().recipe, "qwen-image-21");
+    }
+
+    /// Each server takes the files of a slot it has, one it loads less
+    /// well only when it has no other.
+    #[test]
+    fn a_server_picks_the_files_it_has() {
+        let p = &crate::config::builtin_recipes()[0];
+        let int8 = Loadable::files(p.files.values().cloned());
+        assert_eq!(int8.pick(p), p.files);
+        assert!(int8.runs_preset(p));
+        let gguf: Vec<String> = p.alternatives.values().flatten().cloned().chain([p.files["vae"].clone()]).collect();
+        let kcpp = Loadable::Files {
+            ids: p.files.values().cloned().chain(gguf.clone()).collect(),
+            refused: BTreeMap::new(),
+            second_choice: p
+                .files
+                .values()
+                .filter(|f| f.contains("int8"))
+                .map(|f| (f.clone(), "is int8".into()))
+                .collect(),
+        };
+        let picked = kcpp.pick(p);
+        assert_eq!(picked["diffusion_model"], "diffusion_models/qwen_image_2.1-Q4_K.gguf");
+        assert!(kcpp.second_choice(&picked).is_none());
+        let none = Loadable::files(["vae/qwen_image_2.1_vae_bf16.safetensors".to_string()]);
+        assert!(!none.runs_preset(p));
+        assert!(none.why_not_preset(p).unwrap().contains("int8"), "named by its preferred file");
+        let only = Loadable::Only(Some("/m/qwen_image_2.1-Q4_K.gguf".into()));
+        assert!(only.runs_preset(p), "matched by an alternative's name");
     }
 }

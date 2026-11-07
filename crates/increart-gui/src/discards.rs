@@ -3,8 +3,8 @@
 //! space, Ctrl+A all, Esc none; the bar then restores or deletes them all.
 //! Kept in egui's memory per view (it's only what's highlighted).
 
-use eframe::egui::{self, Key, Rect, RichText, Sense};
 use crate::widgets::{ACCENT, ic, ph};
+use eframe::egui::{self, Key, Rect, RichText, Sense};
 
 /// What the bar asked for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

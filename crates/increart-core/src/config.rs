@@ -185,6 +185,68 @@ pub struct RecipePreset {
     /// request).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub loras: Vec<PresetLora>,
+    /// Other files for a slot, taken in this order when `files`' isn't on a
+    /// server (e.g. a GGUF KoboldCpp loads for sd-server's int8 file): see
+    /// [`RecipePreset::resolved`].
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub alternatives: std::collections::BTreeMap<String, Vec<String>>,
+    /// Where a file (of `files`, `alternatives` or `loras`) is downloaded
+    /// from: file ID → URL.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub downloads: std::collections::BTreeMap<String, String>,
+    /// A line on what it is (the built-in presets say what they were tested
+    /// on).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub note: String,
+}
+
+impl RecipePreset {
+    /// A slot's files, the preferred first.
+    pub fn choices<'a>(&'a self, slot: &str) -> impl Iterator<Item = &'a String> + 'a {
+        self.files.get(slot).into_iter().chain(self.alternatives.get(slot).into_iter().flatten())
+    }
+
+    /// Its files with each slot's first choice `have` (slot, file ID)
+    /// takes, the preferred one where it takes none.
+    pub fn resolved(&self, have: impl Fn(&str, &str) -> bool) -> std::collections::BTreeMap<String, String> {
+        self.files
+            .iter()
+            .map(|(slot, id)| {
+                let pick = self.choices(slot).find(|f| have(slot, f)).unwrap_or(id);
+                (slot.clone(), pick.clone())
+            })
+            .collect()
+    }
+
+    /// The same preset loading `files` (a [`RecipePreset::resolved`]).
+    pub fn with_files(&self, files: std::collections::BTreeMap<String, String>) -> RecipePreset {
+        RecipePreset { files, ..self.clone() }
+    }
+
+    /// The prompt with each LoRA's trigger words before it, unless it has
+    /// them already (any case).
+    pub fn prompt_with_triggers(&self, prompt: &str) -> String {
+        let low = prompt.to_lowercase();
+        let missing: Vec<&str> = self
+            .loras
+            .iter()
+            .map(|l| l.trigger.trim())
+            .filter(|t| !t.is_empty() && !low.contains(&t.to_lowercase()))
+            .collect();
+        if missing.is_empty() {
+            return prompt.to_string();
+        }
+        let lead = missing.join(" ");
+        let sep = if lead.ends_with(['.', ',', ';', ':']) { " " } else { ", " };
+        if prompt.trim().is_empty() { lead } else { format!("{lead}{sep}{prompt}") }
+    }
+
+    /// Every file it may need: each slot's choices and the LoRAs.
+    pub fn all_files(&self) -> Vec<&String> {
+        let mut out: Vec<&String> = self.files.keys().flat_map(|s| self.choices(s)).collect();
+        out.extend(self.loras.iter().map(|l| &l.file).filter(|f| !f.is_empty()));
+        out
+    }
 }
 
 impl Default for RecipePreset {
@@ -200,6 +262,9 @@ impl Default for RecipePreset {
             sampler: euler(),
             scheduler: String::new(),
             loras: vec![],
+            alternatives: Default::default(),
+            downloads: Default::default(),
+            note: String::new(),
         }
     }
 }
@@ -212,6 +277,10 @@ pub struct PresetLora {
     pub file: String,
     #[serde(default = "one")]
     pub weight: f32,
+    /// Words the LoRA was trained on, put before the prompt when it hasn't
+    /// them ([`RecipePreset::prompt_with_triggers`]).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub trigger: String,
 }
 
 fn one() -> f32 {
@@ -368,14 +437,46 @@ pub fn builtin_recipes() -> Vec<RecipePreset> {
     ]
     .map(|(k, v)| (k.to_string(), v.to_string()))
     .into();
+    // KoboldCpp can't load the int8 files well: the GGUFs, downloadable
+    let alternatives = [
+        ("diffusion_model", "diffusion_models/qwen_image_2.1-Q4_K.gguf"),
+        ("llm", "text_encoders/Qwen3VL-8B-Instruct-Q4_K_M.gguf"),
+    ]
+    .map(|(k, v)| (k.to_string(), vec![v.to_string()]))
+    .into();
+    let downloads = [
+        (
+            "diffusion_models/qwen_image_2.1-Q4_K.gguf",
+            "leejet/Qwen-Image-2.1-GGUF/resolve/main/qwen_image_2.1-Q4_K.gguf",
+        ),
+        (
+            "text_encoders/Qwen3VL-8B-Instruct-Q4_K_M.gguf",
+            "Qwen/Qwen3-VL-8B-Instruct-GGUF/resolve/main/Qwen3VL-8B-Instruct-Q4_K_M.gguf",
+        ),
+        (
+            "vae/qwen_image_2.1_vae_bf16.safetensors",
+            "Comfy-Org/Qwen-Image-2.1/resolve/main/vae/qwen_image_2.1_vae_bf16.safetensors",
+        ),
+    ]
+    .map(|(k, v)| (k.to_string(), format!("https://huggingface.co/{v}")))
+    .into();
     vec![RecipePreset {
         name: "Qwen-Image 2.1".into(),
         recipe: "qwen-image-21".into(),
         files,
         steps: 20,
         cfg: 2.0,
+        alternatives,
+        downloads,
         ..Default::default()
     }]
+}
+
+/// The model presets offered to add (`presets/builtin.rsn`): each tested on
+/// sd-server and KoboldCpp, with its files' downloads and, for the LoRA
+/// variants, the LoRA's trigger words.
+pub fn catalogue() -> Vec<RecipePreset> {
+    rsnfmt::from_str(include_str!("../presets/builtin.rsn")).expect("presets/builtin.rsn")
 }
 
 /// A named set of servers (e.g. "Both GPUs", "Remote box"): sd-servers,
@@ -1939,7 +2040,8 @@ mod tests {
     #[test]
     fn a_presets_loras_saved_and_read() {
         let mut c = Config { recipes: builtin_recipes(), ..Default::default() };
-        c.recipes[0].loras = vec![PresetLora { file: "loras/style.safetensors".into(), weight: 0.8 }];
+        c.recipes[0].loras =
+            vec![PresetLora { file: "loras/style.safetensors".into(), weight: 0.8, trigger: String::new() }];
         let text = rsnfmt::to_string(&c).unwrap();
         assert!(text.contains("Lora"), "{text}");
         assert_eq!(rsnfmt::from_str::<Config>(&text).unwrap().recipes, c.recipes);
@@ -1950,6 +2052,61 @@ mod tests {
 
     /// A preset's sampler: euler when not written (as before there was a
     /// choice), written only when it's another; empty is the model's own.
+    /// The built-in presets parse, are named once each, and say where each
+    /// of their files comes from.
+    #[test]
+    fn the_catalogue_downloads_every_file() {
+        let c = catalogue();
+        assert!(c.len() >= 14, "{}", c.len());
+        let names: std::collections::BTreeSet<&str> = c.iter().map(|p| p.name.as_str()).collect();
+        assert_eq!(names.len(), c.len(), "a name twice");
+        for p in c.iter().chain(&builtin_recipes()) {
+            assert!(p.files.contains_key("diffusion_model"), "{}", p.name);
+            for f in p.all_files() {
+                assert!(
+                    p.downloads.get(f).is_some_and(|u| u.starts_with("https://"))
+                        || p.name == "Qwen-Image 2.1" && f.contains("int8"),
+                    "{}: {f}",
+                    p.name
+                );
+            }
+            for slot in p.files.keys() {
+                assert!(MODEL_SLOTS.contains(&slot.as_str()), "{}: {slot}", p.name);
+            }
+            let text = rsnfmt::to_string(p).unwrap();
+            assert_eq!(&rsnfmt::from_str::<RecipePreset>(&text).unwrap(), p, "{text}");
+        }
+        // the LoRA variants bring their trigger
+        let z = c.iter().find(|p| p.name == "Z-Image Turbo · pixel art").unwrap();
+        assert_eq!(z.loras[0].trigger, "Pixel art style.");
+    }
+
+    /// A slot's first file `have` takes, the preferred where none.
+    #[test]
+    fn a_preset_resolved_to_the_files_there() {
+        let p = &builtin_recipes()[0];
+        let gguf = |_: &str, f: &str| f.ends_with(".gguf") || f.starts_with("vae/");
+        let r = p.resolved(gguf);
+        assert_eq!(r["diffusion_model"], "diffusion_models/qwen_image_2.1-Q4_K.gguf");
+        assert_eq!(r["llm"], "text_encoders/Qwen3VL-8B-Instruct-Q4_K_M.gguf");
+        assert_eq!(r["vae"], p.files["vae"]);
+        assert_eq!(p.resolved(|_, _| true), p.files, "the preferred first");
+        assert_eq!(p.resolved(|_, _| false), p.files, "none there: as written");
+    }
+
+    #[test]
+    fn lora_triggers_before_the_prompt() {
+        let lora = |t: &str| PresetLora { file: "loras/x.safetensors".into(), weight: 1.0, trigger: t.into() };
+        let mut p = RecipePreset { loras: vec![lora("Pixel art style.")], ..Default::default() };
+        assert_eq!(p.prompt_with_triggers("a cat"), "Pixel art style. a cat");
+        assert_eq!(p.prompt_with_triggers("A cat, pixel art style."), "A cat, pixel art style.", "has it");
+        assert_eq!(p.prompt_with_triggers(""), "Pixel art style.");
+        p.loras = vec![lora("hmrsh style"), lora(""), lora("anime_style")];
+        assert_eq!(p.prompt_with_triggers("a cat"), "hmrsh style anime_style, a cat");
+        p.loras.clear();
+        assert_eq!(p.prompt_with_triggers("a cat"), "a cat");
+    }
+
     #[test]
     fn a_presets_sampler_and_schedule() {
         let p: RecipePreset =

@@ -1707,7 +1707,7 @@ fn kobold_wizard(
     });
     if let Some((p, at)) = &k.downloading {
         ui.add_space(6.0);
-        download_progress(ui, p, at);
+        download_progress(ui, &p.downloads, at);
     }
     ui.add_space(6.0);
     // Cancel on its own at the left, away from the actions
@@ -1797,16 +1797,16 @@ fn wizard_files(ui: &mut egui::Ui, p: &tiers::Plan, dir: &str, out: &mut Vec<Msg
 
 /// The models downloading: all of them (size, speed, time left), then the
 /// file under way and the ones linked instead.
-fn download_progress(ui: &mut egui::Ui, p: &tiers::Plan, at: &WizardDownload) {
+pub fn download_progress(ui: &mut egui::Ui, downloads: &[tiers::Download], at: &WizardDownload) {
     let gb = |b: u64| format!("{:.1}", b as f64 / 1e9);
     let name = |i: usize| {
-        p.downloads.get(i).map(|d| d.file.trim_start_matches(&format!("{}/", tiers::MODEL_SUBDIR)).to_string())
+        downloads.get(i).map(|d| d.file.trim_start_matches(&format!("{}/", tiers::MODEL_SUBDIR)).to_string())
     };
     if at.checking {
         ui.horizontal(|ui| {
             ui.spinner();
             let file = name(at.file).unwrap_or_default();
-            ui.label(format!("Checking what's there already ({} of {}): {file}", at.file + 1, p.downloads.len()));
+            ui.label(format!("Checking what's there already ({} of {}): {file}", at.file + 1, downloads.len()));
         });
     } else {
         let mut line = match at.all_total {
@@ -1827,7 +1827,7 @@ fn download_progress(ui: &mut egui::Ui, p: &tiers::Plan, at: &WizardDownload) {
             Some(t) => format!("{} of {} GB", gb(at.done), gb(t)),
             None => format!("{} GB", gb(at.done)),
         };
-        ui.weak(format!("File {} of {}: {file} ({size})", at.file + 1, p.downloads.len()));
+        ui.weak(format!("File {} of {}: {file} ({size})", at.file + 1, downloads.len()));
     }
     for (file, from) in &at.reused {
         let file = file.trim_start_matches(&format!("{}/", tiers::MODEL_SUBDIR));

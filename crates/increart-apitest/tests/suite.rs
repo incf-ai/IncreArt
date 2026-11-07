@@ -27,9 +27,7 @@ fn recipe() -> RecipePreset {
         files: BTreeMap::from([("diffusion_model".to_string(), FILE.to_string())]),
         steps: 4,
         cfg: 2.0,
-        flow_shift: None,
-        custom_sigmas: vec![],
-        loras: vec![],
+        ..Default::default()
     }
 }
 

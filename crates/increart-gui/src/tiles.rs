@@ -257,7 +257,8 @@ pub fn keys(ui: &egui::Ui, st: &AppState, out: &mut Vec<Msg>) -> bool {
         }
         // Del: the picks, else the image the cursor is on, to Discarded
         if i.key_pressed(Key::Delete) {
-            let images = if st.picked.is_empty() { st.current_image().into_iter().collect() } else { st.picked.clone() };
+            let images =
+                if st.picked.is_empty() { st.current_image().into_iter().collect() } else { st.picked.clone() };
             if !images.is_empty() {
                 out.push(Msg::DiscardImages(images));
             }

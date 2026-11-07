@@ -1024,6 +1024,37 @@ pub enum ScaleBy {
     Height,
 }
 
+/// A model preset's files being fetched into the first model folder.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PresetDownload {
+    /// The preset's name.
+    pub name: String,
+    pub files: Vec<increart_core::tiers::Download>,
+    pub at: WizardDownload,
+}
+
+/// The files of a model preset that aren't in a model folder and that it
+/// says where to download (each slot's preferred file, or the first of its
+/// choices with a download when that has none; the LoRAs). Nothing for a
+/// slot one of whose choices is there.
+pub fn missing_downloads(p: &RecipePreset, model_dirs: &[String]) -> Vec<increart_core::tiers::Download> {
+    use increart_core::config::model_file_on_disk;
+    let there = |f: &str| model_file_on_disk(f, model_dirs).is_some();
+    let mut out: Vec<increart_core::tiers::Download> = vec![];
+    let slots = p
+        .files
+        .keys()
+        .filter(|s| !p.choices(s).any(|f| there(f)))
+        .filter_map(|s| p.choices(s).find(|f| p.downloads.contains_key(*f)));
+    let loras = p.loras.iter().map(|l| &l.file).filter(|f| !f.is_empty() && !there(f) && p.downloads.contains_key(*f));
+    for f in slots.chain(loras) {
+        if !out.iter().any(|d| d.file == *f) {
+            out.push(increart_core::tiers::Download { url: p.downloads[f].clone(), file: f.clone() });
+        }
+    }
+    out
+}
+
 /// The model presets editor (DESIGN.md, Model presets): a working copy of
 /// `config.recipes`.
 #[derive(Clone, Debug, PartialEq)]
@@ -1032,6 +1063,8 @@ pub struct RecipeEditor {
     pub selected: usize,
     /// A file picked outside the model folders, said in the editor.
     pub error: Option<String>,
+    /// **Built-in presets** shown (the tested presets, to add).
+    pub builtin: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -1055,7 +1088,7 @@ impl RecipeEditor {
                 sigmas: p.custom_sigmas.iter().map(f32::to_string).collect::<Vec<_>>().join(", "),
             })
             .collect();
-        RecipeEditor { rows, selected: selected.min(recipes.len().saturating_sub(1)), error: None }
+        RecipeEditor { rows, selected: selected.min(recipes.len().saturating_sub(1)), error: None, builtin: false }
     }
 
     /// Why it can't be saved, if it can't.
@@ -3533,6 +3566,8 @@ pub struct AppState {
     pub res_editor: Option<Vec<Resolution>>,
     /// The model presets editor, while open.
     pub recipe_editor: Option<RecipeEditor>,
+    /// A model preset's files being downloaded (Model presets' **Download**).
+    pub preset_download: Option<PresetDownload>,
     pub scale: Option<ScaleDialog>,
     /// An image shown large over everything (double-click a reference or
     /// the start image in Generate).
@@ -3672,25 +3707,26 @@ impl AppState {
         self.servers.iter().filter_map(|s| self.server_models.get(&s.name))
     }
 
-    /// The open servers that can run these files.
-    pub fn servers_running(&self, files: &BTreeMap<String, String>) -> Vec<&str> {
+    /// The open servers that can run a model preset (with one of each
+    /// slot's files).
+    pub fn servers_running(&self, p: &RecipePreset) -> Vec<&str> {
         self.servers
             .iter()
-            .filter(|s| self.server_models.get(&s.name).is_some_and(|l| l.runs(files)))
+            .filter(|s| self.server_models.get(&s.name).is_some_and(|l| l.runs_preset(p)))
             .map(|s| s.name.as_str())
             .collect()
     }
 
     /// Why no open server can run these files, one line per server
     /// ("kcpp-gpu1: …"); `None` when one can, or none has said.
-    pub fn why_no_server_runs(&self, files: &BTreeMap<String, String>) -> Option<Vec<String>> {
+    pub fn why_no_server_runs(&self, p: &RecipePreset) -> Option<Vec<String>> {
         let known: Vec<_> =
             self.servers.iter().filter_map(|s| self.server_models.get(&s.name).map(|l| (&s.name, l))).collect();
         if known.is_empty() {
             return None;
         }
         let why: Vec<String> =
-            known.iter().map(|(name, l)| l.why_not(files).map(|w| format!("{name}: {w}"))).collect::<Option<_>>()?;
+            known.iter().map(|(name, l)| l.why_not_preset(p).map(|w| format!("{name}: {w}"))).collect::<Option<_>>()?;
         Some(why)
     }
 
@@ -3750,7 +3786,31 @@ impl AppState {
         if self.open_loadable().next().is_none() {
             return all.collect();
         }
-        all.filter(|&i| self.open_loadable().any(|l| l.runs(&self.config.recipes[i].files))).collect()
+        all.filter(|&i| self.open_loadable().any(|l| l.runs_preset(&self.config.recipes[i]))).collect()
+    }
+
+    /// A model preset with the files it will load: of the open servers'
+    /// choices (each slot's first file it has), the one most of them can
+    /// run (the first server's on a tie; one with a file it loads less well
+    /// only if there's no other), else each slot's first in a model folder,
+    /// else as written.
+    pub fn resolve_preset(&self, p: &RecipePreset) -> RecipePreset {
+        let picks: Vec<(BTreeMap<String, String>, bool)> = self
+            .open_loadable()
+            .filter(|l| l.runs_preset(p))
+            .map(|l| {
+                let files = l.pick(p);
+                let well = l.second_choice(&files).is_none();
+                (files, well)
+            })
+            .collect();
+        let runners = |files: &BTreeMap<String, String>| self.open_loadable().filter(|l| l.runs(files)).count();
+        let best = picks.iter().enumerate().max_by_key(|(i, (files, well))| (*well, runners(files), usize::MAX - i));
+        if let Some((_, (files, _))) = best {
+            return p.with_files(files.clone());
+        }
+        let dirs = &self.config.programs.model_dirs;
+        p.with_files(p.resolved(|_, f| increart_core::config::model_file_on_disk(f, dirs).is_some()))
     }
 
     /// Image models a KoboldCpp started elsewhere runs that no model preset
@@ -3760,7 +3820,7 @@ impl AppState {
         self.servers
             .iter()
             .filter_map(|s| match self.server_models.get(&s.name) {
-                Some(l @ Loadable::Only(Some(file))) if !self.config.recipes.iter().any(|r| l.runs(&r.files)) => {
+                Some(l @ Loadable::Only(Some(file))) if !self.config.recipes.iter().any(|r| l.runs_preset(r)) => {
                     Some((s.name.as_str(), file.as_str()))
                 }
                 _ => None,
@@ -3880,6 +3940,7 @@ impl AppState {
             idea_edit_dirty: None,
             res_editor: None,
             recipe_editor: None,
+            preset_download: None,
             scale: None,
             preview: None,
             preview_among: None,

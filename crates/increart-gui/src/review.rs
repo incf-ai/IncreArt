@@ -2958,11 +2958,19 @@ fn discarded_outputs(ui: &mut egui::Ui, st: &AppState, root: &Path, tex: &mut Te
     });
     let sel = picks.sel.clone();
     action = action.or(picks.finish(ui, &bg, &all));
-    discard_action(action, sel, all.len(), "image", "Their links go to the trash; the images stay in the store until Clean up.", out, |a, s| match a {
-        crate::discards::BarAction::Restore => Msg::RestoreOutputs(s),
-        crate::discards::BarAction::Delete => Msg::DeleteDiscardedOutputs(s),
-        crate::discards::BarAction::Empty => Msg::EmptyDiscardedOutputs,
-    });
+    discard_action(
+        action,
+        sel,
+        all.len(),
+        "image",
+        "Their links go to the trash; the images stay in the store until Clean up.",
+        out,
+        |a, s| match a {
+            crate::discards::BarAction::Restore => Msg::RestoreOutputs(s),
+            crate::discards::BarAction::Delete => Msg::DeleteDiscardedOutputs(s),
+            crate::discards::BarAction::Empty => Msg::EmptyDiscardedOutputs,
+        },
+    );
 }
 
 /// Carries out a Discarded view's bar action on the selected `sel` (Delete
@@ -2983,7 +2991,8 @@ pub fn discard_action<T>(
     match a {
         BarAction::Restore if !sel.is_empty() => out.push(msg(a, sel)),
         BarAction::Delete if !sel.is_empty() => {
-            let text = format!("Delete the {} selected discarded {} permanently? {after}", sel.len(), plural(sel.len()));
+            let text =
+                format!("Delete the {} selected discarded {} permanently? {after}", sel.len(), plural(sel.len()));
             out.push(Msg::Ask(Confirm::new(text, "Delete", msg(a, sel))));
         }
         BarAction::Empty if total > 0 => {
@@ -3061,7 +3070,8 @@ fn image_grid(
                     tag_button(ui, st, &o.image, out);
                     collection_menu(ui, st, std::slice::from_ref(&o.image), out);
                     if let OutputSource::Collection(f) = &st.output_source
-                        && let Some(link) = st.index.collection_links.iter().find(|l| l.image == o.image && l.folder.starts_with(f))
+                        && let Some(link) =
+                            st.index.collection_links.iter().find(|l| l.image == o.image && l.folder.starts_with(f))
                         && ui.button(ic(ph::MINUS_CIRCLE, "Remove from this collection")).clicked()
                     {
                         let rel = link.path.strip_prefix("collections").map(Path::to_path_buf).unwrap_or_default();

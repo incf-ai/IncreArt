@@ -72,6 +72,8 @@ const SCENES: &[&str] = &[
     "20-input-library-filters",
     "21-resolutions",
     "21b-model-presets",
+    "21c-model-presets-builtin",
+    "21d-model-presets-lora",
     "22-output-library-lineage",
     "23-export",
     "23b-export-one",
@@ -1548,6 +1550,17 @@ impl Tour {
             ],
             "21b-model-presets" => {
                 vec![Msg::Tab(Tab::Projects), Msg::ProjectsTab(ProjectsTab::Generate), Msg::OpenRecipes]
+            }
+            scene @ ("21c-model-presets-builtin" | "21d-model-presets-lora") => {
+                // the built-in list open, a LoRA variant added; then it selected
+                let mut e = increart_gui_core::RecipeEditor::new(&st.config.recipes, 0);
+                e.builtin = scene.starts_with("21c");
+                if let Some(p) = increart_core::config::catalogue().into_iter().find(|p| p.name.contains("· pixel art"))
+                {
+                    e.rows.push(increart_gui_core::RecipeRow { preset: p, origin: None, sigmas: String::new() });
+                    e.selected = e.rows.len() - 1;
+                }
+                vec![Msg::Tab(Tab::Projects), Msg::ProjectsTab(ProjectsTab::Generate), Msg::EditRecipes(e)]
             }
             "22-output-library-lineage" => {
                 let mut v = vec![
