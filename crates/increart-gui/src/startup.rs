@@ -629,11 +629,42 @@ pub fn servers(ui: &mut egui::Ui, st: &AppState, d: &ServerDialog, out: &mut Vec
     if st.local_files_stale() && !st.local_scanning {
         out.push(Msg::ScanModelFolders);
     }
-    centered(ui, "servers", 780.0, |ui| {
+    let screen = ui.ctx().content_rect();
+    let width = (screen.width() - 80.0).clamp(960.0, 1400.0);
+    let half = (width - 32.0) / 2.0;
+    let table_height = (screen.height() - 600.0).clamp(150.0, 420.0);
+    centered(ui, "servers", width, |ui| {
+        // the divider drawn after: a separator would stretch to the screen's height
+        let r = ui
+            .horizontal_top(|ui| {
+                ui.vertical(|ui| {
+                    ui.set_width(half);
+                    servers_half(ui, st, d, out);
+                });
+                ui.add_space(32.0);
+                ui.vertical(|ui| {
+                    ui.set_width(half);
+                    crate::modelwizard::panel(ui, st, table_height, out);
+                });
+            })
+            .response
+            .rect;
+        let x = r.left() + half + 16.0;
+        let stroke = ui.visuals().widgets.noninteractive.bg_stroke;
+        ui.painter().vline(x, r.y_range(), stroke);
+        ui.separator();
+        footer(ui, st, d, out);
+    });
+}
+
+/// The servers screen's left half: the server setups, and opening one.
+fn servers_half(ui: &mut egui::Ui, st: &AppState, d: &ServerDialog, out: &mut Vec<Msg>) {
+    {
         ui.heading(ic(ph::HARD_DRIVES, "Servers"));
         ui.label(
-            "The servers for this session: KoboldCpp or sd-server to generate images with, and a chat server \
-             for prompt enhance (KoboldCpp can be both). Connected servers keep running when IncreArt exits.",
+            "What makes the images: KoboldCpp or sd-server, started here on your GPUs or already running \
+             elsewhere, and optionally a chat server for prompt enhance (KoboldCpp can be both). A server setup \
+             is servers used together; servers IncreArt connects to keep running when it exits.",
         );
         if let Some(n) = &d.notice {
             ui.add_space(4.0);
@@ -669,7 +700,13 @@ pub fn servers(ui: &mut egui::Ui, st: &AppState, d: &ServerDialog, out: &mut Vec
             ui.separator();
             progress(ui, st, d, out);
         }
-        ui.separator();
+    }
+}
+
+/// Below both halves: the windows over the screen, the settings and the
+/// ways out.
+fn footer(ui: &mut egui::Ui, st: &AppState, d: &ServerDialog, out: &mut Vec<Msg>) {
+    {
         if d.wizard {
             server_wizard(ui.ctx(), st, d, out);
         }
@@ -696,7 +733,7 @@ pub fn servers(ui: &mut egui::Ui, st: &AppState, d: &ServerDialog, out: &mut Vec
                     && ui
                         .button(ic(ph::GEAR, "Server settings…"))
                         .on_hover_text(
-                            "KoboldCpp and sd-server binaries, the model directories: shared by every preset",
+                            "KoboldCpp and sd-server programs, the model folders: shared by every server setup",
                         )
                         .clicked();
                 let logs = ui
@@ -713,7 +750,7 @@ pub fn servers(ui: &mut egui::Ui, st: &AppState, d: &ServerDialog, out: &mut Vec
         if logs {
             out.push(Msg::OpenLogs(None));
         }
-    });
+    }
 }
 
 /// Open the last used preset, continue, close, or (while opening) continue
@@ -876,9 +913,9 @@ fn progress(ui: &mut egui::Ui, st: &AppState, d: &ServerDialog, out: &mut Vec<Ms
 
 /// The presets: a click opens one, ✎ edits it, the bin deletes it (asks).
 fn presets(ui: &mut egui::Ui, st: &AppState, d: &ServerDialog, out: &mut Vec<Msg>) {
-    ui.label(RichText::new("Presets").strong());
+    ui.label(RichText::new("Server setups").strong());
     if st.config.server_presets.is_empty() {
-        ui.label("No presets yet.");
+        ui.label("No server setups yet.");
         ui.add_space(4.0);
         // the way to start: the main action while there are no presets
         ui.horizontal(|ui| {
@@ -886,7 +923,7 @@ fn presets(ui: &mut egui::Ui, st: &AppState, d: &ServerDialog, out: &mut Vec<Msg
                 out.push(Msg::ServerWizard(true));
             }
         });
-        ui.weak("Or make one by hand with New preset (KoboldCpp or sd-server).");
+        ui.weak("Or make one by hand with New server setup (KoboldCpp or sd-server).");
         ui.add_space(6.0);
     }
     let last = st.config.last_preset.as_ref().and_then(|n| st.config.server_presets.iter().position(|p| &p.name == n));
@@ -899,11 +936,11 @@ fn presets(ui: &mut egui::Ui, st: &AppState, d: &ServerDialog, out: &mut Vec<Msg
         // the text gives way to the buttons (wraps), a gap kept between them
         let (open, (edit, delete)) = egui::Sides::new().shrink_left().wrap().spacing(16.0).show(
             ui,
-            |ui| ui.selectable_label(editing, text).on_hover_text("Open").clicked(),
+            |ui| ui.selectable_label(editing, text).on_hover_text("Open: start or connect to its servers").clicked(),
             |ui| {
                 // right to left: ✎ pinned to the right edge, the bin next to it, then the tags
                 let edit = ui.small_button(ph::PENCIL_SIMPLE).on_hover_text("Edit").clicked();
-                let delete = ui.small_button(ph::TRASH).on_hover_text("Delete preset…").clicked();
+                let delete = ui.small_button(ph::TRASH).on_hover_text("Delete this server setup…").clicked();
                 if validation_mark(ui, st, d, p) {
                     out.push(Msg::ValidateBasic(p.name.clone()));
                 }
@@ -921,33 +958,23 @@ fn presets(ui: &mut egui::Ui, st: &AppState, d: &ServerDialog, out: &mut Vec<Msg
             out.push(Msg::EditPreset(i));
         }
         if delete {
-            out.push(Msg::Ask(Confirm::new(format!("Delete preset {}?", p.name), "Delete", Msg::DeletePreset(i))));
+            out.push(Msg::Ask(Confirm::new(
+                format!("Delete server setup {}?", p.name),
+                "Delete",
+                Msg::DeletePreset(i),
+            )));
         }
     }
     ui.add_space(6.0);
     // in a row, so the column doesn't stretch it to full width
     ui.horizontal(|ui| {
-        if ui.button(ic(ph::PLUS, "New preset")).clicked() {
+        if ui.button(ic(ph::PLUS, "New server setup")).clicked() {
             out.push(Msg::NewPreset);
-        }
-        if ui
-            .button(ic(ph::CUBE, "Model presets…"))
-            .on_hover_text("what each model preset loads and its settings; test one on a server")
-            .clicked()
-        {
-            out.push(Msg::OpenRecipes);
-        }
-        if ui
-            .button(ic(ph::DOWNLOAD_SIMPLE, "Set up models…"))
-            .on_hover_text("where the model files go, folders that have some, and models to download")
-            .clicked()
-        {
-            out.push(Msg::OpenModelWizard);
         }
         if !st.config.server_presets.is_empty()
             && ui
                 .button(ic(ph::MAGIC_WAND, WIZARD))
-                .on_hover_text("KoboldCpp with Qwen-Image, set up by each GPU's memory, as a new preset")
+                .on_hover_text("KoboldCpp with Qwen-Image, set up by each GPU's memory, as a new server setup")
                 .clicked()
         {
             out.push(Msg::ServerWizard(true));
@@ -958,9 +985,9 @@ fn presets(ui: &mut egui::Ui, st: &AppState, d: &ServerDialog, out: &mut Vec<Msg
             && st.servers.is_empty()
             && st.background.is_none()
             && ui
-                .button(ic(ph::STETHOSCOPE, "Validate servers…"))
+                .button(ic(ph::STETHOSCOPE, "Test servers…"))
                 .on_hover_text(
-                    "the server validation suite: opens each preset's servers and tests every call the app \
+                    "the server test suite: opens each server setup's servers and tests every call the app \
                      makes, case by case, each request and answer logged",
                 )
                 .clicked()
@@ -969,7 +996,7 @@ fn presets(ui: &mut egui::Ui, st: &AppState, d: &ServerDialog, out: &mut Vec<Msg
         }
     });
     ui.add_space(6.0);
-    ui.weak("Click a preset to open it");
+    ui.weak("Click a server setup to start it (or connect to its servers)");
 }
 
 /// Whether the preset passed the suite's basic cases with the settings it
@@ -983,37 +1010,34 @@ fn validation_mark(ui: &mut egui::Ui, st: &AppState, d: &ServerDialog, p: &confi
     let (icon, text, color, tip) = match st.validations.status(&st.config, p) {
         Status::Passed(s) => {
             let warned = if s.counts.warn > 0 { format!(", with {} warning(s)", s.counts.warn) } else { String::new() };
-            (ph::SEAL_CHECK, "validated", GOOD, format!("its basic validation passed on {}{warned}", s.day()))
+            (ph::SEAL_CHECK, "tested", GOOD, format!("its basic test passed on {}{warned}", s.day()))
         }
         Status::Failed(s) => (
             ph::SEAL_WARNING,
-            "validation failed",
+            "test failed",
             BAD,
             format!(
-                "its basic validation failed on {}: {} case(s) failed or were skipped",
+                "its basic test failed on {}: {} case(s) failed or were skipped",
                 s.day(),
                 s.counts.fail + s.counts.skipped
             ),
         ),
         Status::Changed(s) => (
             ph::SEAL_QUESTION,
-            "not validated",
+            "not tested",
             NEUTRAL,
-            format!("validated on {}, but its settings have changed since", s.day()),
+            format!("tested on {}, but its settings have changed since", s.day()),
         ),
-        Status::Never => (
-            ph::SEAL_QUESTION,
-            "not validated",
-            NEUTRAL,
-            "the server validation suite hasn't checked its servers".into(),
-        ),
+        Status::Never => {
+            (ph::SEAL_QUESTION, "not tested", NEUTRAL, "the server test suite hasn't checked its servers".into())
+        }
     };
     let can = st.suite_found && !d.opening && st.servers.is_empty() && st.background.is_none() && st.api_test.is_none();
     let label = RichText::new(ic(icon, text)).color(color);
     if can {
         ui.add(egui::Button::new(label).frame(false))
             .on_hover_text(format!(
-                "{tip}\nClick to validate it now: each server answers, lists its models and makes a small \
+                "{tip}\nClick to test it now: each server answers, lists its models and makes a small \
                  image, then a short run through them all"
             ))
             .clicked()
@@ -1211,26 +1235,26 @@ fn kobold_binary_field(ui: &mut egui::Ui, st: &AppState, d: &ServerDialog, out: 
 /// No image model is set here: each run asks for its model preset's files.
 fn image_model_line(ui: &mut egui::Ui, out: &mut Vec<Msg>) {
     ui.horizontal(|ui| {
-        ui.weak(ic(ph::CUBE, "Image model: each run's, from its model preset (files in the model directories)"))
+        ui.weak(ic(ph::CUBE, "Image model: each run's own, from your models (files in the model folders)"))
             .on_hover_text(
-                "The servers load the files of the model preset a run is made with (Generate's Model preset list); \
-             KoboldCpp reloads with them, sd-server takes them per request.",
+                "The servers load the files of the model a run is made with (Generate's Model list); KoboldCpp \
+                 reloads with them, sd-server takes them per request.",
             );
-        if ui.small_button(ph::GEAR).on_hover_text("Edit the model presets…").clicked() {
+        if ui.small_button(ph::GEAR).on_hover_text("Edit your models…").clicked() {
             out.push(Msg::OpenRecipes);
         }
     });
 }
 
-/// What a server preset covers (DESIGN.md, What a server preset covers):
-/// "Model presets: 9 of 14 from the files here", each preset's servers or
-/// reasons on hover; a click opens Model presets.
+/// What a server setup covers (DESIGN.md, What a server preset covers):
+/// "Can run 9 of your 14 models with the files here", each model's servers
+/// or reasons on hover; a click opens the models editor.
 fn coverage_line(ui: &mut egui::Ui, st: &AppState, p: &config::ServerPreset, out: &mut Vec<Msg>) {
     if p.servers.iter().all(|s| s.is_chat()) {
         return;
     }
     let Some(c) = st.coverage(p) else {
-        ui.weak("Model presets: looking in the model folders…");
+        ui.weak("Models: looking in the model folders…");
         return;
     };
     let mut tip = String::new();
@@ -1248,9 +1272,12 @@ fn coverage_line(ui: &mut egui::Ui, st: &AppState, p: &config::ServerPreset, out
         }
     }
     if !c.asked.is_empty() {
-        tip.push_str(&format!("{} (connected to) say what they have once open\n", c.asked.join(", ")));
+        tip.push_str(&format!(
+            "{} (already running elsewhere) say what they have once connected\n",
+            c.asked.join(", ")
+        ));
     }
-    tip.push_str("Click: Model presets (edit, test, download)");
+    tip.push_str("Click: edit your models (and test one on a server)");
     let color = if c.can.is_empty() && c.asked.is_empty() { NEUTRAL } else { ui.visuals().weak_text_color() };
     let r = ui
         .horizontal(|ui| {
@@ -1446,18 +1473,11 @@ fn server_wizard(ctx: &egui::Context, st: &AppState, d: &ServerDialog, out: &mut
         ui.horizontal(|ui| {
             let n = st.config.recipes.len();
             ui.weak(format!(
-                "Image models: {n} model preset{}, each naming its files in Models",
+                "Image models: {n} model{}, set up under Models on the right of the servers screen",
                 if n == 1 { "" } else { "s" }
             ));
-            if ui.small_button(ic(ph::GEAR, "Edit model presets…")).clicked() {
+            if ui.small_button(ic(ph::GEAR, "Edit your models…")).clicked() {
                 out.push(Msg::OpenRecipes);
-            }
-            if ui
-                .small_button(ic(ph::DOWNLOAD_SIMPLE, "Set up models…"))
-                .on_hover_text("where the model files go, folders that have some, and models to download")
-                .clicked()
-            {
-                out.push(Msg::OpenModelWizard);
             }
         });
         ui.add_space(10.0);
@@ -2096,10 +2116,10 @@ fn editor_window(ctx: &egui::Context, st: &AppState, d: &ServerDialog, editing: 
 }
 
 fn editor(ui: &mut egui::Ui, st: &AppState, d: &ServerDialog, editing: Editing, out: &mut Vec<Msg>) {
-    let title = if editing == Editing::New { "New preset" } else { "Edit preset" };
+    let title = if editing == Editing::New { "New server setup" } else { "Edit server setup" };
     ui.heading(ic(ph::PENCIL_SIMPLE, title));
     let mut name = d.draft.name.clone();
-    ui.add(egui::TextEdit::singleline(&mut name).desired_width(240.0).hint_text("preset name"));
+    ui.add(egui::TextEdit::singleline(&mut name).desired_width(240.0).hint_text("server setup name"));
     if name != d.draft.name {
         out.push(Msg::SetPresetName(name));
     }
@@ -2278,7 +2298,7 @@ fn roles_grid(ui: &mut egui::Ui, preset: &increart_core::config::ServerPreset) {
         ui.end_row();
         for r in preset.roles() {
             ui.label(&r.name);
-            mark(ui, r.images, "generates images: a run goes to an image server whose model list has its preset's files");
+            mark(ui, r.images, "generates images: a run goes to an image server whose model list has its model's files");
             match &r.note {
                 Some(note) => {
                     ui.label(RichText::new("not asked").weak()).on_hover_text(note);

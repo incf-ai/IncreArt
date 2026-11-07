@@ -7182,7 +7182,7 @@ fn model_presets_edit_and_generate_keeps_its_model() {
     update(&mut s, Msg::OpenRecipes);
     let mut e = s.recipe_editor.clone().unwrap();
     e.rows[1].preset.name = "B ".into();
-    assert_eq!(e.problem().as_deref(), Some("Two model presets are called B"));
+    assert_eq!(e.problem().as_deref(), Some("Two models are called B"));
     e.rows[1].preset.name = "C".into();
     e.rows[1].preset.files.clear();
     assert_eq!(e.problem().as_deref(), Some("C has no diffusion model file"));
@@ -7244,7 +7244,7 @@ fn queueing_a_preset_no_server_runs_asks_first() {
     assert_eq!(h.state.runnable_recipes(), vec![1]);
     // the same model in a preset it runs: switched to, the draft's steps kept, said
     assert_eq!((h.state.generate.preset, h.state.generate.steps), (1, 31));
-    assert!(h.state.messages.iter().any(|m| m.text.contains("Model preset Q8 instead of Int8")));
+    assert!(h.state.messages.iter().any(|m| m.text.contains("Model Q8 instead of Int8")));
     // no other preset of that recipe: nothing to switch to
     assert_eq!(h.state.runnable_alternative(2), None);
     assert_eq!(h.state.runnable_alternative(1), None, "it runs");

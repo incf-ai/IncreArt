@@ -613,7 +613,7 @@ pub fn sweep_panel(
                 let tip = match v {
                     SweepVary::Style => "a run per chosen prompt preset",
                     SweepVary::Strength if f.init().is_none() => "needs a start image",
-                    SweepVary::Model => "a run per model preset, each with its own steps and CFG",
+                    SweepVary::Model => "a run per model, each with its own steps and CFG",
                     SweepVary::Image => "a run per image, each its run's <image1> (or start image)",
                     _ => "a run per value, the rest as the form has it",
                 };
@@ -1121,7 +1121,7 @@ fn pe_bar(ui: &mut egui::Ui, st: &AppState, names: &[String], sw: &mut Sweep, ou
             ui.weak(ic(ph::MAGIC_WAND, "Prompt enhance can suggest values:"));
             if ui
                 .small_button("Servers…")
-                .on_hover_text("add a chat server to a server preset, or pick one to continue without sd-servers")
+                .on_hover_text("add a chat server to a server setup, or pick one to continue without sd-servers")
                 .clicked()
             {
                 out.push(Msg::OpenServerDialog);
@@ -1788,7 +1788,7 @@ fn style_bar(ui: &mut egui::Ui, st: &AppState, sw: &mut Sweep, out: &mut Vec<Msg
             ui.weak(ic(ph::MAGIC_WAND, "Prompt enhance can improve these:"));
             if ui
                 .small_button("Servers…")
-                .on_hover_text("add a chat server to a server preset, or pick one to continue without sd-servers")
+                .on_hover_text("add a chat server to a server setup, or pick one to continue without sd-servers")
                 .clicked()
             {
                 out.push(Msg::OpenServerDialog);

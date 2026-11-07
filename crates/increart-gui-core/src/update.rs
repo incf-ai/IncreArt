@@ -1616,7 +1616,7 @@ fn queue_checked(state: &mut AppState) -> Vec<Effect> {
     }
     // with the files of each slot an open server has
     let Some(preset) = state.config.recipes.get(f.preset).map(|p| state.resolve_preset(p)) else {
-        state.messages_error("No model preset");
+        state.messages_error("No model");
         return vec![];
     };
     // once per session: the run would only wait in the queue
@@ -1862,7 +1862,7 @@ fn model_wizard(state: &mut AppState, msg: Msg) -> Vec<Effect> {
             state.local_files = None;
             if added > 0 {
                 let s = if added == 1 { "" } else { "s" };
-                state.messages_info(format!("{added} model preset{s} added"));
+                state.messages_info(format!("{added} model{s} added"));
             }
             if files.is_empty() {
                 fx.push(Effect::ListLoadable);
@@ -1981,7 +1981,7 @@ fn model_warning(state: &AppState) -> Option<String> {
     Some(format!(
         "No open server can run {}:\n\n{}\n\nQueued anyway, a server still tries to load it: that can fail, \
          or (KoboldCpp with an int8 file) pin tens of GB of RAM.",
-        if lines.len() == 1 { "this model preset" } else { "these model presets" },
+        if lines.len() == 1 { "this model" } else { "these models" },
         lines.join("\n\n")
     ))
 }
@@ -2304,7 +2304,11 @@ fn save_draft(state: &mut AppState) -> bool {
     let taken =
         state.config.server_presets.iter().enumerate().any(|(i, p)| p.name == name && editing != Editing::Preset(i));
     if name.is_empty() || taken {
-        let e = if taken { format!("There is already a preset named {name}") } else { "Name the preset first".into() };
+        let e = if taken {
+            format!("There is already a server setup named {name}")
+        } else {
+            "Name the server setup first".into()
+        };
         state.messages_error(e);
         return false;
     }
@@ -9783,7 +9787,7 @@ fn queue_sweep(state: &mut AppState, confirmed: bool) -> Vec<Effect> {
         })
         .collect::<Option<Vec<_>>>()
     else {
-        state.messages_error("No model preset");
+        state.messages_error("No model");
         return vec![];
     };
     let images = runs.len() as u64 * state.generate.seeds;
@@ -10265,7 +10269,7 @@ const MAX_AVOID: usize = 60;
 
 /// What asking prompt enhance with no chat server in use says.
 const NO_CHAT: &str =
-    "No chat server in use: add one to a server preset (Servers…), or pick one to continue without sd-servers";
+    "No chat server in use: add one to a server setup (Servers…), or pick one to continue without sd-servers";
 
 /// The GPUs to tick in the chat server settings, listed when it runs on
 /// GPUs and they aren't listed yet (or were listed by another runtime).
@@ -10573,7 +10577,7 @@ fn start_with_up(state: &mut AppState, progress: &[ServerProgress]) -> Vec<Effec
     let up: Vec<bool> = progress.iter().map(|p| *p == ServerProgress::Up).collect();
     state.servers = state.servers.iter().zip(&up).filter(|(_, u)| **u).map(|(s, _)| s.clone()).collect();
     if state.servers.is_empty() {
-        state.messages_error("No server came up: open Servers… to retry or change the preset");
+        state.messages_error("No server came up: open Servers… to retry or change the server setup");
         return vec![Effect::StopServers];
     }
     state.engine_running = true;
@@ -10693,7 +10697,7 @@ fn restore_form(state: &mut AppState, d: &increart_core::model::GenerateDraft) {
     let mut notes = vec![];
     if !state.config.recipes.iter().any(|r| r.name == d.preset) {
         f.preset = state.generate.preset;
-        notes.push(format!("model preset {} no longer exists, kept the current one", d.preset));
+        notes.push(format!("model {} no longer exists, kept the current one", d.preset));
     }
     if let Some(root) = &state.library {
         let before = f.images.len() + f.sweep.images.len();
@@ -11312,7 +11316,7 @@ fn runnable_preset(state: &mut AppState) {
     let Some(j) = state.runnable_alternative(f.preset) else { return };
     let (from, to) = (state.config.recipes[f.preset].name.clone(), state.config.recipes[j].name.clone());
     state.generate.preset = j;
-    state.messages_info(format!("Model preset {to} instead of {from}, which no open server can run"));
+    state.messages_info(format!("Model {to} instead of {from}, which no open server can run"));
 }
 
 /// A queued run or sweep is saved: Queue works for its label again.

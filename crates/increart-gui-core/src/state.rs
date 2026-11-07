@@ -1146,13 +1146,13 @@ pub struct Coverage {
 }
 
 impl Coverage {
-    /// "Model presets: 9 of 14 from the files here" (", + what remote
-    /// lists once open").
+    /// "Can run 9 of your 14 models with the files here" (", plus what
+    /// remote has once connected").
     pub fn line(&self) -> String {
         let n = self.can.len() + self.cannot.len();
-        let mut line = format!("Model presets: {} of {n} from the files here", self.can.len());
+        let mut line = format!("Can run {} of your {n} models with the files here", self.can.len());
         if !self.asked.is_empty() {
-            line.push_str(&format!(", + what {} lists once open", self.asked.join(", ")));
+            line.push_str(&format!(", plus what {} has once connected", self.asked.join(", ")));
         }
         line
     }
@@ -1240,10 +1240,10 @@ impl RecipeEditor {
             let p = &r.preset;
             let name = p.name.trim();
             if name.is_empty() {
-                return Some("A model preset has no name".into());
+                return Some("A model has no name".into());
             }
             if !names.insert(name) {
-                return Some(format!("Two model presets are called {name}"));
+                return Some(format!("Two models are called {name}"));
             }
             if p.recipe.trim().is_empty() {
                 return Some(format!("{name} has no recipe"));
@@ -1258,7 +1258,7 @@ impl RecipeEditor {
                 return Some(format!("{name}: the sigmas aren't numbers"));
             }
         }
-        if self.rows.is_empty() { Some("Keep at least one model preset".into()) } else { None }
+        if self.rows.is_empty() { Some("Keep at least one model".into()) } else { None }
     }
 }
 

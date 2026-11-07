@@ -71,7 +71,7 @@ pub fn window(ctx: &egui::Context, st: &AppState, t: &ApiTest, out: &mut Vec<Msg
 fn preset_choice(ui: &mut egui::Ui, t: &ApiTest, out: &mut Vec<Msg>) {
     const ALL: &str = "All presets";
     ui.horizontal(|ui| {
-        ui.label("Server preset");
+        ui.label("Server setup");
         let shown = t.preset.as_deref().unwrap_or(ALL);
         let mut chosen = None;
         ui.add_enabled_ui(!t.running, |ui| {
@@ -326,7 +326,7 @@ fn basic(ui: &mut egui::Ui, st: &AppState, t: &ApiTest, height: f32, out: &mut V
     let preset = t.preset.as_deref();
     if !t.cases.is_empty() && !t.running {
         ui.horizontal(|ui| {
-            ui.label("Server preset");
+            ui.label("Server setup");
             let mut chosen = None;
             egui::ComboBox::from_id_salt("api_basic_preset").selected_text(preset.unwrap_or("choose one")).show_ui(
                 ui,
@@ -388,7 +388,7 @@ fn status_line(ui: &mut egui::Ui, st: &AppState, preset: &str) {
 /// Before a run: what validating does, and its steps.
 fn ready(ui: &mut egui::Ui, t: &ApiTest, preset: Option<&str>) {
     let Some(preset) = preset else {
-        ui.label("Choose the server preset to validate above.");
+        ui.label("Choose the server setup to test above.");
         return;
     };
     ui.add(
@@ -576,7 +576,7 @@ fn step_name(c: &Case) -> String {
     let key = c.id.rsplit('/').next().unwrap_or(&c.id);
     let what = match key {
         "together.open" => return "Start or connect to the servers".into(),
-        "together.routing" => return "Each model preset has a server to run on".into(),
+        "together.routing" => return "Each model has a server to run on".into(),
         "together.end-to-end" => return "A short run through all of them, as the app uses them".into(),
         "connect.capabilities" => "answers".to_string(),
         "models.list" => "lists its models".into(),

@@ -241,7 +241,7 @@ fn a_server_preset_covers_the_model_presets_its_servers_find_files_for() {
     assert_eq!(c.cannot[0].0, "Gone");
     assert!(c.cannot[0].1.iter().any(|w| w.starts_with("sd0: ") && w.contains("gone.gguf")), "{:?}", c.cannot);
     assert_eq!(c.asked, vec!["remote".to_string()]);
-    assert_eq!(c.line(), "Model presets: 2 of 3 from the files here, + what remote lists once open");
+    assert_eq!(c.line(), "Can run 2 of your 3 models with the files here, plus what remote has once connected");
     let alone = ServerPreset { name: "K".into(), servers: vec![kcpp] };
     assert_eq!(s.coverage(&alone).unwrap().can.len(), 2);
     // other folders: scanned again

@@ -12,7 +12,7 @@ use crate::widgets::{BAD, dialog_buttons, ic, ph};
 pub fn summary(ui: &mut egui::Ui, st: &AppState, out: &mut Vec<Msg>) {
     ui.horizontal(|ui| {
         let Some(server) = &st.pe.server else {
-            ui.weak("No chat server in use: add one to a server preset (Change servers…).");
+            ui.weak("No chat server in use: add one to a server setup (Change servers…).");
             return;
         };
         ui.label(RichText::new(&server.name).strong());

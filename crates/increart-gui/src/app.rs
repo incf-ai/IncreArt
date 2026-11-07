@@ -373,7 +373,7 @@ fn server_statuses(ui: &mut egui::Ui, st: &AppState, out: &mut Vec<Msg>, compact
                     let runs: Vec<&str> =
                         st.config.recipes.iter().filter(|r| l.runs_preset(r)).map(|r| r.name.as_str()).collect();
                     if runs.is_empty() {
-                        "generates images: none of the model presets (it lacks their files)".to_string()
+                        "generates images: none of your models (it lacks their files)".to_string()
                     } else {
                         format!("generates images of: {}", runs.join(", "))
                     }
@@ -1470,7 +1470,6 @@ impl eframe::App for App {
                 egui::CentralPanel::default().show(ui, |ui| crate::startup::servers(ui, st, &d, &mut out));
                 // the preset editor's gear opens it here too
                 crate::projects::recipes_window(&ctx, st, &mut out);
-                crate::modelwizard::window(&ctx, st, &mut out);
             }
             Phase::Main => self.main_window(ui, &mut out),
         }
@@ -1482,7 +1481,6 @@ impl eframe::App for App {
             crate::settings::window(&ctx, &self.st, &mut out);
             crate::projects::resolutions_window(&ctx, &self.st, &mut out);
             crate::projects::recipes_window(&ctx, &self.st, &mut out);
-            crate::modelwizard::window(&ctx, &self.st, &mut out);
             crate::projects::scale_window(&ctx, &self.st, &mut out);
             // under the modals it opens (picker, preview, job details)
             crate::tiles::window(&ctx, &self.st, &mut self.tex, &mut out);

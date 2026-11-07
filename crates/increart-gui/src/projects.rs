@@ -1917,7 +1917,7 @@ pub fn recipes_window(ctx: &egui::Context, st: &AppState, out: &mut Vec<Msg>) {
     let mut picks: Vec<Msg> = vec![];
     egui::Modal::new(egui::Id::unique("recipes")).show(ctx, |ui| {
         ui.set_width(820.0);
-        ui.heading(ic(ph::CUBE, "Model presets"));
+        ui.heading(ic(ph::CUBE, "Your models"));
         ui.weak("Generate's Model list: what each loads and its default settings. Saved to config.rsn.");
         ui.add_space(4.0);
         let mut action: Option<(usize, &str)> = None;
@@ -2254,8 +2254,8 @@ pub fn recipes_window(ctx: &egui::Context, st: &AppState, out: &mut Vec<Msg>) {
             ui,
             |ui| {
                 if ui
-                    .selectable_label(e.builtin, ic(ph::LIST_PLUS, "Built-in presets…"))
-                    .on_hover_text("presets tested on sd-server and KoboldCpp, with their downloads")
+                    .selectable_label(e.builtin, ic(ph::LIST_PLUS, "Built-in models…"))
+                    .on_hover_text("models tested on sd-server and KoboldCpp, with their downloads")
                     .clicked()
                 {
                     e.builtin = !e.builtin;
@@ -2388,7 +2388,7 @@ fn preset_test(
     ui.label(RichText::new("Test").strong());
     let (of, servers) = st.preset_test_servers();
     if servers.is_empty() {
-        ui.weak("No image server to test on: add a server preset on the servers screen first.");
+        ui.weak("No image server to test on: add a server setup on the servers screen first.");
         return;
     }
     let names: Vec<&str> = servers.iter().map(|s| s.name()).collect();
@@ -2579,7 +2579,7 @@ fn builtin_presets(ui: &mut egui::Ui, st: &AppState, e: &mut increart_gui_core::
         if ui.button(ic(ph::ARROW_LEFT, "Back to the list")).clicked() {
             e.builtin = false;
         }
-        ui.label(RichText::new(ic(ph::LIST_PLUS, "Built-in presets")).strong());
+        ui.label(RichText::new(ic(ph::LIST_PLUS, "Built-in models")).strong());
     });
     ui.weak(
         "Tested on sd-server and KoboldCpp. Add puts one in the list (Save keeps it); Download fetches its files \
@@ -2702,9 +2702,9 @@ fn generate(ui: &mut egui::Ui, st: &AppState, tex: &mut Textures, out: &mut Vec<
             ui.horizontal(|ui| {
                 ui.label("Label");
                 ui.add(egui::TextEdit::singleline(&mut f.label).desired_width(140.0));
-                ui.label("Model preset");
+                ui.label("Model");
                 model_choice(ui, st, f.preset, out);
-                if ui.small_button(ph::GEAR).on_hover_text("Edit the model presets…").clicked() {
+                if ui.small_button(ph::GEAR).on_hover_text("Edit your models…").clicked() {
                     out.push(Msg::OpenRecipes);
                 }
             });
@@ -2944,7 +2944,7 @@ fn model_choice(ui: &mut egui::Ui, st: &AppState, chosen: usize, out: &mut Vec<M
             }
         }
         if runnable.is_empty() {
-            ui.weak("No server has the files of any model preset");
+            ui.weak("No server has the files of any of your models");
         }
         if !hidden.is_empty() {
             ui.separator();
@@ -2959,11 +2959,11 @@ fn model_choice(ui: &mut egui::Ui, st: &AppState, chosen: usize, out: &mut Vec<M
             }
         }
         for (server, file) in st.models_without_preset() {
-            ui.weak(format!("{server} runs {file}, which no model preset uses"));
+            ui.weak(format!("{server} runs {file}, which none of your models uses"));
         }
     });
     if !runnable.contains(&chosen) {
-        r.response.on_hover_text("No open server has this preset's model files");
+        r.response.on_hover_text("No open server has this model's files");
     }
 }
 

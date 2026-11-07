@@ -198,8 +198,17 @@ both: **presets** saved in `config.rsn` (see Config file → Servers), each a
 list of servers that may include chat servers (prompt enhance shares its
 asks among them):
 
-- The preset list (the dialog is one column; editing and settings open
-  modals). The one used last is tagged "last used",
+- **Names in the UI**: a server preset is called a **server setup**, a
+  model preset (`RecipePreset`) just a **model** ("your models"); model
+  files stay "model files". The code keeps the old names.
+- **Two halves**: on the left **Servers**, the server setups and opening
+  one (the progress, while opening, below them); on the right **Models**
+  (see Setting up models below), always shown, with **Edit your models
+  (N)…** for the models editor. Server settings…, Logs… and the ways out
+  span both, below. The screen is as wide as the window allows (960–1400
+  px); the divider is drawn after the halves, so it doesn't stretch the
+  screen.
+- The server setup list (editing and settings open modals). The one used last is tagged "last used",
   the tag in a muted accent colour. Each row shows its servers, e.g. "Start ROCm0 on
   :1234 · Start ROCm1 on :1235 · Chat: Qwen3-VL 8B (GPU)" or "Connect to
   http://10.0.0.2:1234".
@@ -2778,12 +2787,12 @@ in the app's state folder (`$XDG_STATE_HOME/increart` when set, else
   when it passed somewhere as it is, red when it failed, grey when only
   tested before an edit, each server's result on hover. Its traffic is
   always logged, tagged `[test <preset> on <server>]`.
-- **Setting up models**: **Set up models…** (on the servers screen beside
-  Model presets…, and in the sd-server wizard beside Edit model presets…)
-  opens one window, which says what it's for (getting image models onto
-  this machine for the servers; each model ticked becomes a model preset,
-  only files not already in a model folder downloaded) and has three
-  numbered steps:
+- **Setting up models**: the servers screen's right half, **Models**
+  (opened as the screen first shows; its state, `ModelWizard`, stays while
+  the app runs, so a download's progress is there when the screen is
+  reopened). It says what it's for (the image models the servers can
+  load, each its files and settings; built-in ones added, only files not
+  already on the machine downloaded) and has three numbered steps:
   - **1. Download folder**: where downloads go, the first model folder by default, else
     `~/models`; typed or Browse…. One not yet a model folder is added as
     the first (made if it isn't there); one already among them stays where
@@ -2794,31 +2803,31 @@ in the app's state folder (`$XDG_STATE_HOME/increart` when set, else
     model files' count and size, looked for off the UI thread. Those not
     already model folders are ticked (those that are, greyed): added as model folders, so
     their files are used where they are (and not downloaded again).
-  - **3. Models to add**: the built-in presets in a table (Model, Size,
-    Files, Fits your GPUs; the header stays put, each header says what its
+  - **3. Add built-in models**: in a table (Model, Size, Files, Fits GPU
+    — "0 ✓ 1 ✗" by GPU number with more than one; the header stays put, each header says what its
     column means on hover; a fixed height, so the window doesn't jump as
     sizes come in), each with its files' size together
     (about the memory it takes: each slot's file there, else the one
-    fetched, and its LoRAs), what's needed ("all there", "download 3
-    files (9.8 GB)", "set up (preset and files)"), and for each GPU (listed as the
-    KoboldCpp wizard lists them) whether it fits (✓/✗, "GPU 0 ✓" with more than one): its files under 95 % of
+    fetched, and its LoRAs), what's needed ("files here", "download 3
+    files (9.8 GB)", "added, files here"), and for each GPU (listed as the
+    KoboldCpp wizard lists them) whether it fits: its files under 95 % of
     the card's memory. Sizes of what isn't there are asked of Hugging Face
     (HEAD, a dozen at a time, once a session). One already a preset with
     its files there, or with a file neither there nor downloadable, can't
     be ticked.
-  - **Download and add** (**Add N presets** when nothing's missing): the
+  - **Download and add** (**Add to your models** when nothing's missing): the
     folders become the model folders, the ticked presets are added to
     Model presets (not twice), and the files missing from all the model
     folders (each once) are fetched into the folder by the downloader
     Model presets' Download uses (a file of the same name and size in a
     model folder or Hugging Face's cache is linked instead), with its
-    progress and **Cancel download**. Closing the window leaves a download
-    going (Model presets shows it; a message says when it's done); then the
+    progress and **Cancel download** (the models editor shows it too; a
+    message says when it's done); then the
     servers are asked again what they have, and what the server presets
     cover is scanned again.
 - **What a server preset covers**: on the servers screen each preset (and
-  the preset editor, under "Image model") has "Model presets: 9 of 14 from
-  the files here", before anything is started. The model folders are
+  the preset editor, under "Image model") has "Can run 9 of your 14
+  models with the files here", before anything is started. The model folders are
   scanned once (again when they change or after a download), off the UI
   thread, as a started server would list them
   (`kobold_image::LocalFiles`): a started sd-server has every file there;

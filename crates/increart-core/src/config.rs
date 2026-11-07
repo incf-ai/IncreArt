@@ -666,7 +666,7 @@ impl ServerPreset {
     }
 
     /// Its roles in a line: "images: kcpp, proxy · text: PE · vision: PE"
-    /// ("images: gpu0 · no prompt enhance" without a chat server).
+    /// ("Images: gpu0 · Prompt enhance: none" without a chat server).
     pub fn roles_line(&self) -> String {
         let roles = self.roles();
         let names =
@@ -674,11 +674,11 @@ impl ServerPreset {
         let list = |v: Vec<&str>, none: &str| if v.is_empty() { none.to_string() } else { v.join(", ") };
         let images = list(names(&|r| r.images), "none");
         if !roles.iter().any(|r| r.text) {
-            return format!("images: {images} · no prompt enhance");
+            return format!("Images: {images} · Prompt enhance: none");
         }
         let text = list(names(&|r| r.text), "none");
         let vision = list(names(&|r| r.vision != Some(false) && r.text), "none (asks go without images)");
-        format!("images: {images} · text: {text} · vision: {vision}")
+        format!("Images: {images} · Prompt enhance: {text} · Reads pictures: {vision}")
     }
 }
 
@@ -1728,14 +1728,14 @@ mod tests {
             [("kobold", true, false, None), ("proxy", true, false, None), ("PE", false, true, Some(true))]
         );
         assert!(r[0].note.as_deref().unwrap().contains("swaps its chat model"), "{:?}", r[0].note);
-        assert_eq!(p.roles_line(), "images: kobold, proxy · text: PE · vision: PE");
+        assert_eq!(p.roles_line(), "Images: kobold, proxy · Prompt enhance: PE · Reads pictures: PE");
         // KoboldCpp alone, chatting without a vision projector
         let text = r#"ServerPreset { name: "one", servers: [
             Kobold(KoboldServer { name: "k", run: Start { binary: "k", port: 5001 }, chat: Some(KoboldChat { model: "m" }) }),
         ] }"#;
         let p: ServerPreset = rsnfmt::from_str(text).unwrap();
         assert_eq!(p.roles()[0].vision, Some(false));
-        assert_eq!(p.roles_line(), "images: k · text: k · vision: none (asks go without images)");
+        assert_eq!(p.roles_line(), "Images: k · Prompt enhance: k · Reads pictures: none (asks go without images)");
         // and prompt enhance's asks to it go without the images
         assert!(!p.chat_server().unwrap().vision());
         // with a projector, or one its .kcpps may name, or connected to: with them
@@ -1753,7 +1753,7 @@ mod tests {
             name: "sd".into(),
             servers: vec![ServerConfig::Connect { name: "box".into(), url: "u".into(), device: String::new() }],
         };
-        assert_eq!(p.roles_line(), "images: box · no prompt enhance");
+        assert_eq!(p.roles_line(), "Images: box · Prompt enhance: none");
     }
 
     #[test]
