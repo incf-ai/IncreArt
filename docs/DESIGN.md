@@ -2829,7 +2829,8 @@ in the app's state folder (`$XDG_STATE_HOME/increart` when set, else
     switching tabs; models installed meanwhile are added to them too, so
     Save doesn't drop them.
   - **Folders**: the download folder, your model folders in order
-    (changed in Server settings…), and folders found with model files.
+    (changed in Server settings…), folders found with model files, and
+    model files kept elsewhere.
   The pages' parts:
   - **1. Download folder**: where downloads go, the first model folder by default, else
     `~/models`; typed or Browse…. One not yet a model folder is added as
@@ -2840,14 +2841,33 @@ in the app's state folder (`$XDG_STATE_HOME/increart` when set, else
     …; `modelsetup::find_folders`, each once by its real path), with their
     model files' count and size, looked for off the UI thread. Those not
     already model folders are ticked (those that are, greyed): added as model folders, so
-    their files are used where they are (and not downloaded again).
+    their files are used where they are (and not downloaded again) when
+    their layout is the models' (`diffusion_models/`, `vae/`, … as
+    ComfyUI's is).
+  - **Model files kept elsewhere** (any layout): the model files in the
+    model folders, every folder found (ticked or not) and Hugging Face's
+    cache (`$HF_HOME`), a few folders down, are indexed by name with
+    their size (`modelsetup::FileIndex`, off the UI thread; again when the
+    folders change or files come: a download, links). A built-in model's
+    file not where the model wants it (its file ID under a model folder)
+    but found by name, and by size when Hugging Face's is known, is to be
+    linked, not downloaded (`PresetNeeds::links`). **Link what's here**
+    links every built-in model's such files into the download folder
+    (made a model folder; nothing installed): symlinks (Windows: a hard
+    link if it can't), so the user's folders stay as they are; it says how
+    many files and how many models it leaves with nothing to download.
+    A flat mirror of a folder isn't made: the models' files are
+    `slot/file` paths, and names repeat across tools.
   - **3. Add built-in models**: in a table (Model, Size, Files, Fits GPU
     — "0 ✓ 1 ✗" by GPU number with more than one; the header stays put, each header says what its
     column means on hover; a fixed height, so the window doesn't jump as
     sizes come in), each with its files' size together
     (about the memory it takes: each slot's file there, else the one
-    fetched, and its LoRAs), what's needed ("files here", "download 3
-    files (9.8 GB)", "added, files here"), and for each GPU (listed as the
+    fetched or linked, and its LoRAs), what's needed ("files here",
+    "download 3 files (9.8 GB)", "files found elsewhere, link 4" (green;
+    the hover lists each file and where it is), "link 3, download 1",
+    and for an installed one "ready", "3 files elsewhere, to link", "2
+    files missing"), and for each GPU (listed as the
     KoboldCpp wizard lists them) whether it fits: its files under 95 % of
     the card's memory. Sizes of what isn't there are asked of Hugging Face
     (HEAD, a dozen at a time, once a session). One already a preset with
@@ -2855,8 +2875,11 @@ in the app's state folder (`$XDG_STATE_HOME/increart` when set, else
     be ticked.
   - **Download and add** (**Add to your models** when nothing's missing): the
     folders become the model folders, the ticked presets are added to
-    Model presets (not twice), and the files missing from all the model
-    folders (each once) are fetched into the folder by the downloader
+    Model presets (not twice), the files found elsewhere linked into the
+    folder first ("4 files linked from where they were, not downloaded";
+    no Hugging Face request for them), and the other files missing from
+    all the model folders (each once) are fetched into the folder by the
+    downloader
     Model presets' Download uses (a file of the same name and size in a
     model folder or Hugging Face's cache is linked instead), with its
     progress and **Cancel download** (the models editor shows it too; a

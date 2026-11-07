@@ -509,6 +509,14 @@ pub enum Msg {
     /// fetched.
     ModelWizardGo,
     CloseModelWizard,
+    /// Look for model files (the model folders, those found, Hugging
+    /// Face's cache) if not looked or of other folders; answered with
+    /// `ModelFilesIndexed`.
+    IndexModelFiles,
+    ModelFilesIndexed(Vec<PathBuf>, Box<increart_core::modelsetup::FileIndex>),
+    /// Every built-in model's files found elsewhere linked into the
+    /// download folder (Folders' **Link what's here**).
+    ModelWizardLinkHere,
     /// A discarded image's link back in its project (Output library →
     /// Discarded).
     RestoreOutput(PathBuf),
@@ -1179,6 +1187,9 @@ pub enum Effect {
     },
     /// Each URL's size, answered with a `DownloadSize` each.
     DownloadSizes(Vec<String>),
+    /// The model files under these folders, answered with
+    /// `ModelFilesIndexed`.
+    IndexModelFiles(Vec<PathBuf>),
     SavePresetTests(PathBuf, increart_core::presettest::PresetTests),
     /// Note in the stamps file that opening these settings (a
     /// fingerprint) asked whether to validate them.
@@ -1662,7 +1673,7 @@ fn wizard_download(state: &mut AppState, msg: Msg) -> Vec<Effect> {
         }
         Msg::CancelWizardDownload => vec![Effect::CancelDownload],
         Msg::WizardDownloaded(r) => {
-            state.local_files = None;
+            state.files_changed();
             let Phase::Servers(d) = &mut state.phase else { return vec![] };
             let Some(k) = &mut d.kobold else { return vec![] };
             let Some((plan, _)) = k.downloading.take() else { return vec![] };
@@ -1734,7 +1745,7 @@ fn preset_downloads(state: &mut AppState, msg: Msg) -> Vec<Effect> {
         Msg::WizardDownloaded(r) => {
             let Some(d) = state.preset_download.take() else { return vec![] };
             // what the server presets cover: scanned again
-            state.local_files = None;
+            state.files_changed();
             let n = d.files.len();
             match r {
                 Ok(()) => {
@@ -1802,6 +1813,9 @@ fn model_wizard(state: &mut AppState, msg: Msg) -> Vec<Effect> {
                     found: old.found.take(),
                     sizes: std::mem::take(&mut old.sizes),
                     gpus: old.gpus.take(),
+                    index: old.index.take(),
+                    index_of: std::mem::take(&mut old.index_of),
+                    indexing: old.indexing,
                     ..*w
                 };
             }
@@ -1836,13 +1850,26 @@ fn model_wizard(state: &mut AppState, msg: Msg) -> Vec<Effect> {
             }
             let dir = w.dir.trim().to_string();
             let dirs = w.folders(&state.config.programs.model_dirs);
-            let files = w.downloads(&state.config.programs.model_dirs);
+            let (links, files) = w.plan(&state.config.programs.model_dirs);
             let picked: Vec<RecipePreset> =
                 increart_core::config::catalogue().into_iter().filter(|p| w.picked.contains(&p.name)).collect();
             w.started = true;
             if let Err(e) = std::fs::create_dir_all(&dir) {
                 state.messages_error(format!("Couldn't make {dir}: {e}"));
                 return vec![];
+            }
+            // the files kept elsewhere linked first (not downloaded)
+            if !links.is_empty() {
+                let errors = crate::state::make_links(&dir, &links);
+                let made = links.len() - errors.len();
+                if made > 0 {
+                    let s = if made == 1 { "" } else { "s" };
+                    state.messages_info(format!("{made} file{s} linked from where they were, not downloaded"));
+                }
+                for e in errors {
+                    state.messages_error(format!("Couldn't link {e}"));
+                }
+                state.files_changed();
             }
             // the presets added (not twice), the folders used
             let c = &mut state.config;
@@ -1867,7 +1894,7 @@ fn model_wizard(state: &mut AppState, msg: Msg) -> Vec<Effect> {
             } else {
                 fx.extend(save_config(state));
             }
-            state.local_files = None;
+            state.files_changed();
             if added > 0 {
                 let s = if added == 1 { "" } else { "s" };
                 state.messages_info(format!("{added} model{s} added"));
@@ -1880,6 +1907,55 @@ fn model_wizard(state: &mut AppState, msg: Msg) -> Vec<Effect> {
             let name = format!("{n} model file{}", if n == 1 { "" } else { "s" });
             fx.extend(update(state, Msg::DownloadPresetFilesInto(name, dir, files)));
             fx
+        }
+        Msg::IndexModelFiles => {
+            let model_dirs = state.config.programs.model_dirs.clone();
+            let Some(w) = &mut state.model_wizard else { return vec![] };
+            // (after the folders found, so they're looked in too)
+            let dirs = w.index_dirs(&model_dirs);
+            if w.indexing || w.found.is_none() || (w.index.is_some() && w.index_of == dirs) {
+                return vec![];
+            }
+            w.indexing = true;
+            vec![Effect::IndexModelFiles(dirs)]
+        }
+        Msg::ModelFilesIndexed(dirs, index) => {
+            if let Some(w) = &mut state.model_wizard {
+                w.indexing = false;
+                w.index = Some(std::sync::Arc::new(*index));
+                w.index_of = dirs;
+            }
+            vec![]
+        }
+        Msg::ModelWizardLinkHere => {
+            let model_dirs = state.config.programs.model_dirs.clone();
+            let Some(w) = &state.model_wizard else { return vec![] };
+            let dir = w.dir.trim().to_string();
+            if dir.is_empty() {
+                state.messages_error("Choose the folder the models go in first");
+                return vec![];
+            }
+            let (links, whole) = w.links_here(&model_dirs);
+            let dirs = w.folders(&model_dirs);
+            if links.is_empty() {
+                state.messages_info("Nothing to link: no built-in model's files are elsewhere");
+                return vec![];
+            }
+            let errors = crate::state::make_links(&dir, &links);
+            let made = links.len() - errors.len();
+            let (s, ms) = (if made == 1 { "" } else { "s" }, if whole == 1 { "" } else { "s" });
+            state.messages_info(format!(
+                "{made} file{s} linked into {dir}: {whole} built-in model{ms} with nothing left to download"
+            ));
+            for e in errors {
+                state.messages_error(format!("Couldn't link {e}"));
+            }
+            state.files_changed();
+            // the download folder (and those ticked) made model folders
+            if dirs != model_dirs {
+                return update(state, Msg::SetModelDirs(dirs));
+            }
+            vec![Effect::ListLoadable]
         }
         Msg::CloseModelWizard => {
             // the Models window (the editor closes by CloseRecipes); a
@@ -2769,6 +2845,9 @@ fn part_of(msg: &Msg) -> usize {
         Msg::DownloadSize(..) => 4,
         Msg::ModelWizardGo => 4,
         Msg::CloseModelWizard => 4,
+        Msg::IndexModelFiles => 4,
+        Msg::ModelFilesIndexed(..) => 4,
+        Msg::ModelWizardLinkHere => 4,
         Msg::LocalFiles(..) => 4,
         Msg::CancelPresetDownload => 4,
         Msg::RestoreOutput(..) => 16,
@@ -4584,7 +4663,10 @@ fn apply_4(state: &mut AppState, msg: Msg, rest: &mut Option<Msg>) -> Vec<Effect
         | Msg::ModelFoldersFound(_)
         | Msg::DownloadSize(..)
         | Msg::ModelWizardGo
-        | Msg::CloseModelWizard) => model_wizard(state, m),
+        | Msg::CloseModelWizard
+        | Msg::IndexModelFiles
+        | Msg::ModelFilesIndexed(..)
+        | Msg::ModelWizardLinkHere) => model_wizard(state, m),
         m @ (Msg::TestPreset(..) | Msg::PresetTestStage(..) | Msg::PresetTested(..) | Msg::StopPresetTest) => {
             preset_tests(state, m)
         }

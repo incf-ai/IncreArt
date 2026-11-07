@@ -60,6 +60,8 @@ pub fn panel(ui: &mut egui::Ui, st: &AppState, list_height: f32, out: &mut Vec<M
         ui.spinner();
         return;
     };
+    // the model files found elsewhere, looked for (again when they change)
+    out.push(Msg::IndexModelFiles);
     let mut w = old.clone();
     let servers = !st.config.server_presets.is_empty();
     let r = ui.add_enabled_ui(servers, |ui| overview(ui, st, &mut w, list_height, out));
@@ -86,7 +88,7 @@ pub fn panel(ui: &mut egui::Ui, st: &AppState, list_height: f32, out: &mut Vec<M
 fn overview(ui: &mut egui::Ui, st: &AppState, w: &mut ModelWizard, list_height: f32, out: &mut Vec<Msg>) {
     let catalogue = increart_core::config::catalogue();
     let model_dirs = &st.config.programs.model_dirs;
-    let lists = ModelLists::of(&st.config.recipes, &catalogue, model_dirs, &w.sizes);
+    let lists = ModelLists::of(&st.config.recipes, &catalogue, model_dirs, &w.sizes, w.index.as_deref());
     egui::Sides::new().show(
         ui,
         |ui| ui.heading(ic(ph::CUBE, "Models")),
@@ -258,17 +260,39 @@ fn status(needs: &PresetNeeds, section: Section) -> RichText {
         let t = if section == Section::Custom { "files missing" } else { "not there, no download" };
         return RichText::new(ic(ph::WARNING, t)).color(NEUTRAL);
     }
-    if needs.downloads.is_empty() {
-        let t = if section == Section::Available { "files here, not installed" } else { "ready" };
-        return RichText::new(ic(ph::CHECK, t)).color(GOOD);
-    }
-    let n = needs.downloads.len();
+    let (l, n) = (needs.links.len(), needs.downloads.len());
     let size = needs.download_bytes.map_or(String::new(), |b| format!(" ({})", gb(b)));
-    if section == Section::Available {
-        RichText::new(ic(ph::DOWNLOAD_SIMPLE, &format!("download {n} file{}{size}", plural(n))))
-    } else {
-        RichText::new(ic(ph::DOWNLOAD_SIMPLE, &format!("{n} file{} missing{size}", plural(n)))).color(NEUTRAL)
+    match (l, n) {
+        (0, 0) => {
+            let t = if section == Section::Available { "files here, not installed" } else { "ready" };
+            RichText::new(ic(ph::CHECK, t)).color(GOOD)
+        }
+        // kept elsewhere: linked on install, nothing downloaded
+        (l, 0) => {
+            let t = if section == Section::Available {
+                format!("files found elsewhere, link {l}")
+            } else {
+                format!("{l} file{} elsewhere, to link", plural(l))
+            };
+            RichText::new(ic(ph::LINK, &t)).color(GOOD)
+        }
+        (0, n) if section == Section::Available => {
+            RichText::new(ic(ph::DOWNLOAD_SIMPLE, &format!("download {n} file{}{size}", plural(n))))
+        }
+        (0, n) => {
+            RichText::new(ic(ph::DOWNLOAD_SIMPLE, &format!("{n} file{} missing{size}", plural(n)))).color(NEUTRAL)
+        }
+        (l, n) => RichText::new(ic(ph::DOWNLOAD_SIMPLE, &format!("link {l}, download {n}{size}"))),
     }
+}
+
+/// A row's Files cell hover: where the files linked are.
+fn links_tip(needs: &PresetNeeds) -> Option<String> {
+    if needs.links.is_empty() {
+        return None;
+    }
+    let lines: Vec<String> = needs.links.iter().map(|l| format!("{}  <-  {}", l.file, l.from.display())).collect();
+    Some(format!("found elsewhere, linked into the download folder (not downloaded):\n{}", lines.join("\n")))
 }
 
 const NAME_W: f32 = 230.0;
@@ -384,7 +408,10 @@ fn list_table(
                     });
                     row.col(|ui| size_cell(ui, needs));
                     row.col(|ui| {
-                        ui.label(status(needs, section));
+                        let r = ui.label(status(needs, section));
+                        if let Some(t) = links_tip(needs) {
+                            r.on_hover_text(t);
+                        }
                     });
                     row.col(|ui| fits_cell(ui, needs, gpus));
                 });
@@ -422,7 +449,7 @@ fn open_row(ui: &mut egui::Ui, st: &AppState, w: &mut ModelWizard, name: &str, s
         let dirs = w.folders(&st.config.programs.model_dirs);
         let catalogue = increart_core::config::catalogue();
         if let Some(p) = catalogue.iter().find(|p| p.name == name)
-            && !PresetNeeds::of(p, &dirs, &w.sizes).unavailable
+            && !PresetNeeds::of(p, &dirs, &w.sizes, w.index.as_deref()).unavailable
         {
             w.picked.insert(name.to_string());
         }
@@ -479,6 +506,7 @@ pub fn window(ctx: &egui::Context, st: &AppState, out: &mut Vec<Msg>) {
         out.push(Msg::OpenModelWizard);
         return;
     };
+    out.push(Msg::IndexModelFiles);
     let mut w = old.clone();
     if !w.editing {
         // opened as the editor
@@ -546,7 +574,7 @@ pub fn window(ctx: &egui::Context, st: &AppState, out: &mut Vec<Msg>) {
         if st.preset_download.is_none() && w.started {
             ui.colored_label(GOOD, ic(ph::CHECK_CIRCLE, "Done: installed, their files in the model folders."));
         }
-        let files = w.downloads(&st.config.programs.model_dirs);
+        let (links, files) = w.plan(&st.config.programs.model_dirs);
         let picked = w.picked.len();
         match (w.tab, &mut ed) {
             (ModelSetupTab::Yours, Some(e)) => {
@@ -580,10 +608,17 @@ pub fn window(ctx: &egui::Context, st: &AppState, out: &mut Vec<Msg>) {
                             let known: Option<u64> =
                                 files.iter().try_fold(0u64, |n, d| Some(n + w.sizes.get(&d.url).copied().flatten()?));
                             let s = plural(picked);
+                            let linked = match links.len() {
+                                0 => String::new(),
+                                l => format!(" · {l} file{} linked from elsewhere", plural(l)),
+                            };
                             match (files.len(), known) {
-                                (0, _) => format!("{picked} model{s} ticked, files already here"),
-                                (n, Some(b)) => format!("{picked} model{s} ticked · {n} files to download, {}", gb(b)),
-                                (n, None) => format!("{picked} model{s} ticked · {n} files to download"),
+                                (0, _) if links.is_empty() => format!("{picked} model{s} ticked, files already here"),
+                                (0, _) => format!("{picked} model{s} ticked{linked}, nothing to download"),
+                                (n, Some(b)) => {
+                                    format!("{picked} model{s} ticked{linked} · {n} files to download, {}", gb(b))
+                                }
+                                (n, None) => format!("{picked} model{s} ticked{linked} · {n} files to download"),
                             }
                         } else if w.tab == ModelSetupTab::Folders {
                             "Then: Install built-in, to add models".to_string()
@@ -717,6 +752,50 @@ fn folders_page(ui: &mut egui::Ui, st: &AppState, w: &mut ModelWizard, out: &mut
             }
         }
     }
+    ui.add_space(12.0);
+    step(ui, "Model files kept elsewhere", "linked where the built-in models want them, rather than downloaded again");
+    match (&w.index, w.indexing) {
+        (None, _) => {
+            ui.horizontal(|ui| {
+                ui.spinner();
+                ui.weak("Looking for model files…");
+            });
+        }
+        (Some(ix), busy) => {
+            let (links, whole) = w.links_here(model_dirs);
+            ui.weak(format!(
+                "{} model file{} in your model folders, the folders above (ticked or not) and Hugging Face's cache, \
+                 matched by name and size{}.",
+                ix.len(),
+                plural(ix.len()),
+                if busy { " (looking again…)" } else { "" }
+            ));
+            if links.is_empty() {
+                ui.weak("None of the built-in models' files are elsewhere: nothing to link.");
+            } else {
+                ui.label(format!(
+                    "{} file{} of the built-in models are elsewhere: linking them makes {whole} model{} ready to \
+                     install with nothing to download.",
+                    links.len(),
+                    plural(links.len()),
+                    plural(whole)
+                ));
+                let can = !w.dir.trim().is_empty();
+                let tip: Vec<String> = links.iter().map(|l| format!("{}  <-  {}", l.file, l.from.display())).collect();
+                if ui
+                    .add_enabled(can, egui::Button::new(ic(ph::LINK, "Link what's here")))
+                    .on_hover_text(format!(
+                        "links in the download folder (made a model folder); your files stay where they are:\n{}",
+                        tip.join("\n")
+                    ))
+                    .on_disabled_hover_text("give a download folder first")
+                    .clicked()
+                {
+                    out.push(Msg::ModelWizardLinkHere);
+                }
+            }
+        }
+    }
 }
 
 fn add_page(ui: &mut egui::Ui, st: &AppState, w: &mut ModelWizard) {
@@ -729,7 +808,7 @@ fn add_page(ui: &mut egui::Ui, st: &AppState, w: &mut ModelWizard) {
     let gpus = gpus_of(w);
     let vram = w.ticked_vram(&gpus);
     let rows: Vec<(&RecipePreset, PresetNeeds)> =
-        catalogue.iter().map(|p| (p, PresetNeeds::of(p, &dirs, &w.sizes))).collect();
+        catalogue.iter().map(|p| (p, PresetNeeds::of(p, &dirs, &w.sizes, w.index.as_deref()))).collect();
     let all = rows.len();
     let rows = w.shown(rows, &vram);
     if rows.len() < all {
@@ -758,7 +837,7 @@ fn add_page(ui: &mut egui::Ui, st: &AppState, w: &mut ModelWizard) {
         .body(|mut body| {
             for (p, needs) in &rows {
                 let have = st.config.recipes.iter().any(|r| r.name == p.name);
-                let enabled = !needs.unavailable && !(have && needs.downloads.is_empty());
+                let enabled = !needs.unavailable && !(have && needs.downloads.is_empty() && needs.links.is_empty());
                 let mut on = w.picked.contains(&p.name);
                 // nothing to do for it: not picked
                 if !enabled && on {
@@ -793,7 +872,10 @@ fn add_page(ui: &mut egui::Ui, st: &AppState, w: &mut ModelWizard) {
                     });
                     row.col(|ui| size_cell(ui, needs));
                     row.col(|ui| {
-                        ui.label(status(needs, if have { Section::Installed } else { Section::Available }));
+                        let r = ui.label(status(needs, if have { Section::Installed } else { Section::Available }));
+                        if let Some(t) = links_tip(needs) {
+                            r.on_hover_text(t);
+                        }
                     });
                     row.col(|ui| fits_cell(ui, needs, &gpus));
                 });

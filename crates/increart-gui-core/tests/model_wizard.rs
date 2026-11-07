@@ -41,17 +41,20 @@ fn the_folder_found_folders_and_picked_presets_become_the_setup() {
     assert!(w.add.contains(&path), "found folders ticked");
     // its files there: nothing to fetch for it; the second needs downloads
     let dirs = w.folders(&[]);
-    let needs = PresetNeeds::of(first, &dirs, &w.sizes);
+    let needs = PresetNeeds::of(first, &dirs, &w.sizes, None);
     assert!(needs.downloads.is_empty() && needs.total_bytes == Some(12) && !needs.unavailable, "{needs:?}");
     assert_eq!(needs.fits(1.0), Some(true));
     let second = &catalogue()[1];
-    let needs = PresetNeeds::of(second, &dirs, &w.sizes);
+    let needs = PresetNeeds::of(second, &dirs, &w.sizes, None);
     assert!(!needs.downloads.is_empty() && needs.download_bytes.is_none(), "sizes not known yet");
     for d in &needs.downloads {
         update(&mut s, Msg::DownloadSize(d.url.clone(), Some(1_000)));
     }
     let w = s.model_wizard.clone().unwrap();
-    assert_eq!(PresetNeeds::of(second, &dirs, &w.sizes).download_bytes, Some(1_000 * needs.downloads.len() as u64));
+    assert_eq!(
+        PresetNeeds::of(second, &dirs, &w.sizes, None).download_bytes,
+        Some(1_000 * needs.downloads.len() as u64)
+    );
     // picked, in my folder
     let mut w = s.model_wizard.clone().unwrap();
     w.dir = mine.clone();
@@ -139,7 +142,7 @@ fn the_models_are_listed_as_yours_installed_and_not_and_filtered() {
     let mine = RecipePreset { name: "My own".into(), recipe: "z-image-turbo".into(), ..Default::default() };
     let recipes = vec![mine, catalogue[1].clone()];
     let sizes = std::collections::BTreeMap::new();
-    let lists = ModelLists::of(&recipes, &catalogue, &[], &sizes);
+    let lists = ModelLists::of(&recipes, &catalogue, &[], &sizes, None);
     let names = |v: &[(&RecipePreset, PresetNeeds)]| v.iter().map(|(p, _)| p.name.clone()).collect::<Vec<_>>();
     assert_eq!(names(&lists.custom), ["My own"]);
     assert_eq!(names(&lists.installed), [catalogue[1].name.clone()]);
@@ -204,4 +207,94 @@ fn the_models_are_listed_as_yours_installed_and_not_and_filtered() {
     let fits = w.shown(rows, &[0.000001, 24.0]);
     assert_eq!(fits[0].1.total_bytes, Some(9));
     assert_eq!(fits.last().unwrap().1.total_bytes, None);
+}
+
+#[test]
+fn files_kept_elsewhere_are_linked_not_downloaded() {
+    use increart_core::modelsetup::FileIndex;
+    let tmp = tempfile::tempdir().unwrap();
+    let mine = tmp.path().join("mine").to_string_lossy().into_owned();
+    // another tool's folder, its own layout: the second built-in's files
+    // loose in it, one of them the wrong size
+    let other = tmp.path().join("other/stuff");
+    std::fs::create_dir_all(&other).unwrap();
+    let p = &catalogue()[1];
+    let mut s = state(vec![]);
+    update(&mut s, Msg::OpenModelWizard);
+    let wants: Vec<_> = increart_gui_core::missing_downloads(p, &[]);
+    assert!(wants.len() >= 2, "{wants:?}");
+    for (i, d) in wants.iter().enumerate() {
+        let name = std::path::Path::new(&d.file).file_name().unwrap();
+        std::fs::write(other.join(name), if i == 0 { b"12" as &[u8] } else { b"1234" }).unwrap();
+        update(&mut s, Msg::DownloadSize(d.url.clone(), Some(4)));
+    }
+    // looked for once the folders are found; the answer kept
+    update(&mut s, Msg::ModelFoldersFound(vec![]));
+    let mut w = s.model_wizard.clone().unwrap();
+    w.dir = mine.clone();
+    update(&mut s, Msg::EditModelWizard(Box::new(w)));
+    let fx = update(&mut s, Msg::IndexModelFiles);
+    let Some(Effect::IndexModelFiles(dirs)) = fx.first() else { panic!("{fx:?}") };
+    assert!(dirs.contains(&std::path::PathBuf::from(&mine)));
+    assert!(update(&mut s, Msg::IndexModelFiles).is_empty(), "not twice at once");
+    let mut dirs = dirs.clone();
+    dirs.push(tmp.path().join("other"));
+    let index = FileIndex::build(&dirs);
+    update(&mut s, Msg::ModelFilesIndexed(dirs, Box::new(index)));
+    let w = s.model_wizard.clone().unwrap();
+    let needs = PresetNeeds::of(p, &w.folders(&[]), &w.sizes, w.index.as_deref());
+    // the right size linked, the wrong one downloaded
+    assert_eq!(needs.links.len(), wants.len() - 1, "{needs:?}");
+    assert_eq!(needs.downloads.len(), 1);
+    assert_eq!(needs.downloads[0].file, wants[0].file);
+    // installed: linked into the download folder, only the other fetched
+    let mut w = w;
+    w.picked = [p.name.clone()].into();
+    update(&mut s, Msg::EditModelWizard(Box::new(w)));
+    let fx = update(&mut s, Msg::ModelWizardGo);
+    for d in &wants[1..] {
+        let at = std::path::Path::new(&mine).join(&d.file);
+        assert!(std::fs::symlink_metadata(&at).unwrap().file_type().is_symlink(), "{at:?}");
+        assert_eq!(std::fs::read(&at).unwrap(), b"1234");
+    }
+    let Some(Effect::DownloadModels { files, .. }) = fx.iter().find(|f| matches!(f, Effect::DownloadModels { .. }))
+    else {
+        panic!("{fx:?}")
+    };
+    assert_eq!(files.len(), 1);
+    assert!(s.messages.iter().any(|m| m.text.contains("linked from where they were")));
+    // looked for again (the files changed)
+    assert!(s.model_wizard.as_ref().unwrap().index_of.is_empty());
+}
+
+#[test]
+fn link_whats_here_links_every_built_in_models_files_found() {
+    use increart_core::modelsetup::FileIndex;
+    let tmp = tempfile::tempdir().unwrap();
+    let mine = tmp.path().join("mine").to_string_lossy().into_owned();
+    let other = tmp.path().join("other");
+    std::fs::create_dir_all(&other).unwrap();
+    let p = &catalogue()[2];
+    let wants = increart_gui_core::missing_downloads(p, &[]);
+    for d in &wants {
+        std::fs::write(other.join(std::path::Path::new(&d.file).file_name().unwrap()), b"x").unwrap();
+    }
+    let mut s = state(vec![]);
+    update(&mut s, Msg::OpenModelWizard);
+    update(&mut s, Msg::ModelFoldersFound(vec![]));
+    let mut w = s.model_wizard.clone().unwrap();
+    w.dir = mine.clone();
+    update(&mut s, Msg::EditModelWizard(Box::new(w)));
+    // sizes not known: by name
+    update(&mut s, Msg::ModelFilesIndexed(vec![other.clone()], Box::new(FileIndex::build(&[other]))));
+    let (links, whole) = s.model_wizard.as_ref().unwrap().links_here(&[]);
+    assert!(links.len() >= wants.len() && whole >= 1, "{links:?}");
+    update(&mut s, Msg::ModelWizardLinkHere);
+    for d in &wants {
+        assert!(std::path::Path::new(&mine).join(&d.file).is_file(), "{}", d.file);
+    }
+    // the download folder made a model folder; nothing installed
+    assert_eq!(s.config.programs.model_dirs, vec![mine]);
+    assert!(s.config.recipes.is_empty());
+    assert!(s.messages.iter().any(|m| m.text.contains("linked into")), "{:?}", s.messages);
 }

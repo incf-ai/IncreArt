@@ -1063,6 +1063,14 @@ pub struct ModelWizard {
     /// fits one of the others (all ticked to start; none: every size).
     pub gpus_off: BTreeSet<u32>,
     pub sort: ModelSort,
+    /// The model files in the model folders, the folders found and Hugging
+    /// Face's cache, by name (None: not looked yet), to link a model's file
+    /// kept elsewhere rather than download it.
+    pub index: Option<std::sync::Arc<increart_core::modelsetup::FileIndex>>,
+    /// The folders `index` is of (emptied when files change, to look again).
+    pub index_of: Vec<std::path::PathBuf>,
+    /// Looking.
+    pub indexing: bool,
 }
 
 /// The tabs of the **Models** window.
@@ -1167,9 +1175,10 @@ impl<'a> ModelLists<'a> {
         catalogue: &'a [RecipePreset],
         dirs: &[String],
         sizes: &BTreeMap<String, Option<u64>>,
+        index: Option<&increart_core::modelsetup::FileIndex>,
     ) -> ModelLists<'a> {
         let builtin = |name: &str| catalogue.iter().any(|c| c.name == name);
-        let needs = |p: &'a RecipePreset| (p, PresetNeeds::of(p, dirs, sizes));
+        let needs = |p: &'a RecipePreset| (p, PresetNeeds::of(p, dirs, sizes, index));
         ModelLists {
             custom: recipes.iter().filter(|r| !builtin(&r.name)).map(needs).collect(),
             installed: recipes.iter().filter(|r| builtin(&r.name)).map(needs).collect(),
@@ -1239,11 +1248,24 @@ impl ModelWizard {
     }
 }
 
+/// A model's file found elsewhere, to link where the model wants it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Link {
+    /// Its file ID (where it goes, under the download folder).
+    pub file: String,
+    /// The file found.
+    pub from: std::path::PathBuf,
+    pub bytes: u64,
+}
+
 /// What a built-in preset needs from the model folders `dirs`.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct PresetNeeds {
-    /// The files to fetch ([`missing_downloads`]).
+    /// The files to fetch ([`missing_downloads`], less those in `links`).
     pub downloads: Vec<increart_core::tiers::Download>,
+    /// Files not in the model folders where it wants them but found
+    /// elsewhere (same name, and size if known): to link, not download.
+    pub links: Vec<Link>,
     /// Their size (None: one not known yet).
     pub download_bytes: Option<u64>,
     /// All its files', there or to fetch: roughly the memory it takes.
@@ -1253,18 +1275,42 @@ pub struct PresetNeeds {
 }
 
 impl PresetNeeds {
-    pub fn of(p: &RecipePreset, dirs: &[String], sizes: &BTreeMap<String, Option<u64>>) -> PresetNeeds {
+    pub fn of(
+        p: &RecipePreset,
+        dirs: &[String],
+        sizes: &BTreeMap<String, Option<u64>>,
+        index: Option<&increart_core::modelsetup::FileIndex>,
+    ) -> PresetNeeds {
         use increart_core::config::model_file_on_disk;
-        let downloads = missing_downloads(p, dirs);
+        // a file found elsewhere: same name, and the download's size when
+        // that's known
+        let found = |f: &str| -> Option<Link> {
+            let size = p.downloads.get(f).and_then(|u| sizes.get(u).copied().flatten());
+            let (from, bytes) = index?.find(f, size)?;
+            Some(Link { file: f.to_string(), from: from.to_path_buf(), bytes })
+        };
+        let mut links: Vec<Link> = vec![];
+        let mut downloads = vec![];
+        for d in missing_downloads(p, dirs) {
+            match found(&d.file) {
+                Some(l) => links.push(l),
+                None => downloads.push(d),
+            }
+        }
         let size_of = |f: &str| -> Option<u64> {
             match model_file_on_disk(f, dirs) {
                 Some(path) => std::fs::metadata(path).ok().map(|m| m.len()),
-                None => sizes.get(p.downloads.get(f)?).copied().flatten(),
+                None => match links.iter().find(|l| l.file == f) {
+                    Some(l) => Some(l.bytes),
+                    None => sizes.get(p.downloads.get(f)?).copied().flatten(),
+                },
             }
         };
         let mut unavailable = false;
         let mut total = Some(0u64);
-        // each slot's file there, else the one fetched
+        let mut more: Vec<Link> = vec![];
+        // each slot's file there, else the one linked or fetched; a slot with
+        // no download, linked if found
         for slot in p.files.keys() {
             let f = p
                 .choices(slot)
@@ -1272,14 +1318,21 @@ impl PresetNeeds {
                 .or_else(|| p.choices(slot).find(|f| p.downloads.contains_key(*f)));
             match f {
                 Some(f) => total = total.zip(size_of(f)).map(|(a, b)| a + b),
-                None => unavailable = true,
+                None => match p.choices(slot).find_map(|f| found(f)) {
+                    Some(l) => {
+                        total = total.map(|t| t + l.bytes);
+                        more.push(l);
+                    }
+                    None => unavailable = true,
+                },
             }
         }
         for l in p.loras.iter().filter(|l| !l.file.is_empty()) {
             total = total.zip(size_of(&l.file)).map(|(a, b)| a + b);
         }
+        links.extend(more);
         let download_bytes = downloads.iter().try_fold(0u64, |n, d| Some(n + sizes.get(&d.url).copied().flatten()?));
-        PresetNeeds { downloads, download_bytes, total_bytes: total, unavailable }
+        PresetNeeds { downloads, links, download_bytes, total_bytes: total, unavailable }
     }
 
     /// Whether it fits a GPU of `vram_gib` (its files a little under it).
@@ -1304,19 +1357,76 @@ impl ModelWizard {
         dirs
     }
 
-    /// What the ticked presets fetch (each file once) into `folders`.
-    pub fn downloads(&self, model_dirs: &[String]) -> Vec<increart_core::tiers::Download> {
+    /// What the ticked presets link and fetch (each file once) into
+    /// `folders`.
+    pub fn plan(&self, model_dirs: &[String]) -> (Vec<Link>, Vec<increart_core::tiers::Download>) {
         let dirs = self.folders(model_dirs);
-        let mut out: Vec<increart_core::tiers::Download> = vec![];
+        let (mut links, mut downloads): (Vec<Link>, Vec<increart_core::tiers::Download>) = (vec![], vec![]);
         for p in increart_core::config::catalogue().iter().filter(|p| self.picked.contains(&p.name)) {
-            for d in missing_downloads(p, &dirs) {
-                if !out.iter().any(|o| o.file == d.file) {
-                    out.push(d);
+            let needs = PresetNeeds::of(p, &dirs, &self.sizes, self.index.as_deref());
+            for l in needs.links {
+                if !links.iter().any(|o| o.file == l.file) {
+                    links.push(l);
+                }
+            }
+            for d in needs.downloads {
+                if !downloads.iter().any(|o| o.file == d.file) {
+                    downloads.push(d);
                 }
             }
         }
-        out
+        (links, downloads)
     }
+
+    /// What the ticked presets fetch.
+    pub fn downloads(&self, model_dirs: &[String]) -> Vec<increart_core::tiers::Download> {
+        self.plan(model_dirs).1
+    }
+
+    /// The links every built-in model's files found elsewhere want (each
+    /// file once), and how many models they make whole (nothing left to
+    /// download).
+    pub fn links_here(&self, model_dirs: &[String]) -> (Vec<Link>, usize) {
+        let dirs = self.folders(model_dirs);
+        let mut links: Vec<Link> = vec![];
+        let mut whole = 0;
+        for p in increart_core::config::catalogue().iter() {
+            let needs = PresetNeeds::of(p, &dirs, &self.sizes, self.index.as_deref());
+            if needs.links.is_empty() {
+                continue;
+            }
+            if needs.downloads.is_empty() && !needs.unavailable {
+                whole += 1;
+            }
+            for l in needs.links {
+                if !links.iter().any(|o| o.file == l.file) {
+                    links.push(l);
+                }
+            }
+        }
+        (links, whole)
+    }
+
+    /// The folders to look for model files in: the model folders (and the
+    /// download folder), every folder found, Hugging Face's cache.
+    pub fn index_dirs(&self, model_dirs: &[String]) -> Vec<std::path::PathBuf> {
+        let mut dirs = increart_core::tiers::search_dirs(&self.folders(model_dirs));
+        for f in self.found.iter().flatten() {
+            let p = std::path::PathBuf::from(&f.path);
+            if !dirs.contains(&p) {
+                dirs.push(p);
+            }
+        }
+        dirs
+    }
+}
+
+/// Makes each link (its folder too) under `dir`; the errors.
+pub fn make_links(dir: &str, links: &[Link]) -> Vec<String> {
+    links
+        .iter()
+        .filter_map(|l| increart_core::tiers::link(&l.from, &std::path::Path::new(dir).join(&l.file)).err())
+        .collect()
 }
 
 /// What a server preset covers ([`AppState::coverage`]).
@@ -4126,6 +4236,15 @@ impl AppState {
             ServerConfig::Start { .. } => Some(f.sd_server()),
             ServerConfig::Kobold(_) if server.is_started() => Some(f.kobold()),
             _ => None,
+        }
+    }
+
+    /// Model files came or went (a download, links): the model folders
+    /// scanned again, the Models window's files looked for again.
+    pub fn files_changed(&mut self) {
+        self.local_files = None;
+        if let Some(w) = &mut self.model_wizard {
+            w.index_of.clear();
         }
     }
 

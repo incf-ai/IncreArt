@@ -1,5 +1,6 @@
-//! **Set up models** (DESIGN.md, Setting up models): where the model files
-//! go, folders that already hold some, to add as model folders.
+//! The **Models** window (DESIGN.md, Setting up models): where the model
+//! files go, folders that already hold some, to add as model folders, and
+//! model files kept elsewhere, to link.
 
 use std::path::{Path, PathBuf};
 
@@ -82,9 +83,92 @@ pub fn find_folders(home: &Path, more: &[PathBuf]) -> Vec<FoundFolder> {
     out
 }
 
+/// The model files under some folders, by file name, with their size: so
+/// a model's file kept somewhere else (another tool's folder, another
+/// layout, Hugging Face's cache) is found and linked where the model wants
+/// it, rather than downloaded again.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct FileIndex {
+    by_name: std::collections::BTreeMap<String, Vec<(PathBuf, u64)>>,
+}
+
+impl FileIndex {
+    /// The model files under `dirs`, a few folders down (Hugging Face's
+    /// `hub/models--…/snapshots/…/` is four); folder links not followed,
+    /// each file once by name and real path.
+    pub fn build(dirs: &[PathBuf]) -> FileIndex {
+        fn walk(dir: &Path, depth: u32, seen: &mut std::collections::BTreeSet<(String, PathBuf)>, ix: &mut FileIndex) {
+            let Ok(list) = std::fs::read_dir(dir) else { return };
+            for e in list.flatten() {
+                let Ok(kind) = e.file_type() else { continue };
+                let p = e.path();
+                if kind.is_dir() {
+                    if depth > 0 && !matches!(e.file_name().to_str(), Some("blobs" | "xet" | ".git")) {
+                        walk(&p, depth - 1, seen, ix);
+                    }
+                    continue;
+                }
+                let Some(name) = e.file_name().to_str().map(str::to_string) else { continue };
+                if !is_model_file(&name) {
+                    continue;
+                }
+                let Ok(meta) = std::fs::metadata(&p) else { continue };
+                let real = p.canonicalize().unwrap_or_else(|_| p.clone());
+                if !meta.is_file() || !seen.insert((name.clone(), real)) {
+                    continue;
+                }
+                ix.by_name.entry(name).or_default().push((p, meta.len()));
+            }
+        }
+        let mut ix = FileIndex::default();
+        let mut seen = std::collections::BTreeSet::new();
+        for d in dirs {
+            walk(d, 5, &mut seen, &mut ix);
+        }
+        ix
+    }
+
+    /// A file named `name` (a file ID's last part), of `size` if that's
+    /// known: the first found.
+    pub fn find(&self, name: &str, size: Option<u64>) -> Option<(&Path, u64)> {
+        let name = Path::new(name).file_name()?.to_str()?;
+        self.by_name.get(name)?.iter().find(|(_, n)| size.is_none_or(|s| s == *n)).map(|(p, n)| (p.as_path(), *n))
+    }
+
+    /// How many files it knows.
+    pub fn len(&self) -> usize {
+        self.by_name.values().map(Vec::len).sum()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.by_name.is_empty()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn files_are_indexed_by_name_and_found_by_size() {
+        let tmp = tempfile::tempdir().unwrap();
+        let t = tmp.path();
+        std::fs::create_dir_all(t.join("a/deep/er")).unwrap();
+        std::fs::create_dir_all(t.join("b/blobs")).unwrap();
+        std::fs::write(t.join("a/deep/er/vae.safetensors"), b"12345").unwrap();
+        std::fs::write(t.join("b/vae.safetensors"), b"123").unwrap();
+        std::fs::write(t.join("b/blobs/x.gguf"), b"1").unwrap();
+        std::fs::write(t.join("b/notes.txt"), b"1").unwrap();
+        // the same file twice under one name (a folder searched twice): once
+        let ix = FileIndex::build(&[t.join("a"), t.join("b"), t.join("b"), t.join("missing")]);
+        assert_eq!(ix.len(), 2, "{ix:?}");
+        // by a file ID's name, the size picking
+        assert_eq!(ix.find("vae/vae.safetensors", Some(5)).unwrap().1, 5);
+        assert_eq!(ix.find("vae.safetensors", Some(3)).unwrap().1, 3);
+        assert!(ix.find("vae.safetensors", Some(4)).is_none());
+        assert!(ix.find("vae.safetensors", None).is_some());
+        assert!(ix.find("x.gguf", None).is_none(), "Hugging Face's blobs aren't looked in");
+    }
 
     #[test]
     fn folders_with_model_files_are_found_once() {

@@ -31,6 +31,7 @@ const SCENES: &[&str] = &[
     "02e-model-wizard",
     "02f-model-setup",
     "02g-models-yours",
+    "02h-models-folders",
     "54-server-wizard",
     "54a-server-wizard-choose",
     "54c-server-wizard-pe-own-gpu",
@@ -1154,6 +1155,13 @@ impl Tour {
                 let Some(mut w) = st.model_wizard.clone() else { return vec![] };
                 w.editing = true;
                 w.tab = increart_gui_core::ModelSetupTab::Add;
+                vec![Msg::EditModelWizard(Box::new(w))]
+            }
+            "02h-models-folders" => {
+                // the Folders tab: folders found, files kept elsewhere to link
+                let Some(mut w) = st.model_wizard.clone() else { return vec![] };
+                w.editing = true;
+                w.tab = increart_gui_core::ModelSetupTab::Folders;
                 vec![Msg::EditModelWizard(Box::new(w))]
             }
             "02g-models-yours" => {

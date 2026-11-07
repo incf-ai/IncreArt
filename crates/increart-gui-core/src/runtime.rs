@@ -411,6 +411,10 @@ impl Runtime {
                 });
             }
             Effect::StopPresetTest => cancel(&self.preset_test_cancel),
+            Effect::IndexModelFiles(dirs) => self.answer("index model files", move || {
+                let index = increart_core::modelsetup::FileIndex::build(&dirs);
+                Msg::ModelFilesIndexed(dirs, Box::new(index))
+            }),
             Effect::FindModelFolders { home, more } => self.answer("find model folders", move || {
                 Msg::ModelFoldersFound(increart_core::modelsetup::find_folders(&home, &more))
             }),
@@ -1823,6 +1827,7 @@ fn work_on(ctx: &Ctx, fx: Effect) -> Vec<Msg> {
         | Effect::StopPresetTest
         | Effect::ScanModelFolders(_)
         | Effect::FindModelFolders { .. }
+        | Effect::IndexModelFiles(_)
         | Effect::DownloadSizes(_)
         | Effect::SavePresetTests(..)
         | Effect::ApiTestList { .. }
