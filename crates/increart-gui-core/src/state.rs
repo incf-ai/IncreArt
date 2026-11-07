@@ -1059,7 +1059,9 @@ pub struct ModelWizard {
     /// The lists' search, kind, fit filter and order.
     pub search: String,
     pub kind: ModelKind,
-    pub fits_only: bool,
+    /// GPUs (by number) not ticked in Fits GPU: a model is shown when it
+    /// fits one of the others (all ticked to start; none: every size).
+    pub gpus_off: BTreeSet<u32>,
     pub sort: ModelSort,
 }
 
@@ -1162,7 +1164,8 @@ impl<'a> ModelLists<'a> {
 
 impl ModelWizard {
     /// Of `rows`, those the search, kind and fit filter let through, in the
-    /// chosen order; `vram`: each GPU's memory in GiB.
+    /// chosen order; `vram`: the memory in GiB of each GPU ticked in Fits
+    /// GPU (none: every size). A size not known yet is shown.
     pub fn shown<'a>(
         &self,
         mut rows: Vec<(&'a RecipePreset, PresetNeeds)>,
@@ -1173,7 +1176,7 @@ impl ModelWizard {
             let text = format!("{} {} {}", p.name, p.recipe, p.note).to_lowercase();
             words.iter().all(|w| text.contains(w))
                 && (self.kind == ModelKind::All || ModelKind::of(p) == self.kind)
-                && (!self.fits_only || vram.iter().any(|v| n.fits(*v) == Some(true)))
+                && (vram.is_empty() || n.total_bytes.is_none() || vram.iter().any(|v| n.fits(*v) == Some(true)))
         });
         match self.sort {
             ModelSort::Listed => {}
@@ -1185,9 +1188,14 @@ impl ModelWizard {
         rows
     }
 
-    /// Whether a filter hides anything.
+    /// Whether a filter is changed from how it starts.
     pub fn filtering(&self) -> bool {
-        !self.search.trim().is_empty() || self.kind != ModelKind::All || self.fits_only
+        !self.search.trim().is_empty() || self.kind != ModelKind::All || !self.gpus_off.is_empty()
+    }
+
+    /// The memory of the GPUs ticked in Fits GPU, of `gpus`.
+    pub fn ticked_vram(&self, gpus: &[increart_core::tiers::Gpu]) -> Vec<f64> {
+        gpus.iter().filter(|g| !self.gpus_off.contains(&g.number)).map(|g| g.vram_gib).collect()
     }
 }
 

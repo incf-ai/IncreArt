@@ -123,7 +123,7 @@ fn overview(ui: &mut egui::Ui, st: &AppState, w: &mut ModelWizard, list_height: 
     gpu_line(ui, w);
     ui.add_space(4.0);
     let gpus = gpus_of(w);
-    let vram: Vec<f64> = gpus.iter().map(|g| g.vram_gib).collect();
+    let vram = w.ticked_vram(&gpus);
     let sections = [
         (
             "Your custom models",
@@ -189,19 +189,69 @@ fn filters(ui: &mut egui::Ui, w: &mut ModelWizard, salt: &str) {
                 ui.selectable_value(&mut w.kind, k, k.label());
             }
         });
-        ui.checkbox(&mut w.fits_only, "Fits a GPU").on_hover_text("only models whose files fit in a GPU's memory");
+        fits_popover(ui, w, salt);
         ui.weak("Sort:");
         egui::ComboBox::from_id_salt(("model_sort", salt)).selected_text(w.sort.label()).show_ui(ui, |ui| {
             for s in ModelSort::ALL {
                 ui.selectable_value(&mut w.sort, s, s.label());
             }
         });
-        if w.filtering() && ui.small_button("Show all").clicked() {
+        if w.filtering()
+            && ui.small_button("Reset").on_hover_text("clear the search, all kinds, every GPU ticked").clicked()
+        {
             w.search.clear();
             w.kind = ModelKind::All;
-            w.fits_only = false;
+            w.gpus_off.clear();
         }
     });
+}
+
+/// **Fits GPU ▾**: a checkbox per GPU, all ticked to start; a model is
+/// listed when it fits one ticked (none ticked: every size).
+fn fits_popover(ui: &mut egui::Ui, w: &mut ModelWizard, salt: &str) {
+    let gpus = gpus_of(w);
+    let ticked: Vec<u32> = gpus.iter().map(|g| g.number).filter(|n| !w.gpus_off.contains(n)).collect();
+    let text = if gpus.is_empty() {
+        "Fits GPU".to_string()
+    } else if ticked.len() == gpus.len() {
+        "Fits GPU: any".to_string()
+    } else if ticked.is_empty() {
+        "Fits GPU: off".to_string()
+    } else {
+        format!("Fits GPU {}", ticked.iter().map(u32::to_string).collect::<Vec<_>>().join(", "))
+    };
+    let r = ui
+        .add_enabled(!gpus.is_empty(), egui::Button::new(format!("{text} {}", ph::CARET_DOWN)))
+        .on_hover_text("only models that fit in one of the ticked GPUs' memory")
+        .on_disabled_hover_text("the GPUs aren't listed (yet)");
+    egui::Popup::menu(&r)
+        .id(egui::Id::unique(("fits_gpu", salt)))
+        .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+        .show(|ui| {
+            ui.set_min_width(400.0);
+            ui.weak("Show models that fit in:");
+            for g in &gpus {
+                let mut on = !w.gpus_off.contains(&g.number);
+                let label = format!("GPU {}: {} ({:.0} GB)", g.number, g.name, g.vram_gib);
+                if ui.checkbox(&mut on, label).changed() {
+                    if on {
+                        w.gpus_off.remove(&g.number);
+                    } else {
+                        w.gpus_off.insert(g.number);
+                    }
+                }
+            }
+            ui.separator();
+            ui.horizontal(|ui| {
+                if ui.small_button("All").clicked() {
+                    w.gpus_off.clear();
+                }
+                if ui.small_button("None").on_hover_text("every size shown").clicked() {
+                    w.gpus_off = gpus.iter().map(|g| g.number).collect();
+                }
+            });
+            ui.weak("None ticked: every size. Sizes not known yet are shown.");
+        });
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -509,7 +559,7 @@ fn add_page(ui: &mut egui::Ui, st: &AppState, w: &mut ModelWizard) {
     gpu_line(ui, w);
     ui.add_space(4.0);
     let gpus = gpus_of(w);
-    let vram: Vec<f64> = gpus.iter().map(|g| g.vram_gib).collect();
+    let vram = w.ticked_vram(&gpus);
     let rows: Vec<(&RecipePreset, PresetNeeds)> =
         catalogue.iter().map(|p| (p, PresetNeeds::of(p, &dirs, &w.sizes))).collect();
     let all = rows.len();

@@ -136,12 +136,25 @@ fn the_models_are_listed_as_yours_installed_and_not_and_filtered() {
     assert!(!shown.is_empty() && shown.iter().all(|(p, _)| !p.loras.is_empty()));
     w.kind = ModelKind::Edit;
     assert!(w.shown(lists.available.clone(), &[]).iter().any(|(p, _)| p.name == "FLUX.1 Kontext"));
-    // fits a GPU: sizes not known fit none
+    // fits a ticked GPU: sizes not known shown; none ticked: every size
     w.kind = ModelKind::All;
-    w.fits_only = true;
-    assert!(w.shown(lists.available.clone(), &[24.0]).is_empty());
+    assert_eq!(w.shown(lists.available.clone(), &[24.0]).len(), lists.available.len());
+    let mut sized = lists.available.clone();
+    sized[0].1.total_bytes = Some(30 << 30);
+    sized[1].1.total_bytes = Some(10 << 30);
+    let fits = w.shown(sized.clone(), &[24.0]);
+    assert!(
+        !fits.iter().any(|(p, _)| p.name == sized[0].0.name) && fits.iter().any(|(p, _)| p.name == sized[1].0.name)
+    );
+    assert!(w.shown(sized.clone(), &[24.0, 48.0]).iter().any(|(p, _)| p.name == sized[0].0.name));
+    assert_eq!(w.shown(sized, &[]).len(), lists.available.len());
+    use increart_core::tiers::Gpu;
+    let gpu = |number, vram_gib| Gpu { number, name: String::new(), vram_gib, integrated: false };
+    assert!(!w.filtering());
+    w.gpus_off.insert(1);
+    assert_eq!(w.ticked_vram(&[gpu(0, 24.0), gpu(1, 48.0)]), [24.0]);
+    assert!(w.filtering());
     // order: by name; largest first, sizes not known last
-    w.fits_only = false;
     w.sort = ModelSort::Name;
     let by_name = names(&w.shown(lists.available.clone(), &[]));
     let mut sorted = by_name.clone();

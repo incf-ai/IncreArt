@@ -2793,7 +2793,11 @@ in the app's state folder (`$XDG_STATE_HOME/increart` when set, else
   reopened), read only:
   - The model folders on one line, a filter row (search: every word in
     the name, recipe or note; kind: image, edit (an edit recipe or
-    Kontext), LoRA style (`ModelKind::of`); **Fits a GPU**; sort: list
+    Kontext), LoRA style (`ModelKind::of`); **Fits GPU ▾**, a popover with
+    a checkbox per GPU, all ticked to start (`gpus_off`): a model is listed
+    when it fits one ticked, a size not known yet always, every size with
+    none ticked (All / None buttons; the button reads "Fits GPU: any",
+    "Fits GPU 1, 2" or "off"); Reset puts the filters back; sort: list
     order, name, smallest or largest first, sizes not known last;
     `ModelWizard::shown`), the GPUs, then three tables (`ModelLists`):
     **Your custom models** (your models not named as a built-in one),
