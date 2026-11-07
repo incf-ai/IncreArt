@@ -41,6 +41,9 @@ pub enum LibTab {
     Discarded,
 }
 
+/// A seed's latest preview: the step it is of and its PNG.
+pub type LiveFrame = (u32, std::sync::Arc<Vec<u8>>);
+
 /// Input library Grid filters (they apply on top of the folder).
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct LibFilter {
@@ -3348,6 +3351,9 @@ pub struct AppState {
     pub finishing: BTreeSet<Id>,
     /// (run, seed) → (step, total) of seeds being generated.
     pub progress: HashMap<(Id, u64), (u32, u32)>,
+    /// (run, seed) → (step, PNG) of the latest preview of seeds being
+    /// generated, when the server sends them.
+    pub live_previews: HashMap<(Id, u64), LiveFrame>,
     /// When their steps were seen, for the live seconds per step.
     pub sampling_times: HashMap<(Id, u64), crate::timing::Sampling>,
     /// Each server's latest images this session (by its name), for its
@@ -3421,6 +3427,12 @@ pub struct AppState {
     /// one before it's saved (a double-click) would save it twice, as the
     /// label only moves on once it is.
     pub queueing: Vec<(Id, String)>,
+    /// What saving each of `queueing` is doing (hashing a model file the
+    /// first time, how far), when it takes a while.
+    pub queueing_notes: HashMap<(Id, String), (String, f32)>,
+    /// The seeds each server (by index) has been handed, and how far each
+    /// got (being sent, queued there, generating).
+    pub sent_seeds: HashMap<usize, Vec<increart_core::engine::SentSeed>>,
     /// Queueing a sweep while the jobs go one at a time: asking whether to
     /// spread them evenly (holds the sweep's "big one confirmed").
     pub sweep_order_ask: Option<bool>,
@@ -3501,6 +3513,11 @@ pub struct AppState {
     pub preview_among: Option<Vec<ImageRef>>,
     /// A pasted image (the Tile window's) shown large, as `preview`.
     pub preview_pasted: Option<crate::tile::TileImage>,
+    /// The seed (run, seed) whose live preview fills the window.
+    pub live_view: Option<(Id, u64)>,
+    /// The latest seed whose live preview was showing when its image came:
+    /// (run, seed, image), held in Generate's panel until the next frame.
+    pub live_done: Option<(Id, u64, Id)>,
     /// The title dialog of an output image, while open.
     pub title_edit: Option<TitleEdit>,
     /// Generate's From library… picker, while open.
@@ -3765,6 +3782,7 @@ impl AppState {
             active_runs: BTreeSet::new(),
             finishing: BTreeSet::new(),
             progress: HashMap::new(),
+            live_previews: HashMap::new(),
             sampling_times: HashMap::new(),
             server_speeds: HashMap::new(),
             rates: Default::default(),
@@ -3797,6 +3815,8 @@ impl AppState {
             saving_bug_report: false,
             no_server_warned: false,
             queueing: vec![],
+            queueing_notes: HashMap::new(),
+            sent_seeds: HashMap::new(),
             folder_view: FolderView::new(FvPlace::Projects),
             parked_folder_views: FvPlace::ALL[1..].iter().map(|p| FolderView::new(*p)).collect(),
             fv_source: None,
@@ -3835,6 +3855,8 @@ impl AppState {
             preview: None,
             preview_among: None,
             preview_pasted: None,
+            live_view: None,
+            live_done: None,
             ref_picker: None,
             ref_picker_source: None,
             title_edit: None,
@@ -4376,9 +4398,15 @@ impl AppState {
     }
 
     /// Where the preview is in [`Self::preview_list`]: (index, count).
-    /// Whether an image is shown large (`preview`, `preview_pasted`).
+    /// Whether an image is shown large (`preview`, `preview_pasted`,
+    /// `live_view`).
     pub fn previewing(&self) -> bool {
-        self.preview.is_some() || self.preview_pasted.is_some()
+        self.preview.is_some() || self.preview_pasted.is_some() || self.live_view.is_some()
+    }
+
+    /// The seeds being generated, (run, seed), in the Jobs list's order.
+    pub fn sampling_seeds(&self) -> Vec<(Id, u64)> {
+        self.jobs().iter().flat_map(|j| j.sampling.iter().map(|(seed, ..)| (j.run.clone(), *seed))).collect()
     }
 
     pub fn preview_position(&self) -> Option<(usize, usize)> {
@@ -5682,6 +5710,9 @@ pub struct RunProgress {
     pub total: u64,
     /// (seed, step, steps) of seeds being sampled now.
     pub sampling: Vec<(u64, u32, u32)>,
+    /// (seed, server, phase) of seeds handed to a server that aren't
+    /// sampling yet: being sent, queued there, or starting.
+    pub sent: Vec<(u64, String, increart_core::engine::SentPhase)>,
     /// Its images so far (DESIGN.md, Timing).
     pub timing: Option<crate::timing::Timing>,
     /// Seconds per step of the seeds being sampled now (mean).
@@ -5823,6 +5854,18 @@ impl AppState {
         let mut sampling: Vec<_> =
             self.progress.iter().filter(|((r2, _), _)| r2 == run).map(|((_, seed), (s, n))| (*seed, *s, *n)).collect();
         sampling.sort();
+        let mut sent: Vec<_> = self
+            .sent_seeds
+            .iter()
+            .filter_map(|(i, seeds)| Some((self.servers.get(*i)?, seeds)))
+            .flat_map(|(srv, seeds)| {
+                seeds
+                    .iter()
+                    .filter(|s| &s.run == run && !self.progress.contains_key(&(run.clone(), s.seed)))
+                    .map(|s| (s.seed, srv.name.clone(), s.phase))
+            })
+            .collect();
+        sent.sort_by_key(|(seed, ..)| *seed);
         let live_steps: Vec<f64> =
             self.sampling_times.iter().filter(|((r2, _), _)| r2 == run).filter_map(|(_, t)| t.step_s()).collect();
         Some(RunProgress {
@@ -5835,6 +5878,7 @@ impl AppState {
             done,
             total: live.len() as u64,
             sampling,
+            sent,
             timing: crate::timing::Timing::of_run(r),
             step_s: (!live_steps.is_empty()).then(|| live_steps.iter().sum::<f64>() / live_steps.len() as f64),
             steps: r.sample.steps,

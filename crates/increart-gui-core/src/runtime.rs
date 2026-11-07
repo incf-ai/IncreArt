@@ -1634,6 +1634,12 @@ fn work_on(ctx: &Ctx, fx: Effect) -> Vec<Msg> {
             }
             vec![]
         }
+        Effect::SetPreview(p) => {
+            if let Some(e) = &ctx.session.lock_or_recover().engine {
+                e.set_preview(p.mode());
+            }
+            vec![]
+        }
         Effect::SetSkipRamCheck(skip) => {
             if let Some(e) = &ctx.session.lock_or_recover().engine {
                 e.set_skip_ram_check(skip);
@@ -1644,7 +1650,7 @@ fn work_on(ctx: &Ctx, fx: Effect) -> Vec<Msg> {
             increart_core::traffic::set_on(on);
             vec![]
         }
-        Effect::StartEngine { shared: cfg, order, skip_ram_check, random } => {
+        Effect::StartEngine { shared: cfg, preview, order, skip_ram_check, random } => {
             let Some(lib) = ctx.library() else { return vec![] };
             // Runs with seeds left, found before taking any other lock (the
             // library lock is held once, never nested). From one scan: the
@@ -1669,7 +1675,7 @@ fn work_on(ctx: &Ctx, fx: Effect) -> Vec<Msg> {
                 .map(|(_, p)| Endpoint { name: p.name.clone(), device: p.device.clone(), client: p.client.clone() })
                 .collect();
             let mut opts = EngineOptions {
-                generation: GenOptions { preview: cfg.preview.clone(), ..Default::default() },
+                generation: GenOptions { preview: preview.mode().into(), ..Default::default() },
                 sdcpp: cfg.commit.clone(),
                 order,
                 random,
@@ -1716,7 +1722,7 @@ fn work_on(ctx: &Ctx, fx: Effect) -> Vec<Msg> {
                 LibOp::CreateSweep { queue, .. } => Some(*queue),
                 _ => None,
             };
-            hash_ahead(&lib, &op);
+            hash_ahead(ctx, &lib, &op);
             let result = {
                 let mut l = lib.lock_or_recover();
                 lib_op(&mut l, op)
@@ -2281,20 +2287,42 @@ fn new_project_from_ideas(lib: &mut Library, ids: &[Id], folder: &Path, name: &s
 /// Hashes a new run's model files into the library's cache before the
 /// library is locked for it: reading a model of many GB takes minutes,
 /// and the engine (starting the runs queued before) needs the library.
-fn hash_ahead(lib: &Mutex<Library>, op: &LibOp) {
-    let (presets, model_dirs): (Vec<&RecipePreset>, _) = match op {
-        LibOp::CreateRun { preset, model_dirs, .. } => (vec![preset], model_dirs),
-        LibOp::CreateSweep { runs, model_dirs, .. } => (runs.iter().map(|(_, _, p)| p).collect(), model_dirs),
+fn hash_ahead(ctx: &Ctx, lib: &Mutex<Library>, op: &LibOp) {
+    let (presets, model_dirs, queued): (Vec<&RecipePreset>, _, _) = match op {
+        LibOp::CreateRun { preset, model_dirs, queued, .. } => (vec![preset], model_dirs, queued),
+        LibOp::CreateSweep { runs, model_dirs, queued, .. } => {
+            (runs.iter().map(|(_, _, p)| p).collect(), model_dirs, queued)
+        }
         _ => return,
     };
+    let (project, label) = (queued.project.clone(), queued.form.label.clone());
     let cache = lib.lock_or_recover().root().join("cache/model-hashes.rsn");
     let ids = presets.iter().flat_map(|p| p.files.values().chain(p.loras.iter().map(|l| &l.file)));
     let files: std::collections::BTreeSet<PathBuf> = ids
         .filter(|id| !id.starts_with('@'))
         .filter_map(|id| increart_core::config::model_file_on_disk(id, model_dirs))
         .collect();
-    for f in files {
-        let _ = modelhash::sha256_cached(&cache, &f);
+    // the ones not hashed before, said as they're read (a few times a second)
+    let new: Vec<&PathBuf> = files.iter().filter(|f| !modelhash::is_cached(&cache, f)).collect();
+    for (i, f) in new.iter().enumerate() {
+        let name = f.file_name().unwrap_or_default().to_string_lossy().into_owned();
+        let mut said = std::time::Instant::now() - std::time::Duration::from_secs(1);
+        let _ = modelhash::sha256_cached_progress(&cache, f, |read, size| {
+            if said.elapsed() < std::time::Duration::from_millis(250) && read < size {
+                return;
+            }
+            said = std::time::Instant::now();
+            let gib = |b: u64| b as f64 / (1u64 << 30) as f64;
+            let of = if new.len() > 1 { format!(" (file {} of {})", i + 1, new.len()) } else { String::new() };
+            let note = format!("hashing {name} once{of}: {:.1} of {:.1} GiB", gib(read), gib(size));
+            let fraction = read as f32 / size.max(1) as f32;
+            let _ = ctx.tx.send(Msg::QueueingNote(project.clone(), label.clone(), Some((note, fraction))));
+            (ctx.wake)();
+        });
+    }
+    if !new.is_empty() {
+        let _ = ctx.tx.send(Msg::QueueingNote(project, label, Some(("saving the run".into(), 1.0))));
+        (ctx.wake)();
     }
 }
 

@@ -234,7 +234,7 @@ impl App {
             // of running into it
             let force_open = self.tour.as_ref().is_some_and(|t| t.jobs_popover());
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                jobs_indicator(ui, st, out, force_open);
+                jobs_indicator(ui, st, &mut self.tex, out, force_open);
                 let bell_open = self.tour.as_ref().is_some_and(|t| t.bell_popover());
                 if self.tour.as_ref().is_some_and(|t| t.snooze_dialog()) {
                     crate::settings::open_snooze_dialog(ui.ctx(), "1h 3x");
@@ -740,7 +740,13 @@ fn messages_line(
 
 /// Bottom-right: a summary of the runs in the engine with an overall
 /// progress bar; click for a popover with each run and the servers.
-fn jobs_indicator(ui: &mut egui::Ui, st: &AppState, out: &mut Vec<Msg>, force_open: bool) {
+fn jobs_indicator(
+    ui: &mut egui::Ui,
+    st: &AppState,
+    tex: &mut crate::textures::Textures,
+    out: &mut Vec<Msg>,
+    force_open: bool,
+) {
     let sum = st.job_summary();
     let resp = ui
         .horizontal(|ui| {
@@ -804,7 +810,7 @@ fn jobs_indicator(ui: &mut egui::Ui, st: &AppState, out: &mut Vec<Msg>, force_op
             // the stops for all stay in view; the runs scroll
             crate::projects::stop_all_row(ui, st, out);
             let n = out.len();
-            egui::ScrollArea::vertical().max_height(420.0).show(ui, |ui| crate::projects::run_list(ui, st, out));
+            egui::ScrollArea::vertical().max_height(420.0).show(ui, |ui| crate::projects::run_list(ui, st, tex, out));
             if out[n..].iter().any(|m| matches!(m, Msg::JobInfo(_))) {
                 egui::Popup::close_all(ui.ctx());
             }
@@ -1482,6 +1488,7 @@ impl eframe::App for App {
             }
             let keys_open = self.tour.as_ref().is_some_and(|t| t.preview_keys());
             crate::projects::preview_window(&ctx, &self.st, &mut self.tex, keys_open, &mut out);
+            crate::projects::live_view_window(&ctx, &self.st, &mut self.tex, &mut out);
             crate::projects::retag_window(&ctx, &self.st, &mut out);
             crate::projects::new_project_window(&ctx, &self.st, &mut self.tex, &mut out);
             crate::projects::move_project_window(&ctx, &self.st, &mut out);

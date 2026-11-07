@@ -148,6 +148,8 @@ pub enum Msg {
     ServerStatus(bool),
     /// Settings: loads wait for free RAM, or don't.
     SetSkipRamCheck(bool),
+    /// Settings: the image shown as it generates.
+    SetPreview(increart_core::config::Preview),
     /// Settings: the image servers' traffic is logged, or isn't.
     SetLogTraffic(bool),
     /// **Test** on a server the app connects to: opens the Test window.
@@ -798,6 +800,14 @@ pub enum Msg {
     Preview(Option<ImageRef>),
     /// A pasted image large (`None`: closed, as `Preview(None)`).
     PreviewPasted(Option<crate::tile::TileImage>),
+    /// A seed being generated, its live preview filling the window (`None`
+    /// closes it); once its image comes, that shows large instead.
+    LiveView(Option<(Id, u64)>),
+    /// The live view on the previous (-1) / next (1) seed being generated.
+    LiveViewStep(isize),
+    /// What saving a queued run or sweep (project, label) is doing and how
+    /// far (0..1); `None` when done.
+    QueueingNote(Id, String, Option<(String, f32)>),
     /// Shows the image large, ← / → stepping through the list.
     PreviewAmong(Vec<ImageRef>, ImageRef),
     /// The large preview's next (1) or previous (-1) image in
@@ -1059,6 +1069,8 @@ pub enum Effect {
     /// with pending seeds.
     StartEngine {
         shared: SdServerConfig,
+        /// The preview mode sent with each job.
+        preview: increart_core::config::Preview,
         order: Order,
         skip_ram_check: bool,
         /// Random order's salt, when on.
@@ -1069,6 +1081,8 @@ pub enum Effect {
     SetJobOrder(Order, Option<u64>),
     /// Loads stop (or start again) waiting for free RAM.
     SetSkipRamCheck(bool),
+    /// The preview mode of the jobs sent from now on.
+    SetPreview(increart_core::config::Preview),
     /// The image servers' traffic log goes on or off.
     SetLogTraffic(bool),
     /// Test `server` (with `models` to load one of; not loading or making
@@ -2124,6 +2138,7 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
                 if state.engine_running {
                     fx.push(Effect::StartEngine {
                         shared: state.config.programs.sd_server.clone(),
+                        preview: state.config.preview,
                         order: state.config.job_order,
                         random: state.job_random(),
                         skip_ram_check: state.config.skip_ram_check,
@@ -2188,6 +2203,7 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
             if sw.stopped && state.engine_running {
                 return vec![Effect::StartEngine {
                     shared: state.config.programs.sd_server.clone(),
+                    preview: state.config.preview,
                     order: state.config.job_order,
                     random: state.job_random(),
                     skip_ram_check: state.config.skip_ram_check,
@@ -2721,6 +2737,7 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
                 state.servers.iter_mut().for_each(|s| (s.idle_since, s.worked) = (None, false));
                 return vec![Effect::StartEngine {
                     shared: state.config.programs.sd_server.clone(),
+                    preview: state.config.preview,
                     order: state.config.job_order,
                     random: state.job_random(),
                     skip_ram_check: state.config.skip_ram_check,
@@ -2768,6 +2785,7 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
             state.servers.iter_mut().for_each(|s| (s.idle_since, s.worked) = (None, false));
             vec![Effect::StartEngine {
                 shared: state.config.programs.sd_server.clone(),
+                preview: state.config.preview,
                 order: state.config.job_order,
                 random: state.job_random(),
                 skip_ram_check: state.config.skip_ram_check,
@@ -2824,6 +2842,19 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
         Msg::ServerStatus(open) => {
             state.server_status = open && state.phase == Phase::Main;
             vec![]
+        }
+        Msg::SetPreview(p) => {
+            if state.config.preview == p {
+                return vec![];
+            }
+            state.config.preview = p;
+            if p == increart_core::config::Preview::Off {
+                state.live_previews.clear();
+                state.live_view = None;
+            }
+            let mut fx = save_config(state);
+            fx.push(Effect::SetPreview(p));
+            fx
         }
         Msg::SetSkipRamCheck(skip) => {
             if state.config.skip_ram_check == skip {
@@ -5420,6 +5451,33 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
             (state.preview, state.preview_among) = (None, None);
             vec![]
         }
+        Msg::QueueingNote(project, label, note) => {
+            let key = (project, label);
+            match note {
+                Some(n) if state.queueing.contains(&key) => {
+                    state.queueing_notes.insert(key, n);
+                }
+                _ => {
+                    state.queueing_notes.remove(&key);
+                }
+            }
+            vec![]
+        }
+        Msg::LiveView(seed) => {
+            state.live_view = seed;
+            vec![]
+        }
+        Msg::LiveViewStep(d) => {
+            let Some(at) = &state.live_view else { return vec![] };
+            let seeds = state.sampling_seeds();
+            let Some(i) = seeds.iter().position(|s| s == at) else {
+                state.live_view = seeds.first().cloned();
+                return vec![];
+            };
+            let n = seeds.len() as isize;
+            state.live_view = seeds.get((i as isize + d).rem_euclid(n) as usize).cloned();
+            vec![]
+        }
         Msg::PreviewAmong(list, image) => {
             state.preview = Some(image);
             state.preview_among = Some(list);
@@ -6962,6 +7020,7 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
                     // (which op failed isn't known: a failed run or sweep
                     // can be queued again)
                     state.queueing.clear();
+                    state.queueing_notes.clear();
                     state.messages_error(e)
                 }
                 Ok(ok) => fx.extend(op_done(state, ok)),
@@ -6974,6 +7033,7 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
             let active = &state.active_runs;
             state.finishing.retain(|r| active.contains(r));
             state.progress.clear();
+            state.live_previews.clear();
             state.sampling_times.clear();
             vec![]
         }
@@ -8438,7 +8498,11 @@ pub fn sweep_defaults(vary: increart_core::prompts::SweepVary, f: &GenerateForm)
 fn still_saving(state: &mut AppState, project: &Id, label: &str) -> bool {
     let saving = state.queueing.iter().any(|(p, l)| p == project && l == label);
     if saving {
-        state.messages_info(format!("{} is being queued already", label.trim()));
+        let doing = state
+            .queueing_notes
+            .get(&(project.clone(), label.to_string()))
+            .map_or(String::new(), |(n, _)| format!(": {n} (see Jobs)"));
+        state.messages_info(format!("{} is still being saved{doing}", label.trim()));
     }
     saving
 }
@@ -9278,6 +9342,7 @@ fn start_with_up(state: &mut AppState, progress: &[ServerProgress]) -> Vec<Effec
     state.servers.iter_mut().for_each(|s| (s.idle_since, s.worked) = (None, false));
     vec![Effect::StartEngine {
         shared: state.config.programs.sd_server.clone(),
+        preview: state.config.preview,
         order: state.config.job_order,
         random: state.job_random(),
         skip_ram_check: state.config.skip_ram_check,
@@ -10015,6 +10080,7 @@ fn runnable_preset(state: &mut AppState) {
 /// A queued run or sweep is saved: Queue works for its label again.
 fn saved_queued(state: &mut AppState, q: &Queued) {
     state.queueing.retain(|(p, l)| !(*p == q.project && *l == q.form.label));
+    state.queueing_notes.remove(&(q.project.clone(), q.form.label.clone()));
 }
 
 fn op_done(state: &mut AppState, ok: OpOk) -> Vec<Effect> {
@@ -10151,8 +10217,9 @@ pub const JOB_LOG_LINES: usize = 5000;
 
 fn engine_event(state: &mut AppState, e: Event) -> Vec<Effect> {
     match e {
-        Event::Server { server, state: s, model, idle, runs } => {
+        Event::Server { server, state: s, model, idle, runs, seeds } => {
             state.server_jobs.insert(server, runs.clone());
+            state.sent_seeds.insert(server, seeds);
             state.alerts.server_runs.entry(server).or_default().extend(runs);
             if let Some(st) = state.servers.get_mut(server) {
                 st.model = model.map(|m| m.recipe);
@@ -10178,7 +10245,11 @@ fn engine_event(state: &mut AppState, e: Event) -> Vec<Effect> {
             }
             vec![]
         }
-        Event::Progress { run, seed, step, total, .. } => {
+        Event::Progress { run, seed, step, total, preview, .. } => {
+            // (seeds sent before previews went off still bring them)
+            if let Some(png) = preview.filter(|_| state.config.preview != increart_core::config::Preview::Off) {
+                state.live_previews.insert((run.clone(), seed), (step, std::sync::Arc::new(png)));
+            }
             let now = state.now;
             state
                 .sampling_times
@@ -10188,7 +10259,13 @@ fn engine_event(state: &mut AppState, e: Event) -> Vec<Effect> {
             state.progress.insert((run, seed), (step, total));
             vec![]
         }
-        Event::Output { run, seed, server, elapsed_s, step_s, .. } => {
+        Event::Output { run, seed, image, server, elapsed_s, step_s, .. } => {
+            // the seed watched: its image, large
+            if state.live_view.as_ref() == Some(&(run.clone(), seed)) {
+                state.live_view = None;
+                state.preview = Some(ImageRef::output(image.clone()));
+                (state.preview_among, state.preview_pasted) = (None, None);
+            }
             if let Some((_, n)) = state.alerts.busy.get_mut(&server) {
                 *n += 1;
             }
@@ -10201,12 +10278,19 @@ fn engine_event(state: &mut AppState, e: Event) -> Vec<Effect> {
                 }
             }
             state.sampling_times.remove(&(run.clone(), seed));
+            if state.live_previews.remove(&(run.clone(), seed)).is_some() {
+                state.live_done = Some((run.clone(), seed, image));
+            }
             state.progress.remove(&(run, seed));
             vec![Effect::Rescan]
         }
         Event::SeedFailed { run, seed, error, .. } => {
             state.sampling_times.remove(&(run.clone(), seed));
             state.progress.remove(&(run.clone(), seed));
+            state.live_previews.remove(&(run.clone(), seed));
+            if state.live_view.as_ref() == Some(&(run.clone(), seed)) {
+                state.live_view = None;
+            }
             state.messages_error(format!("run {run} seed {seed}: {error}"));
             vec![]
         }
@@ -10214,7 +10298,11 @@ fn engine_event(state: &mut AppState, e: Event) -> Vec<Effect> {
             state.active_runs.remove(&run);
             state.finishing.remove(&run);
             state.progress.retain(|(r, _), _| r != &run);
+            state.live_previews.retain(|(r, _), _| r != &run);
             state.sampling_times.retain(|(r, _), _| r != &run);
+            if state.live_view.as_ref().is_some_and(|(r, _)| r == &run) {
+                state.live_view = None;
+            }
             vec![Effect::Rescan]
         }
         Event::Problem(p) => {

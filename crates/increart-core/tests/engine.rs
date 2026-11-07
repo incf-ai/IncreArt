@@ -229,6 +229,18 @@ fn loads_the_model_a_run_needs() {
     assert_eq!(loads[0]["recipe"], "qwen-image-21");
     assert_eq!(loads[0]["models"]["vae"], "vae/v.safetensors");
     assert!(events.iter().any(|e| matches!(e, Event::Server { state, .. } if state.starts_with("loading"))));
+    // the seeds handed to it, said with how far each got
+    let phases: Vec<_> = events
+        .iter()
+        .filter_map(|e| match e {
+            Event::Server { seeds, .. } => Some(seeds.iter().filter(|s| s.run == run).map(|s| s.phase)),
+            _ => None,
+        })
+        .flatten()
+        .collect();
+    use increart_core::engine::SentPhase;
+    assert!(phases.contains(&SentPhase::Generating), "{phases:?}");
+    assert!(phases.iter().any(|p| *p != SentPhase::Generating), "sending or queued first: {phases:?}");
 }
 
 #[test]

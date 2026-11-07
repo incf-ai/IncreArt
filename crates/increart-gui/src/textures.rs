@@ -98,6 +98,8 @@ pub struct Textures {
     /// [`RETRY_AFTER`], [`RETRY_LATER`], [`LOAD_TIMEOUT`] (shorter in tests).
     waits: [Duration; 3],
     ctx: egui::Context,
+    /// The live previews shown, by (run, seed): the step each is of.
+    live: HashMap<(increart_core::Id, u64), (u32, TextureHandle)>,
 }
 
 impl Textures {
@@ -131,7 +133,38 @@ impl Textures {
             results,
             waits: [RETRY_AFTER, RETRY_LATER, LOAD_TIMEOUT],
             ctx: ctx.clone(),
+            live: HashMap::new(),
         }
+    }
+
+    /// The live preview of a seed being sampled (`frames`: the GUI state's
+    /// latest PNG of each), decoded once per step it reports; the ones no
+    /// longer sampled are dropped.
+    pub fn live(
+        &mut self,
+        frames: &HashMap<(increart_core::Id, u64), increart_gui_core::state::LiveFrame>,
+        key: &(increart_core::Id, u64),
+    ) -> Option<TextureHandle> {
+        self.live.retain(|k, _| frames.contains_key(k));
+        let (step, png) = frames.get(key)?;
+        if let Some((s, tex)) = self.live.get(key)
+            && s == step
+        {
+            return Some(tex.clone());
+        }
+        // a frame that won't decode keeps the one before
+        let Ok(img) = image::load_from_memory(png) else { return self.live.get(key).map(|(_, t)| t.clone()) };
+        let rgba = img.to_rgba8();
+        let image = ColorImage::from_rgba_unmultiplied([rgba.width() as usize, rgba.height() as usize], rgba.as_raw());
+        let tex = match self.live.remove(key) {
+            Some((_, mut tex)) => {
+                tex.set(image, TextureOptions::LINEAR);
+                tex
+            }
+            None => self.ctx.load_texture(format!("live {} {}", key.0, key.1), image, TextureOptions::LINEAR),
+        };
+        self.live.insert(key.clone(), (*step, tex.clone()));
+        Some(tex)
     }
 
     /// Uploads finished loads; call once per frame. A failed load is logged

@@ -1127,6 +1127,7 @@ fn settings(ui: &mut egui::Ui, st: &AppState, d: &ServerDialog, out: &mut Vec<Ms
     if c != st.config.programs.sd_server {
         out.push(Msg::SetSdServer(c));
     }
+    preview_field(ui, st, out);
     let mut check = !st.config.skip_ram_check;
     if ui
         .checkbox(&mut check, "Wait for free RAM before loading a model")
@@ -1232,6 +1233,28 @@ fn sdserver_binary_field(ui: &mut egui::Ui, c: &mut increart_core::config::SdSer
         ui.add_sized([56.0, 18.0], egui::Label::new("Binary"));
         path_edit(ui, &mut c.binary, "sd-server", PickKind::SdServerBinary, out);
     });
+}
+
+/// The image shown as it generates (Jobs): asked of each job, so a change
+/// applies to the next seed sent, no server restarted.
+fn preview_field(ui: &mut egui::Ui, st: &AppState, out: &mut Vec<Msg>) {
+    use increart_core::config::Preview;
+    ui.horizontal(|ui| {
+        ui.label("Preview while generating");
+        let now = st.config.preview;
+        egui::ComboBox::from_id_salt("live_preview").selected_text(now.label()).show_ui(ui, |ui| {
+            for p in Preview::ALL {
+                if ui.selectable_label(p == now, p.label()).clicked() && p != now {
+                    out.push(Msg::SetPreview(p));
+                }
+            }
+        });
+    })
+    .response
+    .on_hover_text(
+        "Shown in Jobs beside each image being generated, larger in a run's details. sd-server makes it the way \
+         chosen (Off also hides its step progress); KoboldCpp sends its own kind whichever is chosen, none when Off",
+    );
 }
 
 fn leave_running_field(ui: &mut egui::Ui, c: &mut increart_core::config::SdServerConfig) {

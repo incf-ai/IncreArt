@@ -33,6 +33,19 @@ struct Entry {
 /// The file's SHA-256, from `cache` (an RSN file) when its size and mtime
 /// are unchanged, else computed and cached.
 pub fn sha256_cached(cache: &Path, file: &Path) -> Result<String> {
+    sha256_cached_progress(cache, file, |_, _| {})
+}
+
+/// Whether `file`'s hash is in `cache` (and still its size and time).
+pub fn is_cached(cache: &Path, file: &Path) -> bool {
+    let Ok(meta) = std::fs::metadata(file) else { return false };
+    let mtime = meta.modified().ok().and_then(|t| t.duration_since(UNIX_EPOCH).ok()).map_or(0, |d| d.as_secs());
+    let c: Cache = rsnfmt::read(cache).unwrap_or_default();
+    c.files.get(&*file.to_string_lossy()).is_some_and(|e| e.size == meta.len() && e.mtime == mtime)
+}
+
+/// [`sha256_cached`], telling `progress` (bytes read, size) as it reads.
+pub fn sha256_cached_progress(cache: &Path, file: &Path, mut progress: impl FnMut(u64, u64)) -> Result<String> {
     let meta = std::fs::metadata(file).at(file)?;
     let size = meta.len();
     let mtime = meta.modified().ok().and_then(|t| t.duration_since(UNIX_EPOCH).ok()).map_or(0, |d| d.as_secs());
@@ -47,12 +60,15 @@ pub fn sha256_cached(cache: &Path, file: &Path) -> Result<String> {
     let mut h = Sha256::new();
     let mut f = File::open(file).at(file)?;
     let mut buf = vec![0; 8 << 20];
+    let mut read = 0u64;
     loop {
         let n = f.read(&mut buf).at(file)?;
         if n == 0 {
             break;
         }
         h.update(&buf[..n]);
+        read += n as u64;
+        progress(read, size);
     }
     let sha256 = hex(&h.finalize());
     c.files.insert(key, Entry { size, mtime, sha256: sha256.clone() });

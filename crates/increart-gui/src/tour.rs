@@ -170,6 +170,12 @@ const EXTRA_SCENES: &[&str] = &[
     "79-contact-sheet-filter-zoom",
     "80-stop-buttons",
     "81-stop-finishing",
+    "81b-live-preview",
+    "81c-live-preview-details",
+    "81d-live-preview-folded",
+    "81e-live-preview-generate",
+    "81f-live-view",
+    "81g-live-preview-generate-folded",
     "82-preview-zoom",
     "83-preview-next",
     "84-projects-folder-menu",
@@ -975,7 +981,7 @@ impl Tour {
                         server: 0,
                         step: 9,
                         total: 20,
-                        preview: None,
+                        preview: Some(fake_preview(0)),
                     }));
                     v.push(Msg::JobInfo(Some(r.id.clone())));
                     let log = [
@@ -994,13 +1000,20 @@ impl Tour {
                 }
                 v
             }
-            "80-stop-buttons" | "81-stop-finishing" => {
+            "80-stop-buttons"
+            | "81-stop-finishing"
+            | "81b-live-preview"
+            | "81c-live-preview-details"
+            | "81d-live-preview-folded"
+            | "81e-live-preview-generate"
+            | "81f-live-view"
+            | "81g-live-preview-generate-folded" => {
                 // two runs pretend to generate; the second scene finishes one
                 let runs: Vec<_> = st.index.projects.iter().flat_map(|p| p.runs.first()).take(2).collect();
                 let mut v =
                     vec![Msg::ContinueWithoutServers, Msg::Tab(Tab::Projects), Msg::ProjectsTab(ProjectsTab::Jobs)];
                 v.push(Msg::RunsQueued(runs.iter().map(|r| r.id.clone()).collect()));
-                for r in &runs {
+                for (i, r) in runs.iter().enumerate() {
                     v.push(Msg::Engine(increart_core::engine::Event::Progress {
                         run: r.id.clone(),
                         rev: 0,
@@ -1008,7 +1021,7 @@ impl Tour {
                         server: 0,
                         step: 9,
                         total: 20,
-                        preview: None,
+                        preview: Some(fake_preview(i as u32)),
                     }));
                 }
                 if name == "81-stop-finishing"
@@ -1016,6 +1029,25 @@ impl Tour {
                 {
                     v.push(Msg::CancelRun(r.id.clone(), increart_core::engine::Stop::Finish));
                     v.push(Msg::JobInfo(Some(r.id.clone())));
+                }
+                if name == "81c-live-preview-details"
+                    && let Some(r) = runs.first()
+                {
+                    v.push(Msg::JobInfo(Some(r.id.clone())));
+                }
+                if name == "81f-live-view"
+                    && let Some(r) = runs.first()
+                {
+                    // its frame clicked: watched large, ← / → to the other run's
+                    let seed = r.all_seeds().next().map_or(0, |(_, s)| s);
+                    v.push(Msg::LiveView(Some((r.id.clone(), seed))));
+                }
+                if (name == "81e-live-preview-generate" || name == "81g-live-preview-generate-folded")
+                    && let Some(p) = runs.first().and_then(|r| st.index.run(&r.id))
+                {
+                    // the first run's project's Generate form, its frame above Queue
+                    v.push(Msg::SelectProject(p.0.project.id.clone()));
+                    v.push(Msg::ProjectsTab(ProjectsTab::Generate));
                 }
                 v
             }
@@ -2153,6 +2185,23 @@ impl Tour {
                 );
             });
         }
+        if name.starts_with("81e-") || name.starts_with("81g-") {
+            // Generate's live preview shown, then folded
+            let folded = name.starts_with("81g-");
+            ctx.data_mut(|d| d.insert_persisted(egui::Id::unique("gen_live_folded"), folded));
+        }
+        if name == "81d-live-preview-folded" && self.settled == 1 {
+            // folded again: the frames show under the projects' headers
+            for g in st.run_groups() {
+                ctx.data_mut(|d| d.insert_temp(egui::Id::unique(("jobs_project", &g.project)), false));
+            }
+        }
+        if name == "81b-live-preview" && self.settled == 1 {
+            // the projects' boxes open, their runs' blocks (and frames) shown
+            for g in st.run_groups() {
+                ctx.data_mut(|d| d.insert_temp(egui::Id::unique(("jobs_project", &g.project)), true));
+            }
+        }
         if name == "98b2b-image-sweep-all" && self.settled == 3 {
             // the swept placeholder double-clicked
             ctx.data_mut(|d| d.insert_temp(egui::Id::unique(crate::projects::SWEPT_MODAL), true));
@@ -2954,4 +3003,20 @@ fn tour_input(st: &AppState) -> Option<increart_core::ImageRef> {
 /// An image waiting for review that was made from references, if any.
 fn tour_with_refs(st: &AppState) -> Option<increart_core::ImageRef> {
     st.review_queue().iter().map(|o| o.image.clone()).find(|i| !st.image_inputs(i).is_empty())
+}
+
+/// A preview as a server sends one part-way: a 64 × 64 PNG of soft colour
+/// (the latent's colours), `hue` telling them apart.
+fn fake_preview(hue: u32) -> Vec<u8> {
+    let img = image::RgbImage::from_fn(64, 64, |x, y| {
+        let (fx, fy) = (x as f32 / 63.0, y as f32 / 63.0);
+        let d = ((fx - 0.5).powi(2) + (fy - 0.45).powi(2)).sqrt();
+        let glow = (1.0 - d * 2.2).clamp(0.0, 1.0);
+        let [r, g, b] = if hue.is_multiple_of(2) { [200.0, 90.0, 40.0] } else { [60.0, 120.0, 200.0] };
+        let px = |c: f32, bg: f32| (bg + (c - bg) * glow) as u8;
+        image::Rgb([px(r, 40.0 + 30.0 * fy), px(g, 50.0 + 20.0 * fx), px(b, 70.0)])
+    });
+    let mut png = vec![];
+    let _ = img.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png);
+    png
 }

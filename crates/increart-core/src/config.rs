@@ -64,6 +64,10 @@ pub struct Config {
     /// How long the servers may go quiet (see [`Timeouts`]).
     #[serde(skip_serializing_if = "is_default")]
     pub timeouts: Timeouts,
+    /// The image shown as it generates (Jobs), asked of every server with
+    /// each job.
+    #[serde(skip_serializing_if = "is_default")]
+    pub preview: Preview,
     /// How the job queue shares the servers (Jobs: spread all / sweep by
     /// sweep / one at a time).
     #[serde(skip_serializing_if = "is_default")]
@@ -742,8 +746,10 @@ pub struct SdServerConfig {
     pub old_model_dirs: Vec<String>,
     /// Arguments for every server.
     pub args: Vec<String>,
-    /// Preview mode requested with each job: `none`, `proj`, `tae` or `vae`.
-    pub preview: String,
+    /// Older configs' preview mode (now [`Config::preview`]): read, moved
+    /// by [`Config::normalize`], never written.
+    #[serde(rename = "preview", skip_serializing)]
+    pub old_preview: String,
     /// The sd.cpp commit the binary was built from, recorded in recipes.
     pub commit: String,
     /// Keep servers the app started running when it exits (the model stays
@@ -758,7 +764,7 @@ impl Default for SdServerConfig {
             binary: "sd-server".into(),
             old_model_dirs: vec![],
             args: ["--fa", "--conditioning-cache-size", "32"].map(String::from).to_vec(),
-            preview: "none".into(),
+            old_preview: String::new(),
             commit: String::new(),
             leave_running: false,
         }
@@ -1125,6 +1131,14 @@ impl Config {
         // (duplicates go in full_paths)
         let old = std::mem::take(&mut self.programs.sd_server.old_model_dirs);
         self.programs.model_dirs.extend(old);
+        // "none" was the default, written out with the other settings (no
+        // setting could change it): previews on now
+        match std::mem::take(&mut self.programs.sd_server.old_preview).as_str() {
+            "proj" => self.preview = Preview::Proj,
+            "tae" => self.preview = Preview::Tae,
+            "vae" => self.preview = Preview::Vae,
+            _ => {}
+        }
         warnings.extend(self.move_pe_servers());
         let said = self.full_paths();
         self.fill_koboldcpp();
@@ -1610,6 +1624,30 @@ mod tests {
         assert_eq!(again.programs, c.programs);
     }
 
+    /// sd-server's preview mode moved to the top level for every server:
+    /// "none", the old default written out, turns previews on.
+    #[test]
+    fn preview_out_of_sd_server() {
+        let read = |mode: &str| {
+            let mut c: Config = rsnfmt::from_str(&format!(
+                r#"Config {{ programs: Programs {{ sd_server: SdServerSettings {{ binary: "/s", preview: "{mode}" }} }} }}"#
+            ))
+            .unwrap();
+            c.normalize();
+            assert!(!rsnfmt::to_string(&c).unwrap().contains("preview: \""), "the old field not written");
+            c.preview
+        };
+        assert_eq!(read("none"), Preview::Proj);
+        assert_eq!(read("tae"), Preview::Tae);
+        assert_eq!(read("vae"), Preview::Vae);
+        let mut c = Config { preview: Preview::Off, ..Default::default() };
+        c.normalize();
+        let text = rsnfmt::to_string(&c).unwrap();
+        assert!(text.contains("preview: Off"), "{text}");
+        assert_eq!(rsnfmt::from_str::<Config>(&text).unwrap().preview, Preview::Off);
+        assert!(!rsnfmt::to_string(&Config::default()).unwrap().contains("preview"));
+    }
+
     /// Entries named for their program, read into the app's types; older
     /// configs' entries the same; saved in the new form, shared binaries
     /// left out.
@@ -1876,6 +1914,43 @@ mod tests {
         let text = std::fs::read_to_string(&path).unwrap();
         assert!(text.starts_with("Config {\n    resolutions: [\n        Resolution {"), "{text}");
         assert_eq!(Config::load(&path).unwrap().0, c);
+    }
+}
+
+/// The image a server shows of a job as it samples.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Preview {
+    /// None, and no step progress from sd-server either.
+    Off,
+    /// The latent's colours, small and cheap.
+    #[default]
+    Proj,
+    /// Through the tiny autoencoder (sd-server's `tae` slot).
+    Tae,
+    /// Through the model's VAE: as it will look, slowest.
+    Vae,
+}
+
+impl Preview {
+    pub const ALL: [Preview; 4] = [Preview::Off, Preview::Proj, Preview::Tae, Preview::Vae];
+
+    /// The mode sd-server is sent (`preview`): `none`, `proj`, `tae`, `vae`.
+    pub fn mode(self) -> &'static str {
+        match self {
+            Preview::Off => "none",
+            Preview::Proj => "proj",
+            Preview::Tae => "tae",
+            Preview::Vae => "vae",
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Preview::Off => "Off",
+            Preview::Proj => "Fast (latent colours)",
+            Preview::Tae => "Tiny autoencoder (needs a tae file)",
+            Preview::Vae => "Full VAE (slowest)",
+        }
     }
 }
 

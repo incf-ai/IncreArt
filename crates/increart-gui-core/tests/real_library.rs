@@ -118,6 +118,7 @@ fn save_soon_after_opening() {
     let order = r.state.config.job_order;
     r.rt.run(Effect::StartEngine {
         shared: r.state.config.programs.sd_server.clone(),
+        preview: Default::default(),
         order,
         skip_ram_check: false,
         random: None,

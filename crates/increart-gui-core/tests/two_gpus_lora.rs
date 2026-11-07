@@ -163,14 +163,10 @@ fn config(sd: &str, kcpp: &str, dirs: &[String], sd_device: &str, kcpp_gpu: u32)
         ],
         programs: Programs {
             model_dirs: dirs.to_vec(),
-            sd_server: SdServerConfig {
-                binary: sd.into(),
-                args: vec!["--fa".into()],
-                preview: "none".into(),
-                ..Default::default()
-            },
+            sd_server: SdServerConfig { binary: sd.into(), args: vec!["--fa".into()], ..Default::default() },
             koboldcpp: kcpp.into(),
         },
+        preview: increart_core::config::Preview::Off,
         ..Default::default()
     };
     config.server_presets = vec![ServerPreset {

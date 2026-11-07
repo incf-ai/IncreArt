@@ -112,7 +112,7 @@ bare (`last_preset: "x"`); `Some(…)` is accepted too.
 | `programs.sd_server` | `SdServerSettings { … }` | see below | shared by every sd-server |
 | `programs.sd_server.binary` | path or name on `PATH` | `"sd-server"` | |
 | `programs.sd_server.args` | list | `["--fa", "--conditioning-cache-size", "32"]` | for every sd-server |
-| `programs.sd_server.preview` | `none` / `proj` / `tae` / `vae` | `"none"` | preview sent with each sd-server job |
+| `preview` | `Off` / `Proj` / `Tae` / `Vae` | `Proj` | frames shown while an image generates (Server settings → Preview while generating); `Tae` needs a tae file, `Off` also hides sd-server's step progress. An older `programs.sd_server.preview` moves here on load |
 | `programs.sd_server.commit` | string | `""` | sd.cpp commit, recorded in recipes |
 | `programs.sd_server.leave_running` | bool | `false` | started servers outlive the app |
 | `programs.koboldcpp` | path or command line | found at start-up | the KoboldCpp every `KoboldCpp` entry runs unless it names its own `binary` |
@@ -237,11 +237,11 @@ Config {
         sd_server: SdServerSettings {
             binary: "<home>/sdcpp/build-hip/bin/sd-server",
             args: ["--fa", "--conditioning-cache-size", "32"],
-            preview: "proj",
             commit: "fd21ecf",
         },
         koboldcpp: "<home>/koboldcpp/koboldcpp-linux-x64-nocuda",
     },
+    preview: Proj,
 }
 ```
 

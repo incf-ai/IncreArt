@@ -112,7 +112,7 @@ pub fn view(ui: &mut egui::Ui, st: &AppState, tex: &mut Textures, out: &mut Vec<
         ProjectsTab::Grid => grid(ui, st, tex, out),
         ProjectsTab::Folder => crate::folderview::view(ui, st, tex, out),
         ProjectsTab::Generate => generate(ui, st, tex, out),
-        ProjectsTab::Jobs => jobs(ui, st, out),
+        ProjectsTab::Jobs => jobs(ui, st, tex, out),
         ProjectsTab::Discarded => discarded(ui, st, tex, out),
     });
 }
@@ -473,6 +473,18 @@ fn images_pane(
     f: &mut increart_gui_core::GenerateForm,
     out: &mut Vec<Msg>,
 ) {
+    // this project's seeds being generated, pinned at the bottom so the
+    // references don't move when it comes and goes
+    let group = st.run_groups().into_iter().find(|g| st.project.as_ref() == Some(&g.project));
+    let saving = st.queueing.iter().any(|(p, _)| st.project.as_ref() == Some(p));
+    if group.is_some() || saving {
+        Panel::bottom("gen_live").resizable(false).show(ui, |ui| {
+            saving_rows(ui, st, st.project.as_ref());
+            if let Some(g) = &group {
+                live_section(ui, st, root, tex, g, out);
+            }
+        });
+    }
     let refs = f.refs();
     ui.horizontal(|ui| {
         ui.heading(ic(ph::IMAGES, "Images"));
@@ -2710,7 +2722,7 @@ pub fn fmt_secs(s: f32) -> String {
     if s < 90.0 { format!("{s:.0} s") } else { format!("{:.1} min", s / 60.0) }
 }
 
-fn jobs(ui: &mut egui::Ui, st: &AppState, out: &mut Vec<Msg>) {
+fn jobs(ui: &mut egui::Ui, st: &AppState, tex: &mut Textures, out: &mut Vec<Msg>) {
     ui.heading(ic(ph::HARD_DRIVES, "Servers"));
     server_list(ui, st, out);
     if ui.button(ic(ph::GEAR, "Change servers…")).clicked() {
@@ -2726,7 +2738,7 @@ fn jobs(ui: &mut egui::Ui, st: &AppState, out: &mut Vec<Msg>) {
     order_toggle(ui, st, out);
     stop_all_row(ui, st, out);
     // the servers stay in view; the runs scroll
-    ScrollArea::vertical().auto_shrink([false, false]).id_salt("jobs_runs").show(ui, |ui| run_list(ui, st, out));
+    ScrollArea::vertical().auto_shrink([false, false]).id_salt("jobs_runs").show(ui, |ui| run_list(ui, st, tex, out));
 }
 
 /// "what [Created ▾]": a sort order dropdown; the new choice when it
@@ -3028,11 +3040,14 @@ pub fn stop_all_row(ui: &mut egui::Ui, st: &AppState, out: &mut Vec<Msg>) {
 /// The runs in the engine by project, folded (for the session): a header
 /// with its seeds, time left and stop buttons, and under it a bar; open,
 /// its runs, a sweep's together under one more such header, a line each.
-pub fn run_list(ui: &mut egui::Ui, st: &AppState, out: &mut Vec<Msg>) {
+pub fn run_list(ui: &mut egui::Ui, st: &AppState, tex: &mut Textures, out: &mut Vec<Msg>) {
     use increart_gui_core::RunItem;
     let groups = st.run_groups();
+    saving_rows(ui, st, None);
     if groups.is_empty() {
-        ui.weak("Nothing generating.");
+        if st.queueing.is_empty() {
+            ui.weak("Nothing generating.");
+        }
         return;
     }
     for g in &groups {
@@ -3048,6 +3063,8 @@ pub fn run_list(ui: &mut egui::Ui, st: &AppState, out: &mut Vec<Msg>) {
             });
             ui.add(egui::ProgressBar::new(p.2).desired_height(6.0));
             if !open {
+                // folded, its frames still show
+                live_strip(ui, st, tex, &runs, LIVE_SMALL, out);
                 return;
             }
             for item in &g.items {
@@ -3056,7 +3073,7 @@ pub fn run_list(ui: &mut egui::Ui, st: &AppState, out: &mut Vec<Msg>) {
                         let finishing = st.finishing.contains(&j.run);
                         // the whole block opens the details; its own buttons come first
                         let block = ui.scope_builder(egui::UiBuilder::new().sense(egui::Sense::click()), |ui| {
-                            job_block(ui, st, j, finishing, out);
+                            job_block(ui, st, tex, j, finishing, out);
                         });
                         let r = block
                             .response
@@ -3068,7 +3085,7 @@ pub fn run_list(ui: &mut egui::Ui, st: &AppState, out: &mut Vec<Msg>) {
                     }
                     RunItem::Sweep { name, runs } => {
                         let runs: Vec<_> = runs.iter().collect();
-                        sweep_block(ui, st, &g.project, &g.name, name, &runs, out);
+                        sweep_block(ui, st, tex, &g.project, &g.name, name, &runs, out);
                     }
                 }
             }
@@ -3078,9 +3095,11 @@ pub fn run_list(ui: &mut egui::Ui, st: &AppState, out: &mut Vec<Msg>) {
 
 /// A sweep's runs in the engine: its header (what's sampling now among its
 /// seeds) and a bar; open, a line per run.
+#[allow(clippy::too_many_arguments)]
 fn sweep_block(
     ui: &mut egui::Ui,
     st: &AppState,
+    tex: &mut Textures,
     project: &increart_core::Id,
     project_name: &str,
     name: &str,
@@ -3097,16 +3116,20 @@ fn sweep_block(
             let what = format!("the {n} of {project_name} {name}");
             group_stops(ui, st, runs, &what, (title, group_text(&n, p)), out);
         });
-        let now: Vec<String> = runs
-            .iter()
-            .flat_map(|r| {
-                let row = r.sweep.as_ref().map_or(r.label.as_str(), |(_, row)| row.as_str());
-                r.sampling.iter().map(move |(seed, step, n)| format!("{row} s{seed} {step}/{n}"))
-            })
-            .collect();
+        let now: Vec<String> =
+            runs.iter()
+                .flat_map(|r| {
+                    let row = r.sweep.as_ref().map_or(r.label.as_str(), |(_, row)| row.as_str());
+                    r.sampling.iter().map(move |(seed, step, n)| format!("{row} s{seed} {step}/{n}")).chain(
+                        r.sent.iter().map(move |(seed, _, phase)| format!("{row} s{seed} {}", phase_word(*phase))),
+                    )
+                })
+                .collect();
         if !now.is_empty() {
             let text = RichText::new(format!("now: {}", now.join(", "))).weak().small();
             ui.add(egui::Label::new(text).truncate());
+            // the seeds sampling now, as they come out
+            live_strip(ui, st, tex, runs, LIVE_SMALL, out);
         }
         ui.add(egui::ProgressBar::new(p.2).desired_height(6.0));
         if open {
@@ -3133,7 +3156,12 @@ fn run_line(ui: &mut egui::Ui, st: &AppState, r: &increart_gui_core::RunProgress
             let bar =
                 egui::ProgressBar::new(r.fraction()).desired_width(110.0).text(format!("{} / {}", r.done, r.total));
             ui.add(bar);
-            let now: Vec<String> = r.sampling.iter().map(|(seed, step, n)| format!("s{seed} {step}/{n}")).collect();
+            let now: Vec<String> = r
+                .sampling
+                .iter()
+                .map(|(seed, step, n)| format!("s{seed} {step}/{n}"))
+                .chain(r.sent.iter().map(|(seed, _, phase)| format!("s{seed} {}", phase_word(*phase))))
+                .collect();
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 stop_buttons(ui, &r.run, finishing, r.sampling.len(), true, out);
                 // its time left, without the clock: the line is short
@@ -3238,6 +3266,7 @@ fn group_stops(
 fn job_block(
     ui: &mut egui::Ui,
     st: &AppState,
+    tex: &mut Textures,
     j: &increart_gui_core::RunProgress,
     finishing: bool,
     out: &mut Vec<Msg>,
@@ -3254,7 +3283,8 @@ fn job_block(
             });
             ui.weak(short(&j.prompt, 70));
             ui.add(egui::ProgressBar::new(j.fraction()).text(format!("{} / {} seeds", j.done, j.total)));
-            sampling_bars(ui, j);
+            sampling_bars(ui, st, tex, j, Some(LIVE_SMALL), out);
+            sent_lines(ui, j);
             if let Some(text) = live_timing(st, j) {
                 ui.weak(RichText::new(text).small());
             }
@@ -3364,14 +3394,418 @@ fn stop_buttons(
     }
 }
 
-/// A bar per seed being sampled now.
-fn sampling_bars(ui: &mut egui::Ui, j: &increart_gui_core::RunProgress) {
+/// The Jobs list's live previews' longest side, in points.
+const LIVE_SMALL: f32 = 64.0;
+
+/// The other seeds' frames under Generate's large one, in points.
+const LIVE_ROW: f32 = 48.0;
+
+/// The job details' live previews' longest side, in points.
+const LIVE_LARGE: f32 = 256.0;
+
+/// "sending" / "queued" / "starting": a seed handed to a server, before
+/// its first step.
+fn phase_word(phase: increart_core::engine::SentPhase) -> &'static str {
+    use increart_core::engine::SentPhase;
+    match phase {
+        SentPhase::Sending => "sending",
+        SentPhase::Queued => "queued",
+        SentPhase::Generating => "starting",
+    }
+}
+
+/// "seed 5: queued on kcpp0": a seed handed to a server, before its first
+/// step.
+fn sent_text(seed: u64, server: &str, phase: increart_core::engine::SentPhase) -> String {
+    use increart_core::engine::SentPhase;
+    match phase {
+        SentPhase::Sending => format!("seed {seed}: sending to {server}"),
+        SentPhase::Queued => format!("seed {seed}: queued on {server}, waiting its turn"),
+        SentPhase::Generating => format!("seed {seed}: starting on {server}"),
+    }
+}
+
+/// A line per seed of the run handed to a server that isn't sampling yet.
+fn sent_lines(ui: &mut egui::Ui, j: &increart_gui_core::RunProgress) {
+    for (seed, server, phase) in &j.sent {
+        ui.horizontal(|ui| {
+            ui.add(egui::Spinner::new().size(10.0));
+            ui.weak(RichText::new(sent_text(*seed, server, *phase)).small());
+        });
+    }
+}
+
+/// Runs and sweeps being saved before they're queued (`project`: only
+/// its), each with what it's doing, a bar while that takes a while
+/// (hashing a model file the first time).
+fn saving_rows(ui: &mut egui::Ui, st: &AppState, project: Option<&increart_core::Id>) {
+    for (p, label) in st.queueing.iter().filter(|(p, _)| project.is_none_or(|x| x == p)) {
+        let name = st.index.project(p).map(|e| e.name()).unwrap_or_default();
+        let note = st.queueing_notes.get(&(p.clone(), label.clone()));
+        egui::Frame::group(ui.style()).show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.horizontal(|ui| {
+                ui.spinner();
+                let title =
+                    if project.is_some() { label.trim().to_string() } else { format!("{name} · {}", label.trim()) };
+                ui.label(RichText::new(title).strong());
+                ui.weak("being saved, then queued");
+            });
+            if let Some((text, fraction)) = note {
+                ui.add(egui::Label::new(RichText::new(text).weak().small()).truncate()).on_hover_text(
+                    "the model files' hashes go in the run's recipe; each file is hashed once (cached in the \
+                     library), so a model's first run waits for it",
+                );
+                ui.add(egui::ProgressBar::new(*fraction).desired_height(4.0));
+            }
+        });
+    }
+}
+
+/// A bar per seed being sampled now, its live preview (as big as `size`)
+/// beside it once the server sends one (none: the bars alone).
+fn sampling_bars(
+    ui: &mut egui::Ui,
+    st: &AppState,
+    tex: &mut Textures,
+    j: &increart_gui_core::RunProgress,
+    size: Option<f32>,
+    out: &mut Vec<Msg>,
+) {
     for (seed, step, n) in &j.sampling {
-        ui.add(
-            egui::ProgressBar::new(*step as f32 / (*n).max(1) as f32)
-                .desired_height(12.0)
-                .text(RichText::new(format!("seed {seed}: step {step}/{n}")).small()),
-        );
+        ui.horizontal(|ui| {
+            if let Some(size) = size {
+                live_frame(ui, st, tex, &j.run, *seed, size, out);
+            }
+            ui.add(
+                egui::ProgressBar::new(*step as f32 / (*n).max(1) as f32)
+                    .desired_height(12.0)
+                    .text(RichText::new(format!("seed {seed}: step {step}/{n}")).small()),
+            );
+        });
+    }
+}
+
+/// A seed's latest preview, its longest side `size` (nothing until the
+/// server sends one: previews off, or not sampling yet).
+fn live_frame(
+    ui: &mut egui::Ui,
+    st: &AppState,
+    tex: &mut Textures,
+    run: &increart_core::Id,
+    seed: u64,
+    size: f32,
+    out: &mut Vec<Msg>,
+) -> Option<egui::Response> {
+    let t = tex.live(&st.live_previews, &(run.clone(), seed))?;
+    let [w, h] = t.size_vec2().into();
+    let scale = size / w.max(h).max(1.0);
+    let image = egui::Image::new(&t).fit_to_exact_size(egui::vec2(w * scale, h * scale)).corner_radius(3.0);
+    let r = ui
+        .add(image.sense(egui::Sense::click()))
+        .on_hover_cursor(egui::CursorIcon::PointingHand)
+        .on_hover_text(format!("{}\nclick to watch it large", live_caption(st, run, seed)));
+    if r.clicked() {
+        out.push(Msg::LiveView(Some((run.clone(), seed))));
+    }
+    Some(r)
+}
+
+/// "r01 · seed 3 · step 9/20" (its row for a sweep's run).
+fn live_caption(st: &AppState, run: &increart_core::Id, seed: u64) -> String {
+    let label = st.index.run(run).map_or(String::new(), |(_, r)| r.label.clone());
+    match st.progress.get(&(run.clone(), seed)) {
+        Some((step, n)) => format!("{label} · seed {seed} · step {step}/{n}"),
+        None => format!("{label} · seed {seed}"),
+    }
+}
+
+/// The latest frames of `runs`' seeds being sampled, a row as big as
+/// `size`, each with its run, seed and step under it; a click watches it
+/// large. Nothing while none has a frame.
+fn live_strip(
+    ui: &mut egui::Ui,
+    st: &AppState,
+    tex: &mut Textures,
+    runs: &[&increart_gui_core::RunProgress],
+    size: f32,
+    out: &mut Vec<Msg>,
+) {
+    let any =
+        runs.iter().any(|r| r.sampling.iter().any(|(seed, ..)| st.live_previews.contains_key(&(r.run.clone(), *seed))));
+    if !any {
+        return;
+    }
+    ui.horizontal_wrapped(|ui| {
+        for r in runs {
+            let row = r.sweep.as_ref().map_or(r.label.as_str(), |(_, row)| row.as_str());
+            for (seed, step, n) in &r.sampling {
+                if !st.live_previews.contains_key(&(r.run.clone(), *seed)) {
+                    continue;
+                }
+                ui.vertical(|ui| {
+                    ui.set_max_width(size);
+                    live_frame(ui, st, tex, &r.run, *seed, size, out);
+                    let text = RichText::new(format!("{row} · s{seed} {step}/{n}")).weak().small();
+                    ui.add(egui::Label::new(text).truncate());
+                });
+            }
+        }
+    });
+}
+
+/// Generate's panel while the open project generates (folds to its header
+/// and a bar over the project's seeds): one frame as wide
+/// as the panel (the seed closest to done, or the one picked below; a
+/// click or ⤢ watches it large), its run, seed and step over a bar, and
+/// the other seeds' frames in a row (a click shows one large here). Between
+/// seeds the last one's finished image stays (a click shows it large).
+/// Narrower than 120 pt, the row alone.
+fn live_section(
+    ui: &mut egui::Ui,
+    st: &AppState,
+    root: &std::path::Path,
+    tex: &mut Textures,
+    g: &increart_gui_core::RunGroup,
+    out: &mut Vec<Msg>,
+) {
+    let runs = g.runs();
+    // (run, seed, step, steps) of the seeds sampling, those with a frame
+    let sampling: Vec<(increart_core::Id, u64, u32, u32)> =
+        runs.iter().flat_map(|r| r.sampling.iter().map(|(seed, step, n)| (r.run.clone(), *seed, *step, *n))).collect();
+    let framed: Vec<_> =
+        sampling.iter().filter(|(r, s, ..)| st.live_previews.contains_key(&(r.clone(), *s))).cloned().collect();
+    ui.add_space(4.0);
+    // folded: the header and a bar (remembered)
+    let fold_id = egui::Id::unique("gen_live_folded");
+    let folded = ui.data_mut(|d| d.get_persisted::<bool>(fold_id)).unwrap_or(false);
+    let flip = ui
+        .horizontal(|ui| {
+            let caret = if folded { ph::CARET_RIGHT } else { ph::CARET_DOWN };
+            let n = sampling.len();
+            let text = format!("{caret} {}", ic(ph::SPARKLE, "Generating"));
+            let r = ui.add(egui::Button::new(RichText::new(text).strong()).frame(false)).on_hover_text(if folded {
+                "show the live preview"
+            } else {
+                "fold the live preview away"
+            });
+            ui.weak(if n == 1 { "1 seed now".to_string() } else { format!("{n} seeds now") });
+            r.clicked()
+        })
+        .inner;
+    if flip {
+        ui.data_mut(|d| d.insert_persisted(fold_id, !folded));
+    }
+    if folded != flip {
+        let p = st.group_progress(&runs);
+        ui.add(egui::ProgressBar::new(p.2).desired_height(4.0));
+        ui.add_space(4.0);
+        return;
+    }
+    let pick_id = egui::Id::unique("gen_live_pick");
+    let picked = ui.data(|d| d.get_temp::<(increart_core::Id, u64)>(pick_id));
+    let big = picked
+        .and_then(|p| framed.iter().find(|(r, s, ..)| (r, *s) == (&p.0, p.1)))
+        .or_else(|| {
+            framed.iter().max_by(|a, b| (a.2 as f32 / a.3.max(1) as f32).total_cmp(&(b.2 as f32 / b.3.max(1) as f32)))
+        })
+        .cloned();
+    let width = ui.available_width();
+    let max_h = ui.ctx().content_rect().height() * 0.45;
+    let fit = |w: f32, h: f32| {
+        let scale = (width / w.max(1.0)).min(max_h / h.max(1.0));
+        egui::vec2(w * scale, h * scale)
+    };
+    let caption = |ui: &mut egui::Ui, text: String, fraction: f32| {
+        ui.add(egui::Label::new(RichText::new(text).weak().small()).truncate());
+        ui.add(egui::ProgressBar::new(fraction).desired_height(4.0));
+    };
+    if width >= 120.0 {
+        match &big {
+            Some((run, seed, step, n)) => {
+                if let Some(t) = tex.live(&st.live_previews, &(run.clone(), *seed)) {
+                    let [w, h] = t.size_vec2().into();
+                    let image = egui::Image::new(&t).fit_to_exact_size(fit(w, h)).corner_radius(3.0);
+                    let resp = ui.add(image.sense(egui::Sense::click()));
+                    let rect = resp.rect;
+                    ui.painter().text(
+                        rect.right_bottom() + egui::vec2(-4.0, -4.0),
+                        egui::Align2::RIGHT_BOTTOM,
+                        format!("preview, {}×{}", w as u32, h as u32),
+                        egui::FontId::proportional(11.0),
+                        egui::Color32::from_white_alpha(170),
+                    );
+                    let corner =
+                        egui::Rect::from_min_size(rect.right_top() + egui::vec2(-26.0, 4.0), egui::vec2(22.0, 20.0));
+                    let expand =
+                        ui.place(corner, egui::Button::new(ph::ARROWS_OUT).small()).on_hover_text("watch it large");
+                    let resp =
+                        resp.on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_text("click to watch it large");
+                    if resp.clicked() || expand.clicked() {
+                        out.push(Msg::LiveView(Some((run.clone(), *seed))));
+                    }
+                }
+                caption(ui, live_caption(st, run, *seed), *step as f32 / (*n).max(1) as f32);
+            }
+            None => {
+                // between seeds: the last one's image, else what's coming
+                let done = st.live_done.as_ref().filter(|(r, ..)| runs.iter().any(|x| &x.run == r));
+                let shown = done.and_then(|(run, seed, image)| {
+                    let img = increart_core::ImageRef::output(image.clone());
+                    Some((run, seed, img.clone(), tex.full_or_thumb(root, &img)?))
+                });
+                match shown {
+                    Some((run, seed, img, t)) => {
+                        let [w, h] = t.size_vec2().into();
+                        let image = egui::Image::new(&t).fit_to_exact_size(fit(w, h)).corner_radius(3.0);
+                        let resp = ui.add(image.sense(egui::Sense::click()));
+                        let resp = resp
+                            .on_hover_cursor(egui::CursorIcon::PointingHand)
+                            .on_hover_text("click to view it large");
+                        if resp.clicked() {
+                            out.push(Msg::Preview(Some(img)));
+                        }
+                        let label = st.index.run(run).map_or(String::new(), |(_, r)| r.label.clone());
+                        caption(ui, format!("{label} · seed {seed} · done"), 1.0);
+                    }
+                    None if st.config.preview == increart_core::config::Preview::Off => {
+                        ui.weak("Previews are off (Server settings → Preview while generating).");
+                    }
+                    None if sampling.is_empty() && runs.iter().all(|r| r.sent.is_empty()) => {
+                        ui.weak("Waiting for a server…");
+                    }
+                    None => {
+                        ui.weak("Waiting for the first frame…");
+                    }
+                }
+            }
+        }
+    }
+    for r in &runs {
+        sent_lines(ui, r);
+    }
+    // the others (all of them when too narrow for the large one)
+    let others: Vec<_> = framed
+        .iter()
+        .filter(|(r, s, ..)| width < 120.0 || big.as_ref().is_none_or(|(br, bs, ..)| (br, bs) != (r, s)))
+        .collect();
+    if !others.is_empty() {
+        ui.horizontal_wrapped(|ui| {
+            for (run, seed, ..) in others {
+                let Some(t) = tex.live(&st.live_previews, &(run.clone(), *seed)) else { continue };
+                let [w, h] = t.size_vec2().into();
+                let scale = LIVE_ROW / w.max(h).max(1.0);
+                let image = egui::Image::new(&t).fit_to_exact_size(egui::vec2(w * scale, h * scale)).corner_radius(3.0);
+                let r = ui
+                    .add(image.sense(egui::Sense::click()))
+                    .on_hover_cursor(egui::CursorIcon::PointingHand)
+                    .on_hover_text(format!(
+                        "{}\nclick to show it above · double-click to watch it large",
+                        live_caption(st, run, *seed)
+                    ));
+                if r.double_clicked() {
+                    out.push(Msg::LiveView(Some((run.clone(), *seed))));
+                } else if r.clicked() {
+                    ui.data_mut(|d| d.insert_temp(pick_id, (run.clone(), *seed)));
+                }
+            }
+        });
+    }
+    ui.add_space(4.0);
+}
+
+/// A seed being generated, its live preview filling the window: what it
+/// is and its step over a bar, the run's stop buttons, the frame scaled
+/// up smoothly (KoboldCpp's are 1/16 of the image, so blurry), its size in
+/// the corner. ← / → go through the seeds being generated; Esc, a click
+/// outside or Close shut it. When its image comes it shows large instead.
+pub fn live_view_window(ctx: &egui::Context, st: &AppState, tex: &mut Textures, out: &mut Vec<Msg>) {
+    let Some((run, seed)) = &st.live_view else { return };
+    let seeds = st.sampling_seeds();
+    if seeds.len() > 1 {
+        ctx.input(|i| {
+            if i.key_pressed(egui::Key::ArrowLeft) {
+                out.push(Msg::LiveViewStep(-1));
+            }
+            if i.key_pressed(egui::Key::ArrowRight) {
+                out.push(Msg::LiveViewStep(1));
+            }
+        });
+    }
+    let room = ctx.content_rect().size() * 0.95;
+    let frame = egui::Frame::NONE
+        .fill(egui::Color32::from_gray(16))
+        .stroke(egui::Stroke::new(1.0, egui::Color32::from_gray(90)))
+        .inner_margin(8.0);
+    let m = egui::Modal::new(egui::Id::unique("live_view"))
+        .frame(frame)
+        .backdrop_color(egui::Color32::from_black_alpha(200))
+        .show(ctx, |ui| {
+            ui.set_width(room.x - 16.0);
+            let project = st.index.run(run).map_or(String::new(), |(p, _)| p.name().to_string());
+            let finishing = st.finishing.contains(run);
+            let sampling = st.progress.keys().filter(|(r, _)| r == run).count();
+            ui.horizontal(|ui| {
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui.button(ic(ph::X, "Close   Esc")).clicked() {
+                        out.push(Msg::LiveView(None));
+                    }
+                    stop_buttons(ui, run, finishing, sampling, true, out);
+                    if seeds.len() > 1 {
+                        let at = seeds.iter().position(|s| s.0 == *run && s.1 == *seed).map_or(0, |i| i + 1);
+                        if ui.small_button(ph::CARET_RIGHT).on_hover_text("next seed being generated   →").clicked() {
+                            out.push(Msg::LiveViewStep(1));
+                        }
+                        ui.weak(format!("{at} of {}", seeds.len()));
+                        if ui.small_button(ph::CARET_LEFT).on_hover_text("previous seed being generated   ←").clicked()
+                        {
+                            out.push(Msg::LiveViewStep(-1));
+                        }
+                    }
+                    ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                        let title = format!("{project} · {}", live_caption(st, run, *seed));
+                        ui.add(egui::Label::new(RichText::new(title).strong()).truncate());
+                    });
+                });
+            });
+            let (step, n) = st.progress.get(&(run.clone(), *seed)).copied().unwrap_or((0, 0));
+            ui.add(egui::ProgressBar::new(step as f32 / n.max(1) as f32).desired_height(4.0));
+            ui.add_space(4.0);
+            let size = egui::vec2(ui.available_width(), room.y - ui.min_rect().height() - 16.0);
+            let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
+            match tex.live(&st.live_previews, &(run.clone(), *seed)) {
+                Some(t) => {
+                    let [w, h] = t.size_vec2().into();
+                    let scale = (size.x / w.max(1.0)).min(size.y / h.max(1.0));
+                    let at = egui::Rect::from_center_size(rect.center(), egui::vec2(w * scale, h * scale));
+                    egui::Image::new(&t).paint_at(ui, at);
+                    let note = format!("preview, {}×{}", w as u32, h as u32);
+                    ui.painter().text(
+                        at.right_bottom() + egui::vec2(-6.0, -6.0),
+                        egui::Align2::RIGHT_BOTTOM,
+                        note,
+                        egui::FontId::proportional(12.0),
+                        egui::Color32::from_white_alpha(170),
+                    );
+                }
+                None => {
+                    let text = if st.config.preview == increart_core::config::Preview::Off {
+                        "Previews are off (Server settings → Preview while generating)"
+                    } else {
+                        "Waiting for its first frame…"
+                    };
+                    ui.painter().text(
+                        rect.center(),
+                        egui::Align2::CENTER_CENTER,
+                        text,
+                        egui::FontId::proportional(16.0),
+                        ui.visuals().weak_text_color(),
+                    );
+                }
+            }
+        });
+    if m.should_close() {
+        out.push(Msg::LiveView(None));
     }
 }
 
@@ -3436,10 +3870,22 @@ pub fn job_window(ctx: &egui::Context, st: &AppState, tex: &mut Textures, out: &
                 (true, false) => format!("generating on {}", on.join(", ")),
             };
             ui.add(egui::ProgressBar::new(j.fraction()).text(format!("{} / {} seeds · {state}", j.done, j.total)));
-            sampling_bars(ui, j);
+            sampling_bars(ui, st, tex, j, None, out);
+            sent_lines(ui, j);
         }
         ui.add_space(4.0);
         egui::ScrollArea::vertical().max_height(ctx.content_rect().height() * 0.7).show(ui, |ui| {
+            // the seeds being sampled, as they come out
+            if let Some(j) = &progress
+                && j.sampling.iter().any(|(seed, ..)| st.live_previews.contains_key(&(id.clone(), *seed)))
+            {
+                ui.horizontal_wrapped(|ui| {
+                    for (seed, ..) in &j.sampling {
+                        live_frame(ui, st, tex, id, *seed, LIVE_LARGE, out);
+                    }
+                });
+                ui.add_space(6.0);
+            }
             ui.weak("Prompt");
             ui.add(egui::Label::new(&run.prompt).wrap());
             if !run.negative_prompt.is_empty() {

@@ -2598,6 +2598,7 @@ fn start_engine_with_pending_runs_does_not_hang() {
     let run = h.state.project_entry().unwrap().runs[0].id.clone();
     h.rt.run(Effect::StartEngine {
         shared: increart_core::config::SdServerConfig::default(),
+        preview: Default::default(),
         order: Default::default(),
         skip_ram_check: false,
         random: None,
@@ -4350,6 +4351,7 @@ fn idle_server(s: &mut AppState, i: usize, idle: bool) {
             model: None,
             idle,
             runs: vec![],
+            seeds: vec![],
         }),
     );
 }
@@ -4586,6 +4588,7 @@ fn queue_cleared_alert_sounds_once_when_a_gpu_finishes() {
             model: None,
             idle: false,
             runs: vec![run.clone()],
+            seeds: vec![],
         };
         update(s, Msg::Engine(e));
     };
@@ -4709,7 +4712,7 @@ fn queue_pressed_twice_before_the_save_lands_saves_once() {
     h.send(Msg::Generate(f));
     h.send(Msg::QueueGenerate);
     assert!(h.send(Msg::QueueGenerate).is_empty(), "not saved again");
-    assert!(h.state.messages.iter().any(|m| m.text.contains("r00 is being queued already")));
+    assert!(h.state.messages.iter().any(|m| m.text.contains("r00 is still being saved")));
     h.settle();
     assert_eq!(h.state.project_entry().unwrap().runs.len(), 1);
     assert!(h.state.queueing.is_empty());
@@ -7365,6 +7368,68 @@ fn skipping_the_ram_check_is_saved_and_reaches_the_engine() {
     assert!(update(&mut s, Msg::SetSkipRamCheck(true)).is_empty());
 }
 
+/// Previews as a seed generates: each step's frame kept (the latest), gone
+/// once the image is done or fails; the mode saved and sent to the engine
+/// live, Off dropping the frames shown.
+#[test]
+fn live_previews_follow_the_seeds_being_generated() {
+    use increart_core::config::Preview;
+    use increart_core::engine::Event;
+    let mut s = dialog_state(vec![], None);
+    let run = increart_core::Id::new(increart_core::id::now(), 1);
+    let progress = |seed: u64, step: u32, preview: Option<Vec<u8>>| {
+        Msg::Engine(Event::Progress { run: run.clone(), rev: 0, seed, server: 0, step, total: 4, preview })
+    };
+    update(&mut s, progress(0, 1, Some(vec![1])));
+    update(&mut s, progress(0, 2, Some(vec![2])));
+    update(&mut s, progress(1, 1, Some(vec![9])));
+    // a step without one (between previews) keeps the last
+    update(&mut s, progress(0, 3, None));
+    let frame = |s: &AppState, seed: u64| s.live_previews.get(&(run.clone(), seed)).map(|(st, p)| (*st, p.to_vec()));
+    assert_eq!(frame(&s, 0), Some((2, vec![2])));
+    assert_eq!(frame(&s, 1), Some((1, vec![9])));
+    // watched large, the seed's image shows large once it comes
+    update(&mut s, Msg::LiveView(Some((run.clone(), 0))));
+    assert!(s.previewing());
+    let image = increart_core::Id::new(increart_core::id::now(), 9);
+    update(
+        &mut s,
+        Msg::Engine(Event::Output {
+            run: run.clone(),
+            rev: 0,
+            seed: 0,
+            image: image.clone(),
+            link: PathBuf::from("r01_s0.png"),
+            server: 0,
+            elapsed_s: 4.0,
+            step_s: 1.0,
+        }),
+    );
+    assert_eq!(frame(&s, 0), None, "done: the image itself shows now");
+    assert_eq!(s.live_view, None);
+    assert_eq!(s.preview, Some(increart_core::ImageRef::output(image.clone())));
+    assert_eq!(s.live_done, Some((run.clone(), 0, image)), "held in Generate's panel until the next frame");
+    update(&mut s, Msg::Preview(None));
+    // a failed seed closes its live view
+    update(&mut s, Msg::LiveView(Some((run.clone(), 1))));
+    update(&mut s, Msg::Engine(Event::SeedFailed { run: run.clone(), rev: 0, seed: 1, error: "x".into() }));
+    assert!(s.live_previews.is_empty());
+    assert!(!s.previewing());
+
+    assert_eq!(s.config.preview, Preview::Proj, "on by default");
+    update(&mut s, progress(2, 1, Some(vec![3])));
+    update(&mut s, Msg::LiveView(Some((run.clone(), 2))));
+    let fx = update(&mut s, Msg::SetPreview(Preview::Off));
+    assert_eq!(s.config.preview, Preview::Off);
+    assert!(fx.iter().any(|f| matches!(f, Effect::SetPreview(Preview::Off))));
+    assert!(fx.iter().any(|f| matches!(f, Effect::SaveConfig(..))), "{fx:?}");
+    assert!(s.live_previews.is_empty());
+    assert_eq!(s.live_view, None, "previews off: nothing to watch");
+    update(&mut s, progress(2, 2, Some(vec![4])));
+    assert!(s.live_previews.is_empty(), "a seed sent before still brings them: not shown");
+    assert!(update(&mut s, Msg::SetPreview(Preview::Off)).is_empty());
+}
+
 #[test]
 fn the_traffic_log_setting_is_saved_and_applied() {
     let mut s = dialog_state(vec![], None);
@@ -8278,4 +8343,22 @@ fn random_order_goes_to_the_engine_with_this_starts_salt() {
     assert!(update(&mut s, Msg::JobRandom(true)).is_empty(), "unchanged");
     let fx = update(&mut s, Msg::JobRandom(false));
     assert!(fx.iter().any(|f| matches!(f, Effect::SetJobOrder(Order::Sequential, None))), "{fx:?}");
+}
+
+/// A run being saved says what it's doing (hashing a model file the first
+/// time, how far) until it's saved or saving fails; Queue pressed again
+/// meanwhile says so too.
+#[test]
+fn a_run_being_saved_says_what_it_is_doing() {
+    let mut s = dialog_state(vec![], None);
+    let project = increart_core::Id::new(increart_core::id::now(), 1);
+    let note = |n: &str, f: f32| Some((n.to_string(), f));
+    // not being saved: nothing kept
+    update(&mut s, Msg::QueueingNote(project.clone(), "r02".into(), note("hashing a.safetensors once", 0.5)));
+    assert!(s.queueing_notes.is_empty());
+    s.queueing.push((project.clone(), "r02".into()));
+    update(&mut s, Msg::QueueingNote(project.clone(), "r02".into(), note("hashing a.safetensors once", 0.5)));
+    assert_eq!(s.queueing_notes.get(&(project.clone(), "r02".into())).map(|(_, f)| *f), Some(0.5));
+    update(&mut s, Msg::OpDone(Err("disk full".into()), None));
+    assert!(s.queueing.is_empty() && s.queueing_notes.is_empty(), "failed: Queue works again");
 }

@@ -960,11 +960,11 @@ Config {
         sd_server: SdServerSettings {
             binary: "/opt/sdcpp/build-hip/bin/sd-server",
             args: ["--fa", "--conditioning-cache-size", "32"],
-            preview: "none",
             commit: "fd21ecf",
         },
         koboldcpp: "/opt/koboldcpp/koboldcpp",  // every KoboldCpp entry's, unless it names its own binary
     },
+    preview: Tae,                                 // frames while generating; Proj when left out
     resolutions: [ … ],
 }
 ```
@@ -1000,8 +1000,16 @@ Config {
 - A `KoboldCpp` with `images: false`, or an `OpenAiChat`, is a chat server
   for prompt enhance only (see Prompt rewriting → PE server and requests);
   it generates nothing.
-- `programs.sd_server.preview` is the preview mode sent with every job (`none`,
-  `proj`, `tae`, `vae`); `commit` is recorded in recipes as `sdcpp`.
+- `preview` is what to show while an image generates: `Off`, `Proj` (the
+  default: fast latent colours), `Tae` (needs a tae file in the model's `tae`
+  slot) or `Vae` (full VAE, slowest). Set in Server settings ("Preview while
+  generating"); a change reaches the engine at once and applies from the next
+  seed, with no server restart. sd-server gets it as each job's `preview`
+  mode (`none`, `proj`, `tae`, `vae`); KoboldCpp sends its own frame (1/16
+  size, TAE if it has one, else latent colours) unless it is `Off`. Older
+  configs' `programs.sd_server.preview` moves here on load (`"none"` leaves
+  the default). With `Off` sd-server reports no steps, so its bars jump
+  from queued to done. `programs.sd_server.commit` is recorded in recipes as `sdcpp`.
 
 ### Resolutions
 
@@ -1808,8 +1816,14 @@ quitting:
   Queueing keeps the draft (with the next label and seed) so a variation is
   one edit away; **Clear** resets it. Copying a project copies its draft.
   Queue again before that run or sweep is saved (a double-click; the label
-  moves on only once it is) says "r05 is being queued already" and saves
-  nothing: a sweep saved twice showed each style twice on its contact sheet.
+  moves on only once it is) says "r05 is still being saved" (with what
+  it's doing, see Jobs) and saves nothing: a sweep saved twice showed each
+  style twice on its contact sheet. Saving hashes the preset's model files
+  for the recipe, each once (cached in the library's `cache/`); a model's
+  first run in a library waits for that (minutes for a 20–30 GiB file), so
+  the hashing tells the GUI how far it is (`Msg::QueueingNote`: "hashing
+  qwen_image.safetensors once: 12.3 of 29.0 GiB", a bar), shown in Jobs and
+  in Generate's panel until the run is saved.
 - Run labels count from `r00` (a sweep counts once), always past the highest
   `rNN` the project already has, so libraries numbered from `r01` carry on.
 - **New idea**: `input/draft.rsn` (`IdeaDraft { title, text, tags, images }`;
@@ -3343,7 +3357,35 @@ the keys and mouse buttons go through that view's own history instead.
   to the system trash; the images stay until Clean up. **Empty
   discarded…** (asks first) does it for all of them.
 - **Jobs**: per-run progress and per-server state (loading / draining /
-  generating), with a live preview frame from `jobs/{id}`. Under **Runs**,
+  generating). Runs being saved show first ("r02 · being saved, then
+  queued", what saving is doing and a bar). A seed handed to a server but
+  not sampling yet shows as a line under its run with a spinner: "seed 5:
+  sending to kcpp0", "queued on kcpp0, waiting its turn" or "starting on
+  kcpp0" (in a sweep's lines "s5 queued"); the engine says each server's
+  seeds and their phase in `Event::Server { seeds }` (`SentSeed`,
+  `SentPhase::{Sending, Queued, Generating}`). Each seed being sampled shows its latest frame (64 pt) beside
+  its bar, a sweep's box a row of them, a folded project's box a row too
+  (each with its run, seed and step under it); the job details show them
+  at 256 pt. In the Generate tab, while the open project generates, a
+  **Generating** section is pinned to the bottom of the Images pane (so the
+  references don't move as it comes and goes; its header folds it to a
+  bar, remembered): one frame as wide as the pane (height at most 45% of
+  the window), the seed closest to done unless another was picked, with a
+  ⤢ corner button, its run, seed and step over a bar, and the other seeds'
+  frames in a 48 pt row (a click shows one large there, a double-click
+  watches it). Between seeds the last one's finished image stays
+  (`AppState::live_done`; a click shows it in the large preview), else
+  "Waiting for the first frame…". Narrower than 120 pt, only the row.
+  Hovering a frame says its
+  run, seed and step; a click watches it large (`Msg::LiveView`): the frame
+  fills the window, scaled up smoothly (KoboldCpp's are 1/16 of the image,
+  so blurry; "preview, 64×64" in its corner), under the project, run, seed
+  and step, a bar, ‹ "2 of 5" › with ← / → through the seeds being
+  generated, the run's Finish & stop / Stop now, and Close (Esc, a click
+  outside). When the seed's image comes it shows in the large preview
+  instead; a failed seed, its run ending or previews turned off close it.
+  Frames come with the progress events (sd-server's `jobs/{id}`, KoboldCpp's
+  `/sdapi/v1/progress` `current_image`) and go when the seed's image arrives. Under **Runs**,
   the order toggle with **Random** and **Finish & stop all** / **Stop all now** stay put
   (always shown, greyed out with nothing generating); the runs scroll
   under them, by project: a project is a box in the order its first run is
@@ -3358,8 +3400,8 @@ the keys and mouse buttons go through that view's own history instead.
   ("r05 · sweep", its seeds, time left and stops, "now: Ink s3 14/20, …"
   and a bar), open a line per run: its row (the style, "cfg 3"), a bar,
   what it's sampling and its stops. A click on a run's block or line opens
-  its details. Preview is `"proj"`
-  by default; `"tae"` once TAEQI2.1 is in the `tae` slot.
+  its details. Preview is `Proj`
+  by default; `Tae` once TAEQI2.1 is in the `tae` slot.
 - **Job details**: clicking a run in Jobs or in the jobs popover opens a
   modal: its progress, the prompt and negative, the input images as
   thumbnails labelled by their tag (`<image1>`, `<image2>`…, **start image**;

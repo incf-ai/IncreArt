@@ -91,12 +91,36 @@ impl Default for EngineOptions {
     }
 }
 
+/// A seed handed to a server, and how far it got there.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SentSeed {
+    pub run: Id,
+    pub seed: u64,
+    pub phase: SentPhase,
+}
+
+/// Where a seed handed to a server is: being sent (the request, its
+/// images), waiting in the server's queue, or generating.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SentPhase {
+    Sending,
+    Queued,
+    Generating,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum Event {
     /// A server's scheduler state changed (`state` is for display; `idle`:
     /// ready with no job in flight; `runs`: those with a job in flight
-    /// there).
-    Server { server: ServerIdx, state: String, model: Option<ModelKey>, idle: bool, runs: Vec<Id> },
+    /// there; `seeds`: those jobs' seeds and how far each got).
+    Server {
+        server: ServerIdx,
+        state: String,
+        model: Option<ModelKey>,
+        idle: bool,
+        runs: Vec<Id>,
+        seeds: Vec<SentSeed>,
+    },
     /// Sampling progress of a seed, with the latest preview PNG if any.
     Progress { run: Id, rev: u32, seed: u64, server: ServerIdx, step: u32, total: u32, preview: Option<Vec<u8>> },
     /// An image was stored and linked into the project's `unreviewed/`, by
@@ -115,8 +139,9 @@ pub enum Event {
     ModelLoaded { server: ServerIdx, recipe: String, took_s: f32 },
 }
 
-/// A server's last reported state, model, idleness and runs in flight.
-type Shown = (String, Option<ModelKey>, bool, Vec<Id>);
+/// A server's last reported state, model, idleness, runs in flight and
+/// their seeds.
+type Shown = (String, Option<ModelKey>, bool, Vec<Id>, Vec<SentSeed>);
 
 /// How a cancel treats the images being generated.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -132,6 +157,8 @@ enum Msg {
     Queue(Id),
     Cancel(Id, Stop),
     Order(Order, Option<u64>),
+    /// The preview mode sent with the jobs from now on.
+    Preview(String),
     Report(ServerIdx, Report),
     Shutdown,
 }
@@ -270,6 +297,7 @@ impl Engine {
             listed: vec![],
             relist: false,
             generating: HashSet::new(),
+            submitted: HashSet::new(),
             told_stuck: HashSet::new(),
             logs: HashMap::new(),
             load_started: vec![],
@@ -299,6 +327,12 @@ impl Engine {
     /// in queue order, or random with a salt ([`Scheduler::random`]).
     pub fn set_order(&self, order: Order, random: Option<u64>) {
         let _ = self.tx.send(Msg::Order(order, random));
+    }
+
+    /// The preview mode (`none`, `proj`, `tae`, `vae`) of the jobs sent
+    /// from now on.
+    pub fn set_preview(&self, mode: &str) {
+        let _ = self.tx.send(Msg::Preview(mode.to_string()));
     }
 
     /// Loads on this machine stop (or start again) waiting for free RAM;
@@ -356,6 +390,8 @@ struct Coordinator {
     relist: bool,
     /// Tickets whose job was seen generating.
     generating: HashSet<Ticket>,
+    /// Tickets a server took as a job (queued there, or further).
+    submitted: HashSet<Ticket>,
     /// Models said to be loadable nowhere (said once until that changes).
     told_stuck: HashSet<ModelKey>,
     /// Queued runs' generation logs.
@@ -478,6 +514,9 @@ impl Coordinator {
 
     fn step(&mut self) {
         let now = Instant::now();
+        // tickets no longer in flight
+        let sched = &self.sched;
+        self.submitted.retain(|t| sched.ticket(*t).is_some());
         if std::mem::take(&mut self.relist) {
             self.list_round += 1;
             for i in 0..self.servers.len() {
@@ -497,16 +536,25 @@ impl Coordinator {
             let idle =
                 matches!(self.sched.server_state(i), ServerState::Ready) && self.sched.in_flight(i).next().is_none();
             let mut runs: Vec<Id> = vec![];
-            for (_, r) in self.sched.in_flight(i) {
+            let mut seeds: Vec<SentSeed> = vec![];
+            for (t, r) in self.sched.in_flight(i) {
                 if !runs.contains(&r.run) {
                     runs.push(r.run.clone());
                 }
+                let phase = if self.generating.contains(&t) {
+                    SentPhase::Generating
+                } else if self.submitted.contains(&t) {
+                    SentPhase::Queued
+                } else {
+                    SentPhase::Sending
+                };
+                seeds.push(SentSeed { run: r.run.clone(), seed: r.seed, phase });
             }
-            let now = (state, model, idle, runs);
+            let now = (state, model, idle, runs, seeds);
             if self.shown[i].as_ref() != Some(&now) {
                 self.shown[i] = Some(now.clone());
-                let (state, model, idle, runs) = now;
-                self.emit(Event::Server { server: i, state, model, idle, runs });
+                let (state, model, idle, runs, seeds) = now;
+                self.emit(Event::Server { server: i, state, model, idle, runs, seeds });
             }
         }
     }
@@ -589,6 +637,7 @@ impl Coordinator {
                 self.relist = true;
             }
             Msg::Order(order, random) => (self.sched.order, self.sched.random) = (order, random),
+            Msg::Preview(mode) => self.opts.generation.preview = mode,
             Msg::Cancel(run, how) => {
                 let (dropped, in_flight) = self.sched.cancel_run(&run);
                 let mut seeds: Vec<u64> = dropped.iter().map(|(_, s)| *s).collect();
@@ -668,6 +717,9 @@ impl Coordinator {
                 }
                 Report::Submitted { ticket, id } => {
                     self.answered(s);
+                    if self.sched.ticket(ticket).is_some() {
+                        self.submitted.insert(ticket);
+                    }
                     self.log_ticket(ticket, s, &format!("queued on the server as job {id}"))
                 }
                 Report::Warmed(r) => {
