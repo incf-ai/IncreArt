@@ -1871,21 +1871,36 @@ fn model_wizard(state: &mut AppState, msg: Msg) -> Vec<Effect> {
                 }
                 state.files_changed();
             }
-            // the presets added (not twice), the folders used
+            // the presets added (not twice; your older copy replaced, under
+            // the same name), the folders used
             let c = &mut state.config;
-            let mut added = 0;
+            let (mut added, mut updated) = (0, 0);
             for p in picked {
-                if !c.recipes.iter().any(|r| r.name == p.name) {
-                    // in the models being edited too (the same window), so
-                    // saving them doesn't drop it
-                    if let Some(e) = &mut state.recipe_editor
-                        && !e.rows.iter().any(|r| r.preset.name == p.name)
-                    {
-                        let sigmas = p.custom_sigmas.iter().map(f32::to_string).collect::<Vec<_>>().join(", ");
-                        e.rows.push(crate::RecipeRow { preset: p.clone(), origin: Some(c.recipes.len()), sigmas });
+                match c.recipes.iter().position(|r| r.name == p.name) {
+                    Some(i) => {
+                        if crate::state::differs(&c.recipes[i], &p) {
+                            if let Some(e) = &mut state.recipe_editor
+                                && let Some(row) = e.rows.iter_mut().find(|r| r.origin == Some(i))
+                            {
+                                row.preset = p.clone();
+                                row.sigmas = p.custom_sigmas.iter().map(f32::to_string).collect::<Vec<_>>().join(", ");
+                            }
+                            c.recipes[i] = p;
+                            updated += 1;
+                        }
                     }
-                    c.recipes.push(p);
-                    added += 1;
+                    None => {
+                        // in the models being edited too (the same window), so
+                        // saving them doesn't drop it
+                        if let Some(e) = &mut state.recipe_editor
+                            && !e.rows.iter().any(|r| r.preset.name == p.name)
+                        {
+                            let sigmas = p.custom_sigmas.iter().map(f32::to_string).collect::<Vec<_>>().join(", ");
+                            e.rows.push(crate::RecipeRow { preset: p.clone(), origin: Some(c.recipes.len()), sigmas });
+                        }
+                        c.recipes.push(p);
+                        added += 1;
+                    }
                 }
             }
             let mut fx = vec![];
@@ -1898,6 +1913,10 @@ fn model_wizard(state: &mut AppState, msg: Msg) -> Vec<Effect> {
             if added > 0 {
                 let s = if added == 1 { "" } else { "s" };
                 state.messages_info(format!("{added} model{s} added"));
+            }
+            if updated > 0 {
+                let s = if updated == 1 { "" } else { "s" };
+                state.messages_info(format!("{updated} model{s} updated to the built-in's files"));
             }
             if files.is_empty() {
                 fx.push(Effect::ListLoadable);

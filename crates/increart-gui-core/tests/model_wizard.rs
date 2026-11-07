@@ -298,3 +298,49 @@ fn link_whats_here_links_every_built_in_models_files_found() {
     assert!(s.config.recipes.is_empty());
     assert!(s.messages.iter().any(|m| m.text.contains("linked into")), "{:?}", s.messages);
 }
+
+/// As reported: a config from before (the default model with sd-server's
+/// int8 files, nothing to download) where the KoboldCpp wizard put its
+/// files in koboldcpp/.
+#[test]
+fn an_older_copy_of_a_built_in_says_so_and_install_updates_it() {
+    use increart_core::modelsetup::FileIndex;
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_string_lossy().into_owned();
+    let builtin = catalogue().into_iter().find(|p| p.name == "Qwen-Image 2.1").unwrap();
+    // the wizard's files: the built-in's VAE and text encoder among them
+    let kcpp = tmp.path().join("koboldcpp");
+    std::fs::create_dir_all(&kcpp).unwrap();
+    for f in [&builtin.files["vae"], &builtin.files["llm"]] {
+        std::fs::write(kcpp.join(std::path::Path::new(f).file_name().unwrap()), b"12345").unwrap();
+    }
+    let mut old = increart_core::config::builtin_recipes()[0].clone();
+    (old.alternatives, old.downloads) = Default::default();
+    let mut s = state(vec![dir.clone()]);
+    s.config.recipes = vec![old.clone()];
+    update(&mut s, Msg::OpenModelWizard);
+    update(&mut s, Msg::ModelFoldersFound(vec![]));
+    let index = FileIndex::build(&[tmp.path().to_path_buf()]);
+    update(&mut s, Msg::ModelFilesIndexed(vec![], Box::new(index)));
+    let w = s.model_wizard.clone().unwrap();
+    let cat = catalogue();
+    let lists = ModelLists::of(&s.config.recipes, &cat, std::slice::from_ref(&dir), &w.sizes, w.index.as_deref());
+    let (_, needs) = &lists.installed[0];
+    // two files missing, the VAE found elsewhere; no size (so no fit)
+    assert!(needs.update && needs.unavailable, "{needs:?}");
+    assert_eq!((needs.missing, needs.links.len()), (2, 1));
+    assert_eq!(needs.total_bytes, None);
+    assert_eq!(needs.fits(24.0), None);
+    // installed again: replaced by the built-in, under the same name
+    let mut w = w;
+    w.dir = dir.clone();
+    w.picked = [builtin.name.clone()].into();
+    update(&mut s, Msg::EditModelWizard(Box::new(w)));
+    update(&mut s, Msg::ModelWizardGo);
+    assert_eq!(s.config.recipes.len(), 1);
+    assert_eq!(s.config.recipes[0], builtin);
+    assert!(s.messages.iter().any(|m| m.text.contains("1 model updated")), "{:?}", s.messages);
+    // its VAE and text encoder linked from koboldcpp/, not downloaded
+    assert!(tmp.path().join(&builtin.files["vae"]).is_file());
+    assert!(tmp.path().join(&builtin.files["llm"]).is_file());
+}

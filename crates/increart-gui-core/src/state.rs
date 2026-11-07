@@ -1179,9 +1179,14 @@ impl<'a> ModelLists<'a> {
     ) -> ModelLists<'a> {
         let builtin = |name: &str| catalogue.iter().any(|c| c.name == name);
         let needs = |p: &'a RecipePreset| (p, PresetNeeds::of(p, dirs, sizes, index));
+        let installed = |p: &'a RecipePreset| {
+            let (p, mut n) = needs(p);
+            n.update = catalogue.iter().find(|c| c.name == p.name).is_some_and(|c| differs(p, c));
+            (p, n)
+        };
         ModelLists {
             custom: recipes.iter().filter(|r| !builtin(&r.name)).map(needs).collect(),
-            installed: recipes.iter().filter(|r| builtin(&r.name)).map(needs).collect(),
+            installed: recipes.iter().filter(|r| builtin(&r.name)).map(installed).collect(),
             available: catalogue.iter().filter(|c| !recipes.iter().any(|r| r.name == c.name)).map(needs).collect(),
         }
     }
@@ -1272,6 +1277,18 @@ pub struct PresetNeeds {
     pub total_bytes: Option<u64>,
     /// A slot with none of its files there nor a download.
     pub unavailable: bool,
+    /// How many such slots (none found elsewhere either).
+    pub missing: usize,
+    /// Your copy of a built-in model, its files not the built-in's now
+    /// (an older one, or edited): installing the built-in replaces it.
+    pub update: bool,
+}
+
+/// Whether your copy of a built-in model has other files than it now
+/// (files, alternatives or LoRAs).
+pub fn differs(mine: &RecipePreset, builtin: &RecipePreset) -> bool {
+    let loras = |p: &RecipePreset| p.loras.iter().map(|l| l.file.clone()).collect::<Vec<_>>();
+    mine.files != builtin.files || mine.alternatives != builtin.alternatives || loras(mine) != loras(builtin)
 }
 
 impl PresetNeeds {
@@ -1306,7 +1323,7 @@ impl PresetNeeds {
                 },
             }
         };
-        let mut unavailable = false;
+        let mut missing = 0;
         let mut total = Some(0u64);
         let mut more: Vec<Link> = vec![];
         // each slot's file there, else the one linked or fetched; a slot with
@@ -1323,7 +1340,7 @@ impl PresetNeeds {
                         total = total.map(|t| t + l.bytes);
                         more.push(l);
                     }
-                    None => unavailable = true,
+                    None => missing += 1,
                 },
             }
         }
@@ -1332,7 +1349,10 @@ impl PresetNeeds {
         }
         links.extend(more);
         let download_bytes = downloads.iter().try_fold(0u64, |n, d| Some(n + sizes.get(&d.url).copied().flatten()?));
-        PresetNeeds { downloads, links, download_bytes, total_bytes: total, unavailable }
+        // a file missing: its size isn't known, so neither is the whole
+        let unavailable = missing > 0;
+        let total_bytes = if unavailable { None } else { total };
+        PresetNeeds { downloads, links, download_bytes, total_bytes, unavailable, missing, update: false }
     }
 
     /// Whether it fits a GPU of `vram_gib` (its files a little under it).

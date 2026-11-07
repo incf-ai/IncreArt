@@ -162,7 +162,9 @@ fn overview(ui: &mut egui::Ui, st: &AppState, w: &mut ModelWizard, list_height: 
                     .show(ui, |ui| {
                         if all.is_empty() {
                             ui.weak(none);
-                        } else if let Some(name) = list_table(ui, id, &shown, &gpus, section, &mut w.sort) {
+                        } else if let Some((name, mend)) = list_table(ui, id, &shown, &gpus, section, &mut w.sort) {
+                            // an older copy to update: in Install built-in, ticked
+                            let section = if mend { Section::Available } else { section };
                             open_row(ui, st, w, &name, section, out);
                         }
                         if section == Section::Custom {
@@ -257,8 +259,17 @@ enum Section {
 /// What a model's files need, as the Files column says it.
 fn status(needs: &PresetNeeds, section: Section) -> RichText {
     if needs.unavailable {
-        let t = if section == Section::Custom { "files missing" } else { "not there, no download" };
-        return RichText::new(ic(ph::WARNING, t)).color(NEUTRAL);
+        // your older copy of a built-in: installing the built-in mends it
+        if needs.update && section == Section::Installed {
+            return RichText::new(ic(ph::ARROWS_CLOCKWISE, "older copy: update")).color(ACCENT);
+        }
+        let m = needs.missing;
+        let t = match (needs.links.len(), section) {
+            (0, Section::Custom) => format!("{m} file{} missing", plural(m)),
+            (0, _) => format!("{m} file{} not there, no download", plural(m)),
+            (l, _) => format!("{m} file{} missing · {l} found elsewhere", plural(m)),
+        };
+        return RichText::new(ic(ph::WARNING, &t)).color(NEUTRAL);
     }
     let (l, n) = (needs.links.len(), needs.downloads.len());
     let size = needs.download_bytes.map_or(String::new(), |b| format!(" ({})", gb(b)));
@@ -339,6 +350,9 @@ fn heads(h: &mut egui_extras::TableRow, model_tip: &str, sort: &mut ModelSort) {
 fn size_cell(ui: &mut egui::Ui, needs: &PresetNeeds) {
     match needs.total_bytes {
         Some(b) => ui.label(gb(b)),
+        None if needs.unavailable => {
+            ui.weak("?").on_hover_text("a file is missing (and can't be downloaded): not known")
+        }
         None => ui.weak("…").on_hover_text("asking Hugging Face for the sizes"),
     };
 }
@@ -346,6 +360,10 @@ fn size_cell(ui: &mut egui::Ui, needs: &PresetNeeds) {
 fn fits_cell(ui: &mut egui::Ui, needs: &PresetNeeds, gpus: &[Gpu]) {
     if gpus.is_empty() {
         ui.weak("—");
+    }
+    if needs.unavailable {
+        // its size isn't known
+        return;
     }
     for g in gpus {
         let label = if gpus.len() > 1 { format!("{} ", g.number) } else { String::new() };
@@ -379,7 +397,7 @@ fn list_table(
     gpus: &[Gpu],
     section: Section,
     sort: &mut ModelSort,
-) -> Option<String> {
+) -> Option<(String, bool)> {
     use egui_extras::{Column, TableBuilder};
     if rows.is_empty() {
         ui.weak("None match the filter.");
@@ -401,9 +419,12 @@ fn list_table(
             for (p, needs) in rows {
                 body.row(22.0, |mut row| {
                     row.col(|ui| {
+                        // your older copy, its files not there: to update
+                        let mend = needs.update && needs.unavailable;
+                        let what = if mend { "click to update it to the built-in's files" } else { what };
                         let link = ui.add(egui::Link::new(&p.name)).on_hover_text(format!("{}\n\n{what}", tip(p)));
                         if link.clicked() {
-                            clicked = Some(p.name.clone());
+                            clicked = Some((p.name.clone(), mend));
                         }
                     });
                     row.col(|ui| size_cell(ui, needs));
@@ -836,8 +857,12 @@ fn add_page(ui: &mut egui::Ui, st: &AppState, w: &mut ModelWizard) {
         })
         .body(|mut body| {
             for (p, needs) in &rows {
-                let have = st.config.recipes.iter().any(|r| r.name == p.name);
-                let enabled = !needs.unavailable && !(have && needs.downloads.is_empty() && needs.links.is_empty());
+                let mine = st.config.recipes.iter().find(|r| r.name == p.name);
+                let have = mine.is_some();
+                // your copy with other files (older, or edited): ticked, it's replaced
+                let old = mine.is_some_and(|m| increart_gui_core::differs(m, p));
+                let enabled =
+                    !needs.unavailable && !(have && !old && needs.downloads.is_empty() && needs.links.is_empty());
                 let mut on = w.picked.contains(&p.name);
                 // nothing to do for it: not picked
                 if !enabled && on {
@@ -856,7 +881,12 @@ fn add_page(ui: &mut egui::Ui, st: &AppState, w: &mut ModelWizard) {
                         } else {
                             "installed, with its files"
                         };
-                        let r = r.on_hover_text(tip(p)).on_disabled_hover_text(format!("{}\n\n{why}", tip(p)));
+                        let hover = if old {
+                            format!("{}\n\nyour copy has other files: ticked, it's replaced by this one", tip(p))
+                        } else {
+                            tip(p)
+                        };
+                        let r = r.on_hover_text(hover).on_disabled_hover_text(format!("{}\n\n{why}", tip(p)));
                         let to: Option<String> = ui.memory(|m| m.data.get_temp(add_scroll_id()));
                         if to.as_deref() == Some(p.name.as_str()) {
                             r.scroll_to_me(Some(egui::Align::Center));
@@ -872,7 +902,12 @@ fn add_page(ui: &mut egui::Ui, st: &AppState, w: &mut ModelWizard) {
                     });
                     row.col(|ui| size_cell(ui, needs));
                     row.col(|ui| {
-                        let r = ui.label(status(needs, if have { Section::Installed } else { Section::Available }));
+                        let text = if old {
+                            update_status(needs)
+                        } else {
+                            status(needs, if have { Section::Installed } else { Section::Available })
+                        };
+                        let r = ui.label(text);
                         if let Some(t) = links_tip(needs) {
                             r.on_hover_text(t);
                         }
@@ -881,4 +916,17 @@ fn add_page(ui: &mut egui::Ui, st: &AppState, w: &mut ModelWizard) {
                 });
             }
         });
+}
+
+/// Install built-in's Files for a model you have an other copy of: what
+/// updating it takes.
+fn update_status(needs: &PresetNeeds) -> RichText {
+    let size = needs.download_bytes.map_or(String::new(), |b| format!(" ({})", gb(b)));
+    let what = match (needs.links.len(), needs.downloads.len()) {
+        (0, 0) => "files here".to_string(),
+        (l, 0) => format!("link {l}"),
+        (0, n) => format!("download {n}{size}"),
+        (l, n) => format!("link {l}, download {n}{size}"),
+    };
+    RichText::new(ic(ph::ARROWS_CLOCKWISE, &format!("update: {what}"))).color(ACCENT)
 }

@@ -1351,6 +1351,16 @@ impl Config {
         if self.recipes.is_empty() {
             self.recipes = builtin_recipes();
         }
+        // the default model as rc16 and before wrote it (sd-server's int8
+        // files, nothing to download): the current default's alternatives
+        // and downloads, so it's had where those files aren't
+        let now = &builtin_recipes()[0];
+        for r in &mut self.recipes {
+            if r.name == now.name && r.files == now.files && r.alternatives.is_empty() && r.downloads.is_empty() {
+                r.alternatives = now.alternatives.clone();
+                r.downloads = now.downloads.clone();
+            }
+        }
         if self.resolutions.is_empty() {
             self.resolutions = builtin_resolutions();
             return warnings;
@@ -1561,6 +1571,19 @@ mod tests {
         assert_eq!(example_library_in(dir.path()), None, "a folder without library.rsn");
         fs::write(lib.join("library.rsn"), "").unwrap();
         assert_eq!(example_library_in(dir.path()), Some(lib));
+    }
+
+    #[test]
+    fn the_old_default_model_gets_the_downloads() {
+        let now = &builtin_recipes()[0];
+        // as rc16 wrote it; and one edited (other files): left as it is
+        let old = RecipePreset { alternatives: Default::default(), downloads: Default::default(), ..now.clone() };
+        let mut edited = old.clone();
+        edited.files.insert("vae".into(), "vae/mine.safetensors".into());
+        let mut c = Config { recipes: vec![old, edited.clone()], ..Default::default() };
+        c.normalize();
+        assert_eq!(&c.recipes[0], now);
+        assert_eq!(c.recipes[1], edited);
     }
 
     #[test]

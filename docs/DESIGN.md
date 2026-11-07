@@ -2867,12 +2867,25 @@ in the app's state folder (`$XDG_STATE_HOME/increart` when set, else
     "download 3 files (9.8 GB)", "files found elsewhere, link 4" (green;
     the hover lists each file and where it is), "link 3, download 1",
     and for an installed one "ready", "3 files elsewhere, to link", "2
-    files missing"), and for each GPU (listed as the
+    files missing"; a slot with no file there, none found and no download:
+    "2 files not there, no download" ("· 1 found elsewhere" when others
+    are), its Size "?" and no Fits GPU (its size isn't known, so a part of
+    it isn't shown as fitting)), and for each GPU (listed as the
     KoboldCpp wizard lists them) whether it fits: its files under 95 % of
     the card's memory. Sizes of what isn't there are asked of Hugging Face
     (HEAD, a dozen at a time, once a session). One already a preset with
     its files there, or with a file neither there nor downloadable, can't
-    be ticked.
+    be ticked. One you have a copy of with other files (files,
+    alternatives or LoRAs: an older built-in, or edited) can be:
+    "update: link 2, download 1 (…)"; installing replaces your copy with
+    the built-in under the same name ("1 model updated to the built-in's
+    files"; in Your models too if open). In the Models half such a copy
+    whose files aren't there says "older copy: update", and a click opens
+    Install built-in with it ticked.
+  - The default model as rc16 and before wrote it (sd-server's int8
+    files, no alternatives or downloads) gets the current default's
+    alternatives and downloads when the config is loaded (one edited is
+    left).
   - **Download and add** (**Add to your models** when nothing's missing): the
     folders become the model folders, the ticked presets are added to
     Model presets (not twice), the files found elsewhere linked into the
