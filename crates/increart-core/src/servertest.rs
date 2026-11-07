@@ -204,13 +204,18 @@ impl Test<'_> {
             Ok(st) if st.loaded().as_ref() == Some(model) => {
                 self.end(Outcome::Ok, format!("{name}: {asked} loaded in {:.1} s", t.elapsed().as_secs_f32()))
             }
+            Ok(st) if st.holds(model) => {
+                let theirs = json!({ "recipe": st.recipe, "models": st.models });
+                let took = t.elapsed().as_secs_f32();
+                self.end(Outcome::Ok, format!("{name}: {asked} loaded in {took:.1} s, under its own names: {theirs}"))
+            }
             Ok(st) => {
                 let answered = json!({ "state": st.state, "recipe": st.recipe, "models": st.models });
                 self.end(
                     Outcome::Failed,
                     format!(
                         "{name}: asked to load {asked}, it answered {answered}. The answer must be state \"ready\" \
-                         with the recipe and the files as asked, or IncreArt takes the load as failed and sends no \
+                         with the files as asked (under the recipe and slots asked, or its own), or IncreArt takes the load as failed and sends no \
                          run of {name} there"
                     ),
                 )

@@ -363,7 +363,7 @@ fn basic(ui: &mut egui::Ui, st: &AppState, t: &ApiTest, height: f32, out: &mut V
                 ui.add(egui::Label::new(RichText::new(e).color(BAD)).wrap());
                 ui.add_space(6.0);
             }
-            ready(ui, t, preset);
+            ready(ui, st, t, preset);
         }
     });
     ui.add_space(6.0);
@@ -386,17 +386,21 @@ fn status_line(ui: &mut egui::Ui, st: &AppState, preset: &str) {
 }
 
 /// Before a run: what validating does, and its steps.
-fn ready(ui: &mut egui::Ui, t: &ApiTest, preset: Option<&str>) {
+fn ready(ui: &mut egui::Ui, st: &AppState, t: &ApiTest, preset: Option<&str>) {
     let Some(preset) = preset else {
         ui.label("Choose the server setup to test above.");
         return;
+    };
+    let started = if connects_only(st, preset) {
+        "Its servers are all already running: nothing is started here, they're only connected to."
+    } else {
+        "Servers the preset starts are started for the check and stopped after."
     };
     ui.add(
         egui::Label::new(format!(
             "Checks that IncreArt can use {preset}'s servers, as it will when you open the preset: each server \
              answers, lists its models and makes a small image, then a short run goes through them all. It takes \
-             a few minutes; the first image takes the longest. Servers the preset starts are started for the \
-             check and stopped after."
+             a few minutes; the first image takes the longest. {started}"
         ))
         .wrap(),
     );
@@ -407,6 +411,12 @@ fn ready(ui: &mut egui::Ui, t: &ApiTest, preset: Option<&str>) {
     ui.weak(
         "Press Start validation below. When it's done, a summary says whether the servers work, and what to do if not.",
     );
+}
+
+/// Whether every server of the preset is one already running (connected
+/// to, none started here).
+fn connects_only(st: &AppState, preset: &str) -> bool {
+    st.config.preset(preset).is_some_and(|p| !p.servers.is_empty() && p.servers.iter().all(|s| !s.is_started()))
 }
 
 /// During a run: how far it is, its steps.
@@ -427,7 +437,12 @@ fn running(ui: &mut egui::Ui, st: &AppState, t: &ApiTest, preset: &str) {
     ui.add_space(6.0);
     steps(ui, t, &ran);
     ui.add_space(6.0);
-    ui.weak("The first image can take a minute or two while the model loads. You can stop at any time.");
+    ui.weak(if connects_only(st, preset) {
+        "Nothing is started here: it checks the servers you connect to. The first image can take a while if a \
+         server loads its model. You can stop at any time."
+    } else {
+        "The first image can take a minute or two while the model loads. You can stop at any time."
+    });
 }
 
 /// After a run: whether it works, what went wrong, what to do.

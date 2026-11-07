@@ -198,7 +198,10 @@ impl Ctx<'_> {
         let loaded = self.client(s)?.model_status().ok().and_then(|st| st.loaded());
         can.iter()
             .copied()
-            .min_by_key(|&m| Some(self.key(s, m)) != loaded)
+            .min_by_key(|&m| {
+                let key = self.key(s, m);
+                !loaded.as_ref().is_some_and(|l| *l == key || l.same_files(&key))
+            })
             .ok_or_else(|| "none of the config's model presets has its files on it".to_string())
     }
 
@@ -206,14 +209,18 @@ impl Ctx<'_> {
     pub fn ensure_loaded(&self, s: usize, m: usize) -> Result<(), String> {
         let client = self.client(s)?;
         let want = &self.key(s, m);
-        if client.model_status().ok().and_then(|st| st.loaded()).as_ref() == Some(want) {
+        if client.model_status().is_ok_and(|st| st.holds(want)) {
             return Ok(());
         }
         self.log(format!("loading {} on {}", self.models[m].preset.name, self.name(s)));
         let t = Instant::now();
         match client.load_model(want) {
-            Ok(st) if st.loaded().as_ref() == Some(want) => {
-                self.log(format!("loaded in {:.1} s", t.elapsed().as_secs_f32()));
+            Ok(st) if st.holds(want) => {
+                let theirs = match st.loaded() {
+                    Some(k) if k != *want => format!(" (it calls it {})", key_text(&k)),
+                    _ => String::new(),
+                };
+                self.log(format!("loaded in {:.1} s{theirs}", t.elapsed().as_secs_f32()));
                 Ok(())
             }
             Ok(st) => Err(format!(

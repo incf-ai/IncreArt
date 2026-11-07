@@ -339,6 +339,10 @@ impl Runtime {
             Effect::ListDevices(binary) => self.answer("list devices", move || {
                 Msg::Devices(launcher::list_devices(&binary).map_err(|e| format!("{binary}: {e}")))
             }),
+            Effect::DetectServer(url, password) => self.answer("detect server", move || {
+                let r = increart_core::detect::detect(&url, &password);
+                Msg::ServerFound(url, r)
+            }),
             Effect::KoboldVersion(binary) => self.answer("KoboldCpp version", move || {
                 let r = increart_core::kobold::version(&binary);
                 Msg::KoboldVersion(binary, r)
@@ -1816,6 +1820,7 @@ fn work_on(ctx: &Ctx, fx: Effect) -> Vec<Msg> {
             vec![Msg::OpDone(result, ix)]
         }
         Effect::ListDevices(_)
+        | Effect::DetectServer(..)
         | Effect::DetectGpus(_)
         | Effect::KoboldVersion(_)
         | Effect::DownloadModels { .. }

@@ -926,11 +926,18 @@ fn presets(ui: &mut egui::Ui, st: &AppState, d: &ServerDialog, out: &mut Vec<Msg
         ui.add_space(4.0);
         // the way to start: the main action while there are no presets
         ui.horizontal(|ui| {
-            if ui.button(RichText::new(ic(ph::MAGIC_WAND, WIZARD)).strong().color(ACCENT)).clicked() {
+            if ui
+                .button(RichText::new(ic(ph::MAGIC_WAND, WIZARD)).strong().color(ACCENT))
+                .on_hover_text(WIZARD_TIP)
+                .clicked()
+            {
                 out.push(Msg::ServerWizard(true));
             }
         });
-        ui.weak("Or make one by hand with New server setup (KoboldCpp or sd-server).");
+        ui.weak(
+            "Local (recommended): KoboldCpp set up for your GPUs. Remote (advanced): servers already running, \
+             here or on another machine. Or make one by hand with New server setup.",
+        );
         ui.add_space(6.0);
     }
     let last = st.config.last_preset.as_ref().and_then(|n| st.config.server_presets.iter().position(|p| &p.name == n));
@@ -979,10 +986,7 @@ fn presets(ui: &mut egui::Ui, st: &AppState, d: &ServerDialog, out: &mut Vec<Msg
             out.push(Msg::NewPreset);
         }
         if !st.config.server_presets.is_empty()
-            && ui
-                .button(ic(ph::MAGIC_WAND, WIZARD))
-                .on_hover_text("KoboldCpp with Qwen-Image, set up by each GPU's memory, as a new server setup")
-                .clicked()
+            && ui.button(ic(ph::MAGIC_WAND, WIZARD)).on_hover_text(WIZARD_TIP).clicked()
         {
             out.push(Msg::ServerWizard(true));
         }
@@ -1112,7 +1116,44 @@ fn without_window(ctx: &egui::Context, st: &AppState, w: &Without, out: &mut Vec
 }
 
 /// The setup wizard's button.
-const WIZARD: &str = "Set up KoboldCpp for your GPUs…";
+const WIZARD: &str = "Set up servers…";
+const WIZARD_TIP: &str = "A new server setup. Local (recommended): KoboldCpp with Qwen-Image set up by each GPU's \
+                          memory, or sd-server. Remote (advanced): servers already running, here or on another \
+                          machine, each asked what it is.";
+
+/// Local (recommended) / Remote (advanced): servers IncreArt starts on this
+/// computer, or ones already running. The wizard's and the preset editor's
+/// top choice. Some(choice) when one is clicked.
+fn local_remote(ui: &mut egui::Ui, remote: bool) -> Option<bool> {
+    let mut picked = None;
+    ui.horizontal(|ui| {
+        if ui
+            .radio(!remote, RichText::new(ic(ph::CPU, "Local (recommended)")).strong())
+            .on_hover_text("Servers on this computer: IncreArt starts them on your GPUs and stops them when it exits")
+            .clicked()
+        {
+            picked = Some(false);
+        }
+        ui.add_space(16.0);
+        if ui
+            .radio(remote, RichText::new(ic(ph::PLUGS_CONNECTED, "Remote (advanced)")).strong())
+            .on_hover_text(
+                "Servers already running, here or on another machine: KoboldCpp, sd-server (or a proxy speaking \
+                 its API, such as one in front of ComfyUI), or an OpenAI-compatible chat server. IncreArt connects \
+                 to them and leaves them running.",
+            )
+            .clicked()
+        {
+            picked = Some(true);
+        }
+    });
+    ui.weak(if remote {
+        "Servers already running, here or on another machine: IncreArt connects to them."
+    } else {
+        "Servers on this computer, started and stopped by IncreArt."
+    });
+    picked
+}
 
 /// **Server settings…**: KoboldCpp, sd-server and the model directories,
 /// shared by every preset.
@@ -1136,37 +1177,68 @@ fn settings_window(ctx: &egui::Context, st: &AppState, d: &ServerDialog, out: &m
 }
 
 fn settings(ui: &mut egui::Ui, st: &AppState, d: &ServerDialog, out: &mut Vec<Msg>) {
-    ui.label(RichText::new(ic(ph::IMAGE, "KoboldCpp")).strong());
-    ui.weak(
-        "Generates images, and runs prompt enhance too. New KoboldCpp entries and the setup wizard start this one.",
-    );
-    kobold_binary_field(ui, st, d, out);
+    let connected = increart_gui_core::connected_servers(&st.config.server_presets);
+    if !connected.is_empty() {
+        connected_list(ui, d, &connected, out);
+        ui.add_space(12.0);
+    }
+    // a program no preset starts is folded away, its "not found" unsaid
+    let (kobold_used, sd_used) = increart_gui_core::programs_started(&st.config.server_presets);
+    let unused = |ui: &mut egui::Ui, id: &str, title: &str, add: &mut dyn FnMut(&mut egui::Ui)| {
+        egui::CollapsingHeader::new(RichText::new(format!("{title} (none of your presets starts it)")).weak())
+            .id_salt(id)
+            .default_open(false)
+            .show(ui, |ui| add(ui));
+    };
+    let mut kobold = |ui: &mut egui::Ui| {
+        ui.weak(
+            "Generates images, and runs prompt enhance too. New KoboldCpp entries and the setup wizard start this \
+             one.",
+        );
+        kobold_binary_field(ui, st, d, out);
+    };
+    if kobold_used {
+        ui.label(RichText::new(ic(ph::IMAGE, "KoboldCpp")).strong());
+        kobold(ui);
+    } else {
+        unused(ui, "kobold_unused", "KoboldCpp", &mut kobold);
+    }
     ui.add_space(12.0);
-    ui.label(RichText::new(ic(ph::PLAY_CIRCLE, "sd-server")).strong());
     let mut c = st.config.programs.sd_server.clone();
-    sdserver_binary_field(ui, &mut c, out);
-    ui.horizontal(|ui| {
-        let label = if d.devices.is_some() { "List again" } else { "List devices (sd-server --list-devices)" };
-        if ui.button(ic(ph::LIST_MAGNIFYING_GLASS, label)).clicked() {
-            out.push(Msg::ListDevices);
-        }
-    });
-    match &d.devices {
-        None => {}
-        Some(Ok(list)) if list.is_empty() => {
-            ui.weak("none listed");
-        }
-        Some(Ok(list)) => {
-            for l in list {
-                ui.monospace(l);
+    let mut sd = |ui: &mut egui::Ui| {
+        sdserver_binary_field(ui, &mut c, out);
+        ui.horizontal(|ui| {
+            let label = if d.devices.is_some() { "List again" } else { "List devices (sd-server --list-devices)" };
+            if ui.button(ic(ph::LIST_MAGNIFYING_GLASS, label)).clicked() {
+                out.push(Msg::ListDevices);
+            }
+        });
+        match &d.devices {
+            None => {}
+            Some(Ok(list)) if list.is_empty() => {
+                ui.weak("none listed");
+            }
+            Some(Ok(list)) => {
+                for l in list {
+                    ui.monospace(l);
+                }
+            }
+            Some(Err(e)) => {
+                ui.colored_label(BAD, e);
             }
         }
-        Some(Err(e)) => {
-            ui.colored_label(BAD, e);
-        }
+    };
+    if sd_used {
+        ui.label(RichText::new(ic(ph::PLAY_CIRCLE, "sd-server")).strong());
+        sd(ui);
+    } else {
+        unused(ui, "sd_unused", "sd-server", &mut sd);
     }
     ui.add_space(12.0);
     ui.label(RichText::new(ic(ph::FOLDER, "Both")).strong());
+    if !kobold_used && !sd_used {
+        ui.weak("For servers started here, and the Models window. Connected servers use the files they list.");
+    }
     models_list(ui, st, MODEL_DIRS_NOTE, out);
     let wizard = match st.config.programs.model_dirs.first() {
         Some(d) => format!("into {}", std::path::Path::new(d).join(tiers::MODEL_SUBDIR).display()),
@@ -1444,6 +1516,193 @@ fn models_field(ui: &mut egui::Ui, dirs: &mut Vec<String>, note: &str, out: &mut
     });
 }
 
+/// Server settings' **Connected servers**: each address the presets
+/// connect to, what it is and whether it answers (asked when the window
+/// opens), and the entries using it.
+fn connected_list(ui: &mut egui::Ui, d: &ServerDialog, connected: &[increart_gui_core::Connected], out: &mut Vec<Msg>) {
+    ui.horizontal(|ui| {
+        ui.label(RichText::new(ic(ph::PLUGS_CONNECTED, "Connected servers")).strong());
+        if ui.small_button(ic(ph::ARROWS_CLOCKWISE, "Check again")).clicked() {
+            for c in connected {
+                out.push(Msg::DetectServer(c.url.clone(), c.password.clone()));
+            }
+        }
+    });
+    ui.weak("Already running, here or on another machine: IncreArt connects to them and leaves them running. Edit them in their preset.");
+    egui::Grid::new("connected_servers").num_columns(3).spacing([12.0, 4.0]).striped(true).show(ui, |ui| {
+        for c in connected {
+            ui.label(RichText::new(&c.url).monospace()).on_hover_text(c.entries.join("\n"));
+            ui.weak(c.kind.label());
+            ui.horizontal_wrapped(|ui| {
+                if d.checking.contains(&c.url) {
+                    ui.spinner();
+                } else {
+                    match d.found.get(&c.url) {
+                        Some(Ok(f)) if f.kind == c.kind => {
+                            ui.colored_label(GOOD, ph::CHECK);
+                            ui.label(f.summary());
+                        }
+                        Some(Ok(f)) => {
+                            ui.colored_label(NEUTRAL, ph::WARNING);
+                            ui.colored_label(NEUTRAL, format!("answers as {} ({})", f.kind.label(), f.summary()));
+                        }
+                        Some(Err(e)) => {
+                            ui.colored_label(BAD, ph::WARNING);
+                            ui.colored_label(BAD, e);
+                        }
+                        None => {
+                            ui.weak("not asked");
+                        }
+                    }
+                }
+            });
+            ui.end_row();
+        }
+    });
+}
+
+/// The wizard's page for servers already running: an address a row, each
+/// asked what it is ([`remote_row`]), saved as a preset and opened.
+fn remote_wizard(ui: &mut egui::Ui, d: &ServerDialog, rows: &[increart_gui_core::RemoteRow], out: &mut Vec<Msg>) {
+    ui.label(
+        "Each server's address (host:port). IncreArt asks it what it is when you leave the field: KoboldCpp, \
+         sd-server's API (sd-server, or a proxy in front of ComfyUI or another backend), or a chat server.",
+    );
+    ui.add_space(6.0);
+    for (i, row) in rows.iter().enumerate() {
+        ui.push_id(("remote_row", i), |ui| {
+            egui::Frame::group(ui.style()).show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                if remote_row(ui, d, row, Some(i), rows.len() > 1, out) {
+                    out.push(Msg::RemoveRemoteRow(i));
+                }
+            });
+        });
+    }
+    if ui.button(ic(ph::PLUS, "Another server")).clicked() {
+        out.push(Msg::AddRemoteRow);
+    }
+    ui.add_space(8.0);
+    let mut servers: Vec<ServerConfig> = vec![];
+    for row in rows {
+        let taken: Vec<&str> = servers.iter().map(|s| s.name()).collect();
+        if let Some(s) = row.server(&d.found, &taken) {
+            servers.push(s);
+        }
+    }
+    if servers.is_empty() {
+        ui.weak("Nothing to connect to yet: type an address.");
+    } else {
+        ui.weak(servers.iter().map(describe).collect::<Vec<_>>().join(" · "));
+        ui.weak(
+            "Image models: each image server lists the files it has, and the models whose files it lists run on \
+             it (Models, on the right of the servers screen).",
+        );
+    }
+    ui.add_space(6.0);
+    let (cancel, _) = dialog_footer(
+        ui,
+        |ui| ui.button("Cancel").clicked(),
+        |ui| {
+            let finish = egui::Button::new(RichText::new(ic(ph::PLAY, "Save as preset and open")).strong());
+            if ui.add_enabled(!servers.is_empty(), finish).clicked() {
+                out.push(Msg::FinishRemoteWizard);
+            }
+        },
+    );
+    if cancel {
+        out.push(Msg::ServerWizard(false));
+    }
+}
+
+/// A server already running, by address: the address (asked what it is
+/// when the field is left, or with Check), what it said, what to connect
+/// to it as (what it said, or picked), and KoboldCpp's password. `i`: the
+/// wizard's row, or the editor's (None). True: removed (×, when
+/// `removable`).
+fn remote_row(
+    ui: &mut egui::Ui,
+    d: &ServerDialog,
+    row: &increart_gui_core::RemoteRow,
+    i: Option<usize>,
+    removable: bool,
+    out: &mut Vec<Msg>,
+) -> bool {
+    use increart_core::detect::Kind;
+    let mut new = row.clone();
+    let key = row.key();
+    let mut removed = false;
+    ui.horizontal(|ui| {
+        let edit = ui.add(
+            egui::TextEdit::singleline(&mut new.url)
+                .desired_width(250.0)
+                .hint_text("192.168.1.20:5001, or http://host:port"),
+        );
+        let enter = edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+        let left = edit.lost_focus() && !d.found.contains_key(&new.key());
+        let check = ui
+            .add_enabled(!new.url.trim().is_empty(), egui::Button::new(ic(ph::ARROWS_CLOCKWISE, "Check")).small())
+            .on_hover_text("Ask it again what it is")
+            .clicked();
+        if (enter || left || check) && !new.url.trim().is_empty() {
+            out.push(Msg::DetectServer(new.url.clone(), new.password.clone()));
+        }
+        if removable {
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                removed = ui.small_button(ph::X).on_hover_text("Remove").clicked();
+            });
+        }
+    });
+    let said = row.found(&d.found);
+    ui.horizontal_wrapped(|ui| {
+        if d.checking.contains(&key) {
+            ui.spinner();
+            ui.weak("asking it what it is…");
+        } else {
+            match said {
+                Some(Ok(found)) => {
+                    ui.colored_label(GOOD, ph::CHECK);
+                    ui.label(found.summary());
+                }
+                Some(Err(e)) => {
+                    ui.colored_label(BAD, ph::WARNING);
+                    ui.colored_label(BAD, e);
+                }
+                None if key.is_empty() => {}
+                None => {
+                    ui.weak("not asked yet: leave the field, or Check");
+                }
+            }
+        }
+    });
+    if !key.is_empty() {
+        ui.horizontal(|ui| {
+            ui.label("Connect as");
+            let auto = match said {
+                Some(Ok(found)) => format!("{} (what it says)", found.kind.label()),
+                _ => "what it says".into(),
+            };
+            let shown = row.kind.map_or(auto.clone(), |k| k.label().to_string());
+            egui::ComboBox::from_id_salt(("connect_as", i)).selected_text(shown).show_ui(ui, |ui| {
+                ui.selectable_value(&mut new.kind, None, auto);
+                for k in Kind::ALL {
+                    ui.selectable_value(&mut new.kind, Some(k), k.label());
+                }
+            });
+            let kobold = row.kind(&d.found) == Some(Kind::KoboldCpp);
+            if kobold || said.is_some_and(|r| r.as_ref().is_ok_and(|f| f.needs_password)) {
+                ui.label("Password");
+                ui.add(egui::TextEdit::singleline(&mut new.password).password(true).desired_width(110.0))
+                    .on_hover_text("Its --password, if it has one");
+            }
+        });
+    }
+    if new != *row {
+        out.push(Msg::EditRemote(i, new));
+    }
+    removed
+}
+
 /// The server setup wizard: KoboldCpp with a preset by each GPU's memory
 /// ([`kobold_wizard`]), or sd-server, the GPUs to start it on (all GPUs
 /// ticked), or a server already running; saved as a preset and opened.
@@ -1453,19 +1712,30 @@ fn server_wizard(ctx: &egui::Context, st: &AppState, d: &ServerDialog, out: &mut
         ui.set_width(if d.kobold.is_some() { 700.0 } else { 560.0 });
         ui.heading(ic(ph::MAGIC_WAND, "Set up servers"));
         let busy = d.kobold.as_ref().is_some_and(|k| k.downloading.is_some());
+        let remote = d.remote.is_some();
         ui.add_enabled_ui(!busy, |ui| {
-            ui.horizontal(|ui| {
-                if ui.radio(d.kobold.is_some(), "KoboldCpp, Qwen-Image set up for your GPUs (recommended)").clicked() {
-                    out.push(Msg::WizardKobold(true));
-                }
-            });
-            ui.horizontal(|ui| {
-                if ui.radio(d.kobold.is_none(), "sd-server, with your own models").clicked() {
-                    out.push(Msg::WizardKobold(false));
-                }
-            });
+            if let Some(on) = local_remote(ui, remote) {
+                out.push(Msg::WizardRemote(on));
+            }
+            if !remote {
+                ui.indent("local_kind", |ui| {
+                    if ui
+                        .radio(d.kobold.is_some(), "KoboldCpp, Qwen-Image set up for your GPUs (recommended)")
+                        .clicked()
+                    {
+                        out.push(Msg::WizardKobold(true));
+                    }
+                    if ui.radio(d.kobold.is_none(), "sd-server, with your own models").clicked() {
+                        out.push(Msg::WizardKobold(false));
+                    }
+                });
+            }
         });
         ui.add_space(8.0);
+        if let Some(rows) = &d.remote {
+            remote_wizard(ui, d, rows, out);
+            return;
+        }
         if let Some(k) = &d.kobold {
             let binary = increart_gui_core::update::wizard_binary(k);
             let version = d.kobold_version.as_ref().filter(|(b, _)| *b == binary).map(|(_, r)| r);
@@ -1527,26 +1797,6 @@ fn server_wizard(ctx: &egui::Context, st: &AppState, d: &ServerDialog, out: &mut
             }
         }
         ui.add_space(10.0);
-        ui.label(RichText::new("Or connect to a server that's already running").strong());
-        let connect = d.draft.servers.iter().position(|s| matches!(s, ServerConfig::Connect { .. }));
-        ui.horizontal(|ui| {
-            if ui.checkbox(&mut connect.is_some(), "Connect to").changed() {
-                out.push(match connect {
-                    Some(i) => Msg::RemoveServer(i),
-                    None => Msg::AddConnectServer,
-                });
-            }
-            if let Some(i) = connect {
-                let mut s = d.draft.servers[i].clone();
-                if let ServerConfig::Connect { url, .. } = &mut s {
-                    ui.add(egui::TextEdit::singleline(url).desired_width(260.0));
-                }
-                if s != d.draft.servers[i] {
-                    out.push(Msg::EditServer(i, s));
-                }
-            }
-        });
-        ui.add_space(10.0);
         ui.label(RichText::new("Prompt enhance (optional)").strong());
         ui.weak("A chat model that suggests and rewrites prompt text.");
         let chats: Vec<(usize, &increart_core::pe::PeServer)> = d
@@ -1575,7 +1825,7 @@ fn server_wizard(ctx: &egui::Context, st: &AppState, d: &ServerDialog, out: &mut
         });
         ui.add_space(10.0);
         if d.draft.servers.is_empty() {
-            ui.weak("Tick a GPU, or a server to connect to.");
+            ui.weak("Tick a GPU (servers already running: Remote (advanced), above).");
         } else {
             ui.weak(d.draft.servers.iter().map(describe).collect::<Vec<_>>().join(" · "));
         }
@@ -2133,8 +2383,8 @@ fn editor(ui: &mut egui::Ui, st: &AppState, d: &ServerDialog, editing: Editing, 
     ui.add_space(6.0);
     if d.draft.servers.is_empty() {
         ui.weak(
-            "Add KoboldCpp (images, and prompt enhance too), or an sd-server to start or connect to and a chat \
-             server for prompt enhance if you like.",
+            "Add its servers below. Local: KoboldCpp (images, and prompt enhance too) or sd-server, and a chat \
+             server for prompt enhance if you like. Remote: servers already running, each asked what it is.",
         );
     }
     let has_chat_entry = d.draft.chat().is_some();
@@ -2214,30 +2464,51 @@ fn editor(ui: &mut egui::Ui, st: &AppState, d: &ServerDialog, editing: Editing, 
         roles_grid(ui, &d.draft);
         ui.add_space(4.0);
     }
-    ui.horizontal(|ui| {
-        if ui
-            .button(RichText::new(ic(ph::PLUS, "KoboldCpp")).strong().color(ACCENT))
-            .on_hover_text("KoboldCpp generating images (and the chat server too, if you like)")
-            .clicked()
-        {
-            out.push(Msg::AddKoboldServer);
-        }
-        if ui.button(ic(ph::PLUS, "sd-server")).on_hover_text("an sd-server IncreArt starts").clicked() {
-            out.push(Msg::AddStartServer);
-        }
-        if ui.button(ic(ph::PLUS, "Connect to sd-server")).on_hover_text("an sd-server already running").clicked() {
-            out.push(Msg::AddConnectServer);
-        }
-        if ui
-            .button(ic(ph::MAGIC_WAND, "Chat server"))
-            .on_hover_text("a chat model for prompt enhance; with several, asks are shared among them")
-            .clicked()
-        {
-            out.push(Msg::PeEditorOpen(None));
-        }
-    });
-    // the listed devices: a click adds a Start server on one (with sd-servers)
-    let sd = d.draft.servers.iter().any(|s| matches!(s, ServerConfig::Start { .. } | ServerConfig::Connect { .. }));
+    // what to add: servers started here, or ones already running (the row)
+    match local_remote(ui, d.connect.is_some()) {
+        Some(true) => out.push(Msg::AddConnectServer),
+        Some(false) => out.push(Msg::CancelConnect),
+        None => {}
+    }
+    if d.connect.is_none() {
+        ui.horizontal(|ui| {
+            if ui
+                .button(RichText::new(ic(ph::PLUS, "KoboldCpp")).strong().color(ACCENT))
+                .on_hover_text("KoboldCpp generating images (and the chat server too, if you like)")
+                .clicked()
+            {
+                out.push(Msg::AddKoboldServer);
+            }
+            if ui.button(ic(ph::PLUS, "sd-server")).on_hover_text("an sd-server IncreArt starts").clicked() {
+                out.push(Msg::AddStartServer);
+            }
+            if ui
+                .button(ic(ph::MAGIC_WAND, "Chat server"))
+                .on_hover_text("a chat model for prompt enhance; with several, asks are shared among them")
+                .clicked()
+            {
+                out.push(Msg::PeEditorOpen(None));
+            }
+        });
+    }
+    if let Some(row) = &d.connect {
+        egui::Frame::group(ui.style()).show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            remote_row(ui, d, row, None, false, out);
+            ui.horizontal(|ui| {
+                let taken: Vec<&str> = d.draft.servers.iter().map(|s| s.name()).collect();
+                let server = row.server(&d.found, &taken);
+                let add = egui::Button::new(ic(ph::PLUS, "Add"));
+                let tip = server.as_ref().map_or("Once it's known what it is (or picked)".into(), describe);
+                if ui.add_enabled(server.is_some(), add).on_hover_text(tip).clicked() {
+                    out.push(Msg::AddConnected);
+                }
+            });
+        });
+    }
+    // the listed devices: a click adds a Start server on one (with sd-servers
+    // started here; connected ones run where they are)
+    let sd = d.draft.servers.iter().any(|s| matches!(s, ServerConfig::Start { .. }));
     if sd {
         ui.horizontal_wrapped(|ui| {
             ui.weak("Devices:");

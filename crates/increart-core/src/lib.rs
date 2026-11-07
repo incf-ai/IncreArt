@@ -17,6 +17,7 @@ pub mod bugreport;
 pub mod check;
 pub mod config;
 pub mod container;
+pub mod detect;
 pub mod engine;
 pub mod error;
 pub mod estimate;

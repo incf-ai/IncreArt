@@ -2047,10 +2047,12 @@ pub fn recipes_page(
                             ui.add_space(6.0);
                             ui.label(RichText::new("Files").strong());
                             let dirs = &st.config.programs.model_dirs;
-                            if dirs.iter().all(|d| d.trim().is_empty()) {
+                            // a remote server lists its own files: no folder needed here
+                            if files.is_empty() && dirs.iter().all(|d| d.trim().is_empty()) {
                                 ui.colored_label(
                                     NEUTRAL,
-                                    "No model directory yet: add the one holding the model files.",
+                                    "No model directory yet: add the one holding the model files, or open a \
+                                     server that lists its own (pick them with the arrow).",
                                 );
                             }
                             if let Some(why) = &e.error {

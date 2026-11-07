@@ -1984,6 +1984,120 @@ pub struct ServerDialog {
     pub notice: Option<String>,
     /// The **Continue without servers** dialog.
     pub without: Option<Box<Without>>,
+    /// The setup wizard's page for servers already running: an address
+    /// a row (None: a page for servers run here).
+    pub remote: Option<Vec<RemoteRow>>,
+    /// The preset editor's address row: Some on **Remote (advanced)**.
+    pub connect: Option<RemoteRow>,
+    /// What each address said it is, by address as connected to
+    /// ([`increart_core::detect::normalize`]), and those being asked.
+    pub found: BTreeMap<String, Result<increart_core::detect::Detected, String>>,
+    pub checking: BTreeSet<String>,
+}
+
+/// A server the presets connect to (already running), once per address.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Connected {
+    /// As connected to ([`increart_core::detect::normalize`]).
+    pub url: String,
+    pub password: String,
+    pub kind: increart_core::detect::Kind,
+    /// "preset: name" for each entry with this address.
+    pub entries: Vec<String>,
+}
+
+/// The servers `presets` connect to, by address (first seen first).
+pub fn connected_servers(presets: &[ServerPreset]) -> Vec<Connected> {
+    use increart_core::detect::{Kind, normalize};
+    use increart_core::kobold::KoboldRun;
+    use increart_core::pe::PeRun;
+    let mut out: Vec<Connected> = vec![];
+    for p in presets {
+        for s in &p.servers {
+            let (url, password, kind) = match s {
+                ServerConfig::Connect { url, .. } => (url.as_str(), "", Kind::SdServer),
+                ServerConfig::Kobold(k) => match &k.run {
+                    KoboldRun::Connect { url, password, .. } => (url.as_str(), password.as_str(), Kind::KoboldCpp),
+                    KoboldRun::Start { .. } => continue,
+                },
+                ServerConfig::Chat(c) => match &c.run {
+                    PeRun::Connect { url } => (url.as_str(), "", Kind::Chat),
+                    PeRun::KoboldCpp { .. } => continue,
+                },
+                ServerConfig::Start { .. } => continue,
+            };
+            let url = normalize(url);
+            let entry = format!("{}: {}", p.name, s.name());
+            match out.iter_mut().find(|c| c.url == url) {
+                Some(c) => c.entries.push(entry),
+                None => out.push(Connected { url, password: password.into(), kind, entries: vec![entry] }),
+            }
+        }
+    }
+    out
+}
+
+/// Which programs the presets start here: (KoboldCpp, sd-server). With no
+/// presets yet, both (the first one may start either).
+pub fn programs_started(presets: &[ServerPreset]) -> (bool, bool) {
+    use increart_core::pe::PeRun;
+    if presets.is_empty() {
+        return (true, true);
+    }
+    let servers = || presets.iter().flat_map(|p| &p.servers);
+    let kobold = servers().any(|s| {
+        matches!(s, ServerConfig::Kobold(_)) && s.is_started()
+            || matches!(s, ServerConfig::Chat(c) if matches!(c.run, PeRun::KoboldCpp { .. }))
+    });
+    let sd = servers().any(|s| matches!(s, ServerConfig::Start { .. }));
+    (kobold, sd)
+}
+
+/// A server already running, by address: what it is comes from asking it
+/// (`ServerDialog::found`), unless picked by hand.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct RemoteRow {
+    pub url: String,
+    /// KoboldCpp's `--password`, if it has one.
+    pub password: String,
+    /// Picked by hand, over what it said it is.
+    pub kind: Option<increart_core::detect::Kind>,
+}
+
+impl RemoteRow {
+    /// Its address as connected to.
+    pub fn key(&self) -> String {
+        increart_core::detect::normalize(&self.url)
+    }
+
+    /// What it said it is, if it answered.
+    pub fn found<'a>(
+        &self,
+        found: &'a BTreeMap<String, Result<increart_core::detect::Detected, String>>,
+    ) -> Option<&'a Result<increart_core::detect::Detected, String>> {
+        found.get(&self.key())
+    }
+
+    /// What it's connected as: picked by hand, else what it said it is.
+    pub fn kind(
+        &self,
+        found: &BTreeMap<String, Result<increart_core::detect::Detected, String>>,
+    ) -> Option<increart_core::detect::Kind> {
+        self.kind.or_else(|| self.found(found)?.as_ref().ok().map(|d| d.kind))
+    }
+
+    /// The preset entry for it, named so no name in `taken` is repeated;
+    /// None until it's known what it is.
+    pub fn server(
+        &self,
+        found: &BTreeMap<String, Result<increart_core::detect::Detected, String>>,
+        taken: &[&str],
+    ) -> Option<ServerConfig> {
+        use increart_core::detect;
+        let kind = self.kind(found)?;
+        let said = self.found(found).and_then(|r| r.as_ref().ok());
+        Some(detect::server_config(kind, &detect::unique_name(kind, taken), &self.url, &self.password, said))
+    }
 }
 
 /// The setup wizard's KoboldCpp page: a preset by VRAM per GPU

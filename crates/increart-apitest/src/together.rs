@@ -413,6 +413,11 @@ fn engine_run(cx: &mut Ctx, stop_one: bool) -> Verdict {
             }
             Event::Problem(p) => {
                 cx.log(format!("problem: {p}"));
+                // its runs wait until the model is retried: not done in this run
+                if p.starts_with(&format!("no server can load {},", preset.recipe)) {
+                    engine.cancel_run(&run, Stop::Now);
+                    break Err(p);
+                }
                 problems.push(p);
             }
             Event::ModelLoaded { .. } => {}

@@ -418,12 +418,37 @@ fn a_load_answered_with_another_model_says_both() {
     engine.queue_run(&run);
     let events = collect(&engine, |e, _| matches!(e, Event::Problem(p) if p.contains("no server can load")));
     let said = events.iter().find_map(|e| match e {
-        Event::Problem(p) if p.contains("asked to load") => Some(p.clone()),
+        Event::Problem(p) if p.contains("isn't what was asked") => Some(p.clone()),
         _ => None,
     });
     let said = said.expect("the answer said");
+    // what differs, then both in full
+    assert!(said.contains(r#"slot "diffusion_model" holds "q" instead of "diffusion_models/q.safetensors""#), "{said}");
     assert!(said.contains(r#""diffusion_model":"diffusion_models/q.safetensors""#), "{said}");
     assert!(said.contains(r#"it answered {"models":{"diffusion_model":"q"}"#), "{said}");
+}
+
+#[test]
+fn a_load_answered_with_the_same_files_under_its_own_names_runs() {
+    // as imgproxy in front of ComfyUI: recipe "checkpoint", slot "model"
+    let s = setup();
+    let a = Fake::start(None);
+    a.with(|st| st.own_recipe = Some("checkpoint".into()));
+    let first = new_run(&s, "qwen-image-21", 2, false);
+    let second = new_run_with(&s, 2, |r| r.label = "r02".into());
+    let engine = start(&s, &[&a]);
+    engine.queue_run(&first);
+    engine.queue_run(&second);
+    let mut done = 0;
+    let events = collect(&engine, |e, _| {
+        done += matches!(e, Event::RunDone { .. }) as u32;
+        done == 2
+    });
+    assert_eq!(outputs(&events).len(), 4, "{events:#?}");
+    assert_eq!(problems(&events, ""), 0, "{events:#?}");
+    // loaded once: its status (its own names) is read as the model asked
+    let loads = a.with(|st| st.log.iter().filter(|(m, p, _)| m == "POST" && p.ends_with("models/load")).count());
+    assert_eq!(loads, 1);
 }
 
 #[test]

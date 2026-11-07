@@ -165,16 +165,23 @@ fn target(a: &Args) -> Result<Target, String> {
                 Some(p) => v.push(p.clone()),
                 None => {
                     let names: Vec<&str> = config.server_presets.iter().map(|p| p.name.as_str()).collect();
-                    return Err(format!("no server preset {name} (the config has: {})", names.join(", ")));
+                    let e = format!("no server preset {name} (the config has: {})", names.join(", "));
+                    return Err(with_warnings(e, &warnings));
                 }
             }
         }
         v
     };
     if presets.is_empty() {
-        return Err("the config has no server presets".into());
+        return Err(with_warnings("the config has no server presets".into(), &warnings));
     }
     Ok((config, path, presets, warnings))
+}
+
+/// An error with the config's warnings under it (a config that didn't
+/// load says why, not only that it has no such preset).
+fn with_warnings(e: String, warnings: &[String]) -> String {
+    warnings.iter().fold(e, |e, w| format!("{e}\nconfig: {w}"))
 }
 
 fn main() -> ExitCode {

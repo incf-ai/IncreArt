@@ -200,7 +200,7 @@ pub fn run(client: &Client, p: &RecipePreset, cancel: &AtomicBool, stage: &mut d
     let key = ModelKey { recipe: p.recipe.clone(), models: out.files.clone() };
     let t = Instant::now();
     match client.load_model(&key) {
-        Ok(st) if st.loaded().as_ref() == Some(&key) => out.load_s = Some(t.elapsed().as_secs_f32()),
+        Ok(st) if st.holds(&key) => out.load_s = Some(t.elapsed().as_secs_f32()),
         Ok(st) => {
             let answered = serde_json::json!({ "state": st.state, "recipe": st.recipe, "models": st.models });
             out.error = Some(format!("the load didn't take: it answered {answered}"));

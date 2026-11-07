@@ -441,6 +441,41 @@ fn list_table(
     clicked
 }
 
+/// Install built-in with only connected servers (none started here): its
+/// downloads are for this computer's model folders, and a connected
+/// server runs the files it lists, a model made from them in Your models.
+fn remote_note(ui: &mut egui::Ui, st: &AppState, w: &mut ModelWizard, out: &mut Vec<Msg>) {
+    let presets = &st.config.server_presets;
+    if increart_gui_core::programs_started(presets) != (false, false)
+        || increart_gui_core::connected_servers(presets).is_empty()
+    {
+        return;
+    }
+    ui.horizontal_wrapped(|ui| {
+        ui.colored_label(NEUTRAL, ph::PLUGS_CONNECTED);
+        ui.colored_label(
+            NEUTRAL,
+            "Your servers are connected ones: these downloads go to this computer's model folders, for servers \
+             started here. A connected server runs the files it lists.",
+        );
+        if ui
+            .small_button(ic(ph::PLUS, "Make a model from a server's files…"))
+            .on_hover_text(
+                "A new model in Your models: pick its recipe, and each file from what the open server lists (the \
+                 arrow beside each file)",
+            )
+            .clicked()
+        {
+            let mut e = editor_on(st, None);
+            e.add_new();
+            ui.memory_mut(|m| m.data.insert_temp(crate::projects::scroll_id(), true));
+            out.push(Msg::EditRecipes(e));
+            w.editing = true;
+            w.tab = ModelSetupTab::Yours;
+        }
+    });
+}
+
 /// **Custom model… (advanced)**, under your custom models: a new model in
 /// Your models, its files the selected one's to start from.
 fn custom_button(ui: &mut egui::Ui, st: &AppState, w: &mut ModelWizard, out: &mut Vec<Msg>) {
@@ -565,6 +600,9 @@ pub fn window(ctx: &egui::Context, st: &AppState, out: &mut Vec<Msg>) {
             }
             ModelSetupTab::Folders => "Where the model files are found, and where new ones are saved.",
         });
+        if w.tab == ModelSetupTab::Add {
+            remote_note(ui, st, &mut w, out);
+        }
         ui.separator();
         let height = (ctx.content_rect().height() - 300.0).clamp(240.0, 640.0);
         // pages as tall as each other, so the window doesn't jump

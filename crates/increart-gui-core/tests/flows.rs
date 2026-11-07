@@ -1464,6 +1464,108 @@ fn server_dialog_asks_before_replacing_servers_in_use() {
     assert!(dialog(&s).opening);
 }
 
+fn sd_found() -> Result<increart_core::detect::Detected, String> {
+    Ok(increart_core::detect::Detected {
+        kind: increart_core::detect::Kind::SdServer,
+        version: None,
+        images: true,
+        image_models: vec!["krea2_turbo_int8_convrot.safetensors".into()],
+        chat_models: vec![],
+        needs_password: false,
+    })
+}
+
+/// Types an address into a server-already-running row (the wizard's by
+/// index, else the editor's), asks it, and gives it `answer`.
+fn connect(
+    s: &mut AppState,
+    row: Option<usize>,
+    url: &str,
+    answer: Option<Result<increart_core::detect::Detected, String>>,
+) {
+    if row.is_none() {
+        update(s, Msg::AddConnectServer);
+    }
+    let r = increart_gui_core::state::RemoteRow { url: url.into(), ..Default::default() };
+    update(s, Msg::EditRemote(row, r));
+    let fx = update(s, Msg::DetectServer(url.into(), String::new()));
+    let key = increart_core::detect::normalize(url);
+    assert_eq!(fx, [Effect::DetectServer(key.clone(), String::new())]);
+    assert!(update(s, Msg::DetectServer(url.into(), String::new())).is_empty(), "asked once at a time");
+    if let Some(a) = answer {
+        update(s, Msg::ServerFound(key, a));
+    }
+}
+
+#[test]
+fn the_wizard_connects_to_servers_already_running() {
+    use increart_core::detect::{Detected, Kind};
+    let mut s = dialog_state(vec![], None);
+    update(&mut s, Msg::ServerWizard(true));
+    assert!(dialog(&s).kobold.is_some(), "it starts on running servers here, KoboldCpp");
+    update(&mut s, Msg::WizardRemote(true));
+    assert!(dialog(&s).kobold.is_none());
+    assert_eq!(dialog(&s).remote.as_ref().map(Vec::len), Some(1), "one empty row");
+    // KoboldCpp with images and text, a proxy speaking sd-server's API,
+    // and one not answering now, picked by hand as a chat server
+    let kobold = Detected {
+        kind: Kind::KoboldCpp,
+        version: Some("1.117".into()),
+        images: true,
+        image_models: vec!["flux.gguf".into()],
+        chat_models: vec!["Qwen3-VL".into()],
+        needs_password: false,
+    };
+    connect(&mut s, Some(0), "192.168.2.136:5000", Some(Ok(kobold)));
+    update(&mut s, Msg::AddRemoteRow);
+    connect(&mut s, Some(1), "http://192.168.2.136:7800/sdcpp/v1", Some(sd_found()));
+    update(&mut s, Msg::AddRemoteRow);
+    connect(&mut s, Some(2), "box:5002", Some(Err("no answer: connection refused".into())));
+    update(&mut s, Msg::AddRemoteRow);
+    // an empty row is left out
+    let mut chat = dialog(&s).remote.as_ref().unwrap()[2].clone();
+    chat.kind = Some(Kind::Chat);
+    update(&mut s, Msg::EditRemote(Some(2), chat));
+    let fx = update(&mut s, Msg::FinishRemoteWizard);
+    // (the chat server opens on its own)
+    assert!(matches!(fx.last(), Some(Effect::OpenServers { servers, .. }) if servers.len() == 2));
+    let p = &s.config.server_presets[0];
+    assert_eq!(p.name, "Servers at 192.168.2.136, box");
+    assert!(
+        matches!(&p.servers[0], ServerConfig::Kobold(k) if k.chat.is_some() && k.base_url() == "http://192.168.2.136:5000")
+    );
+    assert!(matches!(&p.servers[1], ServerConfig::Connect { url, .. } if url == "http://192.168.2.136:7800"));
+    assert!(matches!(&p.servers[2], ServerConfig::Chat(c) if c.base_url() == "http://box:5002"));
+    // the page switches back to servers run here
+    let mut s = dialog_state(vec![], None);
+    update(&mut s, Msg::ServerWizard(true));
+    update(&mut s, Msg::WizardRemote(true));
+    update(&mut s, Msg::WizardRemote(false));
+    assert!(dialog(&s).remote.is_none() && dialog(&s).kobold.is_some());
+    assert!(update(&mut s, Msg::FinishRemoteWizard).is_empty());
+}
+
+#[test]
+fn the_editor_opens_on_remote_for_a_preset_that_only_connects() {
+    let remote = ServerPreset {
+        name: "proxy".into(),
+        servers: vec![ServerConfig::Connect {
+            name: "proxy".into(),
+            url: "http://10.0.0.2:7800".into(),
+            device: String::new(),
+        }],
+    };
+    let local = ServerPreset { name: "gpu".into(), servers: vec![start("gpu0", 1234)] };
+    let mut s = dialog_state(vec![remote, local], None);
+    update(&mut s, Msg::EditPreset(0));
+    assert!(dialog(&s).connect.is_some(), "Remote: the address row");
+    update(&mut s, Msg::EditPreset(1));
+    assert!(dialog(&s).connect.is_none(), "Local");
+    update(&mut s, Msg::AddConnectServer);
+    update(&mut s, Msg::NewPreset);
+    assert!(dialog(&s).connect.is_none(), "a new one starts on Local");
+}
+
 #[test]
 fn server_dialog_new_edit_save_and_delete() {
     let mut s = dialog_state(vec![], None);
@@ -1471,10 +1573,16 @@ fn server_dialog_new_edit_save_and_delete() {
     assert_eq!(dialog(&s).editing, Some(Editing::New));
     update(&mut s, Msg::AddStartServer);
     update(&mut s, Msg::AddStartServer);
-    update(&mut s, Msg::AddConnectServer);
+    connect(&mut s, None, "127.0.0.1:1234", Some(sd_found()));
+    assert!(update(&mut s, Msg::AddConnected).is_empty());
     let d = dialog(&s);
     assert_eq!(d.draft.servers[1], start("gpu1", 1235).clone().with_device("ROCm1"));
-    assert!(matches!(&d.draft.servers[2], ServerConfig::Connect { .. }));
+    assert!(
+        matches!(&d.draft.servers[2], ServerConfig::Connect { name, url, .. } if name == "sd-server" && url == "http://127.0.0.1:1234")
+    );
+    assert_eq!(d.connect, Some(Default::default()), "still Remote: the row emptied for another");
+    update(&mut s, Msg::CancelConnect);
+    assert!(dialog(&s).connect.is_none(), "Local");
     update(&mut s, Msg::RemoveServer(2));
 
     assert!(update(&mut s, Msg::SavePreset).is_empty(), "needs a name");
@@ -1602,16 +1710,16 @@ fn server_wizard_ticks_the_gpus_and_opens_them() {
     // connections only; Cancel leaves nothing behind
     let mut s = dialog_state(vec![], None);
     update(&mut s, Msg::ServerWizard(true));
-    update(&mut s, Msg::WizardKobold(false));
-    update(&mut s, Msg::AddConnectServer);
-    update(&mut s, Msg::FinishServerWizard);
+    update(&mut s, Msg::WizardRemote(true));
+    connect(&mut s, Some(0), "127.0.0.1:1234", Some(sd_found()));
+    update(&mut s, Msg::FinishRemoteWizard);
     assert_eq!(s.config.server_presets[0].name, "Running server");
     let mut s = dialog_state(vec![], None);
     update(&mut s, Msg::ServerWizard(true));
-    update(&mut s, Msg::WizardKobold(false));
-    update(&mut s, Msg::AddConnectServer);
+    update(&mut s, Msg::WizardRemote(true));
+    connect(&mut s, Some(0), "127.0.0.1:1234", Some(sd_found()));
     update(&mut s, Msg::ServerWizard(false));
-    assert!(dialog(&s).draft.servers.is_empty() && !dialog(&s).wizard);
+    assert!(dialog(&s).draft.servers.is_empty() && !dialog(&s).wizard && dialog(&s).remote.is_none());
     assert!(update(&mut s, Msg::FinishServerWizard).is_empty(), "only from the wizard");
 
     // KoboldCpp generating images, and prompt enhance's chat server too

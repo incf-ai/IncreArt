@@ -230,8 +230,33 @@ asks among them):
   ("Stop ROCm0 and open Other? ROCm1 stay as they are.") or drop images
   being made (and says how many runs are generating); otherwise it opens
   at once. A preset with only a chat server stops the sd-servers in use.
-- With no presets, **Set up servers…** opens a wizard. It starts on
-  **KoboldCpp, Qwen-Image set up for your GPUs (recommended)**: the
+- With no presets, **Set up servers…** opens a wizard (also beside **New
+  server setup** once there are presets). Its top, like the preset
+  editor's, is **Local (recommended)** (servers on this computer, started
+  and stopped by IncreArt), with its two ways under it (KoboldCpp, marked
+  recommended, and sd-server), or **Remote (advanced)** (servers already
+  running, here or on another machine). Remote's page is a row per server: its
+  address (host:port; `http://` added, a trailing `/sdcpp/v1`, `/sdapi/v1`,
+  `/v1` or `/api` dropped: `detect::normalize`), asked what it is when the
+  field is left (not yet asked), on Enter or with **Check**
+  (`detect::detect`, off the UI thread, 4 s at most: KoboldCpp by
+  `/api/extra/version`, then its image model (`/sdapi/v1/sd-models`) and
+  chat model (`/api/v1/model`); else sd-server's API by
+  `/sdcpp/v1/capabilities` and its model files (sd-server, or a proxy such
+  as imgproxy in front of ComfyUI, A1111 or OpenAI); else a chat server by
+  `/v1/models`). The row says what it found ("✓ KoboldCpp 1.117 · images:
+  … · chat: …", "✓ sd-server API · 1 model file listed (…)") or why not
+  ("✗ no answer: …", "it answers (HTTP 404), but not as sd-server's API,
+  KoboldCpp or an OpenAI-compatible chat server"); **Connect as** is what
+  it said, or a kind picked (also for a server that's down now), and a
+  password for KoboldCpp. **Another server** adds a row. Each becomes an
+  entry (`detect::server_config`): KoboldCpp with an image model a
+  KoboldCpp image server (with Chat when it has a chat model or that
+  isn't known), one without a chat server; sd-server's API a Connect;
+  named `koboldcpp`, `sd-server`, `chat` (" 2" when taken). **Save as
+  preset and open** names the preset after the hosts ("Servers at
+  192.168.2.136, box"; localhost left out, else "Running server(s)").
+  The first way, **KoboldCpp, Qwen-Image set up for your GPUs (recommended)**: the
   KoboldCpp binary and a model directory, then the GPUs **through** a GPU
   runtime (Vulkan, CUDA or ROCm; CUDA when `nvidia-smi` runs, else Vulkan;
   on a Mac only Metal)
@@ -295,18 +320,22 @@ asks among them):
   presets' entries that had the one before along with it. The other
   choice, **sd-server, with your own models**, is the sd-server
   binary and model directory, then the devices from `--list-devices` with
-  every GPU ticked (not the CPU) on ports 1234, 1235, …, or a server
-  already running to connect to, then optionally **Add a chat server…**
+  every GPU ticked (not the CPU) on ports 1234, 1235, …, then optionally **Add a chat server…**
   for prompt enhance (the chat server settings below). **Save as preset
   and open** names the preset after its devices ("ROCm0 + ROCm1", or
   "Running server") and opens it.
 - KoboldCpp comes first throughout: the screen's intro names it beside
-  sd-server, **Set up KoboldCpp for your GPUs…** (the wizard) sits beside
-  **New preset** once there are presets, and preset summaries say which
+  sd-server, the wizard opens on KoboldCpp, and preset summaries say which
   server each entry is ("Start sd-server on ROCm0 :1234", "Start KoboldCpp
   on :5001 (and chat)").
 - **Server settings…** (bottom right) opens a modal with what every preset
-  shares, in three sections. **KoboldCpp**: the binary new KoboldCpp
+  shares. First, when a preset connects to any, **Connected servers**:
+  each address (once, whichever presets have it), what it's connected as,
+  and what it says now (asked as the settings open, and with **Check
+  again**). Then **KoboldCpp** and **sd-server**; one that no preset
+  starts (presets that only connect) is folded, "(none of your presets
+  starts it)", its binary not checked and its devices not listed, so a
+  setup with no programs here shows no errors. **KoboldCpp**: the binary new KoboldCpp
   entries and the wizard start (`Config::koboldcpp`; empty: the one in use,
   `Config::known_koboldcpp`: prompt enhance's, else a preset entry's; with
   none, found at startup by `kobold::find_binary` on `PATH`, in `~`,
@@ -339,8 +368,13 @@ asks among them):
   the wizard's binary and model directory) has a Browse… picker starting in
   its folder, else the first model folder. **+ sd-server** adds a device and
   port (1234, 1235, … by default); the app launches it and stops it when it
-  exits. **+ Connect to sd-server** adds a URL; connected servers are left
-  running when the app exits. With sd-server rows, the listed devices are
+  exits. These buttons (and **+ Chat server**) are under **Local
+  (recommended)**, above them; **Remote (advanced)** shows instead the
+  wizard's row (address asked what it is, **Connect as**, password) with
+  **Add** (an entry for what it is: KoboldCpp, sd-server's API or a chat
+  server; the row emptied for another). The editor opens on Remote for a
+  preset whose servers are all connected ones, else on Local. Connected
+  servers are left running when the app exits. The devices line shows only with sd-servers started here. With sd-server rows, the listed devices are
   buttons too: a click adds an sd-server on that one (devices already in
   the preset are greyed). A preset can mix all kinds.
   **+ Chat server** opens the chat server settings, starting from the
@@ -1659,9 +1693,14 @@ its details window, and for every run at once in the Jobs header:
   or to say how its jobs are is said once in the messages (and the logs
   of its runs there) until it answers again; the engine retries
   meanwhile, as before, when that was silent. A load answered with
-  another model than asked says both ("asked to load {recipe, models},
-  it answered {state, recipe, models}"): the answer must name the recipe
-  and the files as asked.
+  another model than asked says how it differs (recipe, each slot
+  missing, extra or holding another file), then both in full: the answer
+  must be `ready` with the files as asked. The same files under the
+  server's own recipe and slot names count as loaded (a proxy in front of
+  ComfyUI or A1111 has one recipe of its own: imgproxy answers recipe
+  `checkpoint`, slot `model`); the run log says "loaded in 0.0 s (it
+  calls it checkpoint (…))", and the server's status, while it names
+  them so, is read as the model asked.
 - **Jobs that don't move**: when none of a server's jobs has changed
   (status, place in its queue, step) for 10 minutes, or 3 times its
   longest job yet if more (previews off, a job's steps aren't seen), that
@@ -2822,7 +2861,11 @@ in the app's state folder (`$XDG_STATE_HOME/increart` when set, else
     half too; unsaved edits to your models are dropped):
   - **Install built-in** (leftmost; Manage models… opens on it): the
     filter row and the built-in models, ticked to install; **Download and
-    install** (**Install** when nothing's missing).
+    install** (**Install** when nothing's missing). When every server is a
+    connected one, a note above says downloads go to this computer's model
+    folders and a connected server runs the files it lists, with **Make a
+    model from a server's files…** (a new model in Your models, its files
+    picked from the open server's list).
   - **Your models** (Generate's ⚙, the coverage line, the sd-server
     wizard and Custom model… open on it): the models editor (Model presets
     above), with Reset to built-ins and Save. Its edits stay while
@@ -2924,7 +2967,8 @@ presets as the app uses them, case by case; the startup Servers screen's
 **Validate servers…** is a window around it. The suite starts the servers
 it needs itself, opening each preset's servers together as the app does,
 so the button is there only while no servers are open or opening, and
-nothing else uses the GPUs. Started servers are stopped when the suite
+nothing else uses the GPUs. For a preset whose servers are all connected
+ones, the window says nothing is started here, only connected to. Started servers are stopped when the suite
 ends, is stopped, or loses the app (its stdin closing).
 
 - Its cases, by ID: `preset/server/group.key` for one server,
@@ -2933,12 +2977,15 @@ ends, is stopped, or loses the app (its stdin closing).
     nothing is started), `routing` (each model preset has a server, by
     listed files, by a running file of that name, or "may get it"),
     `parallel`, `pe-with-images`, `end-to-end` (a run through the engine
-    in a scratch library, with the files most of its servers pick) and `failover` (the same with a started server
+    in a scratch library, with the files most of its servers pick; it ends
+    at once when the engine says no server can load the model, its runs
+    waiting, not at the time limit) and `failover` (the same with a started server
     stopped after its first image: the rest go to the others).
   - **connect**: `capabilities`, `latency`, `parallel-clients`,
     `poll-burst`, `unknown-job` (a 404, not an error).
-  - **models**: `list`, `status`, `load-each` (the answer must name what
-    was asked), `load-missing` (a clean refusal).
+  - **models**: `list`, `status`, `load-each` (the answer must hold the
+    files asked, under the recipe and slots asked or its own),
+    `load-missing` (a clean refusal).
   - **generate**: `basic` (the Test button's steps), `txt2img`,
     `same-seed`, `reference`, `large-request` (about 12 MB of reference
     images: a proxy's body limit shows here), `lora`, `custom-sigmas`.

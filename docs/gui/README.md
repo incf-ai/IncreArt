@@ -22,7 +22,8 @@ That runs the main scenes. The rest (`EXTRA_SCENES` in
 say which), each on a fresh library: e.g. `01,02-server-dialog,60-` for server
 settings, `01,02-server-dialog,03-idea-inbox-grid,74` for the alerts. The
 `60b`–`60g` scenes want a config whose sd-server is the suite's fake
-(`cargo build --release -p increart-apitest --features fake`), and the logs
+(`cargo build --release -p increart-apitest --features fake`), `60h` a server
+answering at `INCREART_TOUR_CONNECT` (an address; default 127.0.0.1:1234), and the logs
 scenes some server logs in the state folder (passwords masked: the Logs
 window shows them as written).
 
@@ -32,7 +33,7 @@ size (regenerate it with `scripts/make-gui-gallery.sh`).
 | | |
 | --- | --- |
 | [01-library-dialog](01-library-dialog.webp) | Start-up: what a library is and why one is opened first; recent libraries (last used in the accent colour), Create a new library… / Open an existing library… |
-| [02-server-dialog](02-server-dialog.webp) | Start-up: server presets, each with its servers and what they do (images · text · vision) (a click opens one; ✎ edit, 🗑 delete), Open the last used, New preset / Set up KoboldCpp for your GPUs…, Server settings… |
+| [02-server-dialog](02-server-dialog.webp) | Start-up: server presets, each with its servers and what they do (images · text · vision) (a click opens one; ✎ edit, 🗑 delete), Open the last used, New server setup / Set up servers… / Test servers…, Server settings… |
 | [02c-koboldcpp-entry](02c-koboldcpp-entry.webp) | The preset editor with a KoboldCpp row: started by IncreArt or already running, its model and the prompt enhancer's chat model and mmproj, the command line |
 | [03-idea-inbox-grid](03-idea-inbox-grid.webp) | Idea inbox grid: each card's Save / Discard, keys panel, card-size zoom, the drop-folder hint |
 | [03c-idea-inbox-save-dialog](03c-idea-inbox-save-dialog.webp) | Idea inbox → Save to input library… (`1` / `2` / `S`): the input collections on the left (a filter, the tree, New collection under it), the idea's name and where it's saved on the right; Save & new project |
@@ -92,16 +93,18 @@ size (regenerate it with `scripts/make-gui-gallery.sh`).
 | [52-server-dialog-edit](52-server-dialog-edit.webp) | The preset editor modal: name, server rows, What each server does (Images · Text (prompt enhance) · Vision), the listed devices to add, Save / Save and open / Open without saving / Cancel |
 | [53-library-wizard](53-library-wizard.webp) | Create a new library: home folder, current folder or elsewhere |
 | [55-library-open-wizard](55-library-open-wizard.webp) | Open an existing library: the folder, checked for library.rsn |
-| [54-server-wizard](54-server-wizard.webp) | Server setup wizard (no presets), KoboldCpp: the GPUs through a runtime (Vulkan here; CUDA or ROCm) as its tool lists them (discrete ones ticked), each one's VRAM preset and role, how two GPUs share the work (by default 2 images at a time, prompt enhance ticked on every GPU with room for it beside the images, here both; **Prompt enhance on** ticks its GPUs), the presets table with the one in use highlighted, the summary, the plan and why; Download, save as preset and open |
+| [54-server-wizard](54-server-wizard.webp) | Server setup wizard (no presets), Local (recommended) / Remote (advanced) on top, Local's KoboldCpp (recommended): the GPUs through a runtime (Vulkan here; CUDA or ROCm) as its tool lists them (discrete ones ticked), each one's VRAM preset and role, how two GPUs share the work (by default 2 images at a time, prompt enhance ticked on every GPU with room for it beside the images, here both; **Prompt enhance on** ticks its GPUs), the presets table with the one in use highlighted, the summary, the plan and why; Download, save as preset and open |
 | [54a-server-wizard-choose](54a-server-wizard-choose.webp) | Server setup wizard, **Choose presets myself**: GPU 1 set to the 32 GB preset from its menu, highlighted in the table, with a warning that it leaves little VRAM |
 | [54c-server-wizard-pe-own-gpu](54c-server-wizard-pe-own-gpu.webp) | Server setup wizard, "Prompt enhance on a GPU of its own": GPU 1 makes images, GPU 2 runs only prompt enhance (answers at once, never swapped) |
 | [54d-server-wizard-pe-on-one](54d-server-wizard-pe-on-one.webp) | Server setup wizard, prompt enhance unticked on GPU 2 by hand: only GPU 1 runs the chat model |
-| [54b-server-wizard-sd-server](54b-server-wizard-sd-server.webp) | Server setup wizard, sd-server: the listed GPUs ticked, or connect to a running server |
+| [54b-server-wizard-sd-server](54b-server-wizard-sd-server.webp) | Server setup wizard, Local (recommended) / Remote (advanced) on top, here Local's sd-server: the listed GPUs ticked |
+| [54e-server-wizard-remote](54e-server-wizard-remote.webp) | Server setup wizard, **Remote (advanced)**: an address per server, each asked what it is (KoboldCpp with its image and chat models, a proxy speaking sd-server's API, one not answering), Connect as what it says or a kind picked; Save as preset and open |
 | [56-server-status](56-server-status.webp) | Top bar Servers…: the server status window (here without servers) |
 | [57-no-server-warning](57-no-server-warning.webp) | First Queue of a session with no server: Set up servers… / Queue anyway / Cancel |
 | [58-server-dialog-from-main](58-server-dialog-from-main.webp) | The server dialog reopened from the main window: Close goes back |
 | [59-continue-without-servers](59-continue-without-servers.webp) | Continue without servers asks first |
-| [60-server-settings](60-server-settings.webp) | Server settings modal: KoboldCpp (binary, its version), sd-server (binary, devices), both (models folder, leave running, wait for free RAM, log server traffic), timeouts |
+| [60-server-settings](60-server-settings.webp) | Server settings modal: connected servers (each address, what it is, what it says now; Check again), KoboldCpp folded as no preset starts it, sd-server (binary, devices), both (models folder, leave running, wait for free RAM, log server traffic), timeouts |
+| [60h-preset-editor-connect](60h-preset-editor-connect.webp) | The preset editor on **Remote (advanced)**: an address, asked what it is (here an imgproxy in front of ComfyUI, speaking sd-server's API), Connect as; Add |
 | [60b-server-test-button](60b-server-test-button.webp) | The preset editor: a connected-to server's **Test** button |
 | [60c-server-test](60c-server-test.webp) | Test of a server: the engine's calls one by one (answers, model list, status, loads a model preset, makes a small image, cancels a job), each passed or why not; Copy, Traffic log… |
 | [60d-validate-servers-button](60d-validate-servers-button.webp) | The Servers screen: each preset marked validated or not, **Validate servers…** beside New preset |

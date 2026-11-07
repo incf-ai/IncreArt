@@ -12,7 +12,7 @@ Start-up: what a library is and why one is opened first; recent libraries (last 
 
 ## 02-server-dialog
 
-Start-up: server presets, each with its servers and what they do (images · text · vision) (a click opens one; ✎ edit, 🗑 delete), Open the last used, New preset / Set up KoboldCpp for your GPUs…, Server settings…
+Start-up: server presets, each with its servers and what they do (images · text · vision) (a click opens one; ✎ edit, 🗑 delete), Open the last used, New server setup / Set up servers… / Test servers…, Server settings…
 
 ![02-server-dialog](02-server-dialog.webp)
 
@@ -96,7 +96,7 @@ Generate, a single run whose prompt has blanks: the **Blanks** table under the p
 
 ## 08-projects-jobs
 
-Jobs: servers and running runs
+Jobs: servers and running runs; the order (Spread all · Sweep by sweep · One at a time) and Random
 
 ![08-projects-jobs](08-projects-jobs.webp)
 
@@ -216,7 +216,7 @@ Idea inbox → Import: waiting files, Import now, recent imports with conversion
 
 ## 20-input-library-filters
 
-Input library: filters (starred only), Grid · Folder · Discarded
+Input library: filters (starred, the tag "photo" picked), Grid · Folder · Discarded
 
 ![20-input-library-filters](20-input-library-filters.webp)
 
@@ -366,7 +366,7 @@ Create a new library: home folder, current folder or elsewhere
 
 ## 54-server-wizard
 
-Server setup wizard (no presets), KoboldCpp: the GPUs through a runtime (Vulkan here; CUDA or ROCm) as its tool lists them (discrete ones ticked), each one's VRAM preset and role, how two GPUs share the work (by default 2 images at a time, prompt enhance ticked on every GPU with room for it beside the images, here both; **Prompt enhance on** ticks its GPUs), the presets table with the one in use highlighted, the summary, the plan and why; Download, save as preset and open
+Server setup wizard (no presets), Local (recommended) / Remote (advanced) on top, Local's KoboldCpp (recommended): the GPUs through a runtime (Vulkan here; CUDA or ROCm) as its tool lists them (discrete ones ticked), each one's VRAM preset and role, how two GPUs share the work (by default 2 images at a time, prompt enhance ticked on every GPU with room for it beside the images, here both; **Prompt enhance on** ticks its GPUs), the presets table with the one in use highlighted, the summary, the plan and why; Download, save as preset and open
 
 ![54-server-wizard](54-server-wizard.webp)
 
@@ -378,7 +378,7 @@ Server setup wizard, **Choose presets myself**: GPU 1 set to the 32 GB preset fr
 
 ## 54b-server-wizard-sd-server
 
-Server setup wizard, sd-server: the listed GPUs ticked, or connect to a running server
+Server setup wizard, Local (recommended) / Remote (advanced) on top, here Local's sd-server: the listed GPUs ticked
 
 ![54b-server-wizard-sd-server](54b-server-wizard-sd-server.webp)
 
@@ -393,6 +393,12 @@ Server setup wizard, "Prompt enhance on a GPU of its own": GPU 1 makes images, G
 Server setup wizard, prompt enhance unticked on GPU 2 by hand: only GPU 1 runs the chat model
 
 ![54d-server-wizard-pe-on-one](54d-server-wizard-pe-on-one.webp)
+
+## 54e-server-wizard-remote
+
+Server setup wizard, **Remote (advanced)**: an address per server, each asked what it is (KoboldCpp with its image and chat models, a proxy speaking sd-server's API, one not answering), Connect as what it says or a kind picked; Save as preset and open
+
+![54e-server-wizard-remote](54e-server-wizard-remote.webp)
 
 ## 55-library-open-wizard
 
@@ -426,7 +432,7 @@ Continue without servers asks first
 
 ## 60-server-settings
 
-Server settings modal: KoboldCpp (binary, its version), sd-server (binary, devices), both (models folder, leave running, wait for free RAM, log server traffic), timeouts
+Server settings modal: connected servers (each address, what it is, what it says now; Check again), KoboldCpp folded as no preset starts it, sd-server (binary, devices), both (models folder, leave running, wait for free RAM, log server traffic), timeouts
 
 ![60-server-settings](60-server-settings.webp)
 
@@ -483,6 +489,12 @@ The advanced view after a run: each case's mark and time
 Opening a preset not validated yet: validate it first (a few minutes), or open without
 
 ![60g-validate-first](60g-validate-first.webp)
+
+## 60h-preset-editor-connect
+
+The preset editor on **Remote (advanced)**: an address, asked what it is (here an imgproxy in front of ComfyUI, speaking sd-server's API), Connect as; Add
+
+![60h-preset-editor-connect](60h-preset-editor-connect.webp)
 
 ## 61-duplicate-project
 

@@ -301,6 +301,7 @@ impl Engine {
             told_stuck: HashSet::new(),
             logs: HashMap::new(),
             load_started: vec![],
+            named: vec![],
             body_logged: HashSet::new(),
             troubled: vec![],
             events: etx,
@@ -398,6 +399,11 @@ struct Coordinator {
     logs: HashMap<Id, PathBuf>,
     /// When each server's latest load was asked for.
     load_started: Vec<Option<Instant>>,
+    /// Each server's own name for the model it was last asked to load,
+    /// when it answered with the same files under another recipe and
+    /// slots (a proxy: imgproxy says recipe "checkpoint", slot "model"):
+    /// (its name, the key asked for). Its status is read as the key asked.
+    named: Vec<Option<(ModelKey, ModelKey)>>,
     /// Runs whose request body is in their log (the first seed's).
     body_logged: HashSet<Id>,
     /// Servers whose failing was said (once, until they answer again).
@@ -423,6 +429,7 @@ impl Coordinator {
         self.waiting = vec![None; self.servers.len()];
         self.listed = vec![None; self.servers.len()];
         self.load_started = vec![None; self.servers.len()];
+        self.named = vec![None; self.servers.len()];
         self.troubled = vec![false; self.servers.len()];
         loop {
             match rx.recv_timeout(Duration::from_millis(250)) {
@@ -494,6 +501,15 @@ impl Coordinator {
         self.log_server(s, what);
         if !std::mem::replace(&mut self.troubled[s], true) {
             self.emit(Event::Problem(format!("{}: {what}", self.servers[s].name)));
+        }
+    }
+
+    /// What server `s` says it has loaded, read as the key asked for when
+    /// it's its own name for that load's files.
+    fn as_asked(&self, s: ServerIdx, loaded: Option<ModelKey>) -> Option<ModelKey> {
+        match (&self.named[s], loaded) {
+            (Some((theirs, asked)), Some(k)) if k == *theirs => Some(asked.clone()),
+            (_, k) => k,
         }
     }
 
@@ -677,7 +693,8 @@ impl Coordinator {
                         Ok(_) => self.answered(s),
                         Err(e) => self.trouble(s, &format!("not answering ({e}); trying again after a pause")),
                     }
-                    self.sched.probed(s, r.map(|st| st.loaded()).map_err(drop), now)
+                    let loaded = r.map(|st| self.as_asked(s, st.loaded())).map_err(drop);
+                    self.sched.probed(s, loaded, now)
                 }
                 Report::Listed { round, loadable } => {
                     match loadable {
@@ -757,6 +774,10 @@ impl Coordinator {
                     let took = self.load_started[s].take().map_or(0.0, |t| t.elapsed().as_secs_f32());
                     let text = match &r {
                         Ok(st) if st.loaded().as_ref() == Some(&target) => format!("loaded in {took:.1} s"),
+                        Ok(st) if st.holds(&target) => format!(
+                            "loaded in {took:.1} s (it calls it {})",
+                            st.loaded().map_or(String::new(), |m| model_text(&m))
+                        ),
                         Ok(st) => format!(
                             "the load answered with {} loaded",
                             st.loaded().map_or("nothing".to_string(), |m| model_text(&m))
@@ -765,23 +786,28 @@ impl Coordinator {
                     };
                     self.log_model(&target, Some(s), &text);
                     let result = match r {
-                        Ok(st) if st.loaded().as_ref() == Some(&target) => {
+                        Ok(st) if st.holds(&target) => {
+                            // its own names for the files asked, kept to read its status by
+                            self.named[s] = st.loaded().filter(|k| *k != target).map(|k| (k, target.clone()));
                             self.answered(s);
                             self.emit(Event::ModelLoaded { server: s, recipe: target.recipe.clone(), took_s: took });
                             LoadResult::Ok
                         }
                         Ok(st) => {
                             // the answer must name the recipe and files asked for, as they were asked
+                            let differs = st.mismatch(&target).join("; ");
                             let answered =
                                 serde_json::json!({ "state": st.state, "recipe": st.recipe, "models": st.models });
                             let asked = serde_json::json!({ "recipe": target.recipe, "models": target.models });
                             self.emit(Event::Problem(format!(
-                                "{}: asked to load {asked}, it answered {answered}; {} won't go to it",
-                                self.servers[s].name, target.recipe
+                                "{}: its answer to loading {} isn't what was asked: {differs}. {} won't go to it \
+                                 until the answer (and models/status) says state \"ready\" with the recipe and \
+                                 slots as asked: {asked} (it answered {answered})",
+                                self.servers[s].name, target.recipe, target.recipe
                             )));
                             LoadResult::Broken {
                                 still_loaded: st.loaded(),
-                                why: format!("it answered the load with {answered}"),
+                                why: format!("it answered the load with another model: {differs}"),
                             }
                         }
                         Err(ApiError::InvalidModelConfig(m)) => {

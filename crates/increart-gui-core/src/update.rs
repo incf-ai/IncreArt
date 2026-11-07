@@ -65,6 +65,7 @@ pub enum Msg {
     NewPreset,
     CancelEdit,
     AddStartServer,
+    /// The editor: **Remote (advanced)**, the address row.
     AddConnectServer,
     /// A KoboldCpp image server, started by the app.
     AddKoboldServer,
@@ -87,6 +88,24 @@ pub enum Msg {
     FinishServerWizard,
     /// Wizard: the KoboldCpp page (true) or the sd-server one.
     WizardKobold(bool),
+    /// Wizard: servers already running (true), or run here.
+    WizardRemote(bool),
+    /// A server-already-running row edited: the wizard's (by index) or
+    /// the editor's (None).
+    EditRemote(Option<usize>, crate::state::RemoteRow),
+    /// The wizard: another address row.
+    AddRemoteRow,
+    RemoveRemoteRow(usize),
+    /// Ask the server at this address (with this password) what it is.
+    DetectServer(String, String),
+    /// What the server at this address (normalized) said it is.
+    ServerFound(String, Result<increart_core::detect::Detected, String>),
+    /// The wizard: save the servers already running as a preset and open it.
+    FinishRemoteWizard,
+    /// The editor: add the address row's server (the row emptied).
+    AddConnected,
+    /// The editor: **Local (recommended)**, the row closed.
+    CancelConnect,
     /// The KoboldCpp page's GPUs (`vulkaninfo`).
     /// The GPUs listed, and the RAM available (GiB).
     WizardGpus(Result<Vec<increart_core::tiers::Gpu>, String>, Option<f64>),
@@ -1095,6 +1114,9 @@ pub enum Effect {
         create: bool,
     },
     ListDevices(String),
+    /// What the server at this address is (`detect::detect`), answered
+    /// with `ServerFound`.
+    DetectServer(String, String),
     /// `binary --version`, answered with `KoboldVersion`.
     KoboldVersion(String),
     /// The GPUs and their memory, for the wizard's KoboldCpp page.
@@ -2259,6 +2281,10 @@ fn server_dialog() -> ServerDialog {
         settings: false,
         notice: None,
         without: None,
+        remote: None,
+        connect: None,
+        found: Default::default(),
+        checking: Default::default(),
     }
 }
 
@@ -2508,7 +2534,17 @@ fn wizard_name(draft: &ServerPreset) -> String {
             ServerConfig::Kobold(_) | ServerConfig::Connect { .. } | ServerConfig::Chat(_) => None,
         })
         .collect();
+    // connected: named after the machines, unless they're this one
+    let mut hosts: Vec<String> = vec![];
+    for s in draft.servers.iter().filter(|s| !s.is_started()) {
+        let url = s.base_url();
+        let host = url.split("://").last().unwrap_or(&url).split(['/', ':']).next().unwrap_or("").to_string();
+        if !host.is_empty() && !matches!(host.as_str(), "127.0.0.1" | "localhost") && !hosts.contains(&host) {
+            hosts.push(host);
+        }
+    }
     match (devices.len(), draft.sd_servers().len()) {
+        (0, _) if !hosts.is_empty() => format!("Servers at {}", hosts.join(", ")),
         (0, 0) => "Prompt enhance".into(),
         (0, 1) => "Running server".into(),
         (0, _) => "Running servers".into(),
@@ -2655,6 +2691,15 @@ fn part_of(msg: &Msg) -> usize {
         Msg::DraftDevice(..) => 2,
         Msg::FinishServerWizard => 2,
         Msg::WizardKobold(..) => 1,
+        Msg::WizardRemote(..) => 1,
+        Msg::EditRemote(..) => 1,
+        Msg::AddRemoteRow => 1,
+        Msg::RemoveRemoteRow(..) => 1,
+        Msg::DetectServer(..) => 1,
+        Msg::ServerFound(..) => 1,
+        Msg::FinishRemoteWizard => 1,
+        Msg::AddConnected => 1,
+        Msg::CancelConnect => 1,
         Msg::WizardGpus(..) => 1,
         Msg::WizardRuntime(..) => 1,
         Msg::EditKoboldWizard(..) => 1,
@@ -3386,6 +3431,9 @@ fn apply_1(state: &mut AppState, msg: Msg, rest: &mut Option<Msg>) -> Vec<Effect
                 d.editing = Some(Editing::Preset(i));
                 d.draft = p.clone();
                 d.progress.clear();
+                // Remote (the address row) for a preset that only connects
+                let remote = !p.servers.is_empty() && p.servers.iter().all(|s| !s.is_started());
+                d.connect = remote.then(Default::default);
                 return list_devices_once(state);
             }
             vec![]
@@ -3397,6 +3445,7 @@ fn apply_1(state: &mut AppState, msg: Msg, rest: &mut Option<Msg>) -> Vec<Effect
                 d.editing = Some(Editing::New);
                 d.draft = ServerPreset { name: String::new(), servers: vec![] };
                 d.progress.clear();
+                d.connect = None;
                 return list_devices_once(state);
             }
             vec![]
@@ -3407,20 +3456,109 @@ fn apply_1(state: &mut AppState, msg: Msg, rest: &mut Option<Msg>) -> Vec<Effect
             }
             vec![]
         }
-        Msg::AddStartServer | Msg::AddConnectServer => {
+        Msg::AddStartServer => {
             let Phase::Servers(d) = &mut state.phase else { return vec![] };
             let n = d.draft.sd_servers().len();
-            if msg == Msg::AddStartServer {
-                add_start_server(&mut d.draft, &format!("ROCm{n}"));
-            } else {
-                d.draft.servers.push(ServerConfig::Connect {
-                    name: format!("server{n}"),
-                    url: "http://127.0.0.1:1234".into(),
-                    device: String::new(),
-                });
-            }
+            add_start_server(&mut d.draft, &format!("ROCm{n}"));
             d.progress.clear();
             vec![]
+        }
+        // the editor's Remote: the address first, what it is comes from
+        // asking it (CancelConnect: back to Local)
+        Msg::AddConnectServer => {
+            let Phase::Servers(d) = &mut state.phase else { return vec![] };
+            d.connect.get_or_insert_with(Default::default);
+            vec![]
+        }
+        Msg::CancelConnect => {
+            let Phase::Servers(d) = &mut state.phase else { return vec![] };
+            d.connect = None;
+            vec![]
+        }
+        Msg::AddConnected => {
+            let Phase::Servers(d) = &mut state.phase else { return vec![] };
+            let Some(row) = &d.connect else { return vec![] };
+            let taken: Vec<&str> = d.draft.servers.iter().map(|s| s.name()).collect();
+            let Some(server) = row.server(&d.found, &taken) else { return vec![] };
+            d.draft.servers.push(server);
+            // still Remote: the row emptied for another
+            d.connect = Some(Default::default());
+            d.progress.clear();
+            vec![]
+        }
+        Msg::WizardRemote(on) => {
+            let Phase::Servers(d) = &mut state.phase else { return vec![] };
+            if !d.wizard || d.kobold.as_ref().is_some_and(|k| k.downloading.is_some()) || d.remote.is_some() == on {
+                return vec![];
+            }
+            if !on {
+                d.remote = None;
+                return update(state, Msg::WizardKobold(true));
+            }
+            d.kobold = None;
+            d.draft.servers.clear();
+            d.remote = Some(vec![Default::default()]);
+            vec![]
+        }
+        Msg::EditRemote(i, row) => {
+            let Phase::Servers(d) = &mut state.phase else { return vec![] };
+            match i {
+                Some(i) => {
+                    if let Some(r) = d.remote.as_mut().and_then(|v| v.get_mut(i)) {
+                        *r = row;
+                    }
+                }
+                None => {
+                    if let Some(r) = &mut d.connect {
+                        *r = row;
+                    }
+                }
+            }
+            vec![]
+        }
+        Msg::AddRemoteRow => {
+            let Phase::Servers(d) = &mut state.phase else { return vec![] };
+            if let Some(v) = &mut d.remote {
+                v.push(Default::default());
+            }
+            vec![]
+        }
+        Msg::RemoveRemoteRow(i) => {
+            let Phase::Servers(d) = &mut state.phase else { return vec![] };
+            if let Some(v) = d.remote.as_mut().filter(|v| i < v.len()) {
+                v.remove(i);
+            }
+            vec![]
+        }
+        Msg::DetectServer(url, password) => {
+            let Phase::Servers(d) = &mut state.phase else { return vec![] };
+            let key = increart_core::detect::normalize(&url);
+            if key.is_empty() || !d.checking.insert(key.clone()) {
+                return vec![];
+            }
+            vec![Effect::DetectServer(key, password)]
+        }
+        Msg::ServerFound(key, r) => {
+            let Phase::Servers(d) = &mut state.phase else { return vec![] };
+            d.checking.remove(&key);
+            d.found.insert(key, r);
+            vec![]
+        }
+        Msg::FinishRemoteWizard => {
+            let Phase::Servers(d) = &mut state.phase else { return vec![] };
+            let Some(rows) = &d.remote else { return vec![] };
+            let mut servers: Vec<ServerConfig> = vec![];
+            for row in rows {
+                let taken: Vec<&str> = servers.iter().map(|s| s.name()).collect();
+                if let Some(s) = row.server(&d.found, &taken) {
+                    servers.push(s);
+                }
+            }
+            if servers.is_empty() {
+                return vec![];
+            }
+            d.draft.servers = servers;
+            update(state, Msg::FinishServerWizard)
         }
         Msg::AddKoboldServer => {
             use increart_core::kobold::{KoboldRun, KoboldServer};
@@ -3524,6 +3662,7 @@ fn apply_1(state: &mut AppState, msg: Msg, rest: &mut Option<Msg>) -> Vec<Effect
             };
             d.wizard = open;
             d.kobold = None;
+            d.remote = None;
             d.editing = None;
             d.progress.clear();
             d.draft = ServerPreset { name: String::new(), servers: vec![] };
@@ -3547,6 +3686,7 @@ fn apply_1(state: &mut AppState, msg: Msg, rest: &mut Option<Msg>) -> Vec<Effect
             if !d.wizard || d.kobold.as_ref().is_some_and(|k| k.downloading.is_some()) {
                 return vec![];
             }
+            d.remote = None;
             match &mut d.kobold {
                 // detect again
                 Some(k) if on => {
@@ -3957,8 +4097,15 @@ fn apply_2(state: &mut AppState, msg: Msg, rest: &mut Option<Msg>) -> Vec<Effect
                 // (a field closed while typing in it)
                 return if state.config.full_paths().is_empty() { vec![] } else { save_config(state) };
             }
-            let mut fx = list_devices_once(state);
-            fx.extend(kobold_version_once(state));
+            let (kobold, sd) = crate::state::programs_started(&state.config.server_presets);
+            let mut fx = if sd { list_devices_once(state) } else { vec![] };
+            if kobold {
+                fx.extend(kobold_version_once(state));
+            }
+            // each connected server asked what it is, to say how it is
+            for c in crate::state::connected_servers(&state.config.server_presets) {
+                fx.extend(update(state, Msg::DetectServer(c.url, c.password)));
+            }
             fx
         }
         Msg::ServerStatus(open) => {

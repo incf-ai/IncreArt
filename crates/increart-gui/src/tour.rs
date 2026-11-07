@@ -37,6 +37,7 @@ const SCENES: &[&str] = &[
     "54c-server-wizard-pe-own-gpu",
     "54d-server-wizard-pe-on-one",
     "54b-server-wizard-sd-server",
+    "54e-server-wizard-remote",
     "03-idea-inbox-grid",
     "03b-idea-inbox-picked",
     "03c-idea-inbox-save-dialog",
@@ -137,6 +138,9 @@ const EXTRA_SCENES: &[&str] = &[
     "59-continue-without-servers",
     // after 02
     "60-server-settings",
+    // after 02: the editor on Remote (advanced), asking INCREART_TOUR_CONNECT
+    // (an address; default 127.0.0.1:1234) what it is
+    "60h-preset-editor-connect",
     // after 02: a connected-to server's Test, nothing answering there
     "60b-server-test-button",
     "60c-server-test",
@@ -413,6 +417,17 @@ impl Tour {
             "58-server-dialog-from-main" => vec![Msg::CloseNoServerWarning, Msg::OpenServerDialog],
             "59-continue-without-servers" => vec![Msg::AskContinueWithoutServers],
             "60-server-settings" => vec![Msg::CancelEdit, Msg::ServerSettings(true)],
+            "60h-preset-editor-connect" => {
+                let url = std::env::var("INCREART_TOUR_CONNECT").unwrap_or_else(|_| "127.0.0.1:1234".into());
+                let row = increart_gui_core::RemoteRow { url: url.clone(), ..Default::default() };
+                vec![
+                    Msg::ServerSettings(false),
+                    Msg::NewPreset,
+                    Msg::AddConnectServer,
+                    Msg::EditRemote(None, row),
+                    Msg::DetectServer(url, String::new()),
+                ]
+            }
             "60b-server-test-button" => vec![Msg::CancelOpening, Msg::EditPreset(1)],
             "60c-server-test" => vec![Msg::TestServer(increart_core::config::ServerConfig::Connect {
                 name: "box".into(),
@@ -1226,6 +1241,41 @@ impl Tour {
                 let mut c = st.config.programs.sd_server.clone();
                 c.binary = self.stand_in().to_string_lossy().into();
                 vec![Msg::SetSdServer(c), Msg::WizardKobold(false)]
+            }
+            "54e-server-wizard-remote" => {
+                // servers already running: KoboldCpp on another machine, a
+                // proxy speaking sd-server's API in front of ComfyUI, one down
+                use increart_core::detect::{Detected, Kind, normalize};
+                use increart_gui_core::RemoteRow;
+                let row = |url: &str| RemoteRow { url: url.into(), ..Default::default() };
+                let kobold = Detected {
+                    kind: Kind::KoboldCpp,
+                    version: Some("1.117".into()),
+                    images: true,
+                    image_models: vec!["koboldcpp/qwen_image_2.1-Q8_0.gguf".into()],
+                    chat_models: vec!["Qwen3VL-8B-Instruct-Q4_K_M".into()],
+                    needs_password: false,
+                };
+                let proxy = Detected {
+                    kind: Kind::SdServer,
+                    version: None,
+                    images: true,
+                    image_models: vec!["krea2_turbo_int8_convrot.safetensors".into()],
+                    chat_models: vec![],
+                    needs_password: false,
+                };
+                let urls = ["192.168.2.136:5000", "http://192.168.2.136:7800", "192.168.2.140:5001"];
+                let mut msgs = vec![Msg::WizardRemote(true), Msg::AddRemoteRow, Msg::AddRemoteRow];
+                for (i, u) in urls.iter().enumerate() {
+                    msgs.push(Msg::EditRemote(Some(i), row(u)));
+                }
+                msgs.push(Msg::ServerFound(normalize(urls[0]), Ok(kobold)));
+                msgs.push(Msg::ServerFound(normalize(urls[1]), Ok(proxy)));
+                msgs.push(Msg::ServerFound(
+                    normalize(urls[2]),
+                    Err("no answer: http://192.168.2.140:5001/api/extra/version: Connection refused".into()),
+                ));
+                msgs
             }
             "03-idea-inbox-grid" => {
                 // the presets' first chat server, for the prompt-enhance scenes

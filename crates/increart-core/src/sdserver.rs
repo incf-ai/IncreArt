@@ -109,6 +109,55 @@ impl ModelStatus {
             _ => None,
         }
     }
+
+    /// Whether this answer to a load of `asked` says it's loaded: ready
+    /// with the recipe and slots as asked, or the same files under the
+    /// server's own recipe and slot names (a proxy in front of ComfyUI or
+    /// A1111 has one recipe of its own: imgproxy answers recipe
+    /// "checkpoint", slot "model").
+    pub fn holds(&self, asked: &ModelKey) -> bool {
+        self.loaded().is_some_and(|k| k == *asked || k.same_files(asked))
+    }
+
+    /// How this answer to a load of `asked` differs from it, said plainly
+    /// (for whoever writes a server or proxy): the state, the recipe, then
+    /// each slot missing, extra or holding another file. Empty when it
+    /// matches.
+    pub fn mismatch(&self, asked: &ModelKey) -> Vec<String> {
+        let q = |s: &str| format!("\"{s}\"");
+        let mut said = Vec::new();
+        if self.state != "ready" {
+            let error = self.error.as_deref().filter(|e| !e.is_empty()).map_or(String::new(), |e| format!(": {e}"));
+            said.push(format!("state {} instead of \"ready\"{error}", q(&self.state)));
+        }
+        match &self.recipe {
+            Some(r) if *r == asked.recipe => {}
+            Some(r) => said.push(format!("recipe {} instead of {}", q(r), q(&asked.recipe))),
+            None => said.push(format!("no recipe (asked {})", q(&asked.recipe))),
+        }
+        let extra: Vec<&String> = self.models.keys().filter(|k| !asked.models.contains_key(*k)).collect();
+        let mut renamed = Vec::new();
+        for (slot, file) in &asked.models {
+            match self.models.get(slot) {
+                Some(f) if f == file => {}
+                Some(f) => said.push(format!("slot {} holds {} instead of {}", q(slot), q(f), q(file))),
+                None => {
+                    // the same file under another name: a slot renamed
+                    match extra.iter().find(|k| !renamed.contains(*k) && self.models.get(**k) == Some(file)) {
+                        Some(k) => {
+                            renamed.push(*k);
+                            said.push(format!("slot {} instead of {} for {}", q(k), q(slot), q(file)))
+                        }
+                        None => said.push(format!("no slot {} (asked {})", q(slot), q(file))),
+                    }
+                }
+            }
+        }
+        for k in extra.into_iter().filter(|k| !renamed.contains(k)) {
+            said.push(format!("slot {} not asked for", q(k)));
+        }
+        said
+    }
 }
 
 /// What a server has loaded, or should load: recipe + slot → file ID. Two
@@ -117,6 +166,19 @@ impl ModelStatus {
 pub struct ModelKey {
     pub recipe: String,
     pub models: BTreeMap<String, String>,
+}
+
+impl ModelKey {
+    /// The same files (one or more), whatever the recipe and slots are
+    /// called.
+    pub fn same_files(&self, other: &ModelKey) -> bool {
+        fn files(k: &ModelKey) -> Vec<&String> {
+            let mut v: Vec<&String> = k.models.values().collect();
+            v.sort();
+            v
+        }
+        !self.models.is_empty() && files(self) == files(other)
+    }
 }
 
 impl From<&ModelSelection> for ModelKey {
@@ -599,6 +661,75 @@ fn portable_status(mut s: ModelStatus) -> ModelStatus {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_load_answered_with_the_same_files_under_other_names_holds_them() {
+        let key = |recipe: &str, models: &[(&str, &str)]| ModelKey {
+            recipe: recipe.into(),
+            models: models.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(),
+        };
+        let answer = |state: &str, k: &ModelKey| ModelStatus {
+            state: state.into(),
+            recipe: Some(k.recipe.clone()),
+            models: k.models.clone(),
+            ..Default::default()
+        };
+        let asked = key("krea2", &[("diffusion_model", "krea2.safetensors")]);
+        assert!(answer("ready", &asked).holds(&asked));
+        // as imgproxy answers in front of ComfyUI
+        let proxy = key("checkpoint", &[("model", "krea2.safetensors")]);
+        assert!(answer("ready", &proxy).holds(&asked));
+        assert!(!answer("loading", &proxy).holds(&asked));
+        // another file, or some of them only, isn't it
+        assert!(!answer("ready", &key("checkpoint", &[("model", "other.gguf")])).holds(&asked));
+        let three = key("qwen", &[("diffusion_model", "d"), ("llm", "l"), ("vae", "v")]);
+        assert!(!answer("ready", &key("checkpoint", &[("model", "d")])).holds(&three));
+        assert!(answer("ready", &key("q", &[("a", "v"), ("b", "d"), ("c", "l")])).holds(&three));
+        assert!(!answer("ready", &key("x", &[])).holds(&key("y", &[])));
+    }
+
+    #[test]
+    fn a_load_answered_with_another_model_says_how_it_differs() {
+        let asked = ModelKey {
+            recipe: "krea2".into(),
+            models: [("diffusion_model".to_string(), "krea2.safetensors".to_string())].into(),
+        };
+        let answer = |state: &str, recipe: Option<&str>, models: &[(&str, &str)]| ModelStatus {
+            state: state.into(),
+            recipe: recipe.map(String::from),
+            models: models.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(),
+            ..Default::default()
+        };
+        assert!(
+            answer("ready", Some("krea2"), &[("diffusion_model", "krea2.safetensors")]).mismatch(&asked).is_empty()
+        );
+        // as reported: a proxy naming its own recipe and slot
+        assert_eq!(
+            answer("ready", Some("checkpoint"), &[("model", "krea2.safetensors")]).mismatch(&asked),
+            [
+                r#"recipe "checkpoint" instead of "krea2""#,
+                r#"slot "model" instead of "diffusion_model" for "krea2.safetensors""#
+            ]
+        );
+        assert_eq!(
+            answer("ready", Some("krea2"), &[("diffusion_model", "other.gguf"), ("vae", "v.safetensors")])
+                .mismatch(&asked),
+            [
+                r#"slot "diffusion_model" holds "other.gguf" instead of "krea2.safetensors""#,
+                r#"slot "vae" not asked for"#
+            ]
+        );
+        let mut failed = answer("error", None, &[]);
+        failed.error = Some("out of memory".into());
+        assert_eq!(
+            failed.mismatch(&asked),
+            [
+                r#"state "error" instead of "ready": out of memory"#,
+                r#"no recipe (asked "krea2")"#,
+                r#"no slot "diffusion_model" (asked "krea2.safetensors")"#
+            ]
+        );
+    }
 
     #[test]
     fn ids_outside_the_first_model_dir() {

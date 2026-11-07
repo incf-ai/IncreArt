@@ -58,6 +58,10 @@ pub struct State {
     pub strict_files: bool,
     /// Images of the size asked (else 32×32).
     pub sized: bool,
+    /// Loads are kept, and said, under this recipe with its own slot
+    /// names (`model`, `model2`, …), the files as asked: as a proxy in
+    /// front of ComfyUI says (imgproxy: recipe "checkpoint", slot "model").
+    pub own_recipe: Option<String>,
 }
 
 pub struct Fake {
@@ -218,8 +222,14 @@ fn handle(s: &mut State, method: &Method, path: &str, body: Value) -> (u16, Valu
             {
                 return err(400, "invalid_model_config", &format!("model file not found: {missing}"));
             }
-            let models = serde_json::from_value(body["models"].clone()).unwrap_or_default();
-            s.loaded = Some((recipe, models));
+            let models: BTreeMap<String, String> = serde_json::from_value(body["models"].clone()).unwrap_or_default();
+            s.loaded = Some(match &s.own_recipe {
+                Some(own) => {
+                    let slot = |i: usize| if i == 0 { "model".to_string() } else { format!("model{}", i + 1) };
+                    (own.clone(), models.into_values().enumerate().map(|(i, f)| (slot(i), f)).collect())
+                }
+                None => (recipe, models),
+            });
             (200, model_status(s))
         }
         (Method::Post, "img_gen") => {
