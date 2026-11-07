@@ -1033,6 +1033,107 @@ pub struct PresetDownload {
     pub at: WizardDownload,
 }
 
+/// **Set up models** (DESIGN.md, Setting up models): where the files go,
+/// folders found holding some, and the built-in presets to download.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ModelWizard {
+    /// The folder downloads go in (made a model folder, first if new).
+    pub dir: String,
+    /// Folders found with model files; None while looking.
+    pub found: Option<Vec<increart_core::modelsetup::FoundFolder>>,
+    /// Of `found`, those ticked to add as model folders.
+    pub add: BTreeSet<String>,
+    /// Built-in presets ticked, by name.
+    pub picked: BTreeSet<String>,
+    /// Each download's size by URL, as Hugging Face says (None: it didn't);
+    /// not there yet: still asking.
+    pub sizes: BTreeMap<String, Option<u64>>,
+    /// The GPUs and their memory; None while listing.
+    pub gpus: Option<Result<Vec<increart_core::tiers::Gpu>, String>>,
+    /// The download asked (its presets added).
+    pub started: bool,
+}
+
+/// What a built-in preset needs from the model folders `dirs`.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct PresetNeeds {
+    /// The files to fetch ([`missing_downloads`]).
+    pub downloads: Vec<increart_core::tiers::Download>,
+    /// Their size (None: one not known yet).
+    pub download_bytes: Option<u64>,
+    /// All its files', there or to fetch: roughly the memory it takes.
+    pub total_bytes: Option<u64>,
+    /// A slot with none of its files there nor a download.
+    pub unavailable: bool,
+}
+
+impl PresetNeeds {
+    pub fn of(p: &RecipePreset, dirs: &[String], sizes: &BTreeMap<String, Option<u64>>) -> PresetNeeds {
+        use increart_core::config::model_file_on_disk;
+        let downloads = missing_downloads(p, dirs);
+        let size_of = |f: &str| -> Option<u64> {
+            match model_file_on_disk(f, dirs) {
+                Some(path) => std::fs::metadata(path).ok().map(|m| m.len()),
+                None => sizes.get(p.downloads.get(f)?).copied().flatten(),
+            }
+        };
+        let mut unavailable = false;
+        let mut total = Some(0u64);
+        // each slot's file there, else the one fetched
+        for slot in p.files.keys() {
+            let f = p
+                .choices(slot)
+                .find(|f| model_file_on_disk(f, dirs).is_some())
+                .or_else(|| p.choices(slot).find(|f| p.downloads.contains_key(*f)));
+            match f {
+                Some(f) => total = total.zip(size_of(f)).map(|(a, b)| a + b),
+                None => unavailable = true,
+            }
+        }
+        for l in p.loras.iter().filter(|l| !l.file.is_empty()) {
+            total = total.zip(size_of(&l.file)).map(|(a, b)| a + b);
+        }
+        let download_bytes = downloads.iter().try_fold(0u64, |n, d| Some(n + sizes.get(&d.url).copied().flatten()?));
+        PresetNeeds { downloads, download_bytes, total_bytes: total, unavailable }
+    }
+
+    /// Whether it fits a GPU of `vram_gib` (its files a little under it).
+    pub fn fits(&self, vram_gib: f64) -> Option<bool> {
+        Some(self.total_bytes? as f64 <= vram_gib * 0.95 * (1u64 << 30) as f64)
+    }
+}
+
+impl ModelWizard {
+    /// The folders it makes the model folders: `dir`, then those ticked.
+    pub fn folders(&self, model_dirs: &[String]) -> Vec<String> {
+        let dir = self.dir.trim().to_string();
+        let mut dirs = model_dirs.to_vec();
+        if !dir.is_empty() && !dirs.contains(&dir) {
+            dirs.insert(0, dir);
+        }
+        for a in &self.add {
+            if !dirs.contains(a) {
+                dirs.push(a.clone());
+            }
+        }
+        dirs
+    }
+
+    /// What the ticked presets fetch (each file once) into `folders`.
+    pub fn downloads(&self, model_dirs: &[String]) -> Vec<increart_core::tiers::Download> {
+        let dirs = self.folders(model_dirs);
+        let mut out: Vec<increart_core::tiers::Download> = vec![];
+        for p in increart_core::config::catalogue().iter().filter(|p| self.picked.contains(&p.name)) {
+            for d in missing_downloads(p, &dirs) {
+                if !out.iter().any(|o| o.file == d.file) {
+                    out.push(d);
+                }
+            }
+        }
+        out
+    }
+}
+
 /// What a server preset covers ([`AppState::coverage`]).
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Coverage {
@@ -2948,6 +3049,8 @@ pub enum PickKind {
     KoboldBinary,
     /// A model directory (its index; one past the last adds one).
     ModelDir(usize),
+    /// **Set up models**' folder the files go in.
+    ModelWizardDir,
     /// A file for the PE server being edited.
     Pe(PeFile),
     /// A file for the preset editor's KoboldCpp entry (its index).
@@ -3611,6 +3714,10 @@ pub struct AppState {
     pub preset_download: Option<PresetDownload>,
     /// Model presets' **Test**.
     pub preset_test: Option<PresetTestRun>,
+    /// **Set up models**, while open.
+    pub model_wizard: Option<ModelWizard>,
+    /// Download sizes asked this session, by URL (None: not said).
+    pub download_sizes: BTreeMap<String, Option<u64>>,
     /// The files in the model folders, for what the server presets cover
     /// before they're opened; None until scanned.
     pub local_files: Option<increart_core::kobold_image::LocalFiles>,
@@ -4093,6 +4200,8 @@ impl AppState {
             recipe_editor: None,
             preset_download: None,
             preset_test: None,
+            model_wizard: None,
+            download_sizes: BTreeMap::new(),
             local_files: None,
             local_scanning: false,
             preset_tests: Default::default(),

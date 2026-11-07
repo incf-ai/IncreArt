@@ -411,6 +411,25 @@ impl Runtime {
                 });
             }
             Effect::StopPresetTest => cancel(&self.preset_test_cancel),
+            Effect::FindModelFolders { home, more } => self.answer("find model folders", move || {
+                Msg::ModelFoldersFound(increart_core::modelsetup::find_folders(&home, &more))
+            }),
+            Effect::DownloadSizes(urls) => {
+                let (tx, wake) = (self.ctx.tx.clone(), self.ctx.wake.clone());
+                // several at a time: each HEAD (and its redirect) can take seconds
+                let queue = Arc::new(std::sync::Mutex::new(urls));
+                for _ in 0..12 {
+                    let (tx, wake, queue) = (tx.clone(), wake.clone(), queue.clone());
+                    self.spawn("download sizes", move || {
+                        loop {
+                            let Some(url) = queue.lock_or_recover().pop() else { break };
+                            let size = increart_core::tiers::remote_size(&url);
+                            let _ = tx.send(Msg::DownloadSize(url, size));
+                            wake();
+                        }
+                    });
+                }
+            }
             Effect::ScanModelFolders(dirs) => {
                 let (tx, wake) = (self.ctx.tx.clone(), self.ctx.wake.clone());
                 self.spawn("model folders", move || {
@@ -1051,6 +1070,7 @@ fn pick(kind: PickKind, start: Option<PathBuf>) -> Vec<PathBuf> {
         PickKind::ModelDir(_) => {
             d.set_title("Model directory (KoboldCpp and sd-server)").pick_folder().into_iter().collect()
         }
+        PickKind::ModelWizardDir => d.set_title("The folder the models go in").pick_folder().into_iter().collect(),
         PickKind::SdServerBinary => d.set_title("sd-server binary").pick_file().into_iter().collect(),
         PickKind::RecipeFile(slot) => {
             let slot = increart_core::config::MODEL_SLOTS.get(slot).copied().unwrap_or("model");
@@ -1802,6 +1822,8 @@ fn work_on(ctx: &Ctx, fx: Effect) -> Vec<Msg> {
         | Effect::TestPreset { .. }
         | Effect::StopPresetTest
         | Effect::ScanModelFolders(_)
+        | Effect::FindModelFolders { .. }
+        | Effect::DownloadSizes(_)
         | Effect::SavePresetTests(..)
         | Effect::ApiTestList { .. }
         | Effect::ApiTestRun { .. }

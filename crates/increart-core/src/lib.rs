@@ -36,6 +36,7 @@ pub mod logview;
 pub mod markup;
 pub mod model;
 pub mod modelhash;
+pub mod modelsetup;
 pub mod notify;
 pub mod pe;
 pub mod pixel;

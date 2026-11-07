@@ -28,6 +28,7 @@ const SCENES: &[&str] = &[
     "02b-pe-settings",
     "02c-koboldcpp-entry",
     "02d-model-presets-from-servers",
+    "02e-model-wizard",
     "54-server-wizard",
     "54a-server-wizard-choose",
     "54c-server-wizard-pe-own-gpu",
@@ -1126,6 +1127,21 @@ impl Tour {
             }
             // the preset editor's Image model gear
             "02d-model-presets-from-servers" => vec![Msg::OpenRecipes],
+            "02e-model-wizard" => {
+                // two 24 GB cards; the first three built-ins ticked
+                use increart_core::tiers::Gpu;
+                let gpu = |number, name: &str| Gpu { number, name: name.into(), vram_gib: 23.98, integrated: false };
+                let gpus = vec![gpu(0, "AMD Radeon RX 7900 XTX"), gpu(1, "AMD Radeon RX 7900 XTX")];
+                let dir = st.config.programs.model_dirs.first().cloned().unwrap_or_else(|| "~/models".into());
+                let picked = increart_core::config::catalogue().into_iter().take(3).map(|p| p.name).collect();
+                let w = increart_gui_core::ModelWizard { dir, picked, ..Default::default() };
+                vec![
+                    Msg::CloseRecipes,
+                    Msg::OpenModelWizard,
+                    Msg::EditModelWizard(Box::new(w)),
+                    Msg::WizardGpus(Ok(gpus), None),
+                ]
+            }
             "54-server-wizard" => {
                 // KoboldCpp: two 24 GB cards and an integrated GPU (not ticked)
                 use increart_core::tiers::Gpu;
@@ -1138,6 +1154,7 @@ impl Tour {
                 ];
                 vec![
                     Msg::CloseRecipes,
+                    Msg::CloseModelWizard,
                     Msg::PeEditorClose,
                     Msg::CancelEdit,
                     Msg::ServerWizard(true),

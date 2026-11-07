@@ -2778,6 +2778,38 @@ in the app's state folder (`$XDG_STATE_HOME/increart` when set, else
   when it passed somewhere as it is, red when it failed, grey when only
   tested before an edit, each server's result on hover. Its traffic is
   always logged, tagged `[test <preset> on <server>]`.
+- **Setting up models**: **Set up models…** (on the servers screen beside
+  Model presets…, and in the sd-server wizard beside Edit model presets…)
+  opens one window:
+  - **Folder**: where downloads go, the first model folder by default, else
+    `~/models`; typed or Browse…. One not yet a model folder is added as
+    the first (made if it isn't there); one already among them stays where
+    it is.
+  - **Found model files in**: folders other tools keep models in
+    (ComfyUI's `models/`, stable-diffusion.cpp's, KoboldCpp's, `~/models`,
+    …; `modelsetup::find_folders`, each once by its real path), with their
+    model files' count and size, looked for off the UI thread. Those not
+    already model folders are listed, ticked: added as model folders, so
+    their files are used where they are (and not downloaded again).
+  - **Models**: the built-in presets, each with its files' size together
+    (about the memory it takes: each slot's file there, else the one
+    fetched, and its LoRAs), what's needed ("files there", "3 files to
+    download, 9.8 GB", "in your presets"), and for each GPU (listed as the
+    KoboldCpp wizard lists them) whether it fits: its files under 95 % of
+    the card's memory. Sizes of what isn't there are asked of Hugging Face
+    (HEAD, a dozen at a time, once a session). One already a preset with
+    its files there, or with a file neither there nor downloadable, can't
+    be ticked.
+  - **Download and add** (**Add N presets** when nothing's missing): the
+    folders become the model folders, the ticked presets are added to
+    Model presets (not twice), and the files missing from all the model
+    folders (each once) are fetched into the folder by the downloader
+    Model presets' Download uses (a file of the same name and size in a
+    model folder or Hugging Face's cache is linked instead), with its
+    progress and **Cancel download**. Closing the window leaves a download
+    going (Model presets shows it; a message says when it's done); then the
+    servers are asked again what they have, and what the server presets
+    cover is scanned again.
 - **What a server preset covers**: on the servers screen each preset (and
   the preset editor, under "Image model") has "Model presets: 9 of 14 from
   the files here", before anything is started. The model folders are

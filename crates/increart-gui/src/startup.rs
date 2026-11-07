@@ -422,7 +422,7 @@ fn path_kind(pick: PickKind) -> PathKind {
         | PickKind::Kobold(_, PeFile::Binary)
         | PickKind::Pe(PeFile::Binary) => PathKind::Binary,
         PickKind::WizardModels => PathKind::NewFolder,
-        PickKind::ModelDir(_) => PathKind::Folder,
+        PickKind::ModelDir(_) | PickKind::ModelWizardDir => PathKind::Folder,
         _ => PathKind::File,
     }
 }
@@ -937,6 +937,13 @@ fn presets(ui: &mut egui::Ui, st: &AppState, d: &ServerDialog, out: &mut Vec<Msg
         {
             out.push(Msg::OpenRecipes);
         }
+        if ui
+            .button(ic(ph::DOWNLOAD_SIMPLE, "Set up models…"))
+            .on_hover_text("where the model files go, folders that have some, and models to download")
+            .clicked()
+        {
+            out.push(Msg::OpenModelWizard);
+        }
         if !st.config.server_presets.is_empty()
             && ui
                 .button(ic(ph::MAGIC_WAND, WIZARD))
@@ -1444,6 +1451,13 @@ fn server_wizard(ctx: &egui::Context, st: &AppState, d: &ServerDialog, out: &mut
             ));
             if ui.small_button(ic(ph::GEAR, "Edit model presets…")).clicked() {
                 out.push(Msg::OpenRecipes);
+            }
+            if ui
+                .small_button(ic(ph::DOWNLOAD_SIMPLE, "Set up models…"))
+                .on_hover_text("where the model files go, folders that have some, and models to download")
+                .clicked()
+            {
+                out.push(Msg::OpenModelWizard);
             }
         });
         ui.add_space(10.0);

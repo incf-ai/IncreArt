@@ -18,6 +18,7 @@ mod home;
 mod ideas;
 mod logs;
 mod markup;
+mod modelwizard;
 mod pane;
 mod pe_settings;
 mod presets;
