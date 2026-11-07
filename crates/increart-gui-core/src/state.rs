@@ -1983,6 +1983,9 @@ impl LogsView {
 }
 
 /// Start-up: pick a library, then servers, then the main window.
+// (one, in the app's state: its size costs nothing, and boxing the
+// dialog would break the many patterns that look into it)
+#[allow(clippy::large_enum_variant)]
 #[derive(Clone, Debug, PartialEq)]
 pub enum Phase {
     Library(LibraryDialog),
