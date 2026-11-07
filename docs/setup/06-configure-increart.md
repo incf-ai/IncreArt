@@ -88,9 +88,11 @@ without. A screen still shows, saying why, when its argument doesn't work.
   listed under "Not on these servers: …", with each server's reason on hover.
 - File IDs: for sd-server, the `id`s from `GET /sdcpp/v1/model-files`; for a
   started KoboldCpp, paths relative to a models folder (or absolute).
-  Slots: `diffusion_model`, `model`, `llm`, `vae`, `clip_l`, `clip_g`,
-  `t5xxl`. KoboldCpp takes `diffusion_model`→`--sdmodel`, `llm`→`--sdllm`,
-  `vae`→`--sdvae`, `clip_l`→`--sdclip1`, `clip_g`/`t5xxl`→`--sdclip2`.
+  Slots: `diffusion_model`, `model`, `llm`, `llm_vision`, `vae`, `clip_l`,
+  `clip_g`, `t5xxl`, `tokenizer`, `uncond_diffusion_model`. KoboldCpp
+  (1.124.2 or later) takes `diffusion_model`→`--sdmodel`,
+  `llm`/`t5xxl`→`--sdllm`, `vae`→`--sdvae`, `clip_l`→`--sdclip1`,
+  `clip_g`/`llm_vision`/`tokenizer`/`uncond_diffusion_model`→`--sdclip2`.
 
 **Verify:** Projects → Generate → **Model preset** lists your preset without a
 "Not on these servers" note.

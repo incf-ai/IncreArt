@@ -53,7 +53,14 @@ const SLOTS: &[(&str, &str)] = &[
     ("vae", "--sdvae"),
     ("clip_l", "--sdclip1"),
     ("clip_g", "--sdclip2"),
-    ("t5xxl", "--sdclip2"),
+    // koboldcpp.py hands --sdllm to sd.cpp as t5xxl_path; its loader moves
+    // it to the LLM for LLM-conditioned models (sdtype_adapter.cpp)
+    ("t5xxl", "--sdllm"),
+    // its loader moves Clip-2 to llm_vision (Qwen-Image, LongCat, Boogu),
+    // the unconditional model (Ideogram 4) or the tokenizer (Lens, PiD, Ming)
+    ("llm_vision", "--sdclip2"),
+    ("uncond_diffusion_model", "--sdclip2"),
+    ("tokenizer", "--sdclip2"),
 ];
 
 /// What a started server needs to switch models.
@@ -745,6 +752,9 @@ fn model_flags(key: &ModelKey, dirs: &[String]) -> Result<Vec<(String, String)>,
             None if dirs.is_empty() => PathBuf::from(id),
             None => return Err(format!("{id} isn't in the model folders")),
         };
+        if flags.iter().any(|(f, _)| f == flag) {
+            return Err(format!("KoboldCpp takes the {slot} file in the same place ({flag}) as another one"));
+        }
         flags.push((flag.to_string(), path.to_string_lossy().into_owned()));
     }
     if !flags.iter().any(|(f, _)| f == "--sdmodel") {
@@ -1217,6 +1227,25 @@ mod tests {
                 .contains("no place")
         );
         assert!(model_flags(&key(&[("vae", "vae/v.safetensors")]), &dirs).is_err());
+        // sd.cpp's loader moves --sdllm (its t5xxl_path) and Clip-2 where
+        // the model wants them
+        std::fs::write(dir.path().join("dm/t.gguf"), "").unwrap();
+        let flags = model_flags(
+            &key(&[("diffusion_model", "dm/d.gguf"), ("t5xxl", "dm/t.gguf"), ("llm_vision", "dm/t.gguf")]),
+            &dirs,
+        )
+        .unwrap();
+        let names: BTreeSet<&str> = flags.iter().map(|(f, _)| f.as_str()).collect();
+        assert_eq!(names, ["--sdmodel", "--sdllm", "--sdclip2"].into());
+        for slot in ["tokenizer", "uncond_diffusion_model"] {
+            let f = model_flags(&key(&[("diffusion_model", "dm/d.gguf"), (slot, "dm/t.gguf")]), &dirs).unwrap();
+            assert_eq!(f[1].0, "--sdclip2");
+        }
+        assert!(
+            model_flags(&key(&[("diffusion_model", "dm/d.gguf"), ("llm", "dm/t.gguf"), ("t5xxl", "dm/t.gguf")]), &dirs)
+                .unwrap_err()
+                .contains("same place")
+        );
     }
 
     #[test]

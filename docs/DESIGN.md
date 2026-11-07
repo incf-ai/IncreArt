@@ -519,9 +519,16 @@ KoboldCpp {
   the server as a child process it restarts).
 - **Loading a model**: the run's model files are looked up under the
   server settings' model folders (the same recipe presets serve both)
-  and given as `--sdmodel` (`diffusion_model`), `--sdllm` (`llm`), `--sdvae`
-  (`vae`), `--sdclip1` (`clip_l`), `--sdclip2` (`clip_g`, `t5xxl`); other
-  slots can't be loaded. KoboldCpp writes the settings itself
+  and given as `--sdmodel` (`diffusion_model`), `--sdllm` (`llm`, and
+  `t5xxl`: koboldcpp.py hands `--sdllm` to sd.cpp as its T5 path, which
+  its loader moves to the LLM for LLM-conditioned models), `--sdvae`
+  (`vae`), `--sdclip1` (`clip_l`), `--sdclip2` (`clip_g`, and `llm_vision`,
+  `tokenizer`, `uncond_diffusion_model`: its loader moves Clip-2 to the
+  vision encoder for Qwen-Image, Fibo 2, LongCat and Boogu, to the
+  unconditional model for Ideogram 4, to the tokenizer for MOSS); two
+  files for one flag, or other slots, can't be loaded. Needs KoboldCpp
+  1.124.2 for MOSS, Fibo 2 Edit and FLUX.3 Klein. Krea 2 Edit's vision
+  encoder has no place there (its edits come out as noise). KoboldCpp writes the settings itself
   (`--exportconfig`, the launch arguments plus the files, about 1.5 s) into
   the admin folder, and `POST /api/admin/reload_config` restarts its worker
   with them (it answers for a moment, goes, comes back when loaded). Loaded
