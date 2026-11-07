@@ -20,24 +20,30 @@ const MAIN_NAME: usize = 24;
 /// is only known after drawing it, so it's kept per `key` and the frame is
 /// redone when it changes.
 fn centered(ui: &mut egui::Ui, key: &str, width: f32, add: impl FnOnce(&mut egui::Ui)) {
-    let id = egui::Id::unique(("startup_height", key));
-    let last: Option<f32> = ui.ctx().data(|d| d.get_temp(id));
-    ui.vertical_centered(|ui| {
-        ui.add_space(((ui.available_height() - last.unwrap_or(0.0)) / 2.0).max(16.0));
-        let h = egui::Frame::window(ui.style())
-            .inner_margin(20.0)
-            .show(ui, |ui| {
-                ui.set_width(width);
-                ui.with_layout(egui::Layout::top_down(egui::Align::Min), add);
-            })
-            .response
-            .rect
-            .height();
-        if last.is_none_or(|l| (l - h).abs() > 0.5) {
-            ui.ctx().data_mut(|d| d.insert_temp(id, h));
-            ui.ctx().request_discard("centring a start-up screen");
-        }
-    });
+    // centred on the size it had last frame (a container's isn't known
+    // before it's laid out, and content wider than asked would spill right)
+    let id = egui::Id::unique(("startup_size", key));
+    let last: Option<egui::Vec2> = ui.ctx().data(|d| d.get_temp(id));
+    let size = last.unwrap_or(egui::vec2(width + 40.0, 0.0));
+    ui.add_space(((ui.available_height() - size.y) / 2.0).max(16.0));
+    let r = ui
+        .horizontal(|ui| {
+            ui.add_space(((ui.available_width() - size.x) / 2.0).max(0.0));
+            egui::Frame::window(ui.style())
+                .inner_margin(20.0)
+                .show(ui, |ui| {
+                    ui.set_width(width);
+                    ui.with_layout(egui::Layout::top_down(egui::Align::Min), add);
+                })
+                .response
+                .rect
+                .size()
+        })
+        .inner;
+    if last.is_none_or(|l| (l - r).length() > 0.5) {
+        ui.ctx().data_mut(|d| d.insert_temp(id, r));
+        ui.ctx().request_discard("centring a start-up screen");
+    }
 }
 
 /// `back`: switching from this open library (offers a way back to it).
@@ -630,7 +636,7 @@ pub fn servers(ui: &mut egui::Ui, st: &AppState, d: &ServerDialog, out: &mut Vec
         out.push(Msg::ScanModelFolders);
     }
     let screen = ui.ctx().content_rect();
-    let width = (screen.width() - 80.0).clamp(960.0, 1400.0);
+    let width = (screen.width() - 120.0).clamp(960.0, 1400.0);
     let half = (width - 32.0) / 2.0;
     let table_height = (screen.height() - 470.0).clamp(180.0, 560.0);
     centered(ui, "servers", width, |ui| {
@@ -641,7 +647,8 @@ pub fn servers(ui: &mut egui::Ui, st: &AppState, d: &ServerDialog, out: &mut Vec
                     ui.set_width(half);
                     servers_half(ui, st, d, out);
                 });
-                ui.add_space(32.0);
+                // the row adds its item spacing after the left half: the gap is 32 with it
+                ui.add_space(32.0 - ui.spacing().item_spacing.x);
                 ui.vertical(|ui| {
                     ui.set_width(half);
                     crate::modelwizard::panel(ui, st, table_height, out);
