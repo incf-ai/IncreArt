@@ -54,14 +54,17 @@ pub fn unanswered(
     match asked {
         ApiError::Transport(t) => {
             let low = t.to_ascii_lowercase();
-            let why = if low.contains("connection refused") {
+            // (as each system says it: Linux, macOS, Windows)
+            let refused = ["connection refused", "actively refused", "os error 10061"];
+            let unknown = ["lookup address", "dns", "host not found", "no such host", "os error 11001", "nodename nor"];
+            let why = if refused.iter().any(|r| low.contains(r)) {
                 "connection refused: nothing listens on that port".to_string()
             } else if low.contains("timeout: connect") || low.contains("timed out") && !low.contains("read") {
                 "no reply to connecting within 5 s: the machine is off or unreachable, or a firewall drops it"
                     .to_string()
             } else if low.contains("timeout") {
                 return LaunchError::Silent { name, url, secs: limit.as_secs() };
-            } else if low.contains("lookup address") || low.contains("dns") || low.contains("host not found") {
+            } else if unknown.iter().any(|u| low.contains(u)) {
                 let host = url.split("://").nth(1).unwrap_or(&url);
                 let host = host.split('/').next().unwrap_or(host);
                 let host = host.rsplit_once(':').map_or(host, |(h, _)| h);
@@ -485,6 +488,19 @@ mod tests {
         assert!(said(u, t("timeout: connect")).contains("no reply to connecting within 5 s"));
         let s = said("http://box.lan:7800", t("io: failed to lookup address information: Name or service not known"));
         assert!(s.contains("the name box.lan isn't known here"), "{s}");
+        // as macOS and Windows say them
+        for refused in [
+            "io: Connection refused (os error 61)",
+            "io: No connection could be made because the target machine actively refused it. (os error 10061)",
+        ] {
+            assert!(said(u, t(refused)).contains("connection refused: nothing listens"), "{refused}");
+        }
+        for unknown in [
+            "io: failed to lookup address information: nodename nor servname provided, or not known",
+            "io: No such host is known. (os error 11001)",
+        ] {
+            assert!(said("http://box.lan:7800", t(unknown)).contains("isn't known here"), "{unknown}");
+        }
         let s = said("https://10.0.0.2:7800", t("io: received corrupt message of type InvalidContentType"));
         assert!(s.contains("doesn't speak HTTPS"), "{s}");
         let s = said(u, t("timeout: per read"));
