@@ -936,7 +936,7 @@ fn presets(ui: &mut egui::Ui, st: &AppState, d: &ServerDialog, out: &mut Vec<Msg
         });
         ui.weak(
             "Local (recommended): KoboldCpp set up for your GPUs. Remote (advanced): servers already running, \
-             here or on another machine. Or make one by hand with New server setup.",
+             here or on another machine. Or make one by hand with New server setup… (advanced).",
         );
         ui.add_space(6.0);
     }
@@ -982,13 +982,21 @@ fn presets(ui: &mut egui::Ui, st: &AppState, d: &ServerDialog, out: &mut Vec<Msg
     ui.add_space(6.0);
     // in a row, so the column doesn't stretch it to full width
     ui.horizontal(|ui| {
-        if ui.button(ic(ph::PLUS, "New server setup")).clicked() {
-            out.push(Msg::NewPreset);
-        }
+        // the guided way first; the empty editor is for those who know
         if !st.config.server_presets.is_empty()
             && ui.button(ic(ph::MAGIC_WAND, WIZARD)).on_hover_text(WIZARD_TIP).clicked()
         {
             out.push(Msg::ServerWizard(true));
+        }
+        if ui
+            .button(ic(ph::PLUS, "New server setup… (advanced)"))
+            .on_hover_text(
+                "an empty server setup to fill in yourself, each server by hand; Set up servers… asks what you \
+                 have and fills it in",
+            )
+            .clicked()
+        {
+            out.push(Msg::NewPreset);
         }
         // the suite starts the servers itself: not with any open
         if !st.config.server_presets.is_empty()
@@ -1116,7 +1124,7 @@ fn without_window(ctx: &egui::Context, st: &AppState, w: &Without, out: &mut Vec
 }
 
 /// The setup wizard's button.
-const WIZARD: &str = "Set up servers…";
+const WIZARD: &str = "Set up servers… (guided)";
 const WIZARD_TIP: &str = "A new server setup. Local (recommended): KoboldCpp with Qwen-Image set up by each GPU's \
                           memory, or sd-server. Remote (advanced): servers already running, here or on another \
                           machine, each asked what it is.";
@@ -1179,7 +1187,7 @@ fn settings_window(ctx: &egui::Context, st: &AppState, d: &ServerDialog, out: &m
 fn settings(ui: &mut egui::Ui, st: &AppState, d: &ServerDialog, out: &mut Vec<Msg>) {
     let connected = increart_gui_core::connected_servers(&st.config.server_presets);
     if !connected.is_empty() {
-        connected_list(ui, d, &connected, out);
+        connected_list(ui, st, &connected, out);
         ui.add_space(12.0);
     }
     // a program no preset starts is folded away, its "not found" unsaid
@@ -1519,7 +1527,7 @@ fn models_field(ui: &mut egui::Ui, dirs: &mut Vec<String>, note: &str, out: &mut
 /// Server settings' **Connected servers**: each address the presets
 /// connect to, what it is and whether it answers (asked when the window
 /// opens), and the entries using it.
-fn connected_list(ui: &mut egui::Ui, d: &ServerDialog, connected: &[increart_gui_core::Connected], out: &mut Vec<Msg>) {
+fn connected_list(ui: &mut egui::Ui, st: &AppState, connected: &[increart_gui_core::Connected], out: &mut Vec<Msg>) {
     ui.horizontal(|ui| {
         ui.label(RichText::new(ic(ph::PLUGS_CONNECTED, "Connected servers")).strong());
         if ui.small_button(ic(ph::ARROWS_CLOCKWISE, "Check again")).clicked() {
@@ -1534,10 +1542,10 @@ fn connected_list(ui: &mut egui::Ui, d: &ServerDialog, connected: &[increart_gui
             ui.label(RichText::new(&c.url).monospace()).on_hover_text(c.entries.join("\n"));
             ui.weak(c.kind.label());
             ui.horizontal_wrapped(|ui| {
-                if d.checking.contains(&c.url) {
+                if st.remote_checking.contains(&c.url) {
                     ui.spinner();
                 } else {
-                    match d.found.get(&c.url) {
+                    match st.remote_found.get(&c.url) {
                         Some(Ok(f)) if f.kind == c.kind => {
                             ui.colored_label(GOOD, ph::CHECK);
                             ui.label(f.summary());
@@ -1563,7 +1571,7 @@ fn connected_list(ui: &mut egui::Ui, d: &ServerDialog, connected: &[increart_gui
 
 /// The wizard's page for servers already running: an address a row, each
 /// asked what it is ([`remote_row`]), saved as a preset and opened.
-fn remote_wizard(ui: &mut egui::Ui, d: &ServerDialog, rows: &[increart_gui_core::RemoteRow], out: &mut Vec<Msg>) {
+fn remote_wizard(ui: &mut egui::Ui, st: &AppState, rows: &[increart_gui_core::RemoteRow], out: &mut Vec<Msg>) {
     ui.label(
         "Each server's address (host:port). IncreArt asks it what it is when you leave the field: KoboldCpp, \
          sd-server's API (sd-server, or a proxy in front of ComfyUI or another backend), or a chat server.",
@@ -1573,7 +1581,7 @@ fn remote_wizard(ui: &mut egui::Ui, d: &ServerDialog, rows: &[increart_gui_core:
         ui.push_id(("remote_row", i), |ui| {
             egui::Frame::group(ui.style()).show(ui, |ui| {
                 ui.set_width(ui.available_width());
-                if remote_row(ui, d, row, Some(i), rows.len() > 1, out) {
+                if remote_row(ui, st, row, Some(i), rows.len() > 1, out) {
                     out.push(Msg::RemoveRemoteRow(i));
                 }
             });
@@ -1586,7 +1594,7 @@ fn remote_wizard(ui: &mut egui::Ui, d: &ServerDialog, rows: &[increart_gui_core:
     let mut servers: Vec<ServerConfig> = vec![];
     for row in rows {
         let taken: Vec<&str> = servers.iter().map(|s| s.name()).collect();
-        if let Some(s) = row.server(&d.found, &taken) {
+        if let Some(s) = row.server(&st.remote_found, &taken) {
             servers.push(s);
         }
     }
@@ -1622,7 +1630,7 @@ fn remote_wizard(ui: &mut egui::Ui, d: &ServerDialog, rows: &[increart_gui_core:
 /// `removable`).
 fn remote_row(
     ui: &mut egui::Ui,
-    d: &ServerDialog,
+    st: &AppState,
     row: &increart_gui_core::RemoteRow,
     i: Option<usize>,
     removable: bool,
@@ -1639,7 +1647,7 @@ fn remote_row(
                 .hint_text("192.168.1.20:5001, or http://host:port"),
         );
         let enter = edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-        let left = edit.lost_focus() && !d.found.contains_key(&new.key());
+        let left = edit.lost_focus() && !st.remote_found.contains_key(&new.key());
         let check = ui
             .add_enabled(!new.url.trim().is_empty(), egui::Button::new(ic(ph::ARROWS_CLOCKWISE, "Check")).small())
             .on_hover_text("Ask it again what it is")
@@ -1653,9 +1661,9 @@ fn remote_row(
             });
         }
     });
-    let said = row.found(&d.found);
+    let said = row.found(&st.remote_found);
     ui.horizontal_wrapped(|ui| {
-        if d.checking.contains(&key) {
+        if st.remote_checking.contains(&key) {
             ui.spinner();
             ui.weak("asking it what it is…");
         } else {
@@ -1663,6 +1671,18 @@ fn remote_row(
                 Some(Ok(found)) => {
                     ui.colored_label(GOOD, ph::CHECK);
                     ui.label(found.summary());
+                    // a recipe taking one file: each file a model on saving
+                    if found.kind == increart_core::detect::Kind::SdServer
+                        && !found.image_models.is_empty()
+                        && found.recipes.iter().any(|r| r.single_slot().is_some())
+                    {
+                        let n = found.image_models.len();
+                        ui.weak(if n == 1 {
+                            "· added to your models when saved".to_string()
+                        } else {
+                            format!("· each added to your models when saved ({n})")
+                        });
+                    }
                 }
                 Some(Err(e)) => {
                     ui.colored_label(BAD, ph::WARNING);
@@ -1689,7 +1709,7 @@ fn remote_row(
                     ui.selectable_value(&mut new.kind, Some(k), k.label());
                 }
             });
-            let kobold = row.kind(&d.found) == Some(Kind::KoboldCpp);
+            let kobold = row.kind(&st.remote_found) == Some(Kind::KoboldCpp);
             if kobold || said.is_some_and(|r| r.as_ref().is_ok_and(|f| f.needs_password)) {
                 ui.label("Password");
                 ui.add(egui::TextEdit::singleline(&mut new.password).password(true).desired_width(110.0))
@@ -1733,7 +1753,7 @@ fn server_wizard(ctx: &egui::Context, st: &AppState, d: &ServerDialog, out: &mut
         });
         ui.add_space(8.0);
         if let Some(rows) = &d.remote {
-            remote_wizard(ui, d, rows, out);
+            remote_wizard(ui, st, rows, out);
             return;
         }
         if let Some(k) = &d.kobold {
@@ -2494,10 +2514,10 @@ fn editor(ui: &mut egui::Ui, st: &AppState, d: &ServerDialog, editing: Editing, 
     if let Some(row) = &d.connect {
         egui::Frame::group(ui.style()).show(ui, |ui| {
             ui.set_width(ui.available_width());
-            remote_row(ui, d, row, None, false, out);
+            remote_row(ui, st, row, None, false, out);
             ui.horizontal(|ui| {
                 let taken: Vec<&str> = d.draft.servers.iter().map(|s| s.name()).collect();
-                let server = row.server(&d.found, &taken);
+                let server = row.server(&st.remote_found, &taken);
                 let add = egui::Button::new(ic(ph::PLUS, "Add"));
                 let tip = server.as_ref().map_or("Once it's known what it is (or picked)".into(), describe);
                 if ui.add_enabled(server.is_some(), add).on_hover_text(tip).clicked() {

@@ -10,6 +10,7 @@ use serde_json::Value;
 use ureq::Agent;
 
 use crate::model::ModelSelection;
+use crate::sync::LockExt;
 
 /// `models/load` blocks until the load is done (minutes for Qwen-Image).
 const LOAD_TIMEOUT: Duration = Duration::from_secs(60 * 60);
@@ -194,7 +195,16 @@ pub enum Loadable {
     /// KoboldCpp's model folders), and those it has but can't load, with
     /// why. `second_choice`: listed files it loads less well (why), left
     /// to a server that lists the model's files without that, if one does.
-    Files { ids: BTreeSet<String>, refused: BTreeMap<String, String>, second_choice: BTreeMap<String, String> },
+    /// `by_name`: a file it doesn't list by its ID is the one it lists of
+    /// the same file name (sd-server's API: its [`Client`] loads it by its
+    /// own ID; a proxy or another folder layout lists `x.gguf` for
+    /// `diffusion_models/x.gguf`).
+    Files {
+        ids: BTreeSet<String>,
+        refused: BTreeMap<String, String>,
+        second_choice: BTreeMap<String, String>,
+        by_name: bool,
+    },
     /// KoboldCpp started elsewhere: only the diffusion model it runs (its
     /// file name), if any.
     Only(Option<String>),
@@ -202,7 +212,36 @@ pub enum Loadable {
 
 impl Loadable {
     pub fn files(ids: impl IntoIterator<Item = String>) -> Loadable {
-        Loadable::Files { ids: ids.into_iter().collect(), refused: BTreeMap::new(), second_choice: BTreeMap::new() }
+        Loadable::Files {
+            ids: ids.into_iter().collect(),
+            refused: BTreeMap::new(),
+            second_choice: BTreeMap::new(),
+            by_name: false,
+        }
+    }
+
+    /// As sd-server's API lists them: matched by file name too.
+    pub fn listed(ids: impl IntoIterator<Item = String>) -> Loadable {
+        match Loadable::files(ids) {
+            Loadable::Files { ids, refused, second_choice, .. } => {
+                Loadable::Files { ids, refused, second_choice, by_name: true }
+            }
+            l => l,
+        }
+    }
+
+    /// Its ID for a file IncreArt names `id`: `id` when it lists it, else
+    /// (by name) the one file it lists of the same name; None when it has
+    /// none (or, by name, several).
+    pub fn id_of<'a>(&'a self, id: &'a str) -> Option<&'a str> {
+        let Loadable::Files { ids, refused, by_name, .. } = self else { return None };
+        if ids.contains(id) || refused.contains_key(id) || std::path::Path::new(id).is_absolute() {
+            return Some(id);
+        }
+        if !by_name {
+            return None;
+        }
+        by_file_name(ids.iter().chain(refused.keys()).map(String::as_str), id)
     }
 
     /// Why another server that lists a preset's files should load it
@@ -210,7 +249,7 @@ impl Loadable {
     pub fn second_choice(&self, files: &BTreeMap<String, String>) -> Option<String> {
         let Loadable::Files { second_choice, .. } = self else { return None };
         let name = |p: &str| std::path::Path::new(p).file_name().and_then(|f| f.to_str()).unwrap_or(p).to_string();
-        files.values().find_map(|id| second_choice.get(id).map(|why| format!("{} {why}", name(id))))
+        files.values().find_map(|id| second_choice.get(self.id_of(id)?).map(|why| format!("{} {why}", name(id))))
     }
 
     /// Whether it has a file of a slot and can load it; a second choice
@@ -218,11 +257,9 @@ impl Loadable {
     pub fn has(&self, slot: &str, id: &str, second: bool) -> bool {
         let name = |p: &str| std::path::Path::new(p).file_name().and_then(|f| f.to_str()).unwrap_or(p).to_string();
         match self {
-            Loadable::Files { ids, refused, second_choice } => {
-                (ids.contains(id) || std::path::Path::new(id).is_absolute())
-                    && !refused.contains_key(id)
-                    && (second || !second_choice.contains_key(id))
-            }
+            Loadable::Files { refused, second_choice, .. } => self
+                .id_of(id)
+                .is_some_and(|their| !refused.contains_key(their) && (second || !second_choice.contains_key(their))),
             Loadable::Only(running) => {
                 matches!(slot, "diffusion_model" | "model") && running.as_deref().is_some_and(|r| name(r) == name(id))
             }
@@ -266,14 +303,12 @@ impl Loadable {
     pub fn why_not(&self, files: &BTreeMap<String, String>) -> Option<String> {
         let name = |p: &str| std::path::Path::new(p).file_name().and_then(|f| f.to_str()).unwrap_or(p).to_string();
         match self {
-            Loadable::Files { ids, refused, .. } => files.values().find_map(|id| {
-                if let Some(why) = refused.get(id) {
-                    Some(format!("{} {why}", name(id)))
-                } else if ids.contains(id) || std::path::Path::new(id).is_absolute() {
-                    None
-                } else {
-                    Some(format!("it doesn't have {id}"))
+            Loadable::Files { ids, refused, by_name, .. } => files.values().find_map(|id| match self.id_of(id) {
+                Some(their) => refused.get(their).map(|why| format!("{} {why}", name(id))),
+                None if *by_name && ids.iter().filter(|l| name(l) == name(id)).count() > 1 => {
+                    Some(format!("it lists more than one {}, so which is {id} isn't known", name(id)))
                 }
+                None => Some(format!("it doesn't have {id}")),
             }),
             Loadable::Only(running) => {
                 let wanted = files.get("diffusion_model").or(files.get("model")).map(|f| name(f));
@@ -415,6 +450,9 @@ pub struct Client {
     load_agent: Agent,
     /// KoboldCpp behind the same calls, instead of sd-server.
     kobold: Option<std::sync::Arc<crate::kobold_image::KoboldImage>>,
+    /// Its IDs for files IncreArt names otherwise (found by name when
+    /// loading: its ID → IncreArt's), its answers read back through them.
+    names: std::sync::Arc<std::sync::Mutex<BTreeMap<String, String>>>,
 }
 
 impl std::fmt::Debug for Client {
@@ -446,6 +484,7 @@ impl Client {
             // nothing comes until it's loaded: a cap, not a stall
             load_agent: agent(Some(LOAD_TIMEOUT), None),
             kobold: None,
+            names: Default::default(),
         }
     }
 
@@ -542,7 +581,7 @@ impl Client {
         if let Some(k) = &self.kobold {
             return k.loadable();
         }
-        Ok(Loadable::files(self.model_files()?.into_iter().map(|f| portable_id(&f.id).to_string())))
+        Ok(Loadable::listed(self.model_files()?.into_iter().map(|f| portable_id(&f.id).to_string())))
     }
 
     pub fn refresh_models(&self) -> ApiResult<Value> {
@@ -553,7 +592,19 @@ impl Client {
         if let Some(k) = &self.kobold {
             return k.model_status();
         }
-        self.get("models/status").map(portable_status)
+        self.get("models/status").map(|s| self.ours(portable_status(s)))
+    }
+
+    /// A status with IncreArt's IDs for the files it was asked for by
+    /// another (see `names`).
+    fn ours(&self, mut s: ModelStatus) -> ModelStatus {
+        let names = self.names.lock_or_recover();
+        for id in s.models.values_mut() {
+            if let Some(ours) = names.get(id.as_str()) {
+                *id = ours.clone();
+            }
+        }
+        s
     }
 
     /// Loads a model; blocks until the load has finished.
@@ -566,8 +617,20 @@ impl Client {
         let listed: Vec<String> = self.model_files().map(|f| f.into_iter().map(|f| f.id).collect()).unwrap_or_default();
         let models: BTreeMap<&String, String> =
             model.models.iter().map(|(slot, id)| (slot, server_id(&listed, id))).collect();
+        {
+            // found by another name: its answers read back as asked
+            let mut names = self.names.lock_or_recover();
+            for (slot, theirs) in &models {
+                let ours = &model.models[*slot];
+                let theirs = portable_id(theirs);
+                if theirs != ours {
+                    names.insert(theirs.to_string(), ours.clone());
+                }
+            }
+        }
         let body = serde_json::json!({ "recipe": model.recipe, "models": models });
-        Self::call(&self.load_agent, &self.url("models/load"), Some(&body), false).map(portable_status)
+        Self::call(&self.load_agent, &self.url("models/load"), Some(&body), false)
+            .map(|s| self.ours(portable_status(s)))
     }
 
     pub fn unload_model(&self) -> ApiResult<ModelStatus> {
@@ -575,7 +638,7 @@ impl Client {
             return k.unload_model();
         }
         Self::call(&self.load_agent, &self.url("models/unload"), Some(&serde_json::json!({})), false)
-            .map(portable_status)
+            .map(|s| self.ours(portable_status(s)))
     }
 
     /// Submits an `img_gen` job; returns its ID.
@@ -643,12 +706,31 @@ pub fn portable_id(id: &str) -> &str {
 
 /// sd-server's name for a file IncreArt names `id`, among those it lists:
 /// `id` itself when its first folder has it, else another folder's file at
-/// that path (`id` as it is when none has it, for its error).
+/// that path, else the one file it lists of that file name (a proxy, or
+/// another folder layout: `x.gguf` for `diffusion_models/x.gguf`); `id` as
+/// it is when none has it, for its error.
 fn server_id(listed: &[String], id: &str) -> String {
     if listed.iter().any(|l| l == id) {
         return id.to_string();
     }
-    listed.iter().find(|l| portable_id(l) == id && l.as_str() != id).cloned().unwrap_or_else(|| id.to_string())
+    if let Some(l) = listed.iter().find(|l| portable_id(l) == id && l.as_str() != id) {
+        return l.clone();
+    }
+    let portable: Vec<&str> = listed.iter().map(|l| portable_id(l)).collect();
+    match by_file_name(portable.iter().copied(), id) {
+        Some(p) => listed[portable.iter().position(|x| *x == p).unwrap_or(0)].clone(),
+        None => id.to_string(),
+    }
+}
+
+/// Of `listed`, the one file named as `id`'s file name is (None: none, or
+/// several: which is meant isn't known).
+fn by_file_name<'a>(listed: impl Iterator<Item = &'a str>, id: &str) -> Option<&'a str> {
+    let name = |p: &str| p.rsplit(['/', '\\']).next().unwrap_or(p).to_string();
+    let want = name(id);
+    let mut found = listed.filter(|l| name(l) == want);
+    let first = found.next()?;
+    found.next().is_none().then_some(first)
 }
 
 fn portable_status(mut s: ModelStatus) -> ModelStatus {
@@ -661,6 +743,31 @@ fn portable_status(mut s: ModelStatus) -> ModelStatus {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_file_listed_under_another_folder_is_found_by_its_name() {
+        let files = |m: &[(&str, &str)]| m.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
+        let asked: BTreeMap<String, String> =
+            files(&[("diffusion_model", "diffusion_models/q.gguf"), ("vae", "vae/v.safetensors")]);
+        // sd-server's API (a proxy, or another layout): by name
+        let listed = Loadable::listed(["q.gguf".to_string(), "other/v.safetensors".to_string()]);
+        assert!(listed.runs(&asked));
+        assert_eq!(listed.id_of("diffusion_models/q.gguf"), Some("q.gguf"));
+        // a started KoboldCpp loads from the model folders: not by name
+        let local = Loadable::files(["q.gguf".to_string(), "other/v.safetensors".to_string()]);
+        assert_eq!(local.why_not(&asked).as_deref(), Some("it doesn't have diffusion_models/q.gguf"));
+        // two of that name: which is meant isn't known
+        let two = Loadable::listed(["a/q.gguf".to_string(), "b/q.gguf".to_string(), "v.safetensors".to_string()]);
+        assert_eq!(
+            two.why_not(&asked).as_deref(),
+            Some("it lists more than one q.gguf, so which is diffusion_models/q.gguf isn't known")
+        );
+        // the server's IDs, when loading
+        let listed = ["@0123456789abcdef/q.gguf".to_string(), "v.safetensors".to_string()];
+        assert_eq!(server_id(&listed, "diffusion_models/q.gguf"), "@0123456789abcdef/q.gguf");
+        assert_eq!(server_id(&listed, "vae/v.safetensors"), "v.safetensors");
+        assert_eq!(server_id(&listed, "vae/none.safetensors"), "vae/none.safetensors", "for its error");
+    }
 
     #[test]
     fn a_load_answered_with_the_same_files_under_other_names_holds_them() {
@@ -757,6 +864,7 @@ mod tests {
             ids: ["q8.gguf".to_string()].into(),
             refused: [("d/int8.safetensors".to_string(), "is int8".to_string())].into(),
             second_choice: [("q8.gguf".to_string(), "loads at full size".to_string())].into(),
+            by_name: false,
         };
         assert!(l.runs(&files("q8.gguf")));
         assert_eq!(l.second_choice(&files("q8.gguf")).as_deref(), Some("q8.gguf loads at full size"));
@@ -834,6 +942,7 @@ mod tests {
                 .filter(|f| f.contains("int8"))
                 .map(|f| (f.clone(), "is int8".into()))
                 .collect(),
+            by_name: false,
         };
         let picked = kcpp.pick(p);
         assert_eq!(picked["diffusion_model"], "diffusion_models/qwen_image_2.1-Q4_K.gguf");

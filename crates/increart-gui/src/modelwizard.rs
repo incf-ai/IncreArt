@@ -115,10 +115,14 @@ fn overview(ui: &mut egui::Ui, st: &AppState, w: &mut ModelWizard, list_height: 
         [first, more @ ..] => format!("Model folders: {first} and {} more", more.len()),
     });
     ui.add_space(6.0);
-    filters(ui, w, "overview");
-    gpu_line(ui, w);
+    // only servers already running: their GPUs, not this computer's
+    let fits = !st.remote_only();
+    filters(ui, w, "overview", fits);
+    if fits {
+        gpu_line(ui, w);
+    }
     ui.add_space(4.0);
-    let gpus = gpus_of(w);
+    let gpus = if fits { gpus_of(w) } else { vec![] };
     let vram = w.ticked_vram(&gpus);
     let sections = [
         (
@@ -148,6 +152,7 @@ fn overview(ui: &mut egui::Ui, st: &AppState, w: &mut ModelWizard, list_height: 
         .min_scrolled_height(list_height)
         .max_height(list_height)
         .show(ui, |ui| {
+            server_offers(ui, st, out);
             for (i, (title, id, all, section, none)) in sections.into_iter().enumerate() {
                 if i > 0 {
                     ui.add_space(6.0);
@@ -162,8 +167,10 @@ fn overview(ui: &mut egui::Ui, st: &AppState, w: &mut ModelWizard, list_height: 
                     .show(ui, |ui| {
                         if all.is_empty() {
                             ui.weak(none);
-                        } else if let Some((name, mend)) = list_table(ui, id, &shown, &gpus, section, &mut w.sort) {
-                            // an older copy to update: in Install built-in, ticked
+                        } else if let Some((name, mend)) =
+                            list_table(ui, st, id, &shown, &gpus, fits, section, &mut w.sort)
+                        {
+                            // an older copy to update: in Add models, ticked
                             let section = if mend { Section::Available } else { section };
                             open_row(ui, st, w, &name, section, out);
                         }
@@ -178,7 +185,7 @@ fn overview(ui: &mut egui::Ui, st: &AppState, w: &mut ModelWizard, list_height: 
 }
 
 /// Search, kind, fits a GPU, order: one row, for the lists and the window's.
-fn filters(ui: &mut egui::Ui, w: &mut ModelWizard, salt: &str) {
+fn filters(ui: &mut egui::Ui, w: &mut ModelWizard, salt: &str, fits: bool) {
     ui.horizontal(|ui| {
         ui.label(ph::MAGNIFYING_GLASS);
         ui.add(egui::TextEdit::singleline(&mut w.search).desired_width(160.0).hint_text("Search models"));
@@ -190,7 +197,9 @@ fn filters(ui: &mut egui::Ui, w: &mut ModelWizard, salt: &str) {
                 ui.selectable_value(&mut w.kind, k, k.label());
             }
         });
-        fits_popover(ui, w, salt);
+        if fits {
+            fits_popover(ui, w, salt);
+        }
         if w.filtering()
             && ui.small_button("Reset").on_hover_text("clear the search, all kinds, every GPU ticked").clicked()
         {
@@ -312,7 +321,7 @@ const FILES_W: f32 = 190.0;
 
 /// The column headings, each a click to sort by it (again: the other way;
 /// a third time: the list's order), the order shown by an arrow.
-fn heads(h: &mut egui_extras::TableRow, model_tip: &str, sort: &mut ModelSort) {
+fn heads(h: &mut egui_extras::TableRow, model_tip: &str, sort: &mut ModelSort, fits: bool) {
     let heads = [
         (ModelColumn::Name, "Model", model_tip),
         (ModelColumn::Size, "Size", "all its files together, about the GPU memory it needs"),
@@ -325,6 +334,9 @@ fn heads(h: &mut egui_extras::TableRow, model_tip: &str, sort: &mut ModelSort) {
         ),
     ];
     for (column, title, tip) in heads {
+        if column == ModelColumn::Fits && !fits {
+            continue;
+        }
         h.col(|ui| {
             let arrow = match sort.by(column) {
                 Some(false) => format!(" {}", ph::CARET_UP),
@@ -355,6 +367,25 @@ fn size_cell(ui: &mut egui::Ui, needs: &PresetNeeds) {
         }
         None => ui.weak("…").on_hover_text("asking Hugging Face for the sizes"),
     };
+}
+
+/// Size for a model a server already running has the files for: the
+/// download's when known, else not known here (not "a file is missing").
+fn remote_size_cell(ui: &mut egui::Ui, needs: &PresetNeeds) {
+    match needs.total_bytes {
+        Some(b) => ui.label(gb(b)),
+        None => ui.weak("—").on_hover_text("its files are on the server: their size isn't known here"),
+    };
+}
+
+/// Files for a model a server already running has the files for: on it.
+fn remote_status(ui: &mut egui::Ui, on: &[String], section: Section) {
+    let names = on.join(", ");
+    let t = if section == Section::Available { format!("on {names}, not installed") } else { format!("on {names}") };
+    ui.label(RichText::new(ic(ph::PLUGS_CONNECTED, &t)).color(GOOD)).on_hover_text(format!(
+        "{names} has its files and runs it there: nothing to download here{}",
+        if section == Section::Available { " (installing it only adds it to Your models)" } else { "" }
+    ));
 }
 
 fn fits_cell(ui: &mut egui::Ui, needs: &PresetNeeds, gpus: &[Gpu]) {
@@ -390,11 +421,14 @@ fn tip(p: &RecipePreset) -> String {
 }
 
 /// One of the read-only lists.
+#[allow(clippy::too_many_arguments)]
 fn list_table(
     ui: &mut egui::Ui,
+    st: &AppState,
     id: &str,
     rows: &[(&RecipePreset, PresetNeeds)],
     gpus: &[Gpu],
+    fits: bool,
     section: Section,
     sort: &mut ModelSort,
 ) -> Option<(String, bool)> {
@@ -405,28 +439,34 @@ fn list_table(
     }
     let mut clicked = None;
     let what = if section == Section::Available { "click to install it" } else { "click to open it" };
-    TableBuilder::new(ui)
+    let mut table = TableBuilder::new(ui)
         .id_salt(id)
         .striped(true)
         .vscroll(false)
         .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
         .column(Column::exact(NAME_W).clip(true))
-        .column(Column::exact(SIZE_W))
-        .column(Column::exact(FILES_W).clip(true))
-        .column(Column::remainder().at_least(100.0).clip(true))
-        .header(20.0, |mut h| heads(&mut h, "", sort))
-        .body(|mut body| {
-            for (p, needs) in rows {
-                body.row(22.0, |mut row| {
-                    row.col(|ui| {
-                        // your older copy, its files not there: to update
-                        let mend = needs.update && needs.unavailable;
-                        let what = if mend { "click to update it to the built-in's files" } else { what };
-                        let link = ui.add(egui::Link::new(&p.name)).on_hover_text(format!("{}\n\n{what}", tip(p)));
-                        if link.clicked() {
-                            clicked = Some((p.name.clone(), mend));
-                        }
-                    });
+        .column(Column::exact(SIZE_W));
+    table = if fits {
+        table.column(Column::exact(FILES_W).clip(true)).column(Column::remainder().at_least(100.0).clip(true))
+    } else {
+        table.column(Column::remainder().at_least(FILES_W).clip(true))
+    };
+    table.header(20.0, |mut h| heads(&mut h, "", sort, fits)).body(|mut body| {
+        for (p, needs) in rows {
+            // on a server already running: when the files here don't do (or none start here)
+            let short = needs.unavailable || !needs.downloads.is_empty();
+            let on = if !fits || short { st.runs_remotely(p) } else { vec![] };
+            body.row(22.0, |mut row| {
+                row.col(|ui| {
+                    // your older copy, its files not there: to update
+                    let mend = needs.update && needs.unavailable;
+                    let what = if mend { "click to update it to the built-in's files" } else { what };
+                    let link = ui.add(egui::Link::new(&p.name)).on_hover_text(format!("{}\n\n{what}", tip(p)));
+                    if link.clicked() {
+                        clicked = Some((p.name.clone(), mend));
+                    }
+                });
+                if on.is_empty() {
                     row.col(|ui| size_cell(ui, needs));
                     row.col(|ui| {
                         let r = ui.label(status(needs, section));
@@ -434,14 +474,20 @@ fn list_table(
                             r.on_hover_text(t);
                         }
                     });
+                } else {
+                    row.col(|ui| remote_size_cell(ui, needs));
+                    row.col(|ui| remote_status(ui, &on, section));
+                }
+                if fits {
                     row.col(|ui| fits_cell(ui, needs, gpus));
-                });
-            }
-        });
+                }
+            });
+        }
+    });
     clicked
 }
 
-/// Install built-in with only connected servers (none started here): its
+/// Add models with only connected servers (none started here): its
 /// downloads are for this computer's model folders, and a connected
 /// server runs the files it lists, a model made from them in Your models.
 fn remote_note(ui: &mut egui::Ui, st: &AppState, w: &mut ModelWizard, out: &mut Vec<Msg>) {
@@ -455,19 +501,22 @@ fn remote_note(ui: &mut egui::Ui, st: &AppState, w: &mut ModelWizard, out: &mut 
         ui.colored_label(NEUTRAL, ph::PLUGS_CONNECTED);
         ui.colored_label(
             NEUTRAL,
-            "Your servers are connected ones: these downloads go to this computer's model folders, for servers \
-             started here. A connected server runs the files it lists.",
+            "Your servers are remote ones: a model \"on …\" has its files there, adding it downloads nothing. \
+             The built-in models' downloads go to this computer's model folders, which a remote server can't use.",
         );
         if ui
             .small_button(ic(ph::PLUS, "Make a model from a server's files…"))
             .on_hover_text(
-                "A new model in Your models: pick its recipe, and each file from what the open server lists (the \
-                 arrow beside each file)",
+                "A new model in Your models: pick its recipe (the menu offers the server's), and each file from \
+                 what the servers list (the arrow beside each file)",
             )
             .clicked()
         {
             let mut e = editor_on(st, None);
-            e.add_new();
+            e.add_blank();
+            if let Some(s) = st.file_servers().into_iter().next() {
+                crate::projects::set_files_from(ui.ctx(), e.selected, increart_gui_core::FilesFrom::Server(s));
+            }
             ui.memory_mut(|m| m.data.insert_temp(crate::projects::scroll_id(), true));
             out.push(Msg::EditRecipes(e));
             w.editing = true;
@@ -476,28 +525,105 @@ fn remote_note(ui: &mut egui::Ui, st: &AppState, w: &mut ModelWizard, out: &mut 
     });
 }
 
+/// **On your servers, not set up yet**: the files servers already running
+/// list that no model uses, each a model to add in one click (a recipe
+/// of theirs takes the file alone), with **Add all**.
+fn server_offers(ui: &mut egui::Ui, st: &AppState, out: &mut Vec<Msg>) {
+    let offers = st.server_model_offers();
+    if offers.is_empty() {
+        return;
+    }
+    egui::CollapsingHeader::new(
+        RichText::new(format!("On your servers, not set up yet  ({})", offers.len())).strong().color(ACCENT),
+    )
+    .id_salt("models_offers")
+    .default_open(true)
+    .show(ui, |ui| {
+        ui.weak("Files the servers list that none of your models uses: add one to use it in Generate.");
+        egui::Grid::new("models_offers_grid").num_columns(3).spacing([12.0, 4.0]).striped(true).show(ui, |ui| {
+            for (server, p) in &offers {
+                let file = p.files.values().next().cloned().unwrap_or_default();
+                ui.label(&p.name).on_hover_text(&file);
+                ui.label(RichText::new(ic(ph::PLUGS_CONNECTED, &format!("on {server}"))).color(GOOD));
+                if ui
+                    .small_button(ic(ph::PLUS, "Add"))
+                    .on_hover_text(format!(
+                        "a model in Your models: {file}, {server}'s recipe {}, {} steps, CFG {}",
+                        p.recipe, p.steps, p.cfg
+                    ))
+                    .clicked()
+                {
+                    out.push(Msg::AddServerModels(vec![p.clone()]));
+                }
+                ui.end_row();
+            }
+        });
+        if offers.len() > 1 && ui.small_button(ic(ph::PLUS, "Add all")).clicked() {
+            out.push(Msg::AddServerModels(offers.iter().map(|(_, p)| p.clone()).collect()));
+        }
+    });
+    ui.add_space(6.0);
+}
+
 /// **Custom model… (advanced)**, under your custom models: a new model in
 /// Your models, its files the selected one's to start from.
 fn custom_button(ui: &mut egui::Ui, st: &AppState, w: &mut ModelWizard, out: &mut Vec<Msg>) {
-    if ui
-        .small_button(ic(ph::PLUS, "Custom model… (advanced)"))
-        .on_hover_text(
-            "your own files: pick the recipe and each file yourself (starting from a copy of the selected \
-             model's); the built-in models cover most needs",
-        )
-        .clicked()
-    {
-        let mut e = editor_on(st, None);
-        e.add_new();
-        ui.memory_mut(|m| m.data.insert_temp(crate::projects::scroll_id(), true));
-        out.push(Msg::EditRecipes(e));
-        w.editing = true;
-        w.tab = ModelSetupTab::Yours;
+    use increart_gui_core::FilesFrom;
+    let servers = st.file_servers();
+    let local = !st.remote_only();
+    let mut choice: Option<FilesFrom> = None;
+    let tip = "your own files: pick the recipe and each file yourself; the built-in models cover most needs";
+    let label = ic(ph::PLUS, "Custom model… (advanced)");
+    match (local, servers.as_slice()) {
+        // one place the files can be: no menu
+        (true, []) => {
+            if ui.small_button(label).on_hover_text(format!("{tip} (from a copy of the selected one's)")).clicked() {
+                choice = Some(FilesFrom::Local);
+            }
+        }
+        (false, [one]) => {
+            if ui.small_button(label).on_hover_text(format!("{tip}, from what {one} lists")).clicked() {
+                choice = Some(FilesFrom::Server(one.clone()));
+            }
+        }
+        _ => {
+            ui.menu_button(label, |ui| {
+                if local
+                    && ui
+                        .button("From this computer's files…")
+                        .on_hover_text("the model folders (from a copy of the selected model's files)")
+                        .clicked()
+                {
+                    choice = Some(FilesFrom::Local);
+                    ui.close();
+                }
+                for s in &servers {
+                    if ui.button(format!("From {s}'s files…")).on_hover_text(format!("what {s} lists")).clicked() {
+                        choice = Some(FilesFrom::Server(s.clone()));
+                        ui.close();
+                    }
+                }
+            })
+            .response
+            .on_hover_text(tip);
+        }
     }
+    let Some(from) = choice else { return };
+    let mut e = editor_on(st, None);
+    if from == FilesFrom::Local {
+        e.add_new();
+    } else {
+        e.add_blank();
+    }
+    crate::projects::set_files_from(ui.ctx(), e.selected, from);
+    ui.memory_mut(|m| m.data.insert_temp(crate::projects::scroll_id(), true));
+    out.push(Msg::EditRecipes(e));
+    w.editing = true;
+    w.tab = ModelSetupTab::Yours;
 }
 
 /// A row of the lists clicked: yours and installed ones open in Your
-/// models, one not installed in Install built-in, ticked.
+/// models, one not installed in Add models, ticked.
 fn open_row(ui: &mut egui::Ui, st: &AppState, w: &mut ModelWizard, name: &str, section: Section, out: &mut Vec<Msg>) {
     w.editing = true;
     if section == Section::Available {
@@ -581,7 +707,7 @@ pub fn window(ctx: &egui::Context, st: &AppState, out: &mut Vec<Msg>) {
             ui.heading(ic(ph::CUBE, "Models"));
             ui.add_space(16.0);
             for (t, label) in [
-                (ModelSetupTab::Add, "Install built-in"),
+                (ModelSetupTab::Add, "Add models"),
                 (ModelSetupTab::Yours, "Your models"),
                 (ModelSetupTab::Folders, "Folders"),
             ] {
@@ -595,8 +721,8 @@ pub fn window(ctx: &egui::Context, st: &AppState, out: &mut Vec<Msg>) {
                 "Generate's Model list: what each model loads and the settings it runs with. Saved to config.rsn."
             }
             ModelSetupTab::Add => {
-                "Built-in models, tested on sd-server and KoboldCpp: tick to install. Only the files that aren't \
-                 already in a model folder are downloaded."
+                "Tick models to add them: the files your servers list, and the built-in models (tested on \
+                 sd-server and KoboldCpp; only the files that aren't already in a model folder are downloaded)."
             }
             ModelSetupTab::Folders => "Where the model files are found, and where new ones are saved.",
         });
@@ -624,7 +750,7 @@ pub fn window(ctx: &egui::Context, st: &AppState, out: &mut Vec<Msg>) {
                     ui.set_width(ui.available_width());
                     match w.tab {
                         ModelSetupTab::Folders => folders_page(ui, st, &mut w, out),
-                        _ => add_page(ui, st, &mut w),
+                        _ => add_page(ui, st, &mut w, out),
                     }
                 });
         }
@@ -633,8 +759,10 @@ pub fn window(ctx: &egui::Context, st: &AppState, out: &mut Vec<Msg>) {
         if st.preset_download.is_none() && w.started {
             ui.colored_label(GOOD, ic(ph::CHECK_CIRCLE, "Done: installed, their files in the model folders."));
         }
-        let (links, files) = w.plan(&st.config.programs.model_dirs);
-        let picked = w.picked.len();
+        let remote = st.picked_remote(&w);
+        let (links, files) = w.plan_except(&st.config.programs.model_dirs, &remote);
+        let from_servers = w.picked_files.len();
+        let picked = w.picked.len() + from_servers;
         match (w.tab, &mut ed) {
             (ModelSetupTab::Yours, Some(e)) => {
                 let problem = e.problem();
@@ -667,12 +795,21 @@ pub fn window(ctx: &egui::Context, st: &AppState, out: &mut Vec<Msg>) {
                             let known: Option<u64> =
                                 files.iter().try_fold(0u64, |n, d| Some(n + w.sizes.get(&d.url).copied().flatten()?));
                             let s = plural(picked);
-                            let linked = match links.len() {
+                            let mut linked = match links.len() {
                                 0 => String::new(),
                                 l => format!(" · {l} file{} linked from elsewhere", plural(l)),
                             };
+                            if !remote.is_empty() || from_servers > 0 {
+                                let n = remote.len() + from_servers;
+                                linked = format!(" · {n} with the files on the server{linked}");
+                            }
                             match (files.len(), known) {
-                                (0, _) if links.is_empty() => format!("{picked} model{s} ticked, files already here"),
+                                (0, _) if links.is_empty() && remote.len() + from_servers == picked => {
+                                    format!("{picked} model{s} ticked, the files on the server, nothing to download")
+                                }
+                                (0, _) if links.is_empty() && remote.is_empty() && from_servers == 0 => {
+                                    format!("{picked} model{s} ticked, files already here")
+                                }
                                 (0, _) => format!("{picked} model{s} ticked{linked}, nothing to download"),
                                 (n, Some(b)) => {
                                     format!("{picked} model{s} ticked{linked} · {n} files to download, {}", gb(b))
@@ -680,17 +817,19 @@ pub fn window(ctx: &egui::Context, st: &AppState, out: &mut Vec<Msg>) {
                                 (n, None) => format!("{picked} model{s} ticked{linked} · {n} files to download"),
                             }
                         } else if w.tab == ModelSetupTab::Folders {
-                            "Then: Install built-in, to add models".to_string()
+                            "Then: Add models".to_string()
                         } else {
-                            "Tick models to install them.".to_string()
+                            "Tick models to add them.".to_string()
                         };
                         ui.label(RichText::new(line).color(if picked == 0 { NEUTRAL } else { ACCENT }));
                     },
                     |ui| {
                         close = ui.button("Close   Esc").clicked();
                         if w.tab == ModelSetupTab::Add || picked > 0 {
-                            let label = if files.is_empty() { "Install" } else { "Download and install" };
-                            let can = picked > 0 && !w.dir.trim().is_empty() && st.preset_download.is_none();
+                            let label = if files.is_empty() { "Add" } else { "Download and add" };
+                            let fetch = !files.is_empty() || !links.is_empty();
+                            let can =
+                                picked > 0 && (!fetch || !w.dir.trim().is_empty() && st.preset_download.is_none());
                             go = ui
                                 .add_enabled(
                                     can,
@@ -857,14 +996,110 @@ fn folders_page(ui: &mut egui::Ui, st: &AppState, w: &mut ModelWizard, out: &mut
     }
 }
 
-fn add_page(ui: &mut egui::Ui, st: &AppState, w: &mut ModelWizard) {
+/// **Add models**: the files your servers list (when any do), then the
+/// built-in models, folded with only servers already running (their
+/// downloads are for this computer).
+fn add_page(ui: &mut egui::Ui, st: &AppState, w: &mut ModelWizard, out: &mut Vec<Msg>) {
+    let servers = st.file_servers();
+    if !servers.is_empty() {
+        egui::CollapsingHeader::new(RichText::new("On your servers").strong())
+            .id_salt("add_on_servers")
+            .default_open(true)
+            .show(ui, |ui| server_files_table(ui, st, w, &servers, out));
+        ui.add_space(6.0);
+        let remote = st.remote_only();
+        let title = if remote { "Built-in models — download to this computer" } else { "Built-in models" };
+        egui::CollapsingHeader::new(RichText::new(title).strong())
+            .id_salt(("add_builtin", remote))
+            .default_open(!remote)
+            .show(ui, |ui| builtin_page(ui, st, w));
+    } else {
+        builtin_page(ui, st, w);
+    }
+}
+
+/// Each file a server already running lists: ticked to add it as a model
+/// (a recipe of the server's takes it alone), greyed when one of your
+/// models uses it, or when its recipes need more files (**Make a model
+/// from these…**).
+fn server_files_table(ui: &mut egui::Ui, st: &AppState, w: &mut ModelWizard, servers: &[String], out: &mut Vec<Msg>) {
+    let name = |p: &str| p.rsplit(['/', '\\']).next().unwrap_or(p).to_string();
+    let offers = st.server_model_offers();
+    let mut needs_more: Vec<String> = vec![];
+    egui::Grid::new("add_server_files").num_columns(3).spacing([12.0, 4.0]).striped(true).show(ui, |ui| {
+        for server in servers {
+            for file in st.files_on(server) {
+                let user = st.config.recipes.iter().find(|r| r.files.values().any(|f| name(f) == name(file)));
+                let offer = offers.iter().find(|(s, p)| s == server && p.files.values().any(|f| f == file));
+                match (user, offer) {
+                    (Some(r), _) => {
+                        ui.add_enabled(false, egui::Checkbox::new(&mut true, RichText::new(file).weak()));
+                        ui.weak(format!("on {server}"));
+                        ui.weak(format!("in Your models: {}", r.name));
+                    }
+                    (None, Some((_, p))) => {
+                        let mut on = w.picked_files.contains(file);
+                        if ui
+                            .checkbox(&mut on, &p.name)
+                            .on_hover_text(format!(
+                                "{file}
+
+tick to add it to your models (nothing downloaded)"
+                            ))
+                            .changed()
+                        {
+                            if on {
+                                w.picked_files.insert(file.to_string());
+                            } else {
+                                w.picked_files.remove(file);
+                            }
+                        }
+                        ui.label(RichText::new(ic(ph::PLUGS_CONNECTED, &format!("on {server}"))).color(GOOD));
+                        ui.weak(format!("{}, {} steps, CFG {}", p.recipe, p.steps, p.cfg));
+                    }
+                    (None, None) => {
+                        ui.add_enabled(false, egui::Checkbox::new(&mut false, file))
+                            .on_disabled_hover_text("its recipes take more than one file: make a model of it");
+                        ui.weak(format!("on {server}"));
+                        ui.weak("needs other files with it");
+                        if !needs_more.contains(server) {
+                            needs_more.push(server.clone());
+                        }
+                    }
+                }
+                ui.end_row();
+            }
+        }
+    });
+    for server in needs_more {
+        if ui
+            .small_button(ic(ph::PLUS, &format!("Make a model from {server}'s files…")))
+            .on_hover_text(
+                "a new model in Your models: its recipe from the menu beside Recipe, each file with the arrow",
+            )
+            .clicked()
+        {
+            let mut e = editor_on(st, None);
+            e.add_blank();
+            crate::projects::set_files_from(ui.ctx(), e.selected, increart_gui_core::FilesFrom::Server(server));
+            ui.memory_mut(|m| m.data.insert_temp(crate::projects::scroll_id(), true));
+            out.push(Msg::EditRecipes(e));
+            w.tab = ModelSetupTab::Yours;
+        }
+    }
+}
+
+fn builtin_page(ui: &mut egui::Ui, st: &AppState, w: &mut ModelWizard) {
     use egui_extras::{Column, TableBuilder};
     let catalogue = increart_core::config::catalogue();
     let dirs = w.folders(&st.config.programs.model_dirs);
-    filters(ui, w, "setup");
-    gpu_line(ui, w);
+    let fits = !st.remote_only();
+    filters(ui, w, "setup", fits);
+    if fits {
+        gpu_line(ui, w);
+    }
     ui.add_space(4.0);
-    let gpus = gpus_of(w);
+    let gpus = if fits { gpus_of(w) } else { vec![] };
     let vram = w.ticked_vram(&gpus);
     let rows: Vec<(&RecipePreset, PresetNeeds)> =
         catalogue.iter().map(|p| (p, PresetNeeds::of(p, &dirs, &w.sizes, w.index.as_deref()))).collect();
@@ -877,20 +1112,25 @@ fn add_page(ui: &mut egui::Ui, st: &AppState, w: &mut ModelWizard) {
         ui.weak("None match the filter.");
         return;
     }
-    TableBuilder::new(ui)
+    let mut table = TableBuilder::new(ui)
         .id_salt("model_setup_add")
         .striped(true)
         .vscroll(false)
         .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
         .column(Column::exact(NAME_W + 60.0).clip(true))
-        .column(Column::exact(SIZE_W))
-        .column(Column::exact(FILES_W + 40.0).clip(true))
-        .column(Column::remainder().at_least(100.0).clip(true))
+        .column(Column::exact(SIZE_W));
+    table = if fits {
+        table.column(Column::exact(FILES_W + 40.0).clip(true)).column(Column::remainder().at_least(100.0).clip(true))
+    } else {
+        table.column(Column::remainder().at_least(FILES_W + 40.0).clip(true))
+    };
+    table
         .header(22.0, |mut h| {
             heads(
                 &mut h,
                 "tick to install it; greyed: installed with its files, or it can't be downloaded",
                 &mut w.sort,
+                fits,
             )
         })
         .body(|mut body| {
@@ -899,8 +1139,13 @@ fn add_page(ui: &mut egui::Ui, st: &AppState, w: &mut ModelWizard) {
                 let have = mine.is_some();
                 // your copy with other files (older, or edited): ticked, it's replaced
                 let old = mine.is_some_and(|m| increart_gui_core::differs(m, p));
-                let enabled =
-                    !needs.unavailable && !(have && !old && needs.downloads.is_empty() && needs.links.is_empty());
+                // a server already running has its files (none started here)
+                let held = if fits { vec![] } else { st.runs_remotely(p) };
+                let enabled = if held.is_empty() {
+                    !needs.unavailable && !(have && !old && needs.downloads.is_empty() && needs.links.is_empty())
+                } else {
+                    !have || old
+                };
                 let mut on = w.picked.contains(&p.name);
                 // nothing to do for it: not picked
                 if !enabled && on {
@@ -914,7 +1159,9 @@ fn add_page(ui: &mut egui::Ui, st: &AppState, w: &mut ModelWizard) {
                             name = name.weak();
                         }
                         let r = ui.add_enabled(enabled, egui::Checkbox::new(&mut on, name));
-                        let why = if needs.unavailable {
+                        let why = if have {
+                            "installed, with its files"
+                        } else if needs.unavailable {
                             "its files aren't in your model folders and there's no download for them"
                         } else {
                             "installed, with its files"
@@ -938,25 +1185,29 @@ fn add_page(ui: &mut egui::Ui, st: &AppState, w: &mut ModelWizard) {
                             }
                         }
                     });
-                    row.col(|ui| size_cell(ui, needs));
-                    row.col(|ui| {
-                        let text = if old {
-                            update_status(needs)
-                        } else {
-                            status(needs, if have { Section::Installed } else { Section::Available })
-                        };
-                        let r = ui.label(text);
-                        if let Some(t) = links_tip(needs) {
-                            r.on_hover_text(t);
-                        }
-                    });
-                    row.col(|ui| fits_cell(ui, needs, &gpus));
+                    let section = if have { Section::Installed } else { Section::Available };
+                    if held.is_empty() {
+                        row.col(|ui| size_cell(ui, needs));
+                        row.col(|ui| {
+                            let text = if old { update_status(needs) } else { status(needs, section) };
+                            let r = ui.label(text);
+                            if let Some(t) = links_tip(needs) {
+                                r.on_hover_text(t);
+                            }
+                        });
+                    } else {
+                        row.col(|ui| remote_size_cell(ui, needs));
+                        row.col(|ui| remote_status(ui, &held, section));
+                    }
+                    if fits {
+                        row.col(|ui| fits_cell(ui, needs, &gpus));
+                    }
                 });
             }
         });
 }
 
-/// Install built-in's Files for a model you have an other copy of: what
+/// Add models' Files for a model you have an other copy of: what
 /// updating it takes.
 fn update_status(needs: &PresetNeeds) -> RichText {
     let size = needs.download_bytes.map_or(String::new(), |b| format!(" ({})", gb(b)));

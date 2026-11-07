@@ -1472,6 +1472,7 @@ fn sd_found() -> Result<increart_core::detect::Detected, String> {
         image_models: vec!["krea2_turbo_int8_convrot.safetensors".into()],
         chat_models: vec![],
         needs_password: false,
+        recipes: vec![],
     })
 }
 
@@ -1498,6 +1499,162 @@ fn connect(
 }
 
 #[test]
+fn a_remote_servers_files_count_before_it_opens() {
+    use increart_core::config::RecipePreset;
+    use increart_core::detect::{Detected, Kind, Recipe};
+    let proxy = ServerPreset {
+        name: "proxy".into(),
+        servers: vec![ServerConfig::Connect {
+            name: "proxy".into(),
+            url: "http://10.0.0.2:7800".into(),
+            device: String::new(),
+        }],
+    };
+    let mut s = dialog_state(vec![proxy.clone()], None);
+    // its folder under the model folders, not where the proxy keeps it
+    let krea = RecipePreset {
+        name: "Krea".into(),
+        recipe: "flux".into(),
+        files: [("diffusion_model".to_string(), "diffusion_models/krea.safetensors".to_string())].into(),
+        ..Default::default()
+    };
+    s.config.recipes = vec![krea.clone()];
+    update(&mut s, Msg::LocalFiles(Box::default()));
+    // asked once, on the servers screen (when the library opened)
+    let key = increart_core::detect::normalize("http://10.0.0.2:7800");
+    assert!(s.remote_checking.contains(&key));
+    assert!(update(&mut s, Msg::OpenRecipes).is_empty(), "not again while asking");
+    assert!(s.runs_remotely(&krea).is_empty());
+    assert_eq!(s.coverage(&proxy).unwrap().line(), "Your models: proxy says which it can run once it answers");
+    let found = Detected {
+        kind: Kind::SdServer,
+        version: None,
+        images: true,
+        image_models: vec!["krea.safetensors".into(), "other.gguf".into()],
+        chat_models: vec![],
+        needs_password: false,
+        recipes: vec![Recipe {
+            id: "checkpoint".into(),
+            name: "Checkpoint".into(),
+            slots: vec![("model".into(), true)],
+            steps: Some(20),
+            cfg: Some(7.0),
+        }],
+    };
+    update(&mut s, Msg::ServerFound(key, Ok(found)));
+    // by its file name: the proxy runs it
+    assert_eq!(s.runs_remotely(&krea), ["proxy"]);
+    assert_eq!(s.coverage(&proxy).unwrap().line(), "Can run 1 of your 1 models with the files on proxy");
+    let files = s.server_files();
+    assert!(AppState::server_lists(&files, "diffusion_models/krea.safetensors"));
+    assert!(!AppState::server_lists(&files, "diffusion_models/flux.safetensors"));
+    assert_eq!(s.unused_server_files(), [("proxy".to_string(), 1)]);
+    assert_eq!(s.server_recipes().len(), 1);
+    assert!(s.remote_only());
+    // the file no model uses: a model to add in one click
+    let offers = s.server_model_offers();
+    assert_eq!(offers.len(), 1);
+    let (server, other) = &offers[0];
+    assert_eq!(server, "proxy");
+    assert_eq!(other.name, "other");
+    assert_eq!(other.recipe, "checkpoint");
+    assert_eq!(other.files.get("model").map(String::as_str), Some("other.gguf"));
+    assert_eq!((other.steps, other.cfg), (20, 7.0));
+    update(&mut s, Msg::AddServerModels(vec![other.clone()]));
+    assert!(s.config.recipes.iter().any(|r| r.name == "other"));
+    assert!(s.server_model_offers().is_empty() && s.unused_server_files().is_empty());
+    assert_eq!(s.runs_remotely(other), ["proxy"]);
+    update(&mut s, Msg::AddServerModels(vec![other.clone()]));
+    assert_eq!(s.config.recipes.iter().filter(|r| r.name == "other").count(), 1, "not twice");
+    // asked once a session
+    assert!(update(&mut s, Msg::OpenRecipes).is_empty());
+    // Add models fetches nothing for a model the proxy has
+    let builtin = increart_core::config::catalogue().into_iter().next().unwrap();
+    let mut found = sd_found().unwrap();
+    found.image_models = builtin.files.values().map(|f| f.rsplit('/').next().unwrap().to_string()).collect();
+    update(&mut s, Msg::ServerFound(increart_core::detect::normalize("http://10.0.0.2:7800"), Ok(found)));
+    assert_eq!(s.runs_remotely(&builtin), ["proxy"]);
+    update(&mut s, Msg::OpenModelWizard);
+    let mut w = s.model_wizard.clone().unwrap();
+    w.picked.insert(builtin.name.clone());
+    update(&mut s, Msg::EditModelWizard(Box::new(w)));
+    assert_eq!(s.picked_remote(s.model_wizard.as_ref().unwrap()).len(), 1);
+    let fx = update(&mut s, Msg::ModelWizardGo);
+    assert!(!fx.iter().any(|e| matches!(e, Effect::DownloadModels { .. })), "{fx:?}");
+    assert!(s.config.recipes.iter().any(|r| r.name == builtin.name), "installed");
+}
+
+#[test]
+fn add_models_ticks_a_servers_file_and_custom_models_pick_where_files_are() {
+    use increart_core::config::RecipePreset;
+    use increart_core::detect::Recipe;
+    let proxy = ServerPreset {
+        name: "proxy".into(),
+        servers: vec![ServerConfig::Connect {
+            name: "proxy".into(),
+            url: "http://10.0.0.3:7800".into(),
+            device: String::new(),
+        }],
+    };
+    let mut s = dialog_state(vec![proxy], None);
+    s.config.recipes = vec![];
+    update(&mut s, Msg::LocalFiles(Box::default()));
+    let blank = RecipePreset::default();
+    // nothing heard yet: here
+    assert!(s.file_servers().is_empty());
+    assert_eq!(s.files_from(&blank, &FilesFrom::Auto), FilesFrom::Local);
+    let mut found = sd_found().unwrap();
+    found.image_models.push("vae.safetensors".into());
+    found.recipes = vec![Recipe { id: "checkpoint".into(), slots: vec![("model".into(), true)], ..Default::default() }];
+    update(&mut s, Msg::ServerFound(increart_core::detect::normalize("10.0.0.3:7800"), Ok(found)));
+    assert_eq!(s.file_servers(), ["proxy"]);
+    assert_eq!(s.files_on("proxy").len(), 2);
+    // only remote servers: a new model's files are the server's
+    assert_eq!(s.files_from(&blank, &FilesFrom::Auto), FilesFrom::Server("proxy".into()));
+    assert_eq!(s.files_from(&blank, &FilesFrom::Local), FilesFrom::Local, "as switched");
+    let on_proxy = RecipePreset {
+        files: [("model".to_string(), "x/krea2_turbo_int8_convrot.safetensors".to_string())].into(),
+        ..Default::default()
+    };
+    assert_eq!(s.files_from(&on_proxy, &FilesFrom::Auto), FilesFrom::Server("proxy".into()));
+    // Add models: two files offered, one ticked and added, nothing fetched
+    assert_eq!(s.server_model_offers().len(), 2);
+    update(&mut s, Msg::OpenModelWizard);
+    let mut w = s.model_wizard.clone().unwrap();
+    w.picked_files.insert("krea2_turbo_int8_convrot.safetensors".into());
+    update(&mut s, Msg::EditModelWizard(Box::new(w)));
+    let fx = update(&mut s, Msg::ModelWizardGo);
+    assert!(!fx.iter().any(|e| matches!(e, Effect::DownloadModels { .. })));
+    assert_eq!(s.config.recipes.len(), 1);
+    assert_eq!(s.config.recipes[0].name, "krea2_turbo_int8_convrot");
+    assert!(s.model_wizard.as_ref().unwrap().picked_files.is_empty());
+    assert_eq!(s.server_model_offers().len(), 1, "the other file still offered");
+}
+
+#[test]
+fn the_wizard_adds_a_model_for_each_file_a_proxy_lists() {
+    let mut s = dialog_state(vec![], None);
+    update(&mut s, Msg::ServerWizard(true));
+    update(&mut s, Msg::WizardRemote(true));
+    let mut found = sd_found().unwrap();
+    found.recipes = vec![increart_core::detect::Recipe {
+        id: "checkpoint".into(),
+        slots: vec![("model".into(), true)],
+        steps: Some(20),
+        ..Default::default()
+    }];
+    connect(&mut s, Some(0), "10.0.0.9:7800", Some(Ok(found)));
+    let before = s.config.recipes.len();
+    update(&mut s, Msg::FinishRemoteWizard);
+    assert_eq!(s.config.recipes.len(), before + 1);
+    let p = s.config.recipes.last().unwrap();
+    assert_eq!(p.name, "krea2_turbo_int8_convrot");
+    assert_eq!(p.files.get("model").map(String::as_str), Some("krea2_turbo_int8_convrot.safetensors"));
+    assert_eq!(p.steps, 20);
+    assert_eq!(s.runs_remotely(p).len(), 1);
+}
+
+#[test]
 fn the_wizard_connects_to_servers_already_running() {
     use increart_core::detect::{Detected, Kind};
     let mut s = dialog_state(vec![], None);
@@ -1515,6 +1672,7 @@ fn the_wizard_connects_to_servers_already_running() {
         image_models: vec!["flux.gguf".into()],
         chat_models: vec!["Qwen3-VL".into()],
         needs_password: false,
+        recipes: vec![],
     };
     connect(&mut s, Some(0), "192.168.2.136:5000", Some(Ok(kobold)));
     update(&mut s, Msg::AddRemoteRow);
@@ -7177,6 +7335,8 @@ fn generate_offers_the_model_presets_the_servers_can_run() {
         ids: Default::default(),
         refused: [("int8.safetensors".to_string(), "is in sd-server's int8 format".to_string())].into(),
         second_choice: Default::default(),
+
+        by_name: false,
     };
     update(&mut s, Msg::ServerModels(vec![("gpu1".into(), refusing)]));
     assert_eq!(s.why_file_unlisted("int8.safetensors"), "gpu1: is in sd-server's int8 format");
@@ -7347,6 +7507,8 @@ fn queueing_a_preset_no_server_runs_asks_first() {
         ids: ["q8.gguf".to_string()].into(),
         refused: [("int8.safetensors".to_string(), "is in sd-server's int8 format".to_string())].into(),
         second_choice: Default::default(),
+
+        by_name: false,
     };
     update(&mut h.state, Msg::ServerModels(vec![("kcpp".into(), kobold)]));
     assert_eq!(h.state.runnable_recipes(), vec![1]);
@@ -8577,6 +8739,8 @@ fn a_preset_runs_with_the_files_there_and_its_loras_trigger() {
         ids: p.files.values().cloned().chain(ggufs).collect(),
         refused: Default::default(),
         second_choice: p.files.values().filter(|f| f.contains("int8")).map(|f| (f.clone(), "int8".into())).collect(),
+
+        by_name: false,
     };
     let server = |name: &str| ServerStatus {
         config: None,

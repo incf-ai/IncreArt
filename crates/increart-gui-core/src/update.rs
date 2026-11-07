@@ -95,6 +95,9 @@ pub enum Msg {
     EditRemote(Option<usize>, crate::state::RemoteRow),
     /// The wizard: another address row.
     AddRemoteRow,
+    /// Models made from a server's files (`server_model_offers`) added to
+    /// your models.
+    AddServerModels(Vec<RecipePreset>),
     RemoveRemoteRow(usize),
     /// Ask the server at this address (with this password) what it is.
     DetectServer(String, String),
@@ -1822,11 +1825,13 @@ fn model_wizard(state: &mut AppState, msg: Msg) -> Vec<Effect> {
             urls.retain(|u| !state.download_sizes.contains_key(u));
             let sizes = state.download_sizes.clone();
             state.model_wizard = Some(ModelWizard { dir, sizes, ..Default::default() });
-            vec![
+            let mut fx = vec![
                 Effect::FindModelFolders { home, more: vec![] },
                 Effect::DetectGpus(state.gpu_runtime),
                 Effect::DownloadSizes(urls),
-            ]
+            ];
+            fx.extend(detect_connected(state));
+            fx
         }
         Msg::EditModelWizard(w) => {
             if let Some(old) = &mut state.model_wizard {
@@ -1861,22 +1866,37 @@ fn model_wizard(state: &mut AppState, msg: Msg) -> Vec<Effect> {
             vec![]
         }
         Msg::ModelWizardGo => {
+            // a server already running has their files: nothing fetched
+            let remote = match &state.model_wizard {
+                Some(w) => state.picked_remote(w),
+                None => return vec![],
+            };
+            // the servers' files ticked: a model each, nothing fetched
+            let picked_files = state.model_wizard.as_ref().map(|w| w.picked_files.clone()).unwrap_or_default();
+            let from_servers: Vec<RecipePreset> = state
+                .server_model_offers()
+                .into_iter()
+                .map(|(_, p)| p)
+                .filter(|p| p.files.values().any(|f| picked_files.contains(f)))
+                .collect();
             let Some(w) = state.model_wizard.as_mut() else { return vec![] };
-            if w.dir.trim().is_empty() {
+            w.picked_files.clear();
+            let (links, files) = w.plan_except(&state.config.programs.model_dirs, &remote);
+            let fetch = !links.is_empty() || !files.is_empty();
+            if fetch && w.dir.trim().is_empty() {
                 state.messages_error("Choose the folder the models go in first");
                 return vec![];
             }
-            if state.preset_download.is_some() {
+            if fetch && state.preset_download.is_some() {
                 state.messages_error("A download is under way: wait for it or cancel it first");
                 return vec![];
             }
             let dir = w.dir.trim().to_string();
             let dirs = w.folders(&state.config.programs.model_dirs);
-            let (links, files) = w.plan(&state.config.programs.model_dirs);
             let picked: Vec<RecipePreset> =
                 increart_core::config::catalogue().into_iter().filter(|p| w.picked.contains(&p.name)).collect();
             w.started = true;
-            if let Err(e) = std::fs::create_dir_all(&dir) {
+            if fetch && let Err(e) = std::fs::create_dir_all(&dir) {
                 state.messages_error(format!("Couldn't make {dir}: {e}"));
                 return vec![];
             }
@@ -1939,6 +1959,9 @@ fn model_wizard(state: &mut AppState, msg: Msg) -> Vec<Effect> {
             if updated > 0 {
                 let s = if updated == 1 { "" } else { "s" };
                 state.messages_info(format!("{updated} model{s} updated to the built-in's files"));
+            }
+            if !from_servers.is_empty() {
+                fx.extend(update(state, Msg::AddServerModels(from_servers)));
             }
             if files.is_empty() {
                 fx.push(Effect::ListLoadable);
@@ -2266,6 +2289,20 @@ fn save_config(state: &AppState) -> Vec<Effect> {
     state.config_path.iter().map(|p| Effect::SaveConfig(Box::new(state.config.clone()), p.clone())).collect()
 }
 
+/// Each server already running that a server preset connects to, asked
+/// what it is once a session (not again while asked or once it said): its
+/// files and recipes, before it's open, for what the presets cover, the
+/// Models window and Your models' file lists.
+fn detect_connected(state: &mut AppState) -> Vec<Effect> {
+    let mut fx = vec![];
+    for c in crate::state::connected_servers(&state.config.server_presets) {
+        if !state.remote_found.contains_key(&increart_core::detect::normalize(&c.url)) {
+            fx.extend(update(state, Msg::DetectServer(c.url, c.password)));
+        }
+    }
+    fx
+}
+
 fn server_dialog() -> ServerDialog {
     ServerDialog {
         editing: None,
@@ -2283,8 +2320,6 @@ fn server_dialog() -> ServerDialog {
         without: None,
         remote: None,
         connect: None,
-        found: Default::default(),
-        checking: Default::default(),
     }
 }
 
@@ -2698,6 +2733,7 @@ fn part_of(msg: &Msg) -> usize {
         Msg::DetectServer(..) => 1,
         Msg::ServerFound(..) => 1,
         Msg::FinishRemoteWizard => 1,
+        Msg::AddServerModels(..) => 1,
         Msg::AddConnected => 1,
         Msg::CancelConnect => 1,
         Msg::WizardGpus(..) => 1,
@@ -3327,6 +3363,7 @@ fn apply_0(state: &mut AppState, msg: Msg, rest: &mut Option<Msg>) -> Vec<Effect
                 return fx;
             }
             state.phase = Phase::Servers(server_dialog());
+            fx.extend(detect_connected(state));
             if let Some(choice) = state.startup_servers.take() {
                 fx.extend(skip_servers(state, choice));
             }
@@ -3479,7 +3516,7 @@ fn apply_1(state: &mut AppState, msg: Msg, rest: &mut Option<Msg>) -> Vec<Effect
             let Phase::Servers(d) = &mut state.phase else { return vec![] };
             let Some(row) = &d.connect else { return vec![] };
             let taken: Vec<&str> = d.draft.servers.iter().map(|s| s.name()).collect();
-            let Some(server) = row.server(&d.found, &taken) else { return vec![] };
+            let Some(server) = row.server(&state.remote_found, &taken) else { return vec![] };
             d.draft.servers.push(server);
             // still Remote: the row emptied for another
             d.connect = Some(Default::default());
@@ -3531,17 +3568,15 @@ fn apply_1(state: &mut AppState, msg: Msg, rest: &mut Option<Msg>) -> Vec<Effect
             vec![]
         }
         Msg::DetectServer(url, password) => {
-            let Phase::Servers(d) = &mut state.phase else { return vec![] };
             let key = increart_core::detect::normalize(&url);
-            if key.is_empty() || !d.checking.insert(key.clone()) {
+            if key.is_empty() || !state.remote_checking.insert(key.clone()) {
                 return vec![];
             }
             vec![Effect::DetectServer(key, password)]
         }
         Msg::ServerFound(key, r) => {
-            let Phase::Servers(d) = &mut state.phase else { return vec![] };
-            d.checking.remove(&key);
-            d.found.insert(key, r);
+            state.remote_checking.remove(&key);
+            state.remote_found.insert(key, r);
             vec![]
         }
         Msg::FinishRemoteWizard => {
@@ -3550,7 +3585,7 @@ fn apply_1(state: &mut AppState, msg: Msg, rest: &mut Option<Msg>) -> Vec<Effect
             let mut servers: Vec<ServerConfig> = vec![];
             for row in rows {
                 let taken: Vec<&str> = servers.iter().map(|s| s.name()).collect();
-                if let Some(s) = row.server(&d.found, &taken) {
+                if let Some(s) = row.server(&state.remote_found, &taken) {
                     servers.push(s);
                 }
             }
@@ -3558,7 +3593,39 @@ fn apply_1(state: &mut AppState, msg: Msg, rest: &mut Option<Msg>) -> Vec<Effect
                 return vec![];
             }
             d.draft.servers = servers;
-            update(state, Msg::FinishServerWizard)
+            let mut fx = update(state, Msg::FinishServerWizard);
+            // the files they list a model each, where a recipe takes one
+            let offers: Vec<RecipePreset> = state.server_model_offers().into_iter().map(|(_, p)| p).collect();
+            if !offers.is_empty() {
+                fx.extend(update(state, Msg::AddServerModels(offers)));
+            }
+            fx
+        }
+        Msg::AddServerModels(models) => {
+            let mut added = vec![];
+            for p in models {
+                if state.config.recipes.iter().any(|r| r.name == p.name) {
+                    continue;
+                }
+                // in the models being edited too, so saving them keeps it
+                if let Some(e) = &mut state.recipe_editor {
+                    let sigmas = String::new();
+                    e.rows.push(crate::RecipeRow {
+                        preset: p.clone(),
+                        origin: Some(state.config.recipes.len()),
+                        sigmas,
+                    });
+                }
+                added.push(p.name.clone());
+                state.config.recipes.push(p);
+            }
+            if added.is_empty() {
+                return vec![];
+            }
+            let s = if added.len() == 1 { "" } else { "s" };
+            state.messages_info(format!("Model{s} added from the server's files: {}", added.join(", ")));
+            state.files_changed();
+            save_config(state)
         }
         Msg::AddKoboldServer => {
             use increart_core::kobold::{KoboldRun, KoboldServer};
@@ -4068,6 +4135,7 @@ fn apply_2(state: &mut AppState, msg: Msg, rest: &mut Option<Msg>) -> Vec<Effect
             if state.phase == Phase::Main {
                 state.server_status = false;
                 state.phase = Phase::Servers(ServerDialog { from_main: true, ..server_dialog() });
+                return detect_connected(state);
             }
             vec![]
         }
@@ -6414,7 +6482,7 @@ fn apply_10(state: &mut AppState, msg: Msg, rest: &mut Option<Msg>) -> Vec<Effec
         // ------------------------------------------------ model presets
         Msg::OpenRecipes => {
             state.recipe_editor = Some(RecipeEditor::new(&state.config.recipes, state.generate.preset));
-            vec![]
+            detect_connected(state)
         }
         Msg::EditRecipes(e) => {
             state.recipe_editor = Some(e);

@@ -1920,7 +1920,7 @@ pub fn recipes_page(
     out: &mut Vec<Msg>,
 ) {
     use increart_core::config::MODEL_SLOTS;
-    let files = st.server_files();
+    use increart_gui_core::FilesFrom;
     // file pickers and the file manager, asked from inside the window
     let mut picks: Vec<Msg> = vec![];
     {
@@ -1970,6 +1970,15 @@ pub fn recipes_page(
                 });
                 ui.add_space(12.0);
                 // the selected one
+                // where the pickers look: as switched (not saved), else where its files are
+                let chosen = files_from_choice(ui, e.selected);
+                let from = e.rows.get(e.selected).map_or(FilesFrom::Local, |r| st.files_from(&r.preset, &chosen));
+                let local = from == FilesFrom::Local;
+                let files: std::collections::BTreeSet<&str> = match &from {
+                    FilesFrom::Server(n) => st.files_on(n),
+                    _ => st.local_ids(),
+                };
+                let selected = e.selected;
                 let Some(r) = e.rows.get_mut(e.selected) else { return };
                 // scrolls when taller than the window (LoRAs, test results)
                 let max = max_height;
@@ -1984,11 +1993,14 @@ pub fn recipes_page(
                                 ui.end_row();
                                 ui.label("Recipe")
                                     .on_hover_text("sd-server's recipe for these files, e.g. qwen-image-21");
-                                ui.add(
-                                    egui::TextEdit::singleline(&mut p.recipe)
-                                        .desired_width(320.0)
-                                        .hint_text("qwen-image-21"),
-                                );
+                                ui.horizontal(|ui| {
+                                    ui.add(
+                                        egui::TextEdit::singleline(&mut p.recipe)
+                                            .desired_width(320.0)
+                                            .hint_text("qwen-image-21"),
+                                    );
+                                    recipe_menu(ui, st, p, &from);
+                                });
                                 ui.end_row();
                                 ui.label("Steps");
                                 ui.add(egui::DragValue::new(&mut p.steps).range(1..=200));
@@ -2033,22 +2045,25 @@ pub fn recipes_page(
                             });
                             let p = &mut r.preset;
                             ui.add_space(6.0);
-                            crate::startup::models_list(
-                                ui,
-                                st,
-                                "A preset's files are found in these, searched in this order. Each is written \
+                            files_from_switch(ui, st, selected, &from);
+                            if local {
+                                crate::startup::models_list(
+                                    ui,
+                                    st,
+                                    "A preset's files are found in these, searched in this order. Each is written \
                      relative to its folder (vae/x.safetensors), so a preset keeps working wherever the \
                      folders are; a path in more than one folder is the first one's. LoRAs are in each \
                      folder's loras/. The list is Server settings' own, for every preset and both servers, \
                      and saved as it's changed (Cancel keeps it); a running sd-server sees a change once \
                      it's restarted.",
-                                &mut picks,
-                            );
+                                    &mut picks,
+                                );
+                            }
                             ui.add_space(6.0);
                             ui.label(RichText::new("Files").strong());
                             let dirs = &st.config.programs.model_dirs;
                             // a remote server lists its own files: no folder needed here
-                            if files.is_empty() && dirs.iter().all(|d| d.trim().is_empty()) {
+                            if local && dirs.iter().all(|d| d.trim().is_empty()) {
                                 ui.colored_label(
                                     NEUTRAL,
                                     "No model directory yet: add the one holding the model files, or open a \
@@ -2074,13 +2089,18 @@ pub fn recipes_page(
                                         },
                                     );
                                     let mut f = file.clone();
-                                    let known = files.contains(f.as_str()) || std::path::Path::new(&f).is_absolute();
+                                    let known = AppState::server_lists(&files, &f)
+                                        || std::path::Path::new(&f).is_absolute()
+                                        || f.trim().is_empty();
                                     let edit = egui::TextEdit::singleline(&mut f);
-                                    let r = if known || files.is_empty() {
+                                    let r = if known || (local && files.is_empty()) {
                                         ui.add_sized([300.0, 20.0], edit)
+                                    } else if let FilesFrom::Server(n) = &from {
+                                        ui.add_sized([300.0, 20.0], edit.text_color(NEUTRAL))
+                                            .on_hover_text(format!("{n} doesn't list it"))
                                     } else {
                                         ui.add_sized([300.0, 20.0], edit.text_color(NEUTRAL))
-                                            .on_hover_text(st.why_file_unlisted(&f))
+                                            .on_hover_text("not in the model folders")
                                     };
                                     // a full path inside a model directory: written relative to it
                                     if r.lost_focus()
@@ -2103,10 +2123,16 @@ pub fn recipes_page(
                                             });
                                         })
                                         .response
-                                        .on_hover_text("the files the open servers list");
+                                        .on_hover_text(match &from {
+                                            FilesFrom::Server(n) => format!("the files {n} lists"),
+                                            _ => "the files in the model folders".to_string(),
+                                        });
                                     }
                                     let at = MODEL_SLOTS.iter().position(|n| *n == s.as_str()).unwrap_or(0);
-                                    if ui
+                                    // the server's disk isn't this computer's
+                                    if !local {
+                                        ui.label("");
+                                    } else if ui
                                         .small_button(ph::FOLDER_OPEN)
                                         .on_hover_text("Browse… (in a model directory)")
                                         .clicked()
@@ -2148,7 +2174,9 @@ pub fn recipes_page(
                                 p.files.insert(free.to_string(), String::new());
                             }
                             other_files(ui, st, p, &files);
-                            preset_download(ui, st, p, out);
+                            if local {
+                                preset_download(ui, st, p, out);
+                            }
                             ui.add_space(6.0);
                             ui.label(RichText::new("LoRAs").strong());
                             ui.add(
@@ -2482,7 +2510,7 @@ fn other_files(
                         .get(&slot)
                         .into_iter()
                         .flatten()
-                        .filter(|f| !files.is_empty() && !files.contains(f.as_str()))
+                        .filter(|f| !files.is_empty() && !AppState::server_lists(files, f))
                         .collect();
                     let edit = egui::TextEdit::singleline(&mut text).desired_width(460.0).hint_text("none");
                     let r = if unlisted.is_empty() {
@@ -2511,8 +2539,99 @@ fn other_files(
     );
 }
 
+fn files_from_id() -> egui::Id {
+    egui::Id::unique("recipe_files_from")
+}
+
+/// The Files from switch's choice for the model at `row` (Auto unless
+/// switched on it, or set by the Custom model menu).
+fn files_from_choice(ui: &egui::Ui, row: usize) -> increart_gui_core::FilesFrom {
+    let set: Option<(usize, increart_gui_core::FilesFrom)> = ui.data(|d| d.get_temp(files_from_id()));
+    set.filter(|(r, _)| *r == row).map(|(_, f)| f).unwrap_or_default()
+}
+
+/// Sets where the pickers look for the model at `row` (not saved).
+pub fn set_files_from(ctx: &egui::Context, row: usize, from: increart_gui_core::FilesFrom) {
+    ctx.data_mut(|d| d.insert_temp(files_from_id(), (row, from)));
+}
+
+/// **Files from: Local · proxy**, above a model's files: where the file
+/// arrow and Recipe ▾ look (and whether Browse… and the model folders are
+/// shown). Not saved with it; only with a server listing its files.
+fn files_from_switch(ui: &mut egui::Ui, st: &AppState, row: usize, from: &increart_gui_core::FilesFrom) {
+    use increart_gui_core::FilesFrom;
+    let servers = st.file_servers();
+    if servers.is_empty() {
+        return;
+    }
+    ui.horizontal(|ui| {
+        ui.label("Files from").on_hover_text(
+            "where the file arrow and Recipe ▾ look: this computer's model folders, or what a server already \
+             running lists. Not saved with the model: it runs on any server that has its files.",
+        );
+        let mut pick = from.clone();
+        ui.selectable_value(&mut pick, FilesFrom::Local, "Local").on_hover_text("this computer's model folders");
+        for s in &servers {
+            ui.selectable_value(&mut pick, FilesFrom::Server(s.clone()), s.as_str())
+                .on_hover_text(format!("what {s} lists (its files are there, not here)"));
+        }
+        if &pick != from {
+            set_files_from(ui.ctx(), row, pick);
+        }
+    });
+}
+
+/// **▾** beside Recipe: the recipes the server the files are from said it
+/// has (every server's, from this computer's folders). Picking one sets
+/// it, and for a model with no files yet adds the slots it needs a file in
+/// (each picked with the arrow).
+fn recipe_menu(
+    ui: &mut egui::Ui,
+    st: &AppState,
+    p: &mut increart_core::config::RecipePreset,
+    from: &increart_gui_core::FilesFrom,
+) {
+    let mut recipes = st.server_recipes();
+    if let increart_gui_core::FilesFrom::Server(n) = from {
+        let key = st
+            .connected_image_servers()
+            .into_iter()
+            .find(|s| s.name() == n)
+            .map(|s| increart_core::detect::normalize(&s.base_url()));
+        let theirs: Vec<&increart_core::detect::Recipe> = match key.and_then(|k| st.remote_found.get(&k)) {
+            Some(Ok(d)) => d.recipes.iter().collect(),
+            _ => vec![],
+        };
+        recipes = theirs.into_iter().map(|r| (n.clone(), r)).collect();
+    }
+    if recipes.is_empty() {
+        return;
+    }
+    ui.menu_button(ph::CARET_DOWN, |ui| {
+        ui.set_min_width(360.0);
+        for (server, r) in &recipes {
+            let label = format!("{}  ·  {server}", r.label());
+            if ui.selectable_label(p.recipe == r.id, label).clicked() {
+                p.recipe = r.id.clone();
+                if p.files.values().all(|f| f.trim().is_empty()) {
+                    p.files.clear();
+                    for (slot, needed) in &r.slots {
+                        if *needed && increart_core::config::MODEL_SLOTS.contains(&slot.as_str()) {
+                            p.files.insert(slot.clone(), String::new());
+                        }
+                    }
+                }
+                ui.close();
+            }
+        }
+    })
+    .response
+    .on_hover_text("the recipes the servers already running have (as they said when asked)");
+}
+
 /// The files a preset says where to download that aren't in a model
-/// folder: **Download** (into the first folder), or the one under way.
+/// folder: **Download** (into the first folder), or the one under way; a
+/// server already running with its files said instead.
 fn preset_download(ui: &mut egui::Ui, st: &AppState, p: &increart_core::config::RecipePreset, out: &mut Vec<Msg>) {
     let dirs = &st.config.programs.model_dirs;
     if let Some(d) = &st.preset_download {
@@ -2531,6 +2650,15 @@ fn preset_download(ui: &mut egui::Ui, st: &AppState, p: &increart_core::config::
     let missing = increart_gui_core::missing_downloads(p, dirs);
     if missing.is_empty() {
         return;
+    }
+    let on = st.runs_remotely(p);
+    if !on.is_empty() {
+        let names = on.join(", ");
+        ui.colored_label(GOOD, ic(ph::PLUGS_CONNECTED, &format!("Its files are on {names}: it runs there")))
+            .on_hover_text("the server has them; downloading is only for servers started here");
+        if st.remote_only() {
+            return;
+        }
     }
     let Some(dir) = dirs.iter().find(|d| !d.trim().is_empty()) else { return };
     let n = missing.len();
@@ -2826,6 +2954,7 @@ fn debug_layout<R>(ui: &egui::Ui, strip: egui::Rect, scroll: &egui::scroll_area:
 fn model_choice(ui: &mut egui::Ui, st: &AppState, chosen: usize, out: &mut Vec<Msg>) {
     let recipes = &st.config.recipes;
     let runnable = st.runnable_recipes();
+    let unused = st.unused_server_files();
     let hidden: Vec<&str> =
         (0..recipes.len()).filter(|i| !runnable.contains(i)).map(|i| recipes[i].name.as_str()).collect();
     let name = recipes.get(chosen).map_or("?", |r| r.name.as_str());
@@ -2854,9 +2983,40 @@ fn model_choice(ui: &mut egui::Ui, st: &AppState, chosen: usize, out: &mut Vec<M
         for (server, file) in st.models_without_preset() {
             ui.weak(format!("{server} runs {file}, which none of your models uses"));
         }
+        for (server, n) in &unused {
+            ui.weak(format!("{server} lists {n} file{} none of your models uses", if *n == 1 { "" } else { "s" }));
+        }
+        if !unused.is_empty() {
+            from_server_files(ui, st, out);
+        }
     });
     if !runnable.contains(&chosen) {
         r.response.on_hover_text("No open server has this model's files");
+    }
+    if runnable.is_empty() && !unused.is_empty() {
+        from_server_files(ui, st, out);
+    }
+}
+
+/// **Make a model from a server's files…**: Your models, a new model with
+/// no recipe or files, each picked from what the servers list.
+fn from_server_files(ui: &mut egui::Ui, st: &AppState, out: &mut Vec<Msg>) {
+    if ui
+        .small_button(ic(ph::PLUS, "Make a model from a server's files…"))
+        .on_hover_text("a new model in Your models: its recipe from the menu beside Recipe, each file with the arrow")
+        .clicked()
+    {
+        let mut e = st
+            .recipe_editor
+            .clone()
+            .unwrap_or_else(|| increart_gui_core::RecipeEditor::new(&st.config.recipes, st.generate.preset));
+        e.add_blank();
+        if let Some(s) = st.file_servers().into_iter().next() {
+            set_files_from(ui.ctx(), e.selected, increart_gui_core::FilesFrom::Server(s));
+        }
+        ui.memory_mut(|m| m.data.insert_temp(scroll_id(), true));
+        out.push(Msg::EditRecipes(e));
+        ui.close();
     }
 }
 

@@ -125,7 +125,7 @@ pub fn list(cx: &mut Ctx, t: Target) -> Verdict {
                     Some(why) => cannot.push(format!("{}: {why}", m.preset.name)),
                 }
             }
-            if let increart_core::sdserver::Loadable::Files { ids, refused, second_choice } = &l {
+            if let increart_core::sdserver::Loadable::Files { ids, refused, second_choice, .. } = &l {
                 cx.log(format!("{} files listed", ids.len()));
                 for (id, why) in refused {
                     cx.log(format!("listed but refused: {id}: {why}"));

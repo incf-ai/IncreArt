@@ -259,7 +259,7 @@ impl LocalFiles {
     pub fn kobold(&self) -> Loadable {
         let why = "is in sd-server's int8 format, which KoboldCpp loads at full size";
         let second_choice = self.int8.iter().map(|id| (id.clone(), why.to_string())).collect();
-        Loadable::Files { ids: self.ids.clone(), refused: BTreeMap::new(), second_choice }
+        Loadable::Files { ids: self.ids.clone(), refused: BTreeMap::new(), second_choice, by_name: false }
     }
 }
 

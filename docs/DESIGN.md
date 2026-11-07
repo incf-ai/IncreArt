@@ -230,8 +230,9 @@ asks among them):
   ("Stop ROCm0 and open Other? ROCm1 stay as they are.") or drop images
   being made (and says how many runs are generating); otherwise it opens
   at once. A preset with only a chat server stops the sd-servers in use.
-- With no presets, **Set up servers…** opens a wizard (also beside **New
-  server setup** once there are presets). Its top, like the preset
+- With no presets, **Set up servers… (guided)** opens a wizard (also, once there
+  are presets, first in the row before **New server setup… (advanced)**,
+  an empty setup filled in by hand: the guided way is the one to take). Its top, like the preset
   editor's, is **Local (recommended)** (servers on this computer, started
   and stopped by IncreArt), with its two ways under it (KoboldCpp, marked
   recommended, and sd-server), or **Remote (advanced)** (servers already
@@ -354,7 +355,7 @@ asks among them):
   winning (see Model directories); and leave started servers running. **Timeouts** (also a tab in Settings): see Timeouts below. When a preset starts sd-servers and the binary or
   model directory is missing, the dialog says so with **Fix…**, which opens
   it.
-- ✎ or **New preset** opens the editor modal: the name, then the server
+- ✎ or **New server setup… (advanced)** opens the editor modal: the name, then the server
   rows. **+ KoboldCpp** (first, in the accent colour) adds a KoboldCpp
   image server (port 5001 up, the shared binary); its row has its settings
   under it: started by IncreArt (the shared binary again when switched
@@ -2143,7 +2144,18 @@ and its tooltip says how many more are generating.
   file name). A preset is offered when one server has all its files; the
   others are named under the list ("Not on these servers: …", each
   server's reason on hover), and a model a KoboldCpp runs that no preset
-  uses is named too. A started KoboldCpp doesn't count the `.safetensors`
+  uses is named too, as is a server already running that lists files none
+  of your models uses ("proxy lists 3 files none of your models uses",
+  `unused_server_files`, open or as it said when asked), with **Make a
+  model from a server's files…** (also beside the list when no model
+  runs): Your models, a new model with no recipe or files
+  (`RecipeEditor::add_blank`). A server listing its files (sd-server's
+  API: `Loadable::listed`) matches a preset's file by its ID or, when
+  that isn't listed, by file name when only one file listed has it
+  (`diffusion_models/x.gguf` for a proxy's `x.gguf`); the load sends the
+  server's ID (`server_id`) and its answers are put back in the preset's
+  (`Client::ours`), so run records keep the preset's. One listing two
+  files of that name says which is meant isn't known. A started KoboldCpp doesn't count the `.safetensors`
   with int8 (`I8`) weights in its folders, sd-server's `int8_convrot`
   files: it can't load them, and falls back to a full-size buffer (31 GB
   pinned for Qwen-Image's). Queueing a preset no open server runs (a draft
@@ -2832,9 +2844,13 @@ in the app's state folder (`$XDG_STATE_HOME/increart` when set, else
   (opened as the screen first shows; its state, `ModelWizard`, stays while
   the app runs, so a download's progress is there when the screen is
   reopened), read only; **Manage models…** in its header (opening on
-  Install built-in); **Custom model… (advanced)** under Your custom models
-  (a new model in Your models, selected, from the selected one's files:
-  the built-in ones cover most needs, so it's out of the header):
+  Add models); **Custom model… (advanced)** under Your custom models
+  (a new model in Your models, selected: the built-in ones cover most
+  needs, so it's out of the header). With servers already running that
+  list their files and a server started here too (or more than one such
+  server), it's a menu: **From this computer's files…** (a copy of the
+  selected one's files) / **From proxy's files…** (no recipe or files);
+  with only one place files can be, it goes straight there:
   - The model folders on one line, a filter row (search: every word in
     the name, recipe or note; kind: image, edit (an edit recipe or
     Kontext), LoRA style (`ModelKind::of`); **Fits GPU ▾**, a popover with
@@ -2851,21 +2867,67 @@ in the app's state folder (`$XDG_STATE_HOME/increart` when set, else
     installed**; each with Model, Size, Files ("ready", "3 files missing",
     "files here, not installed", "download 3 files (9.8 GB)") and Fits GPU,
     and "(4 of 18 shown)" when filtered; each collapsible, open to start.
+    A model a server already running can run (`runs_remotely`: open, or
+    as it said when asked) whose files aren't all here, or any it runs
+    when no server preset starts one here (`remote_only`), is "on proxy"
+    in Files (✓, "nothing to download here"), its Size "—" when not known;
+    with only remote servers there's no Fits GPU (the column, its filter
+    and the GPU line: the GPUs are theirs, not this computer's).
+    Above them, **On your servers, not set up yet** lists the files
+    servers already running list that no model uses, where a recipe of
+    theirs takes one file alone (`Recipe::single_slot`: a proxy's
+    "checkpoint"): each a model named after the file (its extension
+    dropped), that recipe, its default steps and CFG, noted "on proxy"
+    (`server_model_offers`), with **Add** (and **Add all**:
+    `Msg::AddServerModels`). The Remote wizard adds them itself on saving
+    (its row says "· added to your models when saved"), so a proxy's
+    model is in Generate at once.
     A model's name is a link: yours and installed ones open in Your models,
-    selected (scrolled to); one not installed opens Install built-in with
+    selected (scrolled to); one not installed opens Add models with
     it ticked (unless it can't be had).
   - The **Models** window (`modelwizard::window`): one window for all of
     it, whatever opens it (the half, Generate's ⚙, the coverage line, the
     sd-server wizard's Edit your models…), its tabs the same height, so it
     doesn't jump; Close or Esc closes it (a download goes on, shown in the
     half too; unsaved edits to your models are dropped):
-  - **Install built-in** (leftmost; Manage models… opens on it): the
-    filter row and the built-in models, ticked to install; **Download and
-    install** (**Install** when nothing's missing). When every server is a
-    connected one, a note above says downloads go to this computer's model
-    folders and a connected server runs the files it lists, with **Make a
-    model from a server's files…** (a new model in Your models, its files
-    picked from the open server's list).
+  - **Add models** (leftmost; Manage models… opens on it; was Install
+    built-in): first, when servers already running list their files
+    (`file_servers`), **On your servers**: each file each lists
+    (`files_on`), ticked to add it as a model (`server_model_offers`: its
+    name, recipe, steps and CFG beside it; `ModelWizard::picked_files`),
+    greyed with "in Your models: …" when one of yours uses it, or "needs
+    other files with it" when no recipe of the server's takes it alone,
+    with **Make a model from proxy's files…** under them. Then the filter
+    row and the built-in models, ticked to install (under **Built-in
+    models**, folded and titled "— download to this computer" with only
+    servers already running). **Download and add** (**Add** when nothing's
+    missing) adds both; the footer counts those with the files on the
+    server. When every server is a
+    connected one, a note above says a model marked "on …" has its files
+    there and installing it downloads nothing, others would download to
+    this computer's model folders, which a remote server can't use; with
+    **Make a model from a server's files…** (a new model in Your models,
+    no recipe or files, picked from the servers' lists). Such a model is
+    installed with nothing linked or fetched (`picked_remote`,
+    `ModelWizard::plan_except`), and needs no download folder. In Your
+    models, a model a server already running has the files for says "Its
+    files are on proxy: it runs there" in place of **Download N files**
+    (beside it when a server starts here too). **Recipe** has a **▾** of
+    the recipes servers already running said they have
+    (`server_recipes`, "checkpoint — Checkpoint (model) · proxy"):
+    picking one sets it, and for a model with no files yet adds the slots
+    it needs a file in, each picked with the arrow, which lists the open
+    servers' files and those servers already running said they have.
+    Above Files, **Files from: Local · proxy** (with a server listing its
+    files) says where the pickers look (`FilesFrom`; not saved with the
+    model, which runs wherever its files are): Local, the model folders
+    (the arrow lists their files, Browse…, the model folders box and
+    the download offer shown); a server, what it lists (the arrow its
+    files, Recipe ▾ its recipes; no Browse…, folders or downloads). It
+    starts where the model's files are (`AppState::files_from`: a server
+    listing them all when they aren't all here; a model with none yet, the
+    first server's with only remote servers, else Local), or as the Custom
+    model menu set it; switching it is kept per model for the session.
   - **Your models** (Generate's ⚙, the coverage line, the sd-server
     wizard and Custom model… open on it): the models editor (Model presets
     above), with Reset to built-ins and Save. Its edits stay while
@@ -2924,7 +2986,7 @@ in the app's state folder (`$XDG_STATE_HOME/increart` when set, else
     the built-in under the same name ("1 model updated to the built-in's
     files"; in Your models too if open). In the Models half such a copy
     whose files aren't there says "older copy: update", and a click opens
-    Install built-in with it ticked.
+    Add models with it ticked.
   - The default model as rc16 and before wrote it (sd-server's int8
     files, no alternatives or downloads) gets the current default's
     alternatives and downloads when the config is loaded (one edited is
@@ -2950,8 +3012,14 @@ in the app's state folder (`$XDG_STATE_HOME/increart` when set, else
   (`kobold_image::LocalFiles`): a started sd-server has every file there;
   a started KoboldCpp too, sd-server's int8 safetensors as a second choice
   (it loads them at full size); an open server, what it said; a server
-  the app connects to and that isn't open says once it is (", + what
-  remote lists once open"). The hover lists each model preset with the
+  the app connects to and that isn't open is asked what it is once a
+  session (on the servers screen, Your models, the Models window:
+  `detect_connected`, kept in `remote_found` with its files and recipes),
+  and counts by what it said. The line says where: "… with the files
+  here", "… here and on proxy", "… on proxy"; ", plus what box has once
+  connected" for one not answering; "Your models: proxy says which it can
+  run once it answers" while every server is one not heard from. The
+  hover lists each model preset with the
   servers that can run it ("kcpp (second choice: …)") or each server's
   reason; a click opens Model presets. **Model presets…** is also beside
   New preset. With no servers open, Model presets' ✓ marks use the same:

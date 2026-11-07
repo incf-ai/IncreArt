@@ -1045,6 +1045,9 @@ pub struct ModelWizard {
     pub add: BTreeSet<String>,
     /// Built-in presets ticked, by name.
     pub picked: BTreeSet<String>,
+    /// Files servers already running list ticked in Add models (each a
+    /// model of `AppState::server_model_offers`), by file ID.
+    pub picked_files: BTreeSet<String>,
     /// Each download's size by URL, as Hugging Face says (None: it didn't);
     /// not there yet: still asking.
     pub sizes: BTreeMap<String, Option<u64>>,
@@ -1380,9 +1383,22 @@ impl ModelWizard {
     /// What the ticked presets link and fetch (each file once) into
     /// `folders`.
     pub fn plan(&self, model_dirs: &[String]) -> (Vec<Link>, Vec<increart_core::tiers::Download>) {
+        self.plan_except(model_dirs, &BTreeSet::new())
+    }
+
+    /// `plan`, but nothing for the models named in `remote` (a server
+    /// already running has their files: they're installed, nothing fetched).
+    pub fn plan_except(
+        &self,
+        model_dirs: &[String],
+        remote: &BTreeSet<String>,
+    ) -> (Vec<Link>, Vec<increart_core::tiers::Download>) {
         let dirs = self.folders(model_dirs);
         let (mut links, mut downloads): (Vec<Link>, Vec<increart_core::tiers::Download>) = (vec![], vec![]);
-        for p in increart_core::config::catalogue().iter().filter(|p| self.picked.contains(&p.name)) {
+        for p in increart_core::config::catalogue()
+            .iter()
+            .filter(|p| self.picked.contains(&p.name) && !remote.contains(&p.name))
+        {
             let needs = PresetNeeds::of(p, &dirs, &self.sizes, self.index.as_deref());
             for l in needs.links {
                 if !links.iter().any(|o| o.file == l.file) {
@@ -1456,16 +1472,34 @@ pub struct Coverage {
     pub can: Vec<(String, Vec<String>)>,
     /// The others, with each server's reason.
     pub cannot: Vec<(String, Vec<String>)>,
-    /// Servers the app connects to (not open): asked once opened.
+    /// Servers the app connects to whose files aren't known (not open,
+    /// not answering when asked).
     pub asked: Vec<String>,
+    /// It starts servers here (on the files in the model folders).
+    pub here: bool,
+    /// Servers it connects to whose files are known (open, or said when
+    /// asked).
+    pub remote: Vec<String>,
 }
 
 impl Coverage {
-    /// "Can run 9 of your 14 models with the files here" (", plus what
-    /// remote has once connected").
+    /// "Can run 9 of your 14 models with the files here" ("… on proxy",
+    /// "… here and on proxy"; ", plus what box has once connected"); a
+    /// setup whose servers haven't said what they have says that.
     pub fn line(&self) -> String {
         let n = self.can.len() + self.cannot.len();
-        let mut line = format!("Can run {} of your {n} models with the files here", self.can.len());
+        if !self.here && self.remote.is_empty() {
+            return match self.asked.as_slice() {
+                [one] => format!("Your models: {one} says which it can run once it answers"),
+                many => format!("Your models: {} say which they can run once they answer", many.join(", ")),
+            };
+        }
+        let place = match (self.here, self.remote.is_empty()) {
+            (true, true) => "here".to_string(),
+            (true, false) => format!("here and on {}", self.remote.join(", ")),
+            _ => format!("on {}", self.remote.join(", ")),
+        };
+        let mut line = format!("Can run {} of your {n} models with the files {place}", self.can.len());
         if !self.asked.is_empty() {
             line.push_str(&format!(", plus what {} has once connected", self.asked.join(", ")));
         }
@@ -1512,6 +1546,19 @@ pub fn missing_downloads(p: &RecipePreset, model_dirs: &[String]) -> Vec<increar
     out
 }
 
+/// Where Your models' file pickers look for a model's files (not saved
+/// with it: a model runs wherever its files are).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum FilesFrom {
+    /// Where its files are found (`AppState::files_from`).
+    #[default]
+    Auto,
+    /// This computer's model folders.
+    Local,
+    /// What a server already running lists, by name.
+    Server(String),
+}
+
 /// The model presets editor (DESIGN.md, Model presets): a working copy of
 /// `config.recipes`.
 #[derive(Clone, Debug, PartialEq)]
@@ -1548,6 +1595,13 @@ impl RecipeEditor {
 
     /// A new model after the others, selected: the selected one's recipe,
     /// files and LoRAs to start from, no name yet.
+    /// A new model with no recipe or files (to pick from a server's).
+    pub fn add_blank(&mut self) {
+        let preset = RecipePreset { cfg: 2.0, ..Default::default() };
+        self.rows.push(RecipeRow { preset, origin: None, sigmas: String::new() });
+        self.selected = self.rows.len() - 1;
+    }
+
     pub fn add_new(&mut self) {
         let from = self.rows.get(self.selected).map(|r| &r.preset);
         let preset = RecipePreset {
@@ -1989,10 +2043,6 @@ pub struct ServerDialog {
     pub remote: Option<Vec<RemoteRow>>,
     /// The preset editor's address row: Some on **Remote (advanced)**.
     pub connect: Option<RemoteRow>,
-    /// What each address said it is, by address as connected to
-    /// ([`increart_core::detect::normalize`]), and those being asked.
-    pub found: BTreeMap<String, Result<increart_core::detect::Detected, String>>,
-    pub checking: BTreeSet<String>,
 }
 
 /// A server the presets connect to (already running), once per address.
@@ -3977,6 +4027,12 @@ pub struct AppState {
     pub servers: Vec<ServerStatus>,
     /// What each server can load, by name (asked once it's open).
     pub server_models: BTreeMap<String, increart_core::sdserver::Loadable>,
+    /// What each server already running said it is when asked (the setup
+    /// wizard, the editor, Server settings, the Models window), by address
+    /// as connected to ([`increart_core::detect::normalize`]): before it's
+    /// open, its files and recipes. And the addresses being asked.
+    pub remote_found: BTreeMap<String, Result<increart_core::detect::Detected, String>>,
+    pub remote_checking: BTreeSet<String>,
     /// The shared sd-server settings `servers` were opened with.
     pub servers_opened_with: Option<increart_core::config::Programs>,
     pub engine_running: bool,
@@ -4365,12 +4421,214 @@ impl AppState {
         {
             return Some(l.clone());
         }
+        if !server.is_started() {
+            return self.remote_loadable(server);
+        }
         let f = self.local_files.as_ref()?;
         match server {
             ServerConfig::Start { .. } => Some(f.sd_server()),
-            ServerConfig::Kobold(_) if server.is_started() => Some(f.kobold()),
+            ServerConfig::Kobold(_) => Some(f.kobold()),
             _ => None,
         }
+    }
+
+    /// What a server already running said it can load when asked (before
+    /// it's open), if it has.
+    pub fn remote_loadable(&self, server: &ServerConfig) -> Option<increart_core::sdserver::Loadable> {
+        let key = increart_core::detect::normalize(&server.base_url());
+        self.remote_found.get(&key)?.as_ref().ok()?.loadable()
+    }
+
+    /// The servers already running some server preset connects to (each
+    /// once, by address), image servers only.
+    pub fn connected_image_servers(&self) -> Vec<&ServerConfig> {
+        let mut seen = BTreeSet::new();
+        self.config
+            .server_presets
+            .iter()
+            .flat_map(|p| &p.servers)
+            .filter(|s| !s.is_started() && !s.is_chat())
+            .filter(|s| seen.insert(increart_core::detect::normalize(&s.base_url())))
+            .collect()
+    }
+
+    /// The recipes the servers already running said they have when asked
+    /// (each recipe once, by ID), each with the first server's name.
+    pub fn server_recipes(&self) -> Vec<(String, &increart_core::detect::Recipe)> {
+        let mut out: Vec<(String, &increart_core::detect::Recipe)> = vec![];
+        for s in self.connected_image_servers() {
+            let key = increart_core::detect::normalize(&s.base_url());
+            let Some(Ok(d)) = self.remote_found.get(&key) else { continue };
+            for r in &d.recipes {
+                if !out.iter().any(|(_, o)| o.id == r.id) {
+                    out.push((s.name().to_string(), r));
+                }
+            }
+        }
+        out
+    }
+
+    /// Models to make from the files servers already running list that
+    /// none of your models uses: one per file, when the server has a
+    /// recipe taking a single file (a proxy's "checkpoint"), named after
+    /// the file, with the recipe's steps and CFG. (server, model)
+    pub fn server_model_offers(&self) -> Vec<(String, RecipePreset)> {
+        let name = |p: &str| p.rsplit(['/', '\\']).next().unwrap_or(p).to_string();
+        let used: BTreeSet<String> =
+            self.config.recipes.iter().flat_map(|r| r.files.values()).map(|f| name(f)).collect();
+        let mut taken: BTreeSet<String> = self.config.recipes.iter().map(|r| r.name.clone()).collect();
+        let mut out = vec![];
+        for s in self.connected_image_servers() {
+            let key = increart_core::detect::normalize(&s.base_url());
+            let Some(Ok(d)) = self.remote_found.get(&key) else { continue };
+            if d.kind != increart_core::detect::Kind::SdServer {
+                continue;
+            }
+            let Some((r, slot)) = d.recipes.iter().find_map(|r| Some((r, r.single_slot()?))) else { continue };
+            for file in &d.image_models {
+                if used.contains(&name(file))
+                    || out.iter().any(|(_, p): &(String, RecipePreset)| p.files.values().any(|f| f == file))
+                {
+                    continue;
+                }
+                let stem = name(file);
+                let stem = stem.rsplit_once('.').map_or(stem.as_str(), |(a, _)| a).to_string();
+                let mut model = stem.clone();
+                let mut n = 2;
+                while taken.contains(&model) {
+                    model = format!("{stem} {n}");
+                    n += 1;
+                }
+                taken.insert(model.clone());
+                let mut p = RecipePreset {
+                    name: model,
+                    recipe: r.id.clone(),
+                    files: [(slot.to_string(), file.clone())].into(),
+                    note: format!("on {}", s.name()),
+                    ..Default::default()
+                };
+                if let Some(steps) = r.steps {
+                    p.steps = steps;
+                }
+                if let Some(cfg) = r.cfg {
+                    p.cfg = cfg;
+                }
+                out.push((s.name().to_string(), p));
+            }
+        }
+        out
+    }
+
+    /// The servers already running that list their files (open ones, and
+    /// those some preset connects to as they said when asked): names.
+    pub fn file_servers(&self) -> Vec<String> {
+        use increart_core::sdserver::Loadable;
+        let mut out: Vec<String> = self
+            .servers
+            .iter()
+            .filter(|s| s.config.as_ref().is_some_and(|c| !c.is_started()))
+            .filter(|s| matches!(self.server_models.get(&s.name), Some(Loadable::Files { .. })))
+            .map(|s| s.name.clone())
+            .collect();
+        for s in self.connected_image_servers() {
+            if !out.iter().any(|n| n == s.name()) && matches!(self.remote_loadable(s), Some(Loadable::Files { .. })) {
+                out.push(s.name().to_string());
+            }
+        }
+        out
+    }
+
+    /// The files one of `file_servers` lists.
+    pub fn files_on(&self, server: &str) -> BTreeSet<&str> {
+        use increart_core::sdserver::Loadable;
+        if let Some(Loadable::Files { ids, .. }) = self.server_models.get(server) {
+            return ids.iter().map(String::as_str).collect();
+        }
+        let Some(s) = self.connected_image_servers().into_iter().find(|s| s.name() == server) else {
+            return BTreeSet::new();
+        };
+        let key = increart_core::detect::normalize(&s.base_url());
+        match self.remote_found.get(&key) {
+            Some(Ok(d)) if d.kind == increart_core::detect::Kind::SdServer => {
+                d.image_models.iter().map(String::as_str).collect()
+            }
+            _ => BTreeSet::new(),
+        }
+    }
+
+    /// The files in the model folders (as a started server lists them).
+    pub fn local_ids(&self) -> BTreeSet<&str> {
+        self.local_files.as_ref().map(|f| f.ids.iter().map(String::as_str).collect()).unwrap_or_default()
+    }
+
+    /// Where Your models' pickers look for a model's files: as chosen,
+    /// else a server's that lists them all when they aren't all here, else
+    /// here; a model with none yet, the first server's with only servers
+    /// already running set up. Never `Auto`.
+    pub fn files_from(&self, p: &RecipePreset, chosen: &FilesFrom) -> FilesFrom {
+        let servers = self.file_servers();
+        match chosen {
+            FilesFrom::Local => return FilesFrom::Local,
+            FilesFrom::Server(n) if servers.contains(n) => return chosen.clone(),
+            _ => {}
+        }
+        let Some(first) = servers.first() else { return FilesFrom::Local };
+        let files: Vec<&String> = p.files.values().filter(|f| !f.trim().is_empty()).collect();
+        let dirs = &self.config.programs.model_dirs;
+        let here =
+            !files.is_empty() && files.iter().all(|f| increart_core::config::model_file_on_disk(f, dirs).is_some());
+        if !here && !files.is_empty() {
+            for s in &servers {
+                let on = self.files_on(s);
+                if files.iter().all(|f| Self::server_lists(&on, f)) {
+                    return FilesFrom::Server(s.clone());
+                }
+            }
+        }
+        if !here && self.remote_only() {
+            return FilesFrom::Server(first.clone());
+        }
+        FilesFrom::Local
+    }
+
+    /// Only servers already running are set up (no server preset starts
+    /// one here): models run on their files and GPUs, not this computer's.
+    pub fn remote_only(&self) -> bool {
+        let presets = &self.config.server_presets;
+        programs_started(presets) == (false, false) && !connected_servers(presets).is_empty()
+    }
+
+    /// The models ticked in Add models that a server already running
+    /// has the files for, with no server started here: installing them
+    /// fetches nothing.
+    pub fn picked_remote(&self, w: &ModelWizard) -> BTreeSet<String> {
+        if !self.remote_only() {
+            return BTreeSet::new();
+        }
+        increart_core::config::catalogue()
+            .iter()
+            .filter(|p| w.picked.contains(&p.name) && !self.runs_remotely(p).is_empty())
+            .map(|p| p.name.clone())
+            .collect()
+    }
+
+    /// The servers already running (open, or some preset's, as they said
+    /// when asked) that can run a model preset: their names. Its files are
+    /// there, not here.
+    pub fn runs_remotely(&self, p: &RecipePreset) -> Vec<String> {
+        let mut on: Vec<String> = self
+            .servers
+            .iter()
+            .filter(|s| s.config.as_ref().is_some_and(|c| !c.is_started()))
+            .filter(|s| self.server_models.get(&s.name).is_some_and(|l| l.runs_preset(p)))
+            .map(|s| s.name.clone())
+            .collect();
+        for s in self.connected_image_servers() {
+            if !on.iter().any(|n| n == s.name()) && self.remote_loadable(s).is_some_and(|l| l.runs_preset(p)) {
+                on.push(s.name().to_string());
+            }
+        }
+        on
     }
 
     /// Model files came or went (a download, links): the model folders
@@ -4396,6 +4654,12 @@ impl AppState {
             preset.servers.iter().filter(|s| !s.is_chat()).map(|s| (s, self.loadable_of(s))).collect();
         let mut c = Coverage {
             asked: servers.iter().filter(|(_, l)| l.is_none()).map(|(s, _)| s.name().to_string()).collect(),
+            here: servers.iter().any(|(s, _)| s.is_started()),
+            remote: servers
+                .iter()
+                .filter(|(s, l)| !s.is_started() && l.is_some())
+                .map(|(s, _)| s.name().to_string())
+                .collect(),
             ..Default::default()
         };
         for p in &self.config.recipes {
@@ -4453,16 +4717,39 @@ impl AppState {
         Some(why)
     }
 
-    /// Every model file the open servers list (KoboldCpp started elsewhere
-    /// lists none).
+    /// Every model file the open servers list, and those sd-server API
+    /// servers some preset connects to said they have when asked (not open
+    /// yet). KoboldCpp started elsewhere lists none.
     pub fn server_files(&self) -> BTreeSet<&str> {
         use increart_core::sdserver::Loadable;
+        let open: BTreeSet<String> = self
+            .servers
+            .iter()
+            .filter_map(|s| s.config.as_ref())
+            .map(|c| increart_core::detect::normalize(&c.base_url()))
+            .collect();
+        let asked = self
+            .connected_image_servers()
+            .into_iter()
+            .map(|s| increart_core::detect::normalize(&s.base_url()))
+            .filter(|key| !open.contains(key))
+            .filter_map(|key| self.remote_found.get(&key)?.as_ref().ok())
+            .filter(|d| d.kind == increart_core::detect::Kind::SdServer)
+            .flat_map(|d| d.image_models.iter().map(String::as_str));
         self.open_loadable()
             .flat_map(|l| match l {
                 Loadable::Files { ids, .. } => ids.iter().map(String::as_str).collect(),
                 Loadable::Only(_) => vec![],
             })
+            .chain(asked)
             .collect()
+    }
+
+    /// Whether a model file is among `server_files`, by its ID or (as
+    /// sd-server's API matches them) its file name.
+    pub fn server_lists(files: &BTreeSet<&str>, id: &str) -> bool {
+        let name = |p: &str| p.rsplit(['/', '\\']).next().unwrap_or(p).to_string();
+        files.contains(id) || files.iter().filter(|f| name(f) == name(id)).count() == 1
     }
 
     /// Why no open server lists a model file, for its row in Model presets:
@@ -4481,6 +4768,13 @@ impl AppState {
             .collect();
         if !refused.is_empty() {
             return refused.join("\n");
+        }
+        let only_remote = self.servers.iter().all(|s| s.config.as_ref().is_some_and(|c| !c.is_started()));
+        if only_remote {
+            // their files are there, not here
+            return "None of the servers lists it (a server already running lists its own files: pick one with \
+                    the arrow)"
+                .into();
         }
         if increart_core::config::model_file_on_disk(id, &self.config.programs.model_dirs).is_none() {
             "Not in the model directories, so no open server lists it".into()
@@ -4536,6 +4830,39 @@ impl AppState {
         p.with_files(p.resolved(|_, f| increart_core::config::model_file_on_disk(f, dirs).is_some()))
     }
 
+    /// Servers already running that list model files none of your models
+    /// uses (by file name): (server, how many). Open ones, and those some
+    /// preset connects to as they said when asked.
+    pub fn unused_server_files(&self) -> Vec<(String, usize)> {
+        use increart_core::sdserver::Loadable;
+        let name = |p: &str| p.rsplit(['/', '\\']).next().unwrap_or(p).to_string();
+        let used: BTreeSet<String> =
+            self.config.recipes.iter().flat_map(|r| r.files.values()).map(|f| name(f)).collect();
+        let mut lists: Vec<(String, Loadable)> = self
+            .servers
+            .iter()
+            .filter(|s| s.config.as_ref().is_some_and(|c| !c.is_started()))
+            .filter_map(|s| Some((s.name.clone(), self.server_models.get(&s.name)?.clone())))
+            .collect();
+        for s in self.connected_image_servers() {
+            if !lists.iter().any(|(n, _)| n == s.name())
+                && let Some(l) = self.remote_loadable(s)
+            {
+                lists.push((s.name().to_string(), l));
+            }
+        }
+        lists
+            .into_iter()
+            .filter_map(|(server, l)| match l {
+                Loadable::Files { ids, .. } => {
+                    let n = ids.iter().filter(|id| !used.contains(&name(id))).count();
+                    (n > 0).then_some((server, n))
+                }
+                Loadable::Only(_) => None,
+            })
+            .collect()
+    }
+
     /// Image models a KoboldCpp started elsewhere runs that no model preset
     /// uses: (server, file name).
     pub fn models_without_preset(&self) -> Vec<(&str, &str)> {
@@ -4578,6 +4905,8 @@ impl AppState {
             proj_scope_kept: None,
             servers: vec![],
             server_models: BTreeMap::new(),
+            remote_found: BTreeMap::new(),
+            remote_checking: BTreeSet::new(),
             servers_opened_with: None,
             engine_running: false,
             server_test: None,

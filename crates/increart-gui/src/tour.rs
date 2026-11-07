@@ -1166,7 +1166,7 @@ impl Tour {
                 ]
             }
             "02f-model-setup" => {
-                // the Models window on Install built-in, the first three ticked
+                // the Models window on Add models, the first three ticked
                 let Some(mut w) = st.model_wizard.clone() else { return vec![] };
                 w.editing = true;
                 w.tab = increart_gui_core::ModelSetupTab::Add;
@@ -1255,6 +1255,7 @@ impl Tour {
                     image_models: vec!["koboldcpp/qwen_image_2.1-Q8_0.gguf".into()],
                     chat_models: vec!["Qwen3VL-8B-Instruct-Q4_K_M".into()],
                     needs_password: false,
+                    recipes: vec![],
                 };
                 let proxy = Detected {
                     kind: Kind::SdServer,
@@ -1263,6 +1264,7 @@ impl Tour {
                     image_models: vec!["krea2_turbo_int8_convrot.safetensors".into()],
                     chat_models: vec![],
                     needs_password: false,
+                    recipes: vec![],
                 };
                 let urls = ["192.168.2.136:5000", "http://192.168.2.136:7800", "192.168.2.140:5001"];
                 let mut msgs = vec![Msg::WizardRemote(true), Msg::AddRemoteRow, Msg::AddRemoteRow];
@@ -1651,7 +1653,7 @@ impl Tour {
             }
             scene @ ("21c-model-presets-builtin" | "21d-model-presets-lora") => {
                 // a LoRA variant added, selected in Your models; 21c: the
-                // window on Install built-in
+                // window on Add models
                 let mut e = increart_gui_core::RecipeEditor::new(&st.config.recipes, 0);
                 if let Some(p) = increart_core::config::catalogue().into_iter().find(|p| p.name.contains("· pixel art"))
                 {

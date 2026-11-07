@@ -452,6 +452,36 @@ fn a_load_answered_with_the_same_files_under_its_own_names_runs() {
 }
 
 #[test]
+fn a_server_listing_the_files_by_name_only_loads_them_by_its_names() {
+    // a proxy (or another folder layout): q.safetensors, not
+    // diffusion_models/q.safetensors
+    let s = setup();
+    let a = Fake::start(None);
+    a.with(|st| {
+        st.model_files = Some(vec!["q.safetensors".into(), "v.safetensors".into()]);
+        st.strict_files = true;
+    });
+    let first = new_run(&s, "qwen-image-21", 2, false);
+    let second = new_run_with(&s, 2, |r| r.label = "r02".into());
+    let engine = start(&s, &[&a]);
+    engine.queue_run(&first);
+    engine.queue_run(&second);
+    let mut done = 0;
+    let events = collect(&engine, |e, _| {
+        done += matches!(e, Event::RunDone { .. }) as u32;
+        done == 2
+    });
+    assert_eq!(outputs(&events).len(), 4, "{events:#?}");
+    assert_eq!(problems(&events, ""), 0, "{events:#?}");
+    let loads: Vec<serde_json::Value> = a.with(|st| {
+        st.log.iter().filter(|(m, p, _)| m == "POST" && p.ends_with("models/load")).map(|(_, _, b)| b.clone()).collect()
+    });
+    assert_eq!(loads.len(), 1, "its status, in its names, read as the files asked: {loads:?}");
+    assert_eq!(loads[0]["models"]["diffusion_model"], "q.safetensors");
+    assert_eq!(loads[0]["models"]["vae"], "v.safetensors");
+}
+
+#[test]
 fn a_server_whose_jobs_never_move_is_said_once() {
     let s = setup();
     let a = Fake::start(LOADED);

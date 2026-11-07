@@ -36,7 +36,7 @@ impl Kind {
 }
 
 /// What a server said about itself.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Detected {
     pub kind: Kind,
     /// Its version, when it says (KoboldCpp).
@@ -51,9 +51,62 @@ pub struct Detected {
     pub chat_models: Vec<String>,
     /// It asked for a password (KoboldCpp's `--password`) on a call.
     pub needs_password: bool,
+    /// The recipes it offers (sd-server's API: `/sdcpp/v1/recipes`).
+    pub recipes: Vec<Recipe>,
+}
+
+/// A recipe a server offers: its ID, name and model slots.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Recipe {
+    pub id: String,
+    pub name: String,
+    /// Slot IDs, each with whether it must have a file.
+    pub slots: Vec<(String, bool)>,
+    /// Its default steps and CFG, when it says.
+    pub steps: Option<u32>,
+    pub cfg: Option<f32>,
+}
+
+impl Recipe {
+    /// "checkpoint — Checkpoint (model)": the slots a file is needed in
+    /// in brackets, the others after "optional".
+    /// The slot a model made of one file puts it in: the recipe's only
+    /// required slot, when it has just one.
+    pub fn single_slot(&self) -> Option<&str> {
+        match self.slots.iter().filter(|(_, r)| *r).collect::<Vec<_>>().as_slice() {
+            [(slot, _)] => Some(slot),
+            _ => None,
+        }
+    }
+
+    pub fn label(&self) -> String {
+        let need: Vec<&str> = self.slots.iter().filter(|(_, r)| *r).map(|(s, _)| s.as_str()).collect();
+        let may: Vec<&str> = self.slots.iter().filter(|(_, r)| !*r).map(|(s, _)| s.as_str()).collect();
+        let mut t = self.id.clone();
+        if !self.name.is_empty() && self.name != self.id {
+            t += &format!(" — {}", self.name);
+        }
+        t += &format!(" ({})", need.join(", "));
+        if !may.is_empty() {
+            t += &format!(", optional: {}", may.join(", "));
+        }
+        t
+    }
 }
 
 impl Detected {
+    /// What it can load, as the engine reads it once connected: the files
+    /// sd-server's API lists (matched by name too), the image model a
+    /// KoboldCpp runs. None for a chat server.
+    pub fn loadable(&self) -> Option<crate::sdserver::Loadable> {
+        use crate::sdserver::Loadable;
+        match self.kind {
+            Kind::SdServer => Some(Loadable::listed(self.image_models.iter().cloned())),
+            Kind::KoboldCpp if self.images => Some(Loadable::Only(self.image_models.first().cloned())),
+            _ => None,
+        }
+    }
+
     /// One line: "KoboldCpp 1.117 · images: x.gguf · chat: Qwen3-VL".
     pub fn summary(&self) -> String {
         let mut parts = vec![match &self.version {
@@ -145,6 +198,36 @@ fn strings(v: Option<&Value>, key: &str) -> Vec<String> {
         .collect()
 }
 
+/// `/sdcpp/v1/recipes`: `{"recipes": [{"id", "name", "slots": [{"id",
+/// "required"}]}]}`.
+fn recipes(v: &Value) -> Vec<Recipe> {
+    v.get("recipes")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|r| {
+            let defaults = r.get("defaults");
+            let default = |k: &str| defaults.and_then(|d| d.get(k)).and_then(Value::as_f64);
+            Some(Recipe {
+                steps: default("steps").filter(|s| *s >= 1.0).map(|s| s as u32),
+                cfg: default("cfg_scale").map(|c| c as f32),
+                id: r.get("id")?.as_str()?.to_string(),
+                name: r.get("name").and_then(Value::as_str).unwrap_or_default().to_string(),
+                slots: r
+                    .get("slots")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|s| {
+                        let id = s.get("id")?.as_str()?.to_string();
+                        Some((id, s.get("required").and_then(Value::as_bool).unwrap_or(false)))
+                    })
+                    .collect(),
+            })
+        })
+        .collect()
+}
+
 /// Asks the server at `url` (see [`normalize`]) what it is: KoboldCpp
 /// (`/api/extra/version`), then sd-server's API (`/sdcpp/v1/capabilities`),
 /// then a chat server (`/v1/models`). Err says why none answered as one.
@@ -164,6 +247,7 @@ pub fn detect(url: &str, password: &str) -> Result<Detected, String> {
             image_models: vec![],
             chat_models: vec![],
             needs_password: false,
+            recipes: vec![],
         };
         if d.images {
             match get(&agent, &base, "/sdapi/v1/sd-models", password) {
@@ -186,8 +270,16 @@ pub fn detect(url: &str, password: &str) -> Result<Detected, String> {
     if let Ok((200, caps)) = get(&agent, &base, "/sdcpp/v1/capabilities", password)
         && caps.is_object()
     {
+        // as the engine lists them (another folder's `@…/` taken off)
         let image_models = match get(&agent, &base, "/sdcpp/v1/model-files", password) {
-            Ok((200, v)) => strings(v.get("files"), "id"),
+            Ok((200, v)) => strings(v.get("files"), "id")
+                .into_iter()
+                .map(|id| crate::sdserver::portable_id(&id).to_string())
+                .collect(),
+            _ => vec![],
+        };
+        let recipes = match get(&agent, &base, "/sdcpp/v1/recipes", password) {
+            Ok((200, v)) => recipes(&v),
             _ => vec![],
         };
         return Ok(Detected {
@@ -197,6 +289,7 @@ pub fn detect(url: &str, password: &str) -> Result<Detected, String> {
             image_models,
             chat_models: vec![],
             needs_password: false,
+            recipes,
         });
     }
     match get(&agent, &base, "/v1/models", password) {
@@ -207,6 +300,7 @@ pub fn detect(url: &str, password: &str) -> Result<Detected, String> {
             image_models: vec![],
             chat_models: strings(v.get("data"), "id"),
             needs_password: false,
+            recipes: vec![],
         }),
         Ok((401 | 403, _)) => Err("it asks for a key or password (a chat server's /v1/models answered 401)".into()),
         _ => Err(format!(
@@ -270,6 +364,28 @@ mod tests {
     }
 
     #[test]
+    fn a_proxys_recipes_are_read() {
+        // as imgproxy answers
+        let v: Value = serde_json::from_str(
+            r#"{"recipes":[{"schema_version":1,"id":"checkpoint","name":"Checkpoint","slots":[{"id":"model","required":true,"label":"Model"}],"defaults":{"cfg_scale":7,"steps":20}}],"errors":[]}"#,
+        )
+        .unwrap();
+        let r = recipes(&v);
+        assert_eq!(
+            r,
+            [Recipe {
+                id: "checkpoint".into(),
+                name: "Checkpoint".into(),
+                slots: vec![("model".into(), true)],
+                steps: Some(20),
+                cfg: Some(7.0),
+            }]
+        );
+        assert_eq!(r[0].single_slot(), Some("model"));
+        assert_eq!(r[0].label(), "checkpoint — Checkpoint (model)");
+    }
+
+    #[test]
     fn names_are_unique() {
         assert_eq!(unique_name(Kind::Chat, &[]), "chat");
         assert_eq!(unique_name(Kind::SdServer, &["sd-server", "sd-server 2"]), "sd-server 3");
@@ -284,6 +400,7 @@ mod tests {
             image_models: vec![],
             chat_models: vec!["Qwen3".into()],
             needs_password: false,
+            recipes: vec![],
         };
         assert!(matches!(server_config(Kind::KoboldCpp, "k", "box:5001", "", Some(&d)), ServerConfig::Chat(_)));
         let d = Detected { images: true, image_models: vec!["x.gguf".into()], ..d };
