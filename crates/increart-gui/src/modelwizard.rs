@@ -92,18 +92,6 @@ fn overview(ui: &mut egui::Ui, st: &AppState, w: &mut ModelWizard, list_height: 
         |ui| ui.heading(ic(ph::CUBE, "Models")),
         |ui| {
             if ui
-                .button(ic(ph::PLUS, "New model…"))
-                .on_hover_text("make your own: files, recipe and settings (starting from the selected model's)")
-                .clicked()
-            {
-                let mut e = editor_on(st, None);
-                e.add_new();
-                ui.memory_mut(|m| m.data.insert_temp(crate::projects::scroll_id(), true));
-                out.push(Msg::EditRecipes(e));
-                w.editing = true;
-                w.tab = ModelSetupTab::Yours;
-            }
-            if ui
                 .button(RichText::new(ic(ph::SLIDERS_HORIZONTAL, "Manage models…")).strong())
                 .on_hover_text("the built-in models to install, each model's files and settings, the model folders")
                 .clicked()
@@ -136,7 +124,7 @@ fn overview(ui: &mut egui::Ui, st: &AppState, w: &mut ModelWizard, list_height: 
             "models_custom",
             &lists.custom,
             Section::Custom,
-            "None: models you make (New model…) are listed here.",
+            "None yet. The built-in models below cover most needs; a custom model is for your own files.",
         ),
         (
             "Built-in models, installed",
@@ -172,10 +160,11 @@ fn overview(ui: &mut egui::Ui, st: &AppState, w: &mut ModelWizard, list_height: 
                     .show(ui, |ui| {
                         if all.is_empty() {
                             ui.weak(none);
-                        } else {
-                            if let Some(name) = list_table(ui, id, &shown, &gpus, section, &mut w.sort) {
-                                open_row(ui, st, w, &name, section, out);
-                            }
+                        } else if let Some(name) = list_table(ui, id, &shown, &gpus, section, &mut w.sort) {
+                            open_row(ui, st, w, &name, section, out);
+                        }
+                        if section == Section::Custom {
+                            custom_button(ui, st, w, out);
                         }
                     });
             }
@@ -402,6 +391,26 @@ fn list_table(
             }
         });
     clicked
+}
+
+/// **Custom model… (advanced)**, under your custom models: a new model in
+/// Your models, its files the selected one's to start from.
+fn custom_button(ui: &mut egui::Ui, st: &AppState, w: &mut ModelWizard, out: &mut Vec<Msg>) {
+    if ui
+        .small_button(ic(ph::PLUS, "Custom model… (advanced)"))
+        .on_hover_text(
+            "your own files: pick the recipe and each file yourself (starting from a copy of the selected \
+             model's); the built-in models cover most needs",
+        )
+        .clicked()
+    {
+        let mut e = editor_on(st, None);
+        e.add_new();
+        ui.memory_mut(|m| m.data.insert_temp(crate::projects::scroll_id(), true));
+        out.push(Msg::EditRecipes(e));
+        w.editing = true;
+        w.tab = ModelSetupTab::Yours;
+    }
 }
 
 /// A row of the lists clicked: yours and installed ones open in Your

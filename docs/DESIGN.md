@@ -2792,8 +2792,10 @@ in the app's state folder (`$XDG_STATE_HOME/increart` when set, else
 - **Setting up models**: the servers screen's right half, **Models**
   (opened as the screen first shows; its state, `ModelWizard`, stays while
   the app runs, so a download's progress is there when the screen is
-  reopened), read only; **Manage models…** and **New model…** (a new
-  model, selected, from the selected one's files) in its header:
+  reopened), read only; **Manage models…** in its header (opening on
+  Install built-in); **Custom model… (advanced)** under Your custom models
+  (a new model in Your models, selected, from the selected one's files:
+  the built-in ones cover most needs, so it's out of the header):
   - The model folders on one line, a filter row (search: every word in
     the name, recipe or note; kind: image, edit (an edit recipe or
     Kontext), LoRA style (`ModelKind::of`); **Fits GPU ▾**, a popover with
@@ -2822,7 +2824,7 @@ in the app's state folder (`$XDG_STATE_HOME/increart` when set, else
     filter row and the built-in models, ticked to install; **Download and
     install** (**Install** when nothing's missing).
   - **Your models** (Generate's ⚙, the coverage line, the sd-server
-    wizard and New model… open on it): the models editor (Model presets
+    wizard and Custom model… open on it): the models editor (Model presets
     above), with Reset to built-ins and Save. Its edits stay while
     switching tabs; models installed meanwhile are added to them too, so
     Save doesn't drop them.
