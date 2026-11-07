@@ -105,11 +105,12 @@ fn overview(ui: &mut egui::Ui, st: &AppState, w: &mut ModelWizard, list_height: 
             }
             if ui
                 .button(RichText::new(ic(ph::SLIDERS_HORIZONTAL, "Manage models…")).strong())
-                .on_hover_text("each model's files and settings, the built-in models to install, the model folders")
+                .on_hover_text("the built-in models to install, each model's files and settings, the model folders")
                 .clicked()
             {
+                // on the servers screen it opens on the built-in models
                 w.editing = true;
-                w.tab = ModelSetupTab::Yours;
+                w.tab = ModelSetupTab::Add;
             }
         },
     );
@@ -487,8 +488,8 @@ pub fn window(ctx: &egui::Context, st: &AppState, out: &mut Vec<Msg>) {
             ui.heading(ic(ph::CUBE, "Models"));
             ui.add_space(16.0);
             for (t, label) in [
-                (ModelSetupTab::Yours, "Your models"),
                 (ModelSetupTab::Add, "Install built-in"),
+                (ModelSetupTab::Yours, "Your models"),
                 (ModelSetupTab::Folders, "Folders"),
             ] {
                 if ui.selectable_label(w.tab == t, RichText::new(label).strong()).clicked() {

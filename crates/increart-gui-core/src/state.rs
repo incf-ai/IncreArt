@@ -1068,11 +1068,12 @@ pub struct ModelWizard {
 /// The tabs of the **Models** window.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum ModelSetupTab {
-    /// Your models: each one's files and settings (the recipe editor).
+    /// Built-in models to install (the servers screen opens on it).
     #[default]
-    Yours,
-    /// Built-in models to install.
     Add,
+    /// Your models: each one's files and settings (the recipe editor;
+    /// Generate's gear opens on it).
+    Yours,
     /// Where the model files are.
     Folders,
 }

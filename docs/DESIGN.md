@@ -2818,12 +2818,14 @@ in the app's state folder (`$XDG_STATE_HOME/increart` when set, else
     sd-server wizard's Edit your models…), its tabs the same height, so it
     doesn't jump; Close or Esc closes it (a download goes on, shown in the
     half too; unsaved edits to your models are dropped):
-  - **Your models**: the models editor (Model presets above), with Reset
-    to built-ins and Save. Its edits stay while switching tabs; models
-    installed meanwhile are added to them too, so Save doesn't drop them.
-  - **Install built-in**: the filter row and the built-in models, ticked
-    to install; **Download and install** (**Install** when nothing's
-    missing).
+  - **Install built-in** (leftmost; Manage models… opens on it): the
+    filter row and the built-in models, ticked to install; **Download and
+    install** (**Install** when nothing's missing).
+  - **Your models** (Generate's ⚙, the coverage line, the sd-server
+    wizard and New model… open on it): the models editor (Model presets
+    above), with Reset to built-ins and Save. Its edits stay while
+    switching tabs; models installed meanwhile are added to them too, so
+    Save doesn't drop them.
   - **Folders**: the download folder, your model folders in order
     (changed in Server settings…), and folders found with model files.
   The pages' parts:
