@@ -4193,7 +4193,8 @@ pub fn job_window(ctx: &egui::Context, st: &AppState, tex: &mut Textures, out: &
     let progress = st.run_progress(id);
     let active = st.active_runs.contains(id);
     let m = egui::Modal::new(egui::Id::unique("job_info")).show(ctx, |ui| {
-        ui.set_width(640.0);
+        // room for the footer's buttons in one row
+        ui.set_width(720.0);
         ui.horizontal(|ui| {
             ui.heading(ic(ph::QUEUE, &format!("{} · {}", p.name(), run.label)));
         });
@@ -4229,7 +4230,12 @@ pub fn job_window(ctx: &egui::Context, st: &AppState, tex: &mut Textures, out: &
                 });
                 ui.add_space(6.0);
             }
-            ui.weak("Prompt");
+            ui.horizontal(|ui| {
+                ui.weak("Prompt");
+                if ui.small_button(ph::COPY).on_hover_text("copy the prompt").clicked() {
+                    ui.ctx().copy_text(run.prompt.clone());
+                }
+            });
             ui.add(egui::Label::new(&run.prompt).wrap());
             if !run.negative_prompt.is_empty() {
                 ui.weak("Negative prompt");
@@ -4382,9 +4388,20 @@ pub fn job_window(ctx: &egui::Context, st: &AppState, tex: &mut Textures, out: &
         dialog_footer(
             ui,
             |ui| {
-                if ui.button(ic(ph::COPY, "Copy prompt")).clicked() {
-                    ui.ctx().copy_text(run.prompt.clone());
+                let mut out = Vec::new();
+                // its images: the new ones in Review, the kept ones in the
+                // Output library (as the run's right-click menu in the tree)
+                let u = st.run_unreviewed(p, id);
+                let review = ui.add_enabled(u > 0, egui::Button::new(ic(ph::EYE, &format!("Review {u}"))));
+                if review.on_hover_text("this run's new images, in Review").clicked() {
+                    out.push(Msg::JobInfo(None));
+                    out.push(Msg::Tab(Tab::Review));
+                    out.push(Msg::ReviewRun(p.project.id.clone(), id.clone()));
                 }
+                if crate::review::show_outputs_button(ui, st, OutputSource::Run(id.clone()), &mut out) {
+                    out.push(Msg::JobInfo(None));
+                }
+                out
             },
             |ui| {
                 if ui
@@ -4407,7 +4424,10 @@ pub fn job_window(ctx: &egui::Context, st: &AppState, tex: &mut Textures, out: &
             },
         )
     });
-    if m.inner.1 || m.should_close() {
+    let esc = m.should_close();
+    let (tools, close) = m.inner;
+    out.extend(tools);
+    if close || esc {
         out.push(Msg::JobInfo(None));
     }
 }

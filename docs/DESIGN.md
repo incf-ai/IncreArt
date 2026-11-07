@@ -3641,9 +3641,12 @@ the keys and mouse buttons go through that view's own history instead.
   and strength, model, size, steps / cfg, sampler (or "model default") and
   scheduler, flow shift, alpha, seeds
   per revision, sweep, source idea, cancelled seeds), with the errors of
-  failed seeds. **Copy prompt**, **Open in Generate** (the run's settings in
-  the form, as Use this style), **Cancel run** while it is in the engine,
-  **Close** / Esc.
+  failed seeds. A copy button beside "Prompt" copies it. The footer, in one
+  row (the modal is 720 pt wide): **Review N** (the run's new images in
+  Review; greyed with none), **Show outputs (N kept)** (its good and neutral
+  images in Output library → Grid), then **Close** / Esc, **Show in
+  history**, **Open in Generate** (the run's settings in the form, as Use
+  this style); Finish & stop / Stop now above it while it is in the engine.
 - **Review** (output queue, top-level tab): a left panel picks the scope
   (all projects / a folder / a project, with unreviewed counts), independent
   of the Projects tab's selection so browsing projects doesn't change the
