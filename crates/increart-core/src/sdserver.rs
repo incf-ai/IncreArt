@@ -303,13 +303,33 @@ impl Loadable {
     pub fn why_not(&self, files: &BTreeMap<String, String>) -> Option<String> {
         let name = |p: &str| std::path::Path::new(p).file_name().and_then(|f| f.to_str()).unwrap_or(p).to_string();
         match self {
-            Loadable::Files { ids, refused, by_name, .. } => files.values().find_map(|id| match self.id_of(id) {
-                Some(their) => refused.get(their).map(|why| format!("{} {why}", name(id))),
-                None if *by_name && ids.iter().filter(|l| name(l) == name(id)).count() > 1 => {
-                    Some(format!("it lists more than one {}, so which is {id} isn't known", name(id)))
+            Loadable::Files { ids, refused, by_name, .. } => {
+                let mut missing: Vec<&str> = vec![];
+                for id in files.values() {
+                    match self.id_of(id) {
+                        Some(their) => {
+                            if let Some(why) = refused.get(their) {
+                                return Some(format!("{} {why}", name(id)));
+                            }
+                        }
+                        None if *by_name && ids.iter().filter(|l| name(l) == name(id)).count() > 1 => {
+                            return Some(format!("it lists more than one {}, so which is {id} isn't known", name(id)));
+                        }
+                        None => missing.push(id),
+                    }
                 }
-                None => Some(format!("it doesn't have {id}")),
-            }),
+                // each file it lacks (the first leads: what a hint is about)
+                match missing.as_slice() {
+                    [] => None,
+                    [one] => Some(format!("it doesn't have {one}")),
+                    [first, rest @ ..] => Some(format!(
+                        "it doesn't have {first} (nor {}: {} of its {} files)",
+                        rest.join(", "),
+                        missing.len(),
+                        files.len()
+                    )),
+                }
+            }
             Loadable::Only(running) => {
                 let wanted = files.get("diffusion_model").or(files.get("model")).map(|f| name(f));
                 match (running, wanted) {
@@ -755,7 +775,10 @@ mod tests {
         assert_eq!(listed.id_of("diffusion_models/q.gguf"), Some("q.gguf"));
         // a started KoboldCpp loads from the model folders: not by name
         let local = Loadable::files(["q.gguf".to_string(), "other/v.safetensors".to_string()]);
-        assert_eq!(local.why_not(&asked).as_deref(), Some("it doesn't have diffusion_models/q.gguf"));
+        assert_eq!(
+            local.why_not(&asked).as_deref(),
+            Some("it doesn't have diffusion_models/q.gguf (nor vae/v.safetensors: 2 of its 2 files)")
+        );
         // two of that name: which is meant isn't known
         let two = Loadable::listed(["a/q.gguf".to_string(), "b/q.gguf".to_string(), "v.safetensors".to_string()]);
         assert_eq!(
@@ -871,6 +894,13 @@ mod tests {
         assert_eq!(Loadable::files(["q8.gguf".to_string()]).second_choice(&files("q8.gguf")), None);
         assert_eq!(l.why_not(&files("d/int8.safetensors")).as_deref(), Some("int8.safetensors is int8"));
         assert_eq!(l.why_not(&files("x.gguf")).as_deref(), Some("it doesn't have x.gguf"));
+        // every file it lacks, the first leading
+        let three = BTreeMap::from([
+            ("diffusion_model".to_string(), "a.gguf".to_string()),
+            ("llm".to_string(), "q8.gguf".to_string()),
+            ("vae".to_string(), "v.safetensors".to_string()),
+        ]);
+        assert_eq!(l.why_not(&three).as_deref(), Some("it doesn't have a.gguf (nor v.safetensors: 2 of its 3 files)"));
         let only = Loadable::Only(Some("/m/q8.gguf".into()));
         assert!(only.runs(&files("koboldcpp/q8.gguf")));
         assert!(only.why_not(&files("x.gguf")).unwrap().starts_with("it runs q8.gguf"));

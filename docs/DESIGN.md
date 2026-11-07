@@ -3042,7 +3042,12 @@ ends, is stopped, or loses the app (its stdin closing).
 - Its cases, by ID: `preset/server/group.key` for one server,
   `preset/group.key` for the preset's servers together.
   - **together**: `open` (always first: a port already taken is said, and
-    nothing is started), `routing` (each model preset has a server, by
+    nothing is started; a server connected to that doesn't open says why,
+    from what asking it got: nothing there, with why (connection refused,
+    no reply to connecting, a name not known here, HTTPS to plain HTTP),
+    something else answering (a 401, a 404, a web page, a 5xx), or
+    something that took the connection and said nothing in the request
+    timeout; the app's own opening says the same), `routing` (each model preset has a server, by
     listed files, by a running file of that name, or "may get it"),
     `parallel`, `pe-with-images`, `end-to-end` (a run through the engine
     in a scratch library, with the files most of its servers pick; it ends
@@ -3129,10 +3134,18 @@ ends, is stopped, or loses the app (its stdin closing).
   validate it again; **Run again**, **Copy report**, **Show report zip**.
   A failure or warning of a common kind gets a **Try:** line under it (in
   the summary, the advanced view's case, and `report.md`), from what the
-  case said (`apitest::hint`): nothing answering at an address, a server
+  case said (`apitest::hint`): nothing answering at an address (each way
+  above), another program or an error answering, silence, a server
   that exits or goes quiet as it starts, a program not found, a 413 body
   limit, out of memory, files listed but refused, a password, a 404, and a
-  model file no server lists. sd-server only looks in a model directory's
+  model file no server lists. A server connected to lists its own files:
+  `models.list` names those it has when no model preset's are among them,
+  routing tags it "(connected)", and the hint is to add a model for its
+  files (Models window → Add models → On your servers), not to move files;
+  a missing model preset names each file it lacks, the first leading. The
+  steps skipped because no model preset has its files on a server get that
+  hint too, and the window's summary says "No model can run on <preset>"
+  (not "didn't run: Run again"). sd-server only looks in a model directory's
   standard folders (`diffusion_models/`, `text_encoders/`, `vae/`,
   `loras/`, `checkpoints/`…), so a file in another (`koboldcpp/`) is said
   to be invisible to it: expected for a model preset meant for KoboldCpp.

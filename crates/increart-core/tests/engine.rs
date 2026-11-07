@@ -584,8 +584,8 @@ fn a_run_no_server_can_load_says_why_once() {
     let Some(Event::Problem(p)) = events.last() else { unreachable!() };
     assert_eq!(
         p,
-        "no server can load qwen-image-21, so its runs wait (gpu0: it doesn't have diffusion_models/q.safetensors; \
-         gpu1: it doesn't have vae/v.safetensors)"
+        "no server can load qwen-image-21, so its runs wait (gpu0: it doesn't have diffusion_models/q.safetensors \
+         (nor vae/v.safetensors: 2 of its 2 files); gpu1: it doesn't have vae/v.safetensors)"
     );
     std::thread::sleep(Duration::from_millis(300));
     assert!(!engine.events().try_iter().any(|e| matches!(e, Event::Problem(_))), "said once");

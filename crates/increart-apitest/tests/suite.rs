@@ -281,6 +281,79 @@ fn a_server_with_only_an_alternative_file_loads_that() {
     assert_eq!(loaded, Some(BTreeMap::from([("diffusion_model".to_string(), GGUF.to_string())])));
 }
 
+/// A server answering every request with `status` and `body`.
+fn answering(status: u16, body: &'static str) -> String {
+    let server = tiny_http::Server::http("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", server.server_addr().to_ip().unwrap());
+    std::thread::spawn(move || {
+        for rq in server.incoming_requests() {
+            let _ = rq.respond(tiny_http::Response::from_string(body).with_status_code(status));
+        }
+    });
+    url
+}
+
+#[test]
+fn a_server_connected_to_that_doesnt_open_says_why() {
+    let closed = format!("http://127.0.0.1:{}", {
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        l.local_addr().unwrap().port()
+    });
+    let auth = answering(401, r#"{"error":"unauthorized"}"#);
+    let page = answering(200, "<html><body><h1>Welcome to nginx!</h1></body></html>");
+    let good = good_fake();
+    let extra = format!("{}/sdcpp/v1", good.url);
+    let preset = ServerPreset {
+        name: "Remote".into(),
+        servers: vec![
+            connect("closed", &closed),
+            connect("auth", &auth),
+            connect("page", &page),
+            connect("extra", &extra),
+        ],
+    };
+    let ran = run_suite(config(std::slice::from_ref(&preset)), vec![preset], &["*/connect.capabilities"]);
+    let (o, why) = ran.of("Remote/together.open");
+    assert_eq!(o, Outcome::Fail);
+    assert!(why.starts_with("4 of 4 didn't open: closed: no server answers on"), "{why}");
+    assert!(why.contains("connection refused"), "{why}");
+    assert!(why.contains("auth: something answers on") && why.contains("HTTP 401"), "{why}");
+    assert!(why.contains("page: something answers on") && why.contains("web page"), "{why}");
+    assert!(why.contains("extra: something answers on") && why.contains("extra path"), "{why}");
+    assert!(!why.contains("auth: auth:"), "the name once: {why}");
+    let (o, why) = ran.of("Remote/auth/connect.capabilities");
+    assert_eq!(o, Outcome::Skipped);
+    assert!(why.starts_with("it didn't open: something answers on"), "{why}");
+}
+
+#[test]
+fn a_proxy_with_other_files_says_what_it_has() {
+    let proxy = Fake::start(None);
+    proxy.with(|s| {
+        s.model_files = Some(vec!["krea.safetensors".into()]);
+        s.strict_files = true;
+    });
+    let preset = ServerPreset { name: "Remote".into(), servers: vec![connect("proxy", &proxy.url)] };
+    let ran = run_suite(
+        config(std::slice::from_ref(&preset)),
+        vec![preset],
+        &["*/models.list", "*/generate.txt2img", "*/together.routing"],
+    );
+    let (o, why) = ran.of("Remote/proxy/models.list");
+    assert_eq!(o, Outcome::Warn);
+    assert!(why.ends_with("it lists 1 other file: krea.safetensors"), "{why}");
+    let (o, why) = ran.of("Remote/together.routing");
+    assert_eq!(o, Outcome::Warn);
+    assert!(why.contains("proxy (connected): it doesn't have diffusion_models/apple.safetensors"), "{why}");
+    for id in ["Remote/proxy/models.list", "Remote/together.routing", "Remote/proxy/generate.txt2img"] {
+        let (o, why) = ran.of(id);
+        let h = increart_core::apitest::hint(o, &why).unwrap_or_default();
+        assert!(h.contains("On your servers"), "{id}: {why}: {h:?}");
+    }
+    let md = std::fs::read_to_string(ran.dir.path().join("report/report.md")).unwrap();
+    assert!(md.contains("Try: The server answers, but none of your model presets"), "{md}");
+}
+
 #[cfg(feature = "fake")]
 mod started {
     use super::*;

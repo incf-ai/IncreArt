@@ -125,8 +125,26 @@ pub fn list(cx: &mut Ctx, t: Target) -> Verdict {
                     Some(why) => cannot.push(format!("{}: {why}", m.preset.name)),
                 }
             }
+            let mut has = String::new();
             if let increart_core::sdserver::Loadable::Files { ids, refused, second_choice, .. } = &l {
-                cx.log(format!("{} files listed", ids.len()));
+                let n = ids.len();
+                cx.log(format!("{n} file{} listed", if n == 1 { "" } else { "s" }));
+                for id in ids.iter().take(50) {
+                    cx.log(format!("  {id}"));
+                }
+                if n > 50 {
+                    cx.log(format!("  … and {} more", n - 50));
+                }
+                // none of the model presets: what it has instead
+                if can.is_empty() && n > 0 {
+                    let some: Vec<&str> = ids.iter().take(3).map(String::as_str).collect();
+                    let more = if n > 3 { format!(" and {} more", n - 3) } else { String::new() };
+                    has = format!(
+                        "; it lists {n} other file{}: {}{more}",
+                        if n == 1 { "" } else { "s" },
+                        some.join(", ")
+                    );
+                }
                 for (id, why) in refused {
                     cx.log(format!("listed but refused: {id}: {why}"));
                 }
@@ -138,7 +156,7 @@ pub fn list(cx: &mut Ctx, t: Target) -> Verdict {
                 cx.log(format!("not {c}"));
             }
             let text = format!(
-                "model presets it can load: {}{}",
+                "model presets it can load: {}{}{has}",
                 if can.is_empty() { "none".into() } else { can.join(", ") },
                 if cannot.is_empty() {
                     String::new()

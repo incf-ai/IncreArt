@@ -226,12 +226,28 @@ const SD_SERVER_FOLDERS: &[&str] = &[
 /// common causes, in words for someone setting up servers. None when
 /// there's nothing better to say than the result itself.
 pub fn hint(outcome: Outcome, summary: &str) -> Option<String> {
+    let has = |t: &str| summary.contains(t);
+    if outcome == Outcome::Skipped && no_model_fits(summary) {
+        return Some(format!(
+            "The server answers, but none of your model presets names files it has, so no image could be made. \
+             {ADD_MODEL} Then validate again."
+        ));
+    }
     if !matches!(outcome, Outcome::Fail | Outcome::Warn) {
         return None;
     }
-    let has = |t: &str| summary.contains(t);
-    if let Some(file) = summary.split("it doesn't have ").nth(1) {
-        let file = file.split([';', ')', ' ']).next().unwrap_or(file);
+    if has("can load: none") && has("other file") {
+        return Some(format!("This server has other model files than your model presets name. {ADD_MODEL}"));
+    }
+    if let Some((before, file)) = summary.split_once("it doesn't have ") {
+        let file = file.split([';', ')', ' ', ',']).next().unwrap_or(file);
+        if before.ends_with("(connected): ") {
+            return Some(format!(
+                "That server is one you connect to (another machine's, or a program started elsewhere): it runs \
+                 only model presets whose files it has, and it doesn't list {file}. {ADD_MODEL} Or put the file \
+                 in that server's own model folders."
+            ));
+        }
         let folder = file.split('/').next().unwrap_or(file);
         let standard = SD_SERVER_FOLDERS.iter().any(|f| f.eq_ignore_ascii_case(folder));
         let kinds = "diffusion_models/ for the model, text_encoders/ for text encoders and mmproj files, vae/ \
@@ -250,6 +266,52 @@ pub fn hint(outcome: Outcome, summary: &str) -> Option<String> {
                  into the right folders and pick them again in Edit model presets…."
             )
         });
+    }
+    if has("connection refused") {
+        return Some(
+            "The machine is there but nothing listens on that port: check the server is running and the port in \
+             the preset is the one it uses; for another machine, that it listens on its network address \
+             (sd-server --listen-ip 0.0.0.0)."
+                .into(),
+        );
+    }
+    if has("no reply to connecting") {
+        return Some(
+            "Nothing replied at all: check the address (an IP that changed?), that the machine is on and on this \
+             network (or VPN), and that no firewall blocks the port."
+                .into(),
+        );
+    }
+    if has("isn't known here") {
+        return Some(
+            "This computer can't find that machine by name: check the spelling, or use its IP address.".into(),
+        );
+    }
+    if has("doesn't speak HTTPS") {
+        return Some(
+            "Change the preset's URL to begin with http:// (sd-server and KoboldCpp serve plain HTTP).".into(),
+        );
+    }
+    if has("sent no answer in") {
+        return Some(
+            "Something accepted the connection and then said nothing: the server may be hung (restart it), busy \
+             with something that blocks it, or another program may hold the port."
+                .into(),
+        );
+    }
+    if has("but not as") && (has("web page") || has("answer isn't the API")) {
+        return Some(
+            "Another program answers at that address (a web server, a router's page, a proxy): check the port, \
+             and that the URL is the server's own, http://host:port with no path."
+                .into(),
+        );
+    }
+    if has("but not as") && has("HTTP 5") {
+        return Some(
+            "The server, or a proxy in front of it, answered with an error: its log says why. A proxy whose \
+             server behind it is down often answers 502 or 503."
+                .into(),
+        );
     }
     if has("no server answers on") {
         return Some(
@@ -299,7 +361,12 @@ pub fn hint(outcome: Outcome, summary: &str) -> Option<String> {
         );
     }
     if has("401") || has("403") || has("password") {
-        return Some("The server wants a password, or another one: check the one in the preset.".into());
+        return Some(
+            "The server, or a proxy in front of it, wants a password or a login. For KoboldCpp, check the one in \
+             the preset; IncreArt sends none to sd-server's API, so let this computer through without one (a \
+             proxy's allowed addresses)."
+                .into(),
+        );
     }
     if has("404") {
         return Some(
@@ -325,6 +392,16 @@ pub fn hint(outcome: Outcome, summary: &str) -> Option<String> {
         return Some("That's a bug in the validation itself, not your servers: please send the report.".into());
     }
     None
+}
+
+/// The advice for a server whose files no model preset names.
+const ADD_MODEL: &str = "Add a model for the files it has: Models window → Add models → On your servers (or \
+                         Make a model from a server's files… on Generate).";
+
+/// Whether a skipped case's summary says no model preset has its files
+/// on any server (not that something it needs failed first).
+pub fn no_model_fits(summary: &str) -> bool {
+    summary.contains("model presets has its files") || summary.contains("has the files of any model preset")
 }
 
 #[cfg(test)]
@@ -357,8 +434,25 @@ mod tests {
         let h =
             hint(Outcome::Warn, "x: no server; its runs would wait (gpu0: it doesn't have vae/x.safetensors)").unwrap();
         assert!(h.starts_with("No server lists vae/x.safetensors."), "{h}");
-        let h = hint(Outcome::Fail, "1 of 1 didn't open: box: box: no server answers on http://10.0.0.2:1234").unwrap();
+        let h = hint(Outcome::Fail, "1 of 1 didn't open: box: no server answers on http://10.0.0.2:1234 (x)").unwrap();
         assert!(h.contains("--listen-ip"), "{h}");
+        let h = hint(Outcome::Fail, "box: no server answers on u (connection refused: nothing listens on that port)");
+        assert!(h.unwrap().contains("nothing listens on that port"));
+        let h = hint(Outcome::Fail, "box: no server answers on u (the name a.lan isn't known here: a typo)");
+        assert!(h.unwrap().contains("IP address"));
+        // a server connected to: its own files, not a folder to move them to
+        let remote = "Qwen GGUF: no server has its files (proxy (connected): it doesn't have \
+                      koboldcpp/mmproj-Q8_0.gguf (nor diffusion_models/q.gguf: 2 of its 2 files))";
+        let h = hint(Outcome::Warn, remote).unwrap();
+        assert!(h.contains("koboldcpp/mmproj-Q8_0.gguf") && h.contains("On your servers"), "{h}");
+        assert!(!h.contains("standard folders"), "{h}");
+        let list =
+            "model presets it can load: none; 2 it can't (the log says why); it lists 1 other file: krea.safetensors";
+        assert!(hint(Outcome::Warn, list).unwrap().contains("Add models"));
+        // skipped for want of a model: said; skipped behind a failure: not
+        let h = hint(Outcome::Skipped, "none of the config's model presets has its files on it").unwrap();
+        assert!(h.contains("validate again"), "{h}");
+        assert_eq!(hint(Outcome::Skipped, "it didn't open: no server answers on x (y)"), None);
         let h = hint(Outcome::Warn, "413 for 9.1 MB (Payload Too Large): runs with large reference images will fail")
             .unwrap();
         assert!(h.contains("client_max_body_size"), "{h}");

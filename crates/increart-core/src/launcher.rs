@@ -12,8 +12,16 @@ use crate::sdserver::Client;
 
 #[derive(Debug, thiserror::Error)]
 pub enum LaunchError {
-    #[error("{name}: no server answers on {url}")]
-    NotRunning { name: String, url: String },
+    /// Nothing there: refused, no route, a name not known ([`unanswered`]).
+    #[error("{name}: no server answers on {url} ({why})")]
+    NotRunning { name: String, url: String, why: String },
+    /// Something answers there, not as the API: a password asked, a 404,
+    /// a web page, an error.
+    #[error("{name}: something answers on {url}, but not as {api}: {why}")]
+    NotTheApi { name: String, url: String, api: &'static str, why: String },
+    /// It took the connection and said nothing in time.
+    #[error("{name}: something took the connection on {url} but sent no answer in {secs} s: stuck, or very busy")]
+    Silent { name: String, url: String, secs: u64 },
     /// Not started at all ([`crate::process::spawn_error`]; also in its log).
     #[error("{name}: {why}")]
     Spawn { name: String, why: String },
@@ -28,6 +36,71 @@ pub enum LaunchError {
     Timeout { name: String, secs: u64, log: PathBuf },
     #[error("{0}")]
     Io(#[from] std::io::Error),
+}
+
+/// Why a server connected to didn't open, from what asking it got: nothing
+/// there (and why: refused, no route, a name not known, HTTPS to plain
+/// HTTP), something else there (`api` named), or silence.
+/// `limit`: how long an answer was waited for.
+pub fn unanswered(
+    name: String,
+    url: String,
+    api: &'static str,
+    asked: &crate::sdserver::ApiError,
+    limit: Duration,
+) -> LaunchError {
+    use crate::sdserver::ApiError;
+    let not_api = |why: String| LaunchError::NotTheApi { name: name.clone(), url: url.clone(), api, why };
+    match asked {
+        ApiError::Transport(t) => {
+            let low = t.to_ascii_lowercase();
+            let why = if low.contains("connection refused") {
+                "connection refused: nothing listens on that port".to_string()
+            } else if low.contains("timeout: connect") || low.contains("timed out") && !low.contains("read") {
+                "no reply to connecting within 5 s: the machine is off or unreachable, or a firewall drops it"
+                    .to_string()
+            } else if low.contains("timeout") {
+                return LaunchError::Silent { name, url, secs: limit.as_secs() };
+            } else if low.contains("lookup address") || low.contains("dns") || low.contains("host not found") {
+                let host = url.split("://").nth(1).unwrap_or(&url);
+                let host = host.split('/').next().unwrap_or(host);
+                let host = host.rsplit_once(':').map_or(host, |(h, _)| h);
+                format!("the name {host} isn't known here: a typo, or a name only another network knows")
+            } else if url.starts_with("https:") && (low.contains("corrupt message") || low.contains("tls")) {
+                "it doesn't speak HTTPS there: try http://".to_string()
+            } else if low.contains("unexpected response") {
+                let page = low.contains("<html") || low.contains("<!doctype");
+                return not_api(if page {
+                    "it sent a web page, not the API's JSON".into()
+                } else {
+                    format!("its answer isn't the API's: {}", t.chars().take(200).collect::<String>())
+                });
+            } else if low.contains("isn't koboldcpp") {
+                return not_api("it says it's something else".into());
+            } else {
+                t.clone()
+            };
+            LaunchError::NotRunning { name, url, why }
+        }
+        ApiError::Http { status: s @ (401 | 403), .. } => {
+            not_api(format!("HTTP {s}: it wants a password or a login, or another one"))
+        }
+        ApiError::Http { status: 404, .. } => not_api(format!(
+            "HTTP 404 for {}: another program, an old version, or a URL with an extra path (give only \
+             http://host:port)",
+            match api {
+                "KoboldCpp" => "/api/extra/version",
+                "sd-server's API" => "/sdcpp/v1/capabilities",
+                _ => "/v1/models",
+            }
+        )),
+        ApiError::Http { status, message } => {
+            let page = message.contains("<html") || message.contains("<!DOCTYPE");
+            let said = if page { "a web page".to_string() } else { message.chars().take(200).collect() };
+            not_api(format!("HTTP {status}: {said}"))
+        }
+        other => not_api(other.to_string()),
+    }
 }
 
 /// A server the app talks to. Dropping it stops the process if the app
@@ -181,11 +254,18 @@ pub fn open_cancellable(
         log: None,
         group: false,
     };
-    if client.capabilities().is_ok() {
-        return Ok(proc);
-    }
+    let asked = match client.capabilities() {
+        Ok(_) => return Ok(proc),
+        Err(e) => e,
+    };
     if matches!(server, ServerConfig::Connect { .. }) {
-        return Err(LaunchError::NotRunning { name, url: server.base_url() });
+        return Err(unanswered(
+            name,
+            server.base_url(),
+            "sd-server's API",
+            &asked,
+            crate::config::timeouts().request(),
+        ));
     }
     fs::create_dir_all(log_dir)?;
     let log = log_path(log_dir, server);
@@ -252,11 +332,12 @@ fn open_kobold(
         log: None,
         group: true,
     };
-    if client.capabilities().is_ok() {
-        return Ok(proc);
-    }
+    let asked = match client.capabilities() {
+        Ok(_) => return Ok(proc),
+        Err(e) => e,
+    };
     let (Some(binary), Some(log)) = (binary, log) else {
-        return Err(LaunchError::NotRunning { name, url: k.base_url() });
+        return Err(unanswered(name, k.base_url(), "KoboldCpp", &asked, crate::config::timeouts().request()));
     };
     fs::create_dir_all(log_dir)?;
     let (child, start) = crate::kobold::spawn(&binary, &args, &env, &log, !shared.sd_server.leave_running)
@@ -386,6 +467,45 @@ pub fn match_device<'a>(listed: &'a [String], wanted: &str) -> Option<&'a str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn why_a_server_connected_to_didnt_open() {
+        use crate::sdserver::ApiError::{self, Http, Transport};
+        let said = |url: &str, e: ApiError| {
+            unanswered("srv".into(), url.into(), "sd-server's API", &e, Duration::from_secs(60)).to_string()
+        };
+        let t = |s: &str| Transport(s.into());
+        let h = |status, m: &str| Http { status, message: m.into() };
+        let u = "http://10.0.0.2:7800";
+        let s = said(u, t("io: Connection refused (os error 111)"));
+        assert_eq!(
+            s,
+            "srv: no server answers on http://10.0.0.2:7800 (connection refused: nothing listens on that port)"
+        );
+        assert!(said(u, t("timeout: connect")).contains("no reply to connecting within 5 s"));
+        let s = said("http://box.lan:7800", t("io: failed to lookup address information: Name or service not known"));
+        assert!(s.contains("the name box.lan isn't known here"), "{s}");
+        let s = said("https://10.0.0.2:7800", t("io: received corrupt message of type InvalidContentType"));
+        assert!(s.contains("doesn't speak HTTPS"), "{s}");
+        let s = said(u, t("timeout: per read"));
+        assert!(s.contains("took the connection") && s.contains("in 60 s"), "{s}");
+        assert!(!s.contains("no server answers"), "{s}");
+        let s = said(u, h(401, "unauthorized"));
+        assert!(s.contains("something answers on") && s.contains("HTTP 401") && s.contains("password"), "{s}");
+        let s = said(&format!("{u}/sdcpp/v1"), h(404, "Not found"));
+        assert!(s.contains("HTTP 404 for /sdcpp/v1/capabilities") && s.contains("extra path"), "{s}");
+        let s = said(u, t("unexpected response (expected value at line 1 column 1): <html><body>nginx"));
+        assert!(s.contains("not as sd-server's API: it sent a web page"), "{s}");
+        let s = said(u, h(502, "<html>Bad Gateway</html>"));
+        assert!(s.ends_with("HTTP 502: a web page"), "{s}");
+        // each gets its own Try line, none "nothing answered"
+        let nothing = crate::apitest::hint(crate::apitest::Outcome::Fail, "no server answers on x (y)").unwrap();
+        for e in [t("timeout: per read"), h(401, "x"), h(404, "x"), h(500, "x"), t("unexpected response (e): <html>")] {
+            let s = said(u, e);
+            let hint = crate::apitest::hint(crate::apitest::Outcome::Fail, &format!("1 of 1 didn't open: {s}"));
+            assert!(hint.as_ref().is_some_and(|h| *h != nothing), "{s}: {hint:?}");
+        }
+    }
 
     #[test]
     fn a_starting_servers_latest_log_line() {

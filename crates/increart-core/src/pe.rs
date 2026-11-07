@@ -513,7 +513,16 @@ impl Client {
 
     /// Whether a chat server answers.
     pub fn ready(&self) -> bool {
-        let quick = agent(Some(Duration::from_secs(3)), None);
+        self.probe().is_ok()
+    }
+
+    /// How long [`Client::probe`] waits.
+    pub const PROBE_LIMIT: Duration = Duration::from_secs(3);
+
+    /// Asks it for its models: why not, if it doesn't answer as a chat
+    /// server.
+    pub fn probe(&self) -> Result<(), crate::sdserver::ApiError> {
+        let quick = agent(Some(Self::PROBE_LIMIT), None);
         let url = format!("{}/v1/models", self.base);
         let t = std::time::Instant::now();
         let answer = quick
@@ -522,7 +531,13 @@ impl Client {
             .map_err(|e| e.to_string())
             .and_then(|mut r| Ok((r.status().as_u16(), r.body_mut().read_to_string().map_err(|e| e.to_string())?)));
         crate::traffic::exchange("GET", &url, None, &answer, t.elapsed());
-        answer.is_ok_and(|(status, _)| (200..300).contains(&status))
+        let (status, text) = answer.map_err(crate::sdserver::ApiError::Transport)?;
+        if !(200..300).contains(&status) {
+            return Err(crate::sdserver::classify(status, &text, false));
+        }
+        serde_json::from_str::<serde_json::Value>(&text)
+            .map(|_| ())
+            .map_err(|e| crate::sdserver::ApiError::Transport(format!("unexpected response ({e}): {text:.200}")))
     }
 
     /// One chat completion: the system prompt, then the user's text with
@@ -665,11 +680,14 @@ pub fn log_name(server: &str) -> String {
 pub fn open(server: &PeServer, log_dir: &Path, wait: Duration, cancel: &AtomicBool) -> Result<PeProcess, String> {
     let client = Client::new(&server.base_url());
     let mut proc = PeProcess { client: client.clone(), child: None, log: None };
-    if client.ready() {
-        return Ok(proc);
-    }
+    let asked = match client.probe() {
+        Ok(()) => return Ok(proc),
+        Err(e) => e,
+    };
     let PeRun::KoboldCpp { binary, .. } = &server.run else {
-        return Err(format!("{}: no chat server answers on {}", server.name, server.base_url()));
+        let api = "an OpenAI-compatible chat server";
+        let why = crate::launcher::unanswered(server.name.clone(), server.base_url(), api, &asked, Client::PROBE_LIMIT);
+        return Err(why.to_string());
     };
     let log = log_path(log_dir, server);
     // (started from the PE thread, which lasts as long as the app)

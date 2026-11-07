@@ -31,6 +31,11 @@ fn host_of(s: &ServerConfig) -> String {
     rest.rsplit_once(':').map_or(rest, |(h, _)| h).to_string()
 }
 
+/// An opening error without the server's name in front (the case says it).
+fn unprefixed(name: &str, e: String) -> String {
+    e.strip_prefix(name).and_then(|r| r.strip_prefix(": ")).map(str::to_string).unwrap_or(e)
+}
+
 pub fn open(cx: &mut Ctx, _: Target) -> Verdict {
     let log_dir = cx.work.join("servers");
     let wait = increart_core::config::timeouts().server_start();
@@ -94,6 +99,7 @@ pub fn open(cx: &mut Ctx, _: Target) -> Verdict {
                 s.proc = Some(p);
             }
             Err(e) => {
+                let e = unprefixed(&name, e);
                 cx.out.log(format!("{name}: {e}"));
                 failed.push(format!("{name}: {e}"));
                 s.failed = Some(e);
@@ -114,6 +120,7 @@ pub fn open(cx: &mut Ctx, _: Target) -> Verdict {
                 c.proc = Some(p);
             }
             Err(e) => {
+                let e = unprefixed(&c.server.name, e);
                 cx.out.log(format!("{} (chat): {e}", c.server.name));
                 failed.push(format!("{} (chat): {e}", c.server.name));
                 c.failed = Some(e);
@@ -138,12 +145,14 @@ pub fn routing(cx: &mut Ctx, _: Target) -> Verdict {
         let (mut listing, mut by_name, mut any, mut not) = (vec![], vec![], vec![], vec![]);
         for (s, l) in &lists {
             let name = cx.name(*s).to_string();
+            // a server elsewhere: its files are its own (the hint says so)
+            let tag = if cx.images[*s].config.is_started() { name.clone() } else { format!("{name} (connected)") };
             match l {
                 Ok(Some(l @ Loadable::Files { .. })) if l.runs_preset(&m.preset) => listing.push(name),
                 Ok(Some(l @ Loadable::Only(_))) if l.runs_preset(&m.preset) => by_name.push(name),
-                Ok(Some(l)) => not.push(format!("{name}: {}", l.why_not_preset(&m.preset).unwrap_or_default())),
+                Ok(Some(l)) => not.push(format!("{tag}: {}", l.why_not_preset(&m.preset).unwrap_or_default())),
                 Ok(None) => any.push(name),
-                Err(e) => not.push(format!("{name}: its list failed ({e})")),
+                Err(e) => not.push(format!("{tag}: its list failed ({e})")),
             }
         }
         let mut line = vec![];

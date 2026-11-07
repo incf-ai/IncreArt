@@ -453,6 +453,9 @@ fn summary(ui: &mut egui::Ui, st: &AppState, t: &ApiTest, preset: &str) {
     let skipped: Vec<usize> =
         ran.iter().copied().filter(|&i| is(i, &[Outcome::Skipped]) || t.cases[i].outcome.is_none()).collect();
     let warned: Vec<usize> = ran.iter().copied().filter(|&i| is(i, &[Outcome::Warn])).collect();
+    // skipped only because no model preset has its files on a server
+    let no_model =
+        !skipped.is_empty() && skipped.iter().all(|&i| increart_core::apitest::no_model_fits(&t.cases[i].summary));
     let took = t.ended.map(|e| duration((e - t.started).max(0.0))).unwrap_or_default();
     let (icon, color, title, text) = if t.stopped {
         (
@@ -472,6 +475,16 @@ fn summary(ui: &mut egui::Ui, st: &AppState, t: &ApiTest, preset: &str) {
                  report gives every request and answer, to send to whoever runs the servers (or to paste to an \
                  LLM); Advanced view shows each check's log.",
                 if n == 1 { "it's" } else { "they're" }
+            ),
+        )
+    } else if no_model {
+        (
+            ph::WARNING_CIRCLE,
+            BAD,
+            format!("No model can run on {preset}"),
+            format!(
+                "Its servers answer, but none has the files of any of your model presets, so no image was made \
+                 and {preset} isn't validated. Add a model for the files a server has (below), then Run again."
             ),
         )
     } else if ran.is_empty() || !skipped.is_empty() {
@@ -554,7 +567,9 @@ fn summary(ui: &mut egui::Ui, st: &AppState, t: &ApiTest, preset: &str) {
     };
     problems(ui, "What went wrong", &failed);
     if !t.stopped {
-        problems(ui, "Not checked (what they need went wrong first)", &skipped);
+        let heading =
+            if no_model { "Not checked (no model to run)" } else { "Not checked (what they need went wrong first)" };
+        problems(ui, heading, &skipped);
     }
     problems(ui, "Worth knowing", &warned);
     ui.add_space(8.0);
