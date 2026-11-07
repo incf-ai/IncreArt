@@ -219,6 +219,50 @@ pub fn int8_safetensors(path: &Path) -> bool {
     tensors.values().any(|t| t.get("dtype").and_then(Value::as_str) == Some("I8"))
 }
 
+/// The files in the model folders, as a started server lists them, before
+/// any is started (DESIGN.md, What a server preset covers).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct LocalFiles {
+    /// The folders scanned.
+    pub dirs: Vec<String>,
+    /// File IDs (`/`-separated under a folder).
+    pub ids: BTreeSet<String>,
+    /// Of `ids`, sd-server's int8 safetensors.
+    pub int8: BTreeSet<String>,
+}
+
+impl LocalFiles {
+    pub fn scan(dirs: &[String]) -> LocalFiles {
+        let mut ids = BTreeSet::new();
+        for dir in dirs {
+            model_ids(Path::new(dir), "", 3, &mut ids);
+        }
+        let int8 = ids
+            .iter()
+            .filter(|id| {
+                dirs.iter().map(|d| Path::new(d).join(id)).find(|p| p.exists()).is_some_and(|p| int8_safetensors(&p))
+            })
+            .cloned()
+            .collect();
+        LocalFiles { dirs: dirs.to_vec(), ids, int8 }
+    }
+
+    /// As a started sd-server lists them.
+    pub fn sd_server(&self) -> Loadable {
+        Loadable::files(self.ids.iter().cloned())
+    }
+
+    /// As a started KoboldCpp lists them: sd-server's int8 files are a
+    /// second choice, as KoboldCpp loads them at full size (31 GB for
+    /// Qwen-Image's; a small model's fits), so a server that lists them as
+    /// they are goes first.
+    pub fn kobold(&self) -> Loadable {
+        let why = "is in sd-server's int8 format, which KoboldCpp loads at full size";
+        let second_choice = self.int8.iter().map(|id| (id.clone(), why.to_string())).collect();
+        Loadable::Files { ids: self.ids.clone(), refused: BTreeMap::new(), second_choice }
+    }
+}
+
 /// The files under `dir` as model file IDs, `depth` folders deep.
 fn model_ids(dir: &Path, prefix: &str, depth: u32, ids: &mut BTreeSet<String>) {
     let Ok(rd) = std::fs::read_dir(dir) else { return };
@@ -310,30 +354,7 @@ impl KoboldImage {
     /// under a folder); without, only the image model it runs.
     pub fn loadable(&self) -> ApiResult<Loadable> {
         match &self.inner.admin {
-            Some(admin) => {
-                let mut ids = BTreeSet::new();
-                for dir in &admin.model_dirs {
-                    model_ids(Path::new(dir), "", 3, &mut ids);
-                }
-                // sd-server's int8 files: KoboldCpp loads them at full
-                // size (31 GB for Qwen-Image's; a small model's fits), so
-                // a server that lists them as they are goes first
-                let second_choice = ids
-                    .iter()
-                    .filter(|id| {
-                        admin
-                            .model_dirs
-                            .iter()
-                            .map(|d| Path::new(d).join(id))
-                            .find(|p| p.exists())
-                            .is_some_and(|p| int8_safetensors(&p))
-                    })
-                    .map(|id| {
-                        (id.clone(), "is in sd-server's int8 format, which KoboldCpp loads at full size".to_string())
-                    })
-                    .collect::<BTreeMap<_, _>>();
-                Ok(Loadable::Files { ids, refused: BTreeMap::new(), second_choice })
-            }
+            Some(admin) => Ok(LocalFiles::scan(&admin.model_dirs).kobold()),
             None => Ok(Loadable::Only(self.inner.running()?.map(|f| file_name(&f).to_string()))),
         }
     }

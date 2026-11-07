@@ -116,7 +116,6 @@ pub struct ChatSrv {
 #[derive(Clone)]
 pub struct Model {
     pub preset: RecipePreset,
-    pub key: ModelKey,
 }
 
 pub struct Ctx<'a> {
@@ -177,7 +176,19 @@ impl Ctx<'_> {
     /// The model presets it can load (all without a list).
     pub fn models_for(&mut self, s: usize) -> Vec<usize> {
         let l = self.loadable(s).ok().flatten();
-        (0..self.models.len()).filter(|&m| l.as_ref().is_none_or(|l| l.runs(&self.models[m].key.models))).collect()
+        (0..self.models.len()).filter(|&m| l.as_ref().is_none_or(|l| l.runs_preset(&self.models[m].preset))).collect()
+    }
+
+    /// What it loads for model preset `m`: each slot's first file it lists
+    /// (as the app picks), the preferred ones without a list (or before it
+    /// was asked).
+    pub fn key(&self, s: usize, m: usize) -> ModelKey {
+        let p = &self.models[m].preset;
+        let models = match &self.images[s].loadable {
+            Some(Ok(Some(l))) => l.pick(p),
+            _ => p.files.clone(),
+        };
+        ModelKey { recipe: p.recipe.clone(), models }
     }
 
     /// The model preset to make images with on it: the one loaded if
@@ -187,14 +198,14 @@ impl Ctx<'_> {
         let loaded = self.client(s)?.model_status().ok().and_then(|st| st.loaded());
         can.iter()
             .copied()
-            .min_by_key(|&m| Some(&self.models[m].key) != loaded.as_ref())
+            .min_by_key(|&m| Some(self.key(s, m)) != loaded)
             .ok_or_else(|| "none of the config's model presets has its files on it".to_string())
     }
 
     /// Loads model preset `m` on it unless loaded; the answer must name it.
     pub fn ensure_loaded(&self, s: usize, m: usize) -> Result<(), String> {
         let client = self.client(s)?;
-        let want = &self.models[m].key;
+        let want = &self.key(s, m);
         if client.model_status().ok().and_then(|st| st.loaded()).as_ref() == Some(want) {
             return Ok(());
         }

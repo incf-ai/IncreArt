@@ -9,7 +9,6 @@ use std::time::Instant;
 
 use increart_core::apitest::{Case, Counts, Event, Outcome, matches};
 use increart_core::config::{Config, ServerPreset};
-use increart_core::sdserver::ModelKey;
 use increart_core::validation::Stamp;
 
 use crate::catalogue::{Target, cases_of, defs};
@@ -67,12 +66,7 @@ pub fn run(o: &Options, cancel: &AtomicBool, emit: Box<dyn FnMut(&Event) + Send>
     out.event(Event::Plan { cases: run.iter().map(|(c, ..)| c.clone()).collect() });
     let sink = out.clone();
     increart_core::traffic::set_sink(Some(Box::new(move |text| sink.traffic(text))));
-    let models: Vec<Model> = o
-        .config
-        .recipes
-        .iter()
-        .map(|r| Model { preset: r.clone(), key: ModelKey { recipe: r.recipe.clone(), models: r.files.clone() } })
-        .collect();
+    let models: Vec<Model> = o.config.recipes.iter().map(|r| Model { preset: r.clone() }).collect();
     for p in &o.presets {
         let cases: Vec<_> = run.iter().filter(|(c, ..)| c.preset == p.name).collect();
         if cases.is_empty() {

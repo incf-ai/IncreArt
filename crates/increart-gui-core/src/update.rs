@@ -488,6 +488,16 @@ pub enum Msg {
     /// into the first model folder, reporting as the wizard's download does.
     DownloadPresetFiles(String, Vec<increart_core::tiers::Download>),
     CancelPresetDownload,
+    /// Model presets' **Test**: the editor's row (as edited) on the server
+    /// of that name ([`AppState::preset_test_servers`]).
+    TestPreset(usize, String),
+    PresetTestStage(u32, increart_core::presettest::Stage),
+    PresetTested(u32, Box<increart_core::presettest::Tried>),
+    StopPresetTest,
+    /// Scan the model folders if not scanned (or of other folders), for
+    /// what the server presets cover; answered with `LocalFiles`.
+    ScanModelFolders,
+    LocalFiles(Box<increart_core::kobold_image::LocalFiles>),
     /// A discarded image's link back in its project (Output library →
     /// Discarded).
     RestoreOutput(PathBuf),
@@ -1138,6 +1148,19 @@ pub enum Effect {
     LoadValidations(PathBuf),
     /// Write the model load times (DESIGN.md, Timing).
     SaveLoadTimes(PathBuf, increart_core::loadtimes::LoadTimes),
+    /// Open `server` (start it, or connect), test `preset` on it, stop it
+    /// if it was started; the image into `images`. Answered with
+    /// `PresetTestStage`s and `PresetTested`.
+    TestPreset {
+        run: u32,
+        server: ServerConfig,
+        programs: Box<increart_core::config::Programs>,
+        preset: Box<RecipePreset>,
+        images: Option<PathBuf>,
+    },
+    StopPresetTest,
+    ScanModelFolders(Vec<String>),
+    SavePresetTests(PathBuf, increart_core::presettest::PresetTests),
     /// Note in the stamps file that opening these settings (a
     /// fingerprint) asked whether to validate them.
     ValidationAsked(PathBuf, String),
@@ -1620,6 +1643,7 @@ fn wizard_download(state: &mut AppState, msg: Msg) -> Vec<Effect> {
         }
         Msg::CancelWizardDownload => vec![Effect::CancelDownload],
         Msg::WizardDownloaded(r) => {
+            state.local_files = None;
             let Phase::Servers(d) = &mut state.phase else { return vec![] };
             let Some(k) = &mut d.kobold else { return vec![] };
             let Some((plan, _)) = k.downloading.take() else { return vec![] };
@@ -1686,6 +1710,8 @@ fn preset_downloads(state: &mut AppState, msg: Msg) -> Vec<Effect> {
         }
         Msg::WizardDownloaded(r) => {
             let Some(d) = state.preset_download.take() else { return vec![] };
+            // what the server presets cover: scanned again
+            state.local_files = None;
             let n = d.files.len();
             match r {
                 Ok(()) => {
@@ -1703,6 +1729,85 @@ fn preset_downloads(state: &mut AppState, msg: Msg) -> Vec<Effect> {
                 }
             }
         }
+        _ => vec![],
+    }
+}
+
+/// Model presets' **Test** (DESIGN.md, Testing a model preset).
+#[inline(never)]
+fn preset_tests(state: &mut AppState, msg: Msg) -> Vec<Effect> {
+    match msg {
+        Msg::TestPreset(row, server) => {
+            let Some(r) = state.recipe_editor.as_ref().and_then(|e| e.rows.get(row)) else { return vec![] };
+            let mut preset = r.preset.clone();
+            preset.name = preset.name.trim().to_string();
+            preset.recipe = preset.recipe.trim().to_string();
+            match parse_sigmas(&r.sigmas) {
+                Some(s) => preset.custom_sigmas = s,
+                None => {
+                    state.messages_error("Custom sigmas: numbers separated by commas, or nothing");
+                    return vec![];
+                }
+            }
+            if preset.files.values().all(|f| f.trim().is_empty()) {
+                state.messages_error(format!("{}: pick its model files first", preset.name));
+                return vec![];
+            }
+            if state.preset_test.as_ref().is_some_and(|t| t.stage.is_some()) {
+                state.messages_error("A test is under way: wait for it or stop it first");
+                return vec![];
+            }
+            let Some(config) = state.preset_test_servers().1.into_iter().find(|s| s.name() == server) else {
+                return vec![];
+            };
+            if let Some(why) = state.why_no_preset_test(&config) {
+                state.messages_error(why);
+                return vec![];
+            }
+            state.server_tests += 1;
+            let run = state.server_tests;
+            state.preset_test = Some(crate::state::PresetTestRun {
+                run,
+                preset: preset.name.clone(),
+                server,
+                stage: Some(increart_core::presettest::Stage::Opening),
+                started: state.now,
+                stopping: false,
+                result: None,
+            });
+            let images = state.preset_tests_path.as_deref().map(increart_core::presettest::images_dir);
+            vec![Effect::TestPreset {
+                run,
+                server: config,
+                programs: Box::new(state.config.programs.clone()),
+                preset: Box::new(preset),
+                images,
+            }]
+        }
+        Msg::PresetTestStage(run, stage) => {
+            if let Some(t) = state.preset_test.as_mut().filter(|t| t.run == run && t.stage.is_some()) {
+                t.stage = Some(stage);
+            }
+            vec![]
+        }
+        Msg::PresetTested(run, tried) => {
+            let Some(t) = state.preset_test.as_mut().filter(|t| t.run == run) else { return vec![] };
+            t.stage = None;
+            t.result = Some((*tried).clone());
+            // an edited preset's result is kept under its name as tested
+            state.preset_tests.record(*tried);
+            match &state.preset_tests_path {
+                Some(path) => vec![Effect::SavePresetTests(path.clone(), state.preset_tests.clone())],
+                None => vec![],
+            }
+        }
+        Msg::StopPresetTest => match state.preset_test.as_mut() {
+            Some(t) if t.stage.is_some() => {
+                t.stopping = true;
+                vec![Effect::StopPresetTest]
+            }
+            _ => vec![],
+        },
         _ => vec![],
     }
 }
@@ -2488,6 +2593,12 @@ fn part_of(msg: &Msg) -> usize {
         Msg::DeleteOutput(..) => 16,
         Msg::DiscardImages(..) => 4,
         Msg::DownloadPresetFiles(..) => 4,
+        Msg::TestPreset(..) => 4,
+        Msg::PresetTestStage(..) => 4,
+        Msg::PresetTested(..) => 4,
+        Msg::StopPresetTest => 4,
+        Msg::ScanModelFolders => 4,
+        Msg::LocalFiles(..) => 4,
         Msg::CancelPresetDownload => 4,
         Msg::RestoreOutput(..) => 16,
         Msg::DeleteDiscardedOutput(..) => 16,
@@ -4292,6 +4403,21 @@ fn apply_4(state: &mut AppState, msg: Msg, rest: &mut Option<Msg>) -> Vec<Effect
         | Msg::RestoreOutputs(_)
         | Msg::DeleteDiscardedOutputs(_)) => discards(state, m),
         m @ (Msg::DownloadPresetFiles(..) | Msg::CancelPresetDownload) => preset_downloads(state, m),
+        m @ (Msg::TestPreset(..) | Msg::PresetTestStage(..) | Msg::PresetTested(..) | Msg::StopPresetTest) => {
+            preset_tests(state, m)
+        }
+        Msg::ScanModelFolders => {
+            if state.local_scanning || !state.local_files_stale() {
+                return vec![];
+            }
+            state.local_scanning = true;
+            vec![Effect::ScanModelFolders(state.config.programs.model_dirs.clone())]
+        }
+        Msg::LocalFiles(f) => {
+            state.local_scanning = false;
+            state.local_files = Some(*f);
+            vec![]
+        }
         other => {
             *rest = Some(other);
             vec![]
@@ -5883,6 +6009,17 @@ fn apply_10(state: &mut AppState, msg: Msg, rest: &mut Option<Msg>) -> Vec<Effec
                 let i = old.iter().position(|p| p.name == name)?;
                 rows.iter().find(|r| r.origin == Some(i)).map(|r| r.preset.name.clone())
             };
+            let mut fx = vec![];
+            let moved: Vec<(String, String)> =
+                old.iter().filter_map(|p| Some((p.name.clone(), renamed(&p.name)?))).filter(|(a, b)| a != b).collect();
+            if !moved.is_empty() {
+                for (a, b) in &moved {
+                    state.preset_tests.rename(a, b);
+                }
+                if let Some(path) = &state.preset_tests_path {
+                    fx.push(Effect::SavePresetTests(path.clone(), state.preset_tests.clone()));
+                }
+            }
             let f = &mut state.generate;
             f.sweep.models = f.sweep.models.iter().filter_map(|m| renamed(m)).collect();
             let chosen = rows.iter().position(|r| r.origin == Some(f.preset));
@@ -5897,11 +6034,15 @@ fn apply_10(state: &mut AppState, msg: Msg, rest: &mut Option<Msg>) -> Vec<Effec
                 state.generate.apply_preset(i, &p);
             }
             mark_generate(state);
-            save_config(state)
+            fx.extend(save_config(state));
+            fx
         }
         Msg::CloseRecipes => {
             state.recipe_editor = None;
-            vec![]
+            match state.preset_test.take() {
+                Some(t) if t.stage.is_some() => vec![Effect::StopPresetTest],
+                _ => vec![],
+            }
         }
         Msg::OpenScale(target) => {
             let size = match target {

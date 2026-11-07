@@ -1033,6 +1033,47 @@ pub struct PresetDownload {
     pub at: WizardDownload,
 }
 
+/// What a server preset covers ([`AppState::coverage`]).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Coverage {
+    /// The model presets some server can run, and which.
+    pub can: Vec<(String, Vec<String>)>,
+    /// The others, with each server's reason.
+    pub cannot: Vec<(String, Vec<String>)>,
+    /// Servers the app connects to (not open): asked once opened.
+    pub asked: Vec<String>,
+}
+
+impl Coverage {
+    /// "Model presets: 9 of 14 from the files here" (", + what remote
+    /// lists once open").
+    pub fn line(&self) -> String {
+        let n = self.can.len() + self.cannot.len();
+        let mut line = format!("Model presets: {} of {n} from the files here", self.can.len());
+        if !self.asked.is_empty() {
+            line.push_str(&format!(", + what {} lists once open", self.asked.join(", ")));
+        }
+        line
+    }
+}
+
+/// A model preset's **Test** under way or done (DESIGN.md, Testing a model
+/// preset): shown in Model presets until the next or the editor closes.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PresetTestRun {
+    /// Numbers tests; answers to an older one are ignored.
+    pub run: u32,
+    pub preset: String,
+    pub server: String,
+    /// Where it is; None once done.
+    pub stage: Option<increart_core::presettest::Stage>,
+    /// When it started (`AppState::now`), for "loading — 12 s".
+    pub started: f64,
+    /// Stop asked.
+    pub stopping: bool,
+    pub result: Option<increart_core::presettest::Tried>,
+}
+
 /// The files of a model preset that aren't in a model folder and that it
 /// says where to download (each slot's preferred file, or the first of its
 /// choices with a download when that has none; the LoRAs). Nothing for a
@@ -3568,6 +3609,16 @@ pub struct AppState {
     pub recipe_editor: Option<RecipeEditor>,
     /// A model preset's files being downloaded (Model presets' **Download**).
     pub preset_download: Option<PresetDownload>,
+    /// Model presets' **Test**.
+    pub preset_test: Option<PresetTestRun>,
+    /// The files in the model folders, for what the server presets cover
+    /// before they're opened; None until scanned.
+    pub local_files: Option<increart_core::kobold_image::LocalFiles>,
+    /// A scan under way.
+    pub local_scanning: bool,
+    /// The tests' results (`preset-tests.rsn`, at `preset_tests_path`).
+    pub preset_tests: increart_core::presettest::PresetTests,
+    pub preset_tests_path: Option<PathBuf>,
     pub scale: Option<ScaleDialog>,
     /// An image shown large over everything (double-click a reference or
     /// the start image in Generate).
@@ -3715,6 +3766,106 @@ impl AppState {
             .filter(|s| self.server_models.get(&s.name).is_some_and(|l| l.runs_preset(p)))
             .map(|s| s.name.as_str())
             .collect()
+    }
+
+    /// The servers a model preset's **Test** can use, and the server preset
+    /// they're of: the open ones, else the server preset being edited, else
+    /// the last opened (else the first); image servers only.
+    pub fn preset_test_servers(&self) -> (String, Vec<ServerConfig>) {
+        let open: Vec<ServerConfig> =
+            self.servers.iter().filter_map(|s| s.config.clone()).filter(|c| !c.is_chat()).collect();
+        if !open.is_empty() {
+            return ("the open servers".into(), open);
+        }
+        let preset = match &self.phase {
+            Phase::Servers(d) if d.editing.is_some() => Some(&d.draft),
+            _ => None,
+        }
+        .or_else(|| {
+            let last = self.config.last_preset.as_deref();
+            self.config.server_presets.iter().find(|p| Some(p.name.as_str()) == last)
+        })
+        .or(self.config.server_presets.first());
+        match preset {
+            Some(p) => (p.name.clone(), p.servers.iter().filter(|c| !c.is_chat()).cloned().collect()),
+            None => (String::new(), vec![]),
+        }
+    }
+
+    /// What `server` can load: what it said if it's open, else (one the app
+    /// starts) the files in the model folders as it would list them; None
+    /// for one the app connects to, not open (asked once it is), or before
+    /// the folders are scanned.
+    pub fn loadable_of(&self, server: &ServerConfig) -> Option<increart_core::sdserver::Loadable> {
+        if let Some(l) =
+            self.servers.iter().find(|s| s.name == server.name()).and_then(|s| self.server_models.get(&s.name))
+        {
+            return Some(l.clone());
+        }
+        let f = self.local_files.as_ref()?;
+        match server {
+            ServerConfig::Start { .. } => Some(f.sd_server()),
+            ServerConfig::Kobold(_) if server.is_started() => Some(f.kobold()),
+            _ => None,
+        }
+    }
+
+    /// The scan of the model folders is missing or of other folders.
+    pub fn local_files_stale(&self) -> bool {
+        self.local_files.as_ref().is_none_or(|f| f.dirs != self.config.programs.model_dirs)
+    }
+
+    /// What a server preset covers (DESIGN.md, What a server preset
+    /// covers): the model presets its servers can run; None before the
+    /// folders are scanned.
+    pub fn coverage(&self, preset: &ServerPreset) -> Option<Coverage> {
+        self.local_files.as_ref()?;
+        let servers: Vec<(&ServerConfig, Option<increart_core::sdserver::Loadable>)> =
+            preset.servers.iter().filter(|s| !s.is_chat()).map(|s| (s, self.loadable_of(s))).collect();
+        let mut c = Coverage {
+            asked: servers.iter().filter(|(_, l)| l.is_none()).map(|(s, _)| s.name().to_string()).collect(),
+            ..Default::default()
+        };
+        for p in &self.config.recipes {
+            // a server loading a file less well says so
+            let on: Vec<String> = servers
+                .iter()
+                .filter_map(|(s, l)| Some((s, l.as_ref().filter(|l| l.runs_preset(p))?)))
+                .map(|(s, l)| match l.second_choice(&l.pick(p)) {
+                    Some(why) => format!("{} (second choice: {why})", s.name()),
+                    None => s.name().to_string(),
+                })
+                .collect();
+            if on.is_empty() {
+                let why = servers
+                    .iter()
+                    .filter_map(|(s, l)| Some(format!("{}: {}", s.name(), l.as_ref()?.why_not_preset(p)?)))
+                    .collect();
+                c.cannot.push((p.name.clone(), why));
+            } else {
+                c.can.push((p.name.clone(), on));
+            }
+        }
+        Some(c)
+    }
+
+    /// Why a model preset can't be tested on `server` now.
+    pub fn why_no_preset_test(&self, server: &ServerConfig) -> Option<String> {
+        if matches!(&self.phase, Phase::Servers(d) if d.opening) {
+            return Some("Not while servers are being opened".into());
+        }
+        if self.api_test.as_ref().is_some_and(|t| t.running) {
+            return Some("Not while Validate servers runs".into());
+        }
+        let url = server.base_url();
+        let in_use = self.servers.iter().any(|s| s.config.as_ref().is_some_and(|c| c.base_url() == url));
+        if in_use && self.engine_running && !self.jobs().is_empty() {
+            return Some(format!(
+                "{} is making a run's images: test once it's done, or on another server",
+                server.name()
+            ));
+        }
+        None
     }
 
     /// Why no open server can run these files, one line per server
@@ -3941,6 +4092,11 @@ impl AppState {
             res_editor: None,
             recipe_editor: None,
             preset_download: None,
+            preset_test: None,
+            local_files: None,
+            local_scanning: false,
+            preset_tests: Default::default(),
+            preset_tests_path: None,
             scale: None,
             preview: None,
             preview_among: None,

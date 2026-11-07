@@ -120,7 +120,7 @@ pub fn list(cx: &mut Ctx, t: Target) -> Verdict {
         Ok(Some(l)) => {
             let (mut can, mut cannot) = (vec![], vec![]);
             for m in &cx.models {
-                match l.why_not(&m.key.models) {
+                match l.why_not_preset(&m.preset) {
                     None => can.push(m.preset.name.clone()),
                     Some(why) => cannot.push(format!("{}: {why}", m.preset.name)),
                 }
@@ -193,7 +193,7 @@ pub fn load_each(cx: &mut Ctx, t: Target) -> Verdict {
 pub fn load_missing(cx: &mut Ctx, t: Target) -> Verdict {
     let s = tried!(server(t));
     let client = tried!(cx.client(s));
-    let recipe = cx.models.first().map(|m| m.key.recipe.clone()).unwrap_or_else(|| "qwen-image-21".into());
+    let recipe = cx.models.first().map(|m| m.preset.recipe.clone()).unwrap_or_else(|| "qwen-image-21".into());
     let missing = "diffusion_models/increart-apitest-missing.safetensors";
     let key = ModelKey { recipe, models: BTreeMap::from([("diffusion_model".to_string(), missing.to_string())]) };
     let answer = client.load_model(&key);
@@ -216,15 +216,7 @@ pub fn load_missing(cx: &mut Ctx, t: Target) -> Verdict {
 
 pub fn basic(cx: &mut Ctx, t: Target) -> Verdict {
     let client = tried!(cx.client(tried!(server(t))));
-    let models: Vec<increart_core::config::RecipePreset> = cx
-        .models
-        .iter()
-        .map(|m| increart_core::config::RecipePreset {
-            recipe: m.key.recipe.clone(),
-            files: m.key.models.clone(),
-            ..m.preset.clone()
-        })
-        .collect();
+    let models: Vec<increart_core::config::RecipePreset> = cx.models.iter().map(|m| m.preset.clone()).collect();
     let mut steps: Vec<servertest::Step> = vec![];
     let cx = &*cx;
     servertest::run(&client, &models, Ok(()), cx.cancel, &mut |i, step| {

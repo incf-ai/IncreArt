@@ -2748,6 +2748,51 @@ in the app's state folder (`$XDG_STATE_HOME/increart` when set, else
   to send to whoever runs the server; **Traffic log…** opens the traffic
   log. A test's traffic is always logged, the log setting on or not, each
   line tagged `[test <server>]`.
+- **Testing a model preset**: Model presets' **Test**, under the selected
+  preset's LoRAs: "on [server ▾] (of what) ▶ Test". The servers offered
+  are the open ones, else those of the server preset being edited on the
+  servers screen, else of the last opened (else the first); image servers
+  only; the first that can run the preset is chosen (kept for the
+  session). It tests the preset as edited (unsaved changes included):
+  opens the server (a server the app starts is started for the test and
+  stopped after; one already answering is used as it is; one to connect
+  to must be running), asks what it has and picks each slot's file as a
+  run would (`Loadable::pick`; without a list, `files`), loads it (the
+  answer must name it), and makes one 512 × 512 image of "a red apple on a
+  wooden table, photo" (the LoRAs' trigger words before it) with the
+  preset's sampler, scheduler, steps, CFG, flow shift, sigmas and LoRAs,
+  seed 1 (`increart_core::presettest`). It says where it is ("opening the
+  server", "asking for its files", "loading", "making the image", with
+  the seconds) with **Stop** (the job is cancelled; a load under way is
+  waited for). Refused while servers are being opened, while Validate
+  servers runs, while another test runs, or on a server making a run's
+  images. Each server's last result for the preset is listed under it:
+  passed with the load and image times, or failed and why ("it can't load
+  it: …", "loading failed: …", "stopped"), the files loaded, and the image
+  (click: shown in the file manager). Results are kept per preset and
+  server in `preset-tests.rsn` in the app's state folder (images in
+  `preset-tests/` beside it), with a fingerprint of the preset's model
+  and settings (not its name, note or downloads): one from before an edit
+  is shown greyed, "tested before an edit". A rename saved moves its
+  results with it. The list marks a tested preset with a flask: green
+  when it passed somewhere as it is, red when it failed, grey when only
+  tested before an edit, each server's result on hover. Its traffic is
+  always logged, tagged `[test <preset> on <server>]`.
+- **What a server preset covers**: on the servers screen each preset (and
+  the preset editor, under "Image model") has "Model presets: 9 of 14 from
+  the files here", before anything is started. The model folders are
+  scanned once (again when they change or after a download), off the UI
+  thread, as a started server would list them
+  (`kobold_image::LocalFiles`): a started sd-server has every file there;
+  a started KoboldCpp too, sd-server's int8 safetensors as a second choice
+  (it loads them at full size); an open server, what it said; a server
+  the app connects to and that isn't open says once it is (", + what
+  remote lists once open"). The hover lists each model preset with the
+  servers that can run it ("kcpp (second choice: …)") or each server's
+  reason; a click opens Model presets. **Model presets…** is also beside
+  New preset. With no servers open, Model presets' ✓ marks use the same:
+  the servers of the server preset in view that could run each preset,
+  from the files on disk.
 - **Validating servers** (`increart-apitest`, in `tools/` beside the app in
   each release; see below).
 
@@ -2767,7 +2812,7 @@ ends, is stopped, or loses the app (its stdin closing).
     nothing is started), `routing` (each model preset has a server, by
     listed files, by a running file of that name, or "may get it"),
     `parallel`, `pe-with-images`, `end-to-end` (a run through the engine
-    in a scratch library) and `failover` (the same with a started server
+    in a scratch library, with the files most of its servers pick) and `failover` (the same with a started server
     stopped after its first image: the rest go to the others).
   - **connect**: `capabilities`, `latency`, `parallel-clients`,
     `poll-burst`, `unknown-job` (a 404, not an error).
@@ -2779,6 +2824,9 @@ ends, is stopped, or loses the app (its stdin closing).
   - **jobs**: `queue`, `cancel-running`, `cancel-queued`, `after-cancel`,
     `poll-finished`.
   - **prompt-enhance** (chat servers): `answers`, `chat`, `stop`, `vision`.
+- Each server is asked to load each model preset with each slot's first
+  file it lists (its `alternatives` after `files`), as the app offers it;
+  a server without a list gets `files`.
 - A case that isn't for the setup (no LoRA in any model preset, a
   text-only chat server, failover with nothing started) is **n/a**, saying
   why; one whose server didn't open is **skipped**. Outcomes: pass,

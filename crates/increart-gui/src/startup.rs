@@ -625,6 +625,10 @@ fn kobold_fields(
 }
 
 pub fn servers(ui: &mut egui::Ui, st: &AppState, d: &ServerDialog, out: &mut Vec<Msg>) {
+    // what each preset covers, from the files in the model folders
+    if st.local_files_stale() && !st.local_scanning {
+        out.push(Msg::ScanModelFolders);
+    }
     centered(ui, "servers", 780.0, |ui| {
         ui.heading(ic(ph::HARD_DRIVES, "Servers"));
         ui.label(
@@ -909,6 +913,7 @@ fn presets(ui: &mut egui::Ui, st: &AppState, d: &ServerDialog, out: &mut Vec<Msg
                 (edit, delete)
             },
         );
+        coverage_line(ui, st, p, out);
         if open {
             out.push(Msg::OpenPreset(i));
         }
@@ -924,6 +929,13 @@ fn presets(ui: &mut egui::Ui, st: &AppState, d: &ServerDialog, out: &mut Vec<Msg
     ui.horizontal(|ui| {
         if ui.button(ic(ph::PLUS, "New preset")).clicked() {
             out.push(Msg::NewPreset);
+        }
+        if ui
+            .button(ic(ph::CUBE, "Model presets…"))
+            .on_hover_text("what each model preset loads and its settings; test one on a server")
+            .clicked()
+        {
+            out.push(Msg::OpenRecipes);
         }
         if !st.config.server_presets.is_empty()
             && ui
@@ -1201,6 +1213,47 @@ fn image_model_line(ui: &mut egui::Ui, out: &mut Vec<Msg>) {
             out.push(Msg::OpenRecipes);
         }
     });
+}
+
+/// What a server preset covers (DESIGN.md, What a server preset covers):
+/// "Model presets: 9 of 14 from the files here", each preset's servers or
+/// reasons on hover; a click opens Model presets.
+fn coverage_line(ui: &mut egui::Ui, st: &AppState, p: &config::ServerPreset, out: &mut Vec<Msg>) {
+    if p.servers.iter().all(|s| s.is_chat()) {
+        return;
+    }
+    let Some(c) = st.coverage(p) else {
+        ui.weak("Model presets: looking in the model folders…");
+        return;
+    };
+    let mut tip = String::new();
+    if !c.can.is_empty() {
+        tip.push_str("Can run:\n");
+        for (name, on) in &c.can {
+            tip.push_str(&format!("  {name} — {}\n", on.join(", ")));
+        }
+    }
+    if !c.cannot.is_empty() {
+        tip.push_str("Can't:\n");
+        for (name, why) in &c.cannot {
+            let why = if why.is_empty() { "not known until opened".to_string() } else { why.join("; ") };
+            tip.push_str(&format!("  {name} — {why}\n"));
+        }
+    }
+    if !c.asked.is_empty() {
+        tip.push_str(&format!("{} (connected to) say what they have once open\n", c.asked.join(", ")));
+    }
+    tip.push_str("Click: Model presets (edit, test, download)");
+    let color = if c.can.is_empty() && c.asked.is_empty() { NEUTRAL } else { ui.visuals().weak_text_color() };
+    let r = ui
+        .horizontal(|ui| {
+            ui.add_space(8.0);
+            ui.add(egui::Label::new(RichText::new(ic(ph::CUBE, &c.line())).color(color)).sense(egui::Sense::click()))
+        })
+        .inner;
+    if r.on_hover_text(tip).clicked() {
+        out.push(Msg::OpenRecipes);
+    }
 }
 
 /// A started server's whole command line, environment first, as its log's
@@ -2113,6 +2166,7 @@ fn editor(ui: &mut egui::Ui, st: &AppState, d: &ServerDialog, editing: Editing, 
     }
     if d.draft.servers.iter().any(|s| !matches!(s, ServerConfig::Chat(_))) {
         image_model_line(ui, out);
+        coverage_line(ui, st, &d.draft, out);
     }
     if !d.draft.servers.is_empty() {
         ui.add_space(4.0);

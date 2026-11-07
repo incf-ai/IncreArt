@@ -107,6 +107,7 @@ pub struct Runtime {
     archive_cancel: Cell<Arc<AtomicBool>>,
     export_cancel: Cell<Arc<AtomicBool>>,
     server_test_cancel: Cell<Arc<AtomicBool>>,
+    preset_test_cancel: Cell<Arc<AtomicBool>>,
     /// The suite's run going on (its number): its stdin, for `stop` (the
     /// run's thread lets it go when the run ends).
     api_test_stdin: Arc<Mutex<Option<(u32, std::process::ChildStdin)>>>,
@@ -234,6 +235,7 @@ impl Runtime {
             archive_cancel: Cell::default(),
             export_cancel: Cell::default(),
             server_test_cancel: Cell::default(),
+            preset_test_cancel: Cell::default(),
             api_test_stdin: Arc::default(),
             watch: Cell::new(None),
         })
@@ -382,6 +384,45 @@ impl Runtime {
                 });
             }
             Effect::StopServerTest => cancel(&self.server_test_cancel),
+            Effect::TestPreset { run, server, programs, preset, images } => {
+                let (tx, wake) = (self.ctx.tx.clone(), self.ctx.wake.clone());
+                let cancel = new_cancel(&self.preset_test_cancel);
+                let logs = self.ctx.paths.logs();
+                self.spawn("preset test", move || {
+                    use increart_core::presettest::{self, Outcome, Stage};
+                    let mut stage = |s: Stage| {
+                        let _ = tx.send(Msg::PresetTestStage(run, s));
+                        wake();
+                    };
+                    stage(Stage::Opening);
+                    let wait = increart_core::config::timeouts().server_start();
+                    let tag = format!("test {} on {}", preset.name, server.name());
+                    let out = increart_core::traffic::tagged(&tag, || {
+                        match launcher::open_cancellable(&server, &programs, &logs, wait, &cancel) {
+                            // dropped after: a server it started is stopped
+                            Ok(proc) => presettest::run(&proc.client, &preset, &cancel, &mut stage),
+                            Err(_) if cancel.load(Ordering::Relaxed) => Outcome::failed("stopped"),
+                            Err(e) => Outcome::failed(format!("couldn't open {}: {e}", server.name())),
+                        }
+                    });
+                    let tried = presettest::tried(&preset, server.name(), out, images.as_deref());
+                    let _ = tx.send(Msg::PresetTested(run, Box::new(tried)));
+                    wake();
+                });
+            }
+            Effect::StopPresetTest => cancel(&self.preset_test_cancel),
+            Effect::ScanModelFolders(dirs) => {
+                let (tx, wake) = (self.ctx.tx.clone(), self.ctx.wake.clone());
+                self.spawn("model folders", move || {
+                    let f = increart_core::kobold_image::LocalFiles::scan(&dirs);
+                    let _ = tx.send(Msg::LocalFiles(Box::new(f)));
+                    wake();
+                });
+            }
+            Effect::SavePresetTests(path, tests) => {
+                // not saved: the marks are gone next time, no worse
+                let _ = tests.save(&path);
+            }
             Effect::ApiTestList { run, config } => {
                 let (tx, wake) = (self.ctx.tx.clone(), self.ctx.wake.clone());
                 self.spawn("apitest list", move || {
@@ -1758,6 +1799,10 @@ fn work_on(ctx: &Ctx, fx: Effect) -> Vec<Msg> {
         | Effect::ListLoadable
         | Effect::TestServer { .. }
         | Effect::StopServerTest
+        | Effect::TestPreset { .. }
+        | Effect::StopPresetTest
+        | Effect::ScanModelFolders(_)
+        | Effect::SavePresetTests(..)
         | Effect::ApiTestList { .. }
         | Effect::ApiTestRun { .. }
         | Effect::ApiTestStop

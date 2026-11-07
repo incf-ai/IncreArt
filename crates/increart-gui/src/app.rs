@@ -44,6 +44,10 @@ impl App {
         if let Some(p) = &st.validations_path {
             st.validations = increart_core::validation::Validations::load(p);
         }
+        st.preset_tests_path = increart_core::presettest::path();
+        if let Some(p) = &st.preset_tests_path {
+            st.preset_tests = increart_core::presettest::PresetTests::load(p);
+        }
         st.load_times_path = increart_core::loadtimes::path();
         if let Some(p) = &st.load_times_path {
             st.load_times = increart_core::loadtimes::LoadTimes::load(p);

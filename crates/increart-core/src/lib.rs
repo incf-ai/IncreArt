@@ -40,6 +40,7 @@ pub mod notify;
 pub mod pe;
 pub mod pixel;
 pub mod png;
+pub mod presettest;
 pub mod process;
 pub mod prompts;
 pub mod request;

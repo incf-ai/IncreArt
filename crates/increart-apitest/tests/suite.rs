@@ -260,6 +260,27 @@ fn the_basic_cases_note_the_preset_validated() {
     assert_eq!(s.servers[0].0, "a");
 }
 
+#[test]
+fn a_server_with_only_an_alternative_file_loads_that() {
+    // as the app: each server is offered each slot's first file it has
+    const GGUF: &str = "diffusion_models/apple-Q8_0.gguf";
+    let a = Fake::start(None);
+    a.with(|s| {
+        s.model_files = Some(vec![GGUF.into()]);
+        s.strict_files = true;
+        s.sized = true;
+    });
+    let preset = ServerPreset { name: "One".into(), servers: vec![connect("a", &a.url)] };
+    let mut config = config(std::slice::from_ref(&preset));
+    config.recipes[0].alternatives = BTreeMap::from([("diffusion_model".to_string(), vec![GGUF.to_string()])]);
+    let ran = run_suite(config, vec![preset], &["*/models.*", "*/generate.txt2img", "*/together.end-to-end"]);
+    for id in ["One/a/models.list", "One/a/models.load-each", "One/a/generate.txt2img", "One/together.end-to-end"] {
+        assert_eq!(ran.of(id).0, Outcome::Pass, "{id}: {:?}", ran.of(id));
+    }
+    let loaded = a.with(|s| s.loaded.clone()).map(|(_, m)| m);
+    assert_eq!(loaded, Some(BTreeMap::from([("diffusion_model".to_string(), GGUF.to_string())])));
+}
+
 #[cfg(feature = "fake")]
 mod started {
     use super::*;

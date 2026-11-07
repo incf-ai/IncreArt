@@ -139,9 +139,9 @@ pub fn routing(cx: &mut Ctx, _: Target) -> Verdict {
         for (s, l) in &lists {
             let name = cx.name(*s).to_string();
             match l {
-                Ok(Some(l @ Loadable::Files { .. })) if l.runs(&m.key.models) => listing.push(name),
-                Ok(Some(l @ Loadable::Only(_))) if l.runs(&m.key.models) => by_name.push(name),
-                Ok(Some(l)) => not.push(format!("{name}: {}", l.why_not(&m.key.models).unwrap_or_default())),
+                Ok(Some(l @ Loadable::Files { .. })) if l.runs_preset(&m.preset) => listing.push(name),
+                Ok(Some(l @ Loadable::Only(_))) if l.runs_preset(&m.preset) => by_name.push(name),
+                Ok(Some(l)) => not.push(format!("{name}: {}", l.why_not_preset(&m.preset).unwrap_or_default())),
                 Ok(None) => any.push(name),
                 Err(e) => not.push(format!("{name}: its list failed ({e})")),
             }
@@ -295,14 +295,22 @@ fn engine_run(cx: &mut Ctx, stop_one: bool) -> Verdict {
     };
     let seeds = if stop_one { 6 } else { (takers.len() as u64 * 2).clamp(2, 8) };
     let preset = cx.models[m].preset.clone();
+    // the files the most of them pick (as the app records a queued run's)
+    let picks: Vec<_> = takers.iter().map(|&s| cx.key(s, m).models).collect();
+    let picked = picks
+        .iter()
+        .max_by_key(|p| {
+            (picks.iter().filter(|q| q == p).count(), usize::MAX - picks.iter().position(|q| q == *p).unwrap_or(0))
+        })
+        .cloned()
+        .unwrap_or_else(|| preset.files.clone());
     let dir = cx.work.join("work").join(if stop_one { "failover" } else { "end-to-end" });
     let _ = std::fs::remove_dir_all(&dir);
     let made = (|| -> increart_core::error::Result<(Library, increart_core::Id)> {
         let mut lib = Library::create(&dir.join("library"), None)?;
         let idea = lib.new_idea(NewIdea::text("Apple", "a red apple on a wooden table"))?;
         let (project, _) = lib.create_project(Path::new(""), Some("apitest"), &[idea])?;
-        let files: BTreeMap<String, ModelFile> = preset
-            .files
+        let files: BTreeMap<String, ModelFile> = picked
             .iter()
             .map(|(slot, id)| (slot.clone(), ModelFile { id: id.clone(), sha256: String::new() }))
             .collect();
