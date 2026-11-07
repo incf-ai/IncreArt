@@ -236,6 +236,23 @@ fn inbox_filters_narrow_the_triage_queue() {
     assert_eq!(h.state.discarded_ideas()[0].idea.title, "Owl");
     assert!(h.state.inbox_queue().is_empty());
     assert_eq!(h.state.unreviewed_ideas().len(), 2, "the others wait");
+
+    // Discarded: the selected back in the inbox, or all deleted for good
+    let discarded = |h: &Harness| h.state.discarded_ideas().iter().map(|e| e.idea.id.clone()).collect::<Vec<_>>();
+    h.send(Msg::RestoreIdeas(discarded(&h), IdeaLoc::Unreviewed));
+    h.settle();
+    assert!(discarded(&h).is_empty(), "{:?}", h.errors());
+    assert_eq!(h.state.unreviewed_ideas().len(), 3);
+    for _ in 0..2 {
+        h.send(Msg::InboxFilter(InboxFilter::default()));
+        h.send(Msg::ReviewCurrentIdea(Verdict::Bad));
+        h.settle();
+    }
+    assert_eq!(discarded(&h).len(), 2);
+    h.send(Msg::EmptyDiscardedIdeas);
+    h.settle();
+    assert!(discarded(&h).is_empty(), "{:?}", h.errors());
+    assert_eq!(h.state.unreviewed_ideas().len(), 1);
 }
 
 #[test]
@@ -961,6 +978,13 @@ fn discarded_projects_restore_and_delete_for_good() {
     h.send(Msg::RestoreProject(id(&h, "new project 2")));
     h.settle();
     assert_eq!(h.state.index.projects[0].dir, Path::new("projects/new project 2"));
+
+    // the selected restored at once
+    h.send(Msg::DeleteNode(Tree::Projects, "new project 2".into()));
+    h.settle();
+    h.send(Msg::RestoreProjects(vec![id(&h, "new project 2")]));
+    h.settle();
+    assert_eq!(names(&h), ["new project 2"], "{:?}", h.errors());
 
     // for good
     h.send(Msg::EmptyDiscardedProjects);
@@ -2366,6 +2390,29 @@ fn review_views_compare_and_rejected() {
     h.settle();
     assert!(discarded(&h).is_empty(), "{:?}", h.errors());
     assert!(h.state.output_link(&second).is_none());
+
+    // any image can be discarded, a good one too, and Ctrl+Z puts it back
+    h.send(Msg::DiscardImages(vec![first.clone()]));
+    h.settle();
+    assert_eq!(discarded(&h), vec![(first.clone(), Some(Verdict::Good))], "{:?}", h.errors());
+    assert!(h.state.output_link(&first).is_none());
+    h.send(Msg::UndoReview);
+    h.settle();
+    assert!(discarded(&h).is_empty(), "{:?}", h.errors());
+    assert_eq!(h.state.output_link(&first).unwrap().verdict, Some(Verdict::Good));
+    // the Discarded tab's selected, restored or deleted at once
+    let all = |h: &Harness| h.state.discarded_outputs().iter().map(|o| o.path.clone()).collect::<Vec<_>>();
+    h.send(Msg::DiscardImages(vec![first.clone()]));
+    h.settle();
+    h.send(Msg::RestoreOutputs(all(&h)));
+    h.settle();
+    assert!(discarded(&h).is_empty() && h.state.output_link(&first).is_some(), "{:?}", h.errors());
+    h.send(Msg::DiscardImages(vec![first.clone()]));
+    h.settle();
+    h.send(Msg::DeleteDiscardedOutputs(all(&h)));
+    h.settle();
+    assert!(discarded(&h).is_empty() && h.state.output_link(&first).is_none(), "{:?}", h.errors());
+    assert!(first.path(&h.root).is_file(), "the image itself stays until Clean up");
 }
 
 #[test]
@@ -4825,6 +4872,25 @@ fn setting_sweeps_vary_cfg_steps_or_the_model() {
     assert_eq!(h.state.caption(&img, CaptionFill::StyleSeed), format!("cfg 3 · seed {}", seeds[1]));
     assert_eq!(h.state.caption(&img, CaptionFill::Settings), "12 steps · cfg 3");
 
+    // Sampler / Scheduler: names, "default" the model's own
+    let mut n = f.clone();
+    n.sweep.vary = SweepVary::Sampler;
+    n.sampler = "euler".into();
+    assert_eq!(update::sweep_defaults(SweepVary::Sampler, &n), "euler, euler_a, dpm++2m, res_multistep");
+    n.sweep.values = "euler_a, default, euler_a".into();
+    let runs = update::param_runs(&n, &recipes).unwrap();
+    let got: Vec<_> = runs.iter().map(|(r, t)| (r.sampler.clone(), t.row())).collect();
+    assert_eq!(got, [("euler_a".to_string(), "euler_a".to_string()), (String::new(), "default".to_string())]);
+    n.sweep.values = "eulr".into();
+    assert!(err(&n).contains("no sampler “eulr”"));
+    n.sweep.vary = SweepVary::Scheduler;
+    n.sweep.values = "karras simple".into();
+    let runs = update::param_runs(&n, &recipes).unwrap();
+    assert_eq!(runs.iter().map(|(r, _)| r.scheduler.as_str()).collect::<Vec<_>>(), ["karras", "simple"]);
+    assert!(runs.iter().all(|(r, _)| r.sampler == "euler"), "the form's sampler");
+    n.sweep.values = String::new();
+    assert!(err(&n).contains("Tick the schedulers"));
+
     // Model: each model preset with its own steps and CFG
     let mut m = f.clone();
     m.sweep.vary = SweepVary::Model;
@@ -6964,9 +7030,8 @@ fn generate_offers_the_model_presets_the_servers_can_run() {
             .into(),
         steps: 20,
         cfg: 2.0,
-        flow_shift: None,
-        custom_sigmas: vec![],
         loras: vec![],
+        ..Default::default()
     };
     let config = Config {
         recipes: vec![preset("Int8", "int8.safetensors"), preset("Q8", "koboldcpp/q8.gguf")],
@@ -7072,13 +7137,20 @@ fn model_presets_edit_and_generate_keeps_its_model() {
         files: [("diffusion_model".to_string(), format!("{name}.gguf"))].into(),
         steps,
         cfg: 2.0,
-        flow_shift: None,
-        custom_sigmas: vec![],
         loras: vec![],
+        ..Default::default()
     };
-    let config = Config { recipes: vec![preset("A", 20), preset("B", 30)], ..Default::default() };
+    let mut b = preset("B", 30);
+    (b.sampler, b.scheduler) = ("dpm++2m".into(), "karras".into());
+    let config = Config { recipes: vec![preset("A", 20), b], ..Default::default() };
     let mut s = AppState::new(config, None);
+    assert_eq!((s.generate.sampler.as_str(), s.generate.scheduler.as_str()), ("euler", ""));
     update(&mut s, Msg::SelectRecipe(1));
+    // the preset's sampler and schedule come with it
+    assert_eq!((s.generate.sampler.as_str(), s.generate.scheduler.as_str()), ("dpm++2m", "karras"));
+    let draft = s.generate.to_draft(&s.config);
+    let back = increart_gui_core::GenerateForm::from_draft(&draft, &s.config);
+    assert_eq!((back.sampler.as_str(), back.scheduler.as_str()), ("dpm++2m", "karras"));
     s.generate.steps = 25; // tweaked in the form
     s.generate.sweep.models = vec!["A".into(), "B".into()];
 
@@ -7144,9 +7216,8 @@ fn queueing_a_preset_no_server_runs_asks_first() {
         files: [("diffusion_model".to_string(), model.to_string())].into(),
         steps: 20,
         cfg: 2.0,
-        flow_shift: None,
-        custom_sigmas: vec![],
         loras: vec![],
+        ..Default::default()
     };
     let mut h = Harness::new();
     let mut other = preset("Other", "other.gguf");

@@ -506,6 +506,8 @@ pub fn seed_ranges(mut seeds: Vec<u64>) -> Vec<Seeds> {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename = "Sample")]
 pub struct Sample {
+    /// Empty: the model's default.
+    #[serde(default)]
     pub method: String,
     /// Empty: the server's default for the recipe.
     #[serde(default, skip_serializing_if = "String::is_empty")]
@@ -741,6 +743,11 @@ pub struct GenerateDraft {
     pub cfg: f32,
     #[serde(default, serialize_with = "bare", skip_serializing_if = "Option::is_none")]
     pub flow_shift: Option<f32>,
+    /// Empty: the model's default; older drafts: euler.
+    #[serde(default = "crate::config::euler")]
+    pub sampler: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub scheduler: String,
     pub seeds: u64,
     #[serde(default)]
     pub first_seed: u64,

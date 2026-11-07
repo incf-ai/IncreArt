@@ -2041,6 +2041,12 @@ pub fn lib_op(lib: &mut Library, op: LibOp) -> Result<OpOk, String> {
         LibOp::MoveIdea(id, loc) => lib.move_idea(&id, &loc).map(|_| OpOk::Done).map_err(err),
         LibOp::SetStar(id, on) => lib.update_idea(&id, |i| i.starred = on).map(|_| OpOk::Done).map_err(err),
         LibOp::DeleteDiscarded(id) => lib.delete_discarded_idea(&id).map(|_| OpOk::Done).map_err(err),
+        LibOp::Each(ops) => {
+            for op in ops {
+                lib_op(lib, op)?;
+            }
+            Ok(OpOk::Done)
+        }
         LibOp::RestoreProject(id) => lib.restore_project(&id).map(|_| OpOk::Done).map_err(err),
         LibOp::DeleteDiscardedProject(id) => lib.delete_discarded_project(&id).map(|_| OpOk::Done).map_err(err),
         LibOp::NewProjectFromIdeas(ids, folder, name) => new_project_from_ideas(lib, &ids, &folder, &name),
@@ -2151,10 +2157,19 @@ pub fn lib_op(lib: &mut Library, op: LibOp) -> Result<OpOk, String> {
             lib.set_title(&project, &image, &title).map(|_| OpOk::Done).map_err(err)
         }
         LibOp::DeleteOutputs(links) => {
+            // where each went, for undo; the first that fails stops them
+            let mut discarded = vec![];
             for l in links {
-                lib.delete_output_link(&l).map_err(err)?;
+                match lib.delete_output_link(&l) {
+                    Ok(at) => discarded.push(at),
+                    Err(e) if discarded.is_empty() => return Err(err(e)),
+                    Err(e) => {
+                        let made = ReviewUndo { discarded, ..Default::default() };
+                        return Ok(OpOk::Reviewed { done: vec![], made, undo: false, error: Some(err(e)) });
+                    }
+                }
             }
-            Ok(OpOk::Done)
+            Ok(OpOk::Reviewed { done: vec![], made: ReviewUndo { discarded, ..Default::default() }, undo: false, error: None })
         }
         LibOp::RestoreOutputs(links) => {
             for l in links {
@@ -2200,6 +2215,12 @@ pub fn lib_op(lib: &mut Library, op: LibOp) -> Result<OpOk, String> {
             review_outputs(lib, links, false, made)
         }
         LibOp::UndoReview(u) => {
+            // discarded images back (one restored or deleted since is fine)
+            for at in &u.discarded {
+                if lib.root().join(at).symlink_metadata().is_ok() {
+                    lib.restore_output_link(at).map_err(err)?;
+                }
+            }
             let mut by_project: crate::state::ProjectTags = vec![];
             for (project, image, before) in u.tags {
                 match by_project.iter_mut().find(|(p, _)| *p == project) {
@@ -2355,8 +2376,8 @@ fn new_run(lib: &Library, f: &GenerateForm, preset: &RecipePreset, model_dirs: &
         width: f.width,
         height: f.height,
         sample: Sample {
-            method: "euler".into(),
-            scheduler: String::new(),
+            method: f.sampler.clone(),
+            scheduler: f.scheduler.clone(),
             steps: f.steps,
             cfg: f.cfg,
             flow_shift: f.flow_shift,

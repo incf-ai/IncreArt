@@ -907,6 +907,8 @@ fn drafts_are_saved_copied_and_protect_their_images() {
         steps: 20,
         cfg: 2.0,
         flow_shift: None,
+        sampler: "euler".into(),
+        scheduler: String::new(),
         seeds: 4,
         first_seed: 0,
         alpha: true,

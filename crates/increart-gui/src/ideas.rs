@@ -1019,13 +1019,38 @@ fn discarded(ui: &mut egui::Ui, st: &AppState, tex: &mut Textures, out: &mut Vec
             ui.weak("No discarded ideas.");
             return;
         }
-        ui.weak("Right-click to restore or delete.");
+        let all: Vec<increart_core::Id> = ideas.iter().map(|e| e.idea.id.clone()).collect();
+        let mut picks = crate::discards::Picks::load(ui, "ideas", &all);
+        let hint = "Right-click to restore or delete.";
+        let mut action = crate::discards::bar(ui, "ideas", hint, picks.sel.len(), all.len(), "idea");
+        let bg = picks.background(ui);
         ScrollArea::vertical().auto_shrink([false, true]).show(ui, |ui| {
             ui.horizontal_wrapped(|ui| {
                 for e in ideas {
-                    let r = idea_card(ui, st, root, tex, e, CARD_W, false, CardButtons::None, out);
+                    let id = &e.idea.id;
+                    let r = idea_card(ui, st, root, tex, e, CARD_W, picks.has(id), CardButtons::None, out);
+                    picks.item(ui, &r, id, &all);
+                    picks.mark(ui, r.rect, id);
+                    let n = picks.sel.len();
                     r.context_menu(|ui| {
-                        let id = &e.idea.id;
+                        if n > 1 && picks.has(id) {
+                            let to_inbox = format!("Restore the {n} selected to the Idea inbox");
+                            if ui.button(ic(ph::TRAY, &to_inbox)).clicked() {
+                                action = Some(crate::discards::BarAction::Restore);
+                                ui.close();
+                            }
+                            let to_lib = format!("Restore the {n} selected to the input library");
+                            if ui.button(ic(ph::BOOKS, &to_lib)).clicked() {
+                                out.push(Msg::RestoreIdeas(picks.sel.clone(), IdeaLoc::Library));
+                                ui.close();
+                            }
+                            if ui.button(ic(ph::TRASH, &format!("Delete the {n} selected permanently…"))).clicked() {
+                                action = Some(crate::discards::BarAction::Delete);
+                                ui.close();
+                            }
+                            ui.separator();
+                            ui.weak("this idea");
+                        }
                         if ui.button(ic(ph::TRAY, "Restore to the Idea inbox")).clicked() {
                             out.push(Msg::Restore(id.clone(), IdeaLoc::Unreviewed));
                             ui.close();
@@ -1044,6 +1069,15 @@ fn discarded(ui: &mut egui::Ui, st: &AppState, tex: &mut Textures, out: &mut Vec
                     });
                 }
             });
+        });
+        let sel = picks.sel.clone();
+        action = action.or(picks.finish(ui, &bg, &all));
+        let after = "Their folders go to the trash; their images stay in the store until Clean up.";
+        crate::review::discard_action(action, sel, all.len(), "idea", after, out, |a, s| match a {
+            // the bar's Restore: to the Idea inbox, where they came from mostly
+            crate::discards::BarAction::Restore => Msg::RestoreIdeas(s, IdeaLoc::Unreviewed),
+            crate::discards::BarAction::Delete => Msg::DeleteDiscardedIdeas(s),
+            crate::discards::BarAction::Empty => Msg::EmptyDiscardedIdeas,
         });
     });
 }

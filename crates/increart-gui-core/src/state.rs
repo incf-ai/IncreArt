@@ -548,6 +548,13 @@ pub fn settings_changes(a: &GenerateDraft, b: &GenerateDraft) -> Vec<String> {
         let s = |f: Option<f32>| f.map_or("default".into(), |f| f.to_string());
         v.push(format!("flow shift {} → {}", s(a.flow_shift), s(b.flow_shift)));
     }
+    let named = |s: &str| if s.is_empty() { "default".to_string() } else { s.to_string() };
+    if a.sampler != b.sampler {
+        v.push(format!("sampler {} → {}", named(&a.sampler), named(&b.sampler)));
+    }
+    if a.scheduler != b.scheduler {
+        v.push(format!("scheduler {} → {}", named(&a.scheduler), named(&b.scheduler)));
+    }
     if a.seeds != b.seeds {
         v.push(format!("seeds {} → {}", a.seeds, b.seeds));
     }
@@ -812,6 +819,11 @@ pub fn settings_line(r: &increart_core::model::Run) -> String {
     let mut v = vec![format!("{} steps", r.sample.steps), format!("cfg {}", fmt(r.sample.cfg))];
     if let Some(x) = r.sample.flow_shift {
         v.push(format!("shift {}", fmt(x)));
+    }
+    // the sampler when it isn't the usual euler and the model's schedule
+    if r.sample.method != "euler" || !r.sample.scheduler.is_empty() {
+        let m = if r.sample.method.is_empty() { "default sampler" } else { r.sample.method.as_str() };
+        v.push(if r.sample.scheduler.is_empty() { m.to_string() } else { format!("{m} {}", r.sample.scheduler) });
     }
     if let increart_core::model::Mode::Edit { strength, init: Some(_) } = &r.mode {
         v.push(format!("strength {}", fmt(*strength)));
@@ -1647,6 +1659,10 @@ pub struct GenerateForm {
     pub steps: u32,
     pub cfg: f32,
     pub flow_shift: Option<f32>,
+    /// Empty: the model's default.
+    pub sampler: String,
+    /// Empty: the model's default.
+    pub scheduler: String,
     pub seeds: u64,
     pub first_seed: u64,
     /// The run's images in order, each a reference (`<image1>`, `<image2>`,
@@ -1795,6 +1811,9 @@ pub struct ReviewUndo {
     pub refs: Vec<(Id, ImageRef)>,
     /// The input library ideas made (image-only refs).
     pub ideas: Vec<Id>,
+    /// The output links discarded, where they are now (in their projects'
+    /// `discarded/`).
+    pub discarded: Vec<PathBuf>,
 }
 
 /// Where Review's Use as a reference… modal puts the images.
@@ -2663,6 +2682,8 @@ impl GenerateForm {
             steps: 20,
             cfg: 2.0,
             flow_shift: None,
+            sampler: increart_core::config::euler(),
+            scheduler: String::new(),
             seeds: 4,
             first_seed: 0,
             images: vec![],
@@ -2687,6 +2708,8 @@ impl GenerateForm {
             steps: self.steps,
             cfg: self.cfg,
             flow_shift: self.flow_shift,
+            sampler: self.sampler.clone(),
+            scheduler: self.scheduler.clone(),
             seeds: self.seeds,
             first_seed: self.first_seed,
             // transparency is asked for in the prompt; never wrapped
@@ -2712,6 +2735,8 @@ impl GenerateForm {
             steps: d.steps,
             cfg: d.cfg,
             flow_shift: d.flow_shift,
+            sampler: d.sampler.clone(),
+            scheduler: d.scheduler.clone(),
             seeds: d.seeds,
             first_seed: d.first_seed,
             images: draft_images(d),
@@ -2732,6 +2757,8 @@ impl GenerateForm {
         f.steps = run.sample.steps;
         f.cfg = run.sample.cfg;
         f.flow_shift = run.sample.flow_shift;
+        f.sampler = run.sample.method.clone();
+        f.scheduler = run.sample.scheduler.clone();
         let init = match &run.mode {
             increart_core::model::Mode::Edit { init, strength } => {
                 f.strength = *strength;
@@ -2811,6 +2838,8 @@ impl GenerateForm {
         self.steps = p.steps;
         self.cfg = p.cfg;
         self.flow_shift = p.flow_shift;
+        self.sampler = p.sampler.clone();
+        self.scheduler = p.scheduler.clone();
     }
 }
 

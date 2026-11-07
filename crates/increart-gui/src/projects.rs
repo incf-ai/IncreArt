@@ -126,19 +126,11 @@ fn discarded(ui: &mut egui::Ui, st: &AppState, tex: &mut Textures, out: &mut Vec
         ui.weak("No discarded projects. A project's Discard… (right-click it) puts it here, to restore later.");
         return;
     }
-    ui.horizontal(|ui| {
-        ui.weak("Restore puts a project back in its folder (the top level if that's gone); its pending seeds generate again.");
-        crate::widgets::right_group(ui, "empty_discarded", |ui| {
-            if ui.button(ic(ph::TRASH, "Empty discarded…")).clicked() {
-                let images: usize = ds.iter().map(|d| d.entry.outputs.len()).sum();
-                let text = format!(
-                    "Delete the {} discarded project(s) permanently? Their folders go to the trash with {images} image link(s); the images stay in the store until Clean up.",
-                    ds.len()
-                );
-                out.push(Msg::Ask(Confirm::new(text, "Delete", Msg::EmptyDiscardedProjects)));
-            }
-        });
-    });
+    let all: Vec<increart_core::Id> = ds.iter().map(|d| d.entry.project.id.clone()).collect();
+    let mut picks = crate::discards::Picks::load(ui, "projects", &all);
+    let hint = "Restore puts a project back in its folder (the top level if that's gone); its pending seeds generate again.";
+    let mut action = crate::discards::bar(ui, "projects", hint, picks.sel.len(), all.len(), "project");
+    let bg = picks.background(ui);
     ScrollArea::vertical().auto_shrink([false, true]).show(ui, |ui| {
         ui.horizontal_wrapped(|ui| {
             for d in ds {
@@ -162,6 +154,8 @@ fn discarded(ui: &mut egui::Ui, st: &AppState, tex: &mut Textures, out: &mut Vec
                     ui.weak(format!("from {}", from.display()));
                     ui.weak(format!("discarded {}", crate::widgets::when(d.discarded.discarded)));
                 });
+                picks.item(ui, &r, id, &all);
+                picks.mark(ui, r.rect, id);
                 let restore = || Msg::RestoreProject(id.clone());
                 let delete = || {
                     let text = format!(
@@ -183,7 +177,20 @@ fn discarded(ui: &mut egui::Ui, st: &AppState, tex: &mut Textures, out: &mut Vec
                         None => {}
                     }
                 }
+                let n = picks.sel.len();
                 r.context_menu(|ui| {
+                    if n > 1 && picks.has(id) {
+                        if ui.button(ic(ph::ARROW_COUNTER_CLOCKWISE, &format!("Restore the {n} selected"))).clicked() {
+                            action = Some(crate::discards::BarAction::Restore);
+                            ui.close();
+                        }
+                        if ui.button(ic(ph::TRASH, &format!("Delete the {n} selected permanently…"))).clicked() {
+                            action = Some(crate::discards::BarAction::Delete);
+                            ui.close();
+                        }
+                        ui.separator();
+                        ui.weak("this project");
+                    }
                     if ui.button(ic(ph::ARROW_COUNTER_CLOCKWISE, "Restore")).clicked() {
                         out.push(restore());
                         ui.close();
@@ -200,6 +207,14 @@ fn discarded(ui: &mut egui::Ui, st: &AppState, tex: &mut Textures, out: &mut Vec
                 });
             }
         });
+    });
+    let sel = picks.sel.clone();
+    action = action.or(picks.finish(ui, &bg, &all));
+    let after = "Their folders go to the trash with their image links; the images stay in the store until Clean up.";
+    crate::review::discard_action(action, sel, all.len(), "project", after, out, |a, s| match a {
+        crate::discards::BarAction::Restore => Msg::RestoreProjects(s),
+        crate::discards::BarAction::Delete => Msg::DeleteDiscardedProjects(s),
+        crate::discards::BarAction::Empty => Msg::EmptyDiscardedProjects,
     });
 }
 
@@ -1507,6 +1522,9 @@ pub fn preview_window(ctx: &egui::Context, st: &AppState, tex: &mut Textures, ke
                             ui.close();
                         }
                         crate::review::add_to_collection(ui, st, std::slice::from_ref(img), out);
+                        if crate::tiles::discard_button(ui, st, std::slice::from_ref(img), "Discard", out) {
+                            out.push(Msg::Preview(None));
+                        }
                         ui.separator();
                     }
                     if !rates {
@@ -1975,6 +1993,12 @@ pub fn recipes_window(ctx: &egui::Context, st: &AppState, out: &mut Vec<Msg>) {
                         }
                     });
                     ui.end_row();
+                    ui.label("Sampler");
+                    sampler_combo(ui, "preset_sampler", &mut p.sampler);
+                    ui.end_row();
+                    ui.label("Scheduler");
+                    scheduler_combo(ui, "preset_scheduler", &mut p.scheduler);
+                    ui.end_row();
                     ui.label("Sigmas").on_hover_text("a custom schedule, comma-separated; empty: the recipe's");
                     ui.add(egui::TextEdit::singleline(&mut r.sigmas).desired_width(320.0).hint_text("the recipe's"));
                     ui.end_row();
@@ -2150,11 +2174,9 @@ pub fn recipes_window(ctx: &egui::Context, st: &AppState, out: &mut Vec<Msg>) {
                     name: String::new(),
                     recipe: e.rows.get(i).map_or("qwen-image-21".into(), |r| r.preset.recipe.clone()),
                     files,
-                    steps: 20,
                     cfg: 2.0,
-                    flow_shift: None,
-                    custom_sigmas: vec![],
                     loras: e.rows.get(i).map(|r| r.preset.loras.clone()).unwrap_or_default(),
+                    ..Default::default()
                 };
                 e.rows.push(increart_gui_core::RecipeRow { preset, origin: None, sigmas: String::new() });
                 e.selected = e.rows.len() - 1;
@@ -2412,6 +2434,11 @@ fn generate(ui: &mut egui::Ui, st: &AppState, tex: &mut Textures, out: &mut Vec<
                         ui.weak("recipe schedule");
                     }
                 });
+                ui.end_row();
+                ui.label("Sampler");
+                sampler_combo(ui, "gen_sampler", &mut f.sampler);
+                ui.label("Scheduler");
+                scheduler_combo(ui, "gen_scheduler", &mut f.scheduler);
                 ui.end_row();
                 ui.label("Seeds");
                 ui.add(egui::DragValue::new(&mut f.seeds).range(1..=999));
@@ -3951,7 +3978,10 @@ pub fn job_window(ctx: &egui::Context, st: &AppState, tex: &mut Textures, out: &
                 ("steps / cfg", format!("{} / {}", s.steps, s.cfg)),
                 (
                     "sampler",
-                    if s.scheduler.is_empty() { s.method.clone() } else { format!("{} · {}", s.method, s.scheduler) },
+                    {
+                        let d = |x: &str| if x.is_empty() { "model default".to_string() } else { x.to_string() };
+                        format!("{} · {}", d(&s.method), d(&s.scheduler))
+                    },
                 ),
                 ("flow shift", s.flow_shift.map_or("recipe schedule".into(), |f| f.to_string())),
                 ("alpha", if run.alpha { "transparent background".into() } else { "no".into() }),
@@ -4094,4 +4124,37 @@ mod tests {
         f.prompt.clear();
         assert_eq!(tag(&f, Some(0..0)), ("<image1>".into(), 8));
     }
+}
+
+/// A combo of stable-diffusion.cpp's samplers, and the model's default
+/// (empty).
+pub fn sampler_combo(ui: &mut egui::Ui, id: &str, v: &mut String) {
+    name_combo(ui, id, v, &increart_core::config::SAMPLERS)
+        .on_hover_text("how each step moves the image; the model's default is the one its recipe names (euler mostly)");
+}
+
+/// A combo of stable-diffusion.cpp's noise schedules, and the model's
+/// default (empty).
+pub fn scheduler_combo(ui: &mut egui::Ui, id: &str, v: &mut String) {
+    name_combo(ui, id, v, &increart_core::config::SCHEDULERS)
+        .on_hover_text("how much noise is left at each step; the model's default suits it (flow models have their own)");
+}
+
+fn name_combo(ui: &mut egui::Ui, id: &str, v: &mut String, names: &[&str]) -> egui::Response {
+    let shown = if v.is_empty() { "model default" } else { v.as_str() };
+    egui::ComboBox::from_id_salt(id)
+        .selected_text(shown)
+        .height(400.0)
+        .show_ui(ui, |ui| {
+            ui.selectable_value(v, String::new(), "model default");
+            // a name this list doesn't know (a newer server's) stays choosable
+            if !v.is_empty() && !names.contains(&v.as_str()) {
+                let other = v.clone();
+                ui.selectable_value(v, other.clone(), other);
+            }
+            for n in names {
+                ui.selectable_value(v, n.to_string(), *n);
+            }
+        })
+        .response
 }

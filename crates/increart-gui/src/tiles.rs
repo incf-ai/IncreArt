@@ -162,6 +162,7 @@ pub fn menu(ui: &mut egui::Ui, st: &AppState, image: &ImageRef, out: &mut Vec<Ms
             out.push(Msg::PickSet(picked));
             ui.close();
         }
+        discard_button(ui, st, std::slice::from_ref(image), "Discard   Del", out);
         ui.separator();
         return;
     }
@@ -213,12 +214,28 @@ pub fn menu(ui: &mut egui::Ui, st: &AppState, image: &ImageRef, out: &mut Vec<Ms
         out.push(Msg::OpenExport(st.picked.clone(), format!("{n} images")));
         ui.close();
     }
+    discard_button(ui, st, &st.picked, &format!("Discard the {n} picked   Del"), out);
     if ui.button(ic(ph::X, "Unpick this one")).clicked() {
         out.push(Msg::PickSet(st.picked.iter().filter(|i| *i != image).cloned().collect()));
         ui.close();
     }
     ui.separator();
     ui.weak("this image");
+}
+
+/// **Discard**: output images to Discarded, whatever their rating (shown
+/// when any of them is a project's output). Whether it was clicked.
+pub fn discard_button(ui: &mut egui::Ui, st: &AppState, images: &[ImageRef], label: &str, out: &mut Vec<Msg>) -> bool {
+    if !images.iter().any(|i| st.output_link(i).is_some()) {
+        return false;
+    }
+    let tip = "out of the project, to Output library → Discarded (restore it there, or Ctrl+Z); its seed isn't generated again";
+    let clicked = ui.button(ic(ph::TRASH, label)).on_hover_text(tip).clicked();
+    if clicked {
+        out.push(Msg::DiscardImages(images.to_vec()));
+        ui.close();
+    }
+    clicked
 }
 
 /// Ctrl+A picks everything shown, Esc drops the picks, T tiles them, L
@@ -237,6 +254,13 @@ pub fn keys(ui: &egui::Ui, st: &AppState, out: &mut Vec<Msg>) -> bool {
     ui.input(|i| {
         if i.modifiers.command && i.key_pressed(Key::A) {
             out.push(Msg::PickSet(st.pickable()));
+        }
+        // Del: the picks, else the image the cursor is on, to Discarded
+        if i.key_pressed(Key::Delete) {
+            let images = if st.picked.is_empty() { st.current_image().into_iter().collect() } else { st.picked.clone() };
+            if !images.is_empty() {
+                out.push(Msg::DiscardImages(images));
+            }
         }
         if st.picked.is_empty() {
             return false;
@@ -293,6 +317,7 @@ pub fn bar(ui: &mut egui::Ui, st: &AppState, out: &mut Vec<Msg>) {
             }
             new_sweep_button(ui, st, out);
             sweep_project_button(ui, st, out);
+            discard_button(ui, st, &st.picked, "Discard", out);
             if ui.button(ic(ph::X, "Clear")).on_hover_text("Esc").clicked() {
                 out.push(Msg::PickSet(vec![]));
             }

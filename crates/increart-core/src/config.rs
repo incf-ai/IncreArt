@@ -174,10 +174,34 @@ pub struct RecipePreset {
     pub flow_shift: Option<f32>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub custom_sigmas: Vec<f32>,
+    /// The sampler ([`SAMPLERS`]); empty: the model's default (both servers
+    /// fall back to it for a name they don't know).
+    #[serde(default = "euler", skip_serializing_if = "is_euler")]
+    pub sampler: String,
+    /// The noise schedule ([`SCHEDULERS`]); empty: the model's default.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub scheduler: String,
     /// LoRAs applied to each image (no reload: both servers take them per
     /// request).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub loras: Vec<PresetLora>,
+}
+
+impl Default for RecipePreset {
+    fn default() -> Self {
+        RecipePreset {
+            name: String::new(),
+            recipe: String::new(),
+            files: Default::default(),
+            steps: 20,
+            cfg: 1.0,
+            flow_shift: None,
+            custom_sigmas: vec![],
+            sampler: euler(),
+            scheduler: String::new(),
+            loras: vec![],
+        }
+    }
 }
 
 /// A LoRA of a model preset: its file inside a model directory's `loras/`
@@ -193,6 +217,60 @@ pub struct PresetLora {
 fn one() -> f32 {
     1.0
 }
+
+pub fn euler() -> String {
+    "euler".into()
+}
+
+fn is_euler(s: &String) -> bool {
+    s == "euler"
+}
+
+/// stable-diffusion.cpp's samplers (sd-server's and KoboldCpp's names).
+pub const SAMPLERS: [&str; 21] = [
+    "euler",
+    "euler_a",
+    "heun",
+    "dpm2",
+    "dpm++2s_a",
+    "dpm++2m",
+    "dpm++2mv2",
+    "ipndm",
+    "ipndm_v",
+    "lcm",
+    "ddim_trailing",
+    "tcd",
+    "res_multistep",
+    "res_2s",
+    "er_sde",
+    "euler_cfg_pp",
+    "euler_a_cfg_pp",
+    "euler_ge",
+    "dpm++2m_sde",
+    "dpm++2m_sde_bt",
+    "lms",
+];
+
+/// stable-diffusion.cpp's noise schedules.
+pub const SCHEDULERS: [&str; 17] = [
+    "discrete",
+    "karras",
+    "exponential",
+    "ays",
+    "gits",
+    "sgm_uniform",
+    "simple",
+    "smoothstep",
+    "kl_optimal",
+    "lcm",
+    "bong_tangent",
+    "ltx2",
+    "logit_normal",
+    "flux2",
+    "flux",
+    "beta",
+    "llada_image",
+];
 
 /// The folder names sd-server finds LoRAs in, inside a model directory
 /// (matched ignoring case).
@@ -269,7 +347,18 @@ pub fn lora_request_path(id: &str) -> &str {
 
 /// The slots a model preset's files go in (sd-server's names; KoboldCpp
 /// takes these too).
-pub const MODEL_SLOTS: [&str; 7] = ["diffusion_model", "model", "llm", "vae", "clip_l", "clip_g", "t5xxl"];
+pub const MODEL_SLOTS: [&str; 10] = [
+    "diffusion_model",
+    "model",
+    "llm",
+    "llm_vision",
+    "vae",
+    "clip_l",
+    "clip_g",
+    "t5xxl",
+    "tokenizer",
+    "uncond_diffusion_model",
+];
 
 pub fn builtin_recipes() -> Vec<RecipePreset> {
     let files = [
@@ -285,9 +374,7 @@ pub fn builtin_recipes() -> Vec<RecipePreset> {
         files,
         steps: 20,
         cfg: 2.0,
-        flow_shift: None,
-        custom_sigmas: vec![],
-        loras: vec![],
+        ..Default::default()
     }]
 }
 
@@ -1859,6 +1946,21 @@ mod tests {
         // the weight defaults to 1
         let p: PresetLora = rsnfmt::from_str(r#"Lora { file: "loras/a.gguf" }"#).unwrap();
         assert_eq!(p.weight, 1.0);
+    }
+
+    /// A preset's sampler: euler when not written (as before there was a
+    /// choice), written only when it's another; empty is the model's own.
+    #[test]
+    fn a_presets_sampler_and_schedule() {
+        let p: RecipePreset =
+            rsnfmt::from_str(r#"ModelPreset { name: "m", recipe: "r", files: {}, steps: 20, cfg: 2 }"#).unwrap();
+        assert_eq!((p.sampler.as_str(), p.scheduler.as_str()), ("euler", ""));
+        assert!(!rsnfmt::to_string(&p).unwrap().contains("sampler"));
+        for (sampler, scheduler) in [("", ""), ("dpm++2m", "karras")] {
+            let q = RecipePreset { sampler: sampler.into(), scheduler: scheduler.into(), ..p.clone() };
+            let text = rsnfmt::to_string(&q).unwrap();
+            assert_eq!(rsnfmt::from_str::<RecipePreset>(&text).unwrap(), q, "{text}");
+        }
     }
 
     #[test]

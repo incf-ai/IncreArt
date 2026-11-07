@@ -2107,7 +2107,11 @@ and its tooltip says how many more are generating.
   editor's Image model line) opens **Model presets**, a modal editor of
   config `model_presets`: the list (a ✓ when an open server runs it, naming which
   on hover; new, duplicate, move, delete) and the selected one's name,
-  recipe, steps, CFG, flow shift (off: the recipe's), custom sigmas
+  recipe, steps, CFG, sampler and scheduler (both picked from
+  stable-diffusion.cpp's names; **model default** leaves it to the model:
+  sd.cpp ignores a name it doesn't know, KoboldCpp falls back to its
+  default, so an empty one is sent as nothing; a name the list doesn't have
+  stays choosable), flow shift (off: the recipe's), custom sigmas
   (comma-separated; empty: the recipe's) and files: a slot (`diffusion_model`,
   `llm`, `vae`, `clip_l`, …) and a file ID per row, typed or picked from the
   files the open servers list (one no server lists is shown amber). Save is
@@ -2342,8 +2346,8 @@ and its tooltip says how many more are generating.
   The scheduler's round robin already starts every style before any gets its
   second seed.
 
-**Setting sweeps.** Vary **Steps**, **CFG**, **Flow shift**, **Strength**
-(only with a start image) or **Model**: a run per value, everything else as
+**Setting sweeps.** Vary **Steps**, **CFG**, **Flow shift**, **Sampler**,
+**Scheduler**, **Strength** (only with a start image) or **Model**: a run per value, everything else as
 the form has it, the same seeds in each.
 
 - **Values**: typed (`8, 12, 20, 30`; commas, spaces or semicolons), sorted,
@@ -2352,8 +2356,11 @@ the form has it, the same seeds in each.
   `10, 15, 20, 30, 40`; CFG 2 → `1, 1.5, 2, 3, 4`; strength `0.3 … 0.9`).
   Steps are whole, 1–200; CFG 0–30; flow shift above 0 to 20; strength above
   0 to 1. A wrong value is named under the field and Queue refuses.
+- **Sampler** / **Scheduler**: a checkbox per name, with **model default**
+  first (to start: the form's own, euler, euler_a, dpm++2m, res_multistep;
+  default, simple, karras, beta); none ticked is refused.
 - **Model**: a checkbox per model preset (the form's ticked to start); each
-  run takes its preset's own steps, CFG and flow shift, so models are
+  run takes its preset's own steps, CFG, sampler, scheduler and flow shift, so models are
   compared at their own settings.
 - The prompt is a plain prompt: `{preset}` is refused, other `{slot}`s must be
   filled in. The summary reads "K values × N seeds = X images ≈ time", the
@@ -2362,7 +2369,7 @@ the form has it, the same seeds in each.
 - Runs are labelled `r05 · cfg 3` and tagged with the value
   (`sweep: Sweep { name: "r05", task: "", preset: "", param: SweepParam {
   name: "cfg", value: "3" } }`; `name` is `steps`, `cfg`, `flow_shift`,
-  `strength` or `model`, whose value is the preset's name). Older runs
+  `sampler`, `scheduler`, `strength` or `model`, whose value is the preset's name). Older runs
   without `param` read as style sweeps.
 - On the contact sheet each row is a value ("20 steps", "cfg 3", "shift 3.1",
   "strength 0.6", a model's name), in order; a CFG row at 1 or below says
@@ -3173,7 +3180,10 @@ the keys and mouse buttons go through that view's own history instead.
     Right-click: restore to the Idea inbox, restore to the input library ·
     copy text, copy image, describe image with PE · delete permanently (asks first; the idea's folder goes to the system
     trash, its images stay until Clean up). **Empty discarded…** deletes them
-    all. Restores can be undone with `Ctrl+Z`.
+    all (asks first). Ideas are selected as the Discarded images are (click,
+    `Ctrl`/`Shift`+click, a box, `Ctrl+A`); the bar restores the selected
+    to the Idea inbox or deletes them permanently. Restores can be undone
+    with `Ctrl+Z`.
 - **Input library**: tabs **Grid** (default) · **Folder** (see Projects →
   Folder) · **Discarded** (the same Discarded view as in the Idea inbox). In
   Grid, the left panel is laid out as the Output library's: the search box
@@ -3413,7 +3423,8 @@ the keys and mouse buttons go through that view's own history instead.
   modal: its progress, the prompt and negative, the input images as
   thumbnails labelled by their tag (`<image1>`, `<image2>`…, **start image**;
   click one to see it large over the modal), and the settings (created, mode
-  and strength, model, size, steps / cfg, sampler, flow shift, alpha, seeds
+  and strength, model, size, steps / cfg, sampler (or "model default") and
+  scheduler, flow shift, alpha, seeds
   per revision, sweep, source idea, cancelled seeds), with the errors of
   failed seeds. **Copy prompt**, **Open in Generate** (the run's settings in
   the form, as Use this style), **Cancel run** while it is in the engine,
@@ -3567,10 +3578,15 @@ the keys and mouse buttons go through that view's own history instead.
     default) · **Good** · **Rejected** (bad) · **Unreviewed** · **All**.
     Clicking a tab replaces the filters (sets its ratings, clears text, refs,
     alpha and tags); once the filters are changed the tab shows "•" and clicking
-    it again resets them. **Rejected** follows the source, with **Delete these
-    N rejected…** (asks first; they go to **Discarded**, their seeds not
-    generated again) and right-click to re-rate, send back to Review or
-    **Delete…**. **Unreviewed** has **Review them**
+    it again resets them. **Rejected** follows the source, with **Discard
+    these N rejected…** (asks first; they go to **Discarded**, their seeds
+    not generated again). Any image, of any rating, can be discarded in any
+    view that shows output images (the Grid's tabs, Review, the Output
+    library, a project's runs, the contact sheet, the large preview):
+    **Discard** in its right-click menu (the picked ones: "Discard the N
+    picked"), in the picks bar, or `Del` (the picks, else the image shown or
+    selected). A message says how many went; `Ctrl+Z` puts them back, rated
+    as they were. **Unreviewed** has **Review them**
     (Review scoped to the source). Double-clicking an image opens it full
     size over the window (the image preview: click, Esc or a click outside
     closes it; right-click copies it). Selecting an image shows the
@@ -3596,7 +3612,12 @@ the keys and mouse buttons go through that view's own history instead.
     the queue and the other tabs, and its run records the seed as deleted
     (not generated again, not a missing output). Hovered, an image shows
     **Restore** and **Delete**; right-click: Restore, Show in file manager,
-    Delete permanently… **Restore** puts it back in its project, rated as it
+    Delete permanently… (on the selected ones when it is selected). Images
+    are selected as everywhere: click, `Ctrl`+click, `Shift`+click a range,
+    a box dragged on the empty space, `Ctrl+A`, `Esc` none; the bar then
+    reads "N images selected · Restore · Delete permanently… (`Del`)". The
+    same selection and bar are in Projects → Discarded and the ideas'
+    Discarded view. **Restore** puts it back in its project, rated as it
     was, and its seed is no longer deleted (refused if a link of that name is
     there). **Delete permanently** (asks first) sends the link to the system
     trash; the image stays until Clean up. **Empty discarded…** (asks first)

@@ -516,14 +516,20 @@ pub enum SweepVary {
     Model,
     /// The image: `<image1>` (or the start image) of each run.
     Image,
+    /// The sampler, by name (`default`: the model's).
+    Sampler,
+    /// The noise schedule, by name (`default`: the model's).
+    Scheduler,
 }
 
 impl SweepVary {
-    pub const EVERY: [SweepVary; 7] = [
+    pub const EVERY: [SweepVary; 9] = [
         SweepVary::Style,
         SweepVary::Steps,
         SweepVary::Cfg,
         SweepVary::FlowShift,
+        SweepVary::Sampler,
+        SweepVary::Scheduler,
         SweepVary::Strength,
         SweepVary::Model,
         SweepVary::Image,
@@ -538,6 +544,8 @@ impl SweepVary {
             SweepVary::Strength => "Strength",
             SweepVary::Model => "Model",
             SweepVary::Image => "Image",
+            SweepVary::Sampler => "Sampler",
+            SweepVary::Scheduler => "Scheduler",
         }
     }
 
@@ -551,6 +559,23 @@ impl SweepVary {
             SweepVary::Strength => "strength",
             SweepVary::Model => "model",
             SweepVary::Image => "image",
+            SweepVary::Sampler => "sampler",
+            SweepVary::Scheduler => "scheduler",
+        }
+    }
+
+    /// Whether its values are names (a sampler's, a schedule's) rather than
+    /// numbers.
+    pub fn named(self) -> bool {
+        matches!(self, SweepVary::Sampler | SweepVary::Scheduler)
+    }
+
+    /// The names a named sweep may take, after `default`.
+    pub fn names(self) -> &'static [&'static str] {
+        match self {
+            SweepVary::Sampler => &crate::config::SAMPLERS,
+            SweepVary::Scheduler => &crate::config::SCHEDULERS,
+            _ => &[],
         }
     }
 }

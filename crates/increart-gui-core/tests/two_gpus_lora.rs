@@ -146,9 +146,8 @@ fn preset(name: &str, diffusion: &str, lora: bool) -> RecipePreset {
         files: [("diffusion_model", diffusion), ("llm", LLM), ("vae", VAE)].map(|(s, f)| (s.into(), f.into())).into(),
         steps: 8,
         cfg: 1.0,
-        flow_shift: None,
-        custom_sigmas: vec![],
         loras: if lora { vec![PresetLora { file: LORA.into(), weight: 1.0 }] } else { vec![] },
+        ..Default::default()
     }
 }
 

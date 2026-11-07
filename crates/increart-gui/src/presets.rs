@@ -662,6 +662,34 @@ fn setting_sweep(ui: &mut egui::Ui, st: &AppState, f: &mut GenerateForm) {
             }
         });
         ui.weak("Each model runs with its own preset's steps, CFG and flow shift.");
+    } else if f.sweep.vary.named() {
+        // the names ticked, kept in the values field in this order
+        let mut ticked: Vec<String> = f
+            .sweep
+            .values
+            .split(|c: char| c == ',' || c.is_whitespace())
+            .filter(|w| !w.is_empty())
+            .map(str::to_lowercase)
+            .collect();
+        let mut changed = false;
+        ui.horizontal_wrapped(|ui| {
+            ui.label(f.sweep.vary.name());
+            for n in std::iter::once("default").chain(f.sweep.vary.names().iter().copied()) {
+                let mut on = ticked.iter().any(|t| t == n);
+                let label = if n == "default" { "model default" } else { n };
+                if ui.checkbox(&mut on, label).changed() {
+                    changed = true;
+                    if on {
+                        ticked.push(n.to_string());
+                    } else {
+                        ticked.retain(|t| t != n);
+                    }
+                }
+            }
+        });
+        if changed {
+            f.sweep.values = ticked.join(", ");
+        }
     } else {
         ui.horizontal(|ui| {
             ui.label("Values");

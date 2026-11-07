@@ -285,6 +285,20 @@ pub enum Msg {
     Restore(Id, IdeaLoc),
     SetStar(Id, bool),
     DeleteDiscarded(Id),
+    /// Discarded ideas for good (asks first in the GUI).
+    DeleteDiscardedIdeas(Vec<Id>),
+    /// Every discarded idea for good (asks first in the GUI).
+    EmptyDiscardedIdeas,
+    /// Ideas back from Discarded, to the Idea inbox or the input library.
+    RestoreIdeas(Vec<Id>, IdeaLoc),
+    /// Discarded projects back where they were.
+    RestoreProjects(Vec<Id>),
+    /// Discarded projects for good (asks first in the GUI).
+    DeleteDiscardedProjects(Vec<Id>),
+    /// Discarded images back in their projects.
+    RestoreOutputs(Vec<PathBuf>),
+    /// Discarded images' links for good (asks first in the GUI).
+    DeleteDiscardedOutputs(Vec<PathBuf>),
     /// A discarded project back where it was (Projects → Discarded).
     RestoreProject(Id),
     /// A discarded project for good (asks first in the GUI).
@@ -466,6 +480,10 @@ pub enum Msg {
     OutputTab(OutputTab),
     OutputSource(OutputSource),
     DeleteOutput(PathBuf),
+    /// Output images to Discarded, whatever their rating (any view's
+    /// Discard, `Del`): their project links; others are left. `Ctrl+Z`
+    /// undoes it.
+    DiscardImages(Vec<ImageRef>),
     /// A discarded image's link back in its project (Output library →
     /// Discarded).
     RestoreOutput(PathBuf),
@@ -1296,6 +1314,9 @@ pub enum LibOp {
     DeleteDiscarded(Id),
     RestoreProject(Id),
     DeleteDiscardedProject(Id),
+    /// These, in order, in one op (one rescan); the first that fails stops
+    /// the rest.
+    Each(Vec<LibOp>),
     /// Keep the ideas (if still in the inbox) and make one project from them.
     /// The ideas into a new project named so in this folder.
     NewProjectFromIdeas(Vec<Id>, PathBuf, String),
@@ -3531,10 +3552,15 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
         Msg::DeleteDiscarded(id) => lib(state, LibOp::DeleteDiscarded(id)),
         Msg::RestoreProject(id) => lib(state, LibOp::RestoreProject(id)),
         Msg::DeleteDiscardedProject(id) => lib(state, LibOp::DeleteDiscardedProject(id)),
-        Msg::EmptyDiscardedProjects => {
-            let ids: Vec<Id> = state.index.discarded_projects.iter().map(|d| d.entry.project.id.clone()).collect();
-            ids.into_iter().flat_map(|id| lib(state, LibOp::DeleteDiscardedProject(id))).collect()
-        }
+        m @ (Msg::DiscardImages(_)
+        | Msg::EmptyDiscardedProjects
+        | Msg::DeleteDiscardedProjects(_)
+        | Msg::RestoreProjects(_)
+        | Msg::DeleteDiscardedIdeas(_)
+        | Msg::EmptyDiscardedIdeas
+        | Msg::RestoreIdeas(..)
+        | Msg::RestoreOutputs(_)
+        | Msg::DeleteDiscardedOutputs(_)) => discards(state, m),
 
         // ------------------------------------------------ input library
         Msg::LibFolder(f) => {
@@ -7820,6 +7846,51 @@ pub fn collection_name_problem(state: &AppState, parent: &std::path::Path, name:
     state.index.collection_folders.contains(&parent.join(name)).then(|| "already a collection here".to_string())
 }
 
+/// Discarding and the Discarded views' batches (out of [`update`], whose
+/// stack frame is large enough as it is).
+#[inline(never)]
+fn discards(state: &mut AppState, msg: Msg) -> Vec<Effect> {
+    match msg {
+        Msg::DiscardImages(images) => {
+            let links: Vec<PathBuf> = images.iter().filter_map(|i| state.output_link(i)).map(|o| o.path.clone()).collect();
+            if links.is_empty() {
+                return vec![];
+            }
+            state.picked.retain(|p| !images.contains(p));
+            let n = links.len();
+            state.messages_info(format!(
+                "{n} image{} to Discarded · Ctrl+Z puts {} back",
+                if n == 1 { "" } else { "s" },
+                if n == 1 { "it" } else { "them" }
+            ));
+            lib(state, LibOp::DeleteOutputs(links))
+        }
+        Msg::EmptyDiscardedProjects => {
+            let ids: Vec<Id> = state.index.discarded_projects.iter().map(|d| d.entry.project.id.clone()).collect();
+            each(state, ids.into_iter().map(LibOp::DeleteDiscardedProject).collect())
+        }
+        Msg::DeleteDiscardedProjects(ids) => each(state, ids.into_iter().map(LibOp::DeleteDiscardedProject).collect()),
+        Msg::RestoreProjects(ids) => each(state, ids.into_iter().map(LibOp::RestoreProject).collect()),
+        Msg::EmptyDiscardedIdeas => {
+            let ids: Vec<Id> = state.discarded_ideas().iter().map(|e| e.idea.id.clone()).collect();
+            each(state, ids.into_iter().map(LibOp::DeleteDiscarded).collect())
+        }
+        Msg::DeleteDiscardedIdeas(ids) => each(state, ids.into_iter().map(LibOp::DeleteDiscarded).collect()),
+        Msg::RestoreIdeas(ids, loc) => each(state, ids.into_iter().map(|id| LibOp::MoveIdea(id, loc.clone())).collect()),
+        Msg::RestoreOutputs(links) if !links.is_empty() => lib(state, LibOp::RestoreOutputs(links)),
+        Msg::DeleteDiscardedOutputs(links) if !links.is_empty() => lib(state, LibOp::DeleteDiscardedOutputs(links)),
+        _ => vec![],
+    }
+}
+
+/// Library ops in one (nothing when there are none).
+fn each(state: &mut AppState, ops: Vec<LibOp>) -> Vec<Effect> {
+    if ops.is_empty() {
+        return vec![];
+    }
+    lib(state, LibOp::Each(ops))
+}
+
 fn lib(state: &mut AppState, op: LibOp) -> Vec<Effect> {
     state.busy += 1;
     if let LibOp::ReviewOutputs { links, undo: false }
@@ -8336,7 +8407,10 @@ pub fn param_runs(f: &GenerateForm, recipes: &[RecipePreset]) -> Result<Vec<(Gen
             run.sweep = Default::default();
             run.prompt = prompt.clone();
             let v: f32 = param.value.parse().unwrap_or_default();
+            let named = if param.value == "default" { String::new() } else { param.value.clone() };
             match f.sweep.vary {
+                SweepVary::Sampler => run.sampler = named,
+                SweepVary::Scheduler => run.scheduler = named,
                 SweepVary::Steps => run.steps = v as u32,
                 SweepVary::Cfg => run.cfg = v,
                 SweepVary::FlowShift => run.flow_shift = Some(v),
@@ -8344,7 +8418,7 @@ pub fn param_runs(f: &GenerateForm, recipes: &[RecipePreset]) -> Result<Vec<(Gen
                 SweepVary::Model => {
                     if let Some(i) = recipes.iter().position(|r| r.name == param.value) {
                         let p = &recipes[i];
-                        (run.preset, run.steps, run.cfg, run.flow_shift) = (i, p.steps, p.cfg, p.flow_shift);
+                        run.apply_preset(i, p);
                     }
                 }
                 SweepVary::Style | SweepVary::Image => {}
@@ -8424,6 +8498,20 @@ pub fn sweep_values(f: &GenerateForm, recipes: &[RecipePreset]) -> Result<Vec<Sw
             recipes.iter().filter(|r| f.sweep.models.contains(&r.name)).map(|r| param(r.name.clone())).collect();
         return if v.is_empty() { Err("Tick the models to compare".into()) } else { Ok(v) };
     }
+    if vary.named() {
+        let mut v: Vec<SweepParam> = vec![];
+        for w in f.sweep.values.split(|c: char| c == ',' || c == ';' || c.is_whitespace()).filter(|w| !w.is_empty()) {
+            let w = w.to_lowercase();
+            if w != "default" && !vary.names().contains(&w.as_str()) {
+                return Err(format!("There's no {} “{w}”", vary.name().to_lowercase()));
+            }
+            if !v.iter().any(|p| p.value == w) {
+                v.push(param(w));
+            }
+        }
+        let what = if vary == SweepVary::Sampler { "samplers" } else { "schedulers" };
+        return if v.is_empty() { Err(format!("Tick the {what} to compare")) } else { Ok(v) };
+    }
     if vary == SweepVary::Strength && f.init().is_none() {
         return Err("A strength sweep needs a start image".into());
     }
@@ -8471,6 +8559,18 @@ pub fn range_values(from: f32, to: f32, step: f32) -> String {
 /// A setting sweep's starting values, around the form's own.
 pub fn sweep_defaults(vary: increart_core::prompts::SweepVary, f: &GenerateForm) -> String {
     use increart_core::prompts::SweepVary;
+    // the form's own, and others that often suit
+    let named = |own: &str, others: &[&str]| {
+        let own = if own.is_empty() { "default" } else { own };
+        let mut v = vec![own];
+        v.extend(others.iter().filter(|o| **o != own));
+        v.join(", ")
+    };
+    match vary {
+        SweepVary::Sampler => return named(&f.sampler, &["euler", "euler_a", "dpm++2m", "res_multistep"]),
+        SweepVary::Scheduler => return named(&f.scheduler, &["default", "simple", "karras", "beta"]),
+        _ => {}
+    }
     let round = |x: f32, to: f32| (x / to).round() * to;
     let v: Vec<f32> = match vary {
         SweepVary::Steps => {
@@ -8486,7 +8586,7 @@ pub fn sweep_defaults(vary: increart_core::prompts::SweepVary, f: &GenerateForm)
             [0.5, 2.0 / 3.0, 1.0, 4.0 / 3.0, 2.0].iter().map(|k| round(x * k, 0.1)).collect()
         }
         SweepVary::Strength => vec![0.3, 0.45, 0.6, 0.75, 0.9],
-        SweepVary::Style | SweepVary::Model | SweepVary::Image => vec![],
+        _ => vec![],
     };
     let mut v = v;
     v.dedup();
@@ -10201,7 +10301,7 @@ fn op_done(state: &mut AppState, ok: OpOk) -> Vec<Effect> {
             return fx;
         }
         OpOk::Reviewed { done, made, undo, error } => {
-            if !undo && (!done.is_empty() || !made.tags.is_empty()) {
+            if !undo && (!done.is_empty() || !made.tags.is_empty() || !made.discarded.is_empty()) {
                 state.review_undo.push(crate::state::ReviewUndo { links: done, ..made });
             }
             if let Some(e) = error {

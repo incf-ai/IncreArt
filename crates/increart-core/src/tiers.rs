@@ -621,9 +621,7 @@ pub fn plan(
         files: files.iter().map(|(slot, url)| (slot.to_string(), local(url))).collect(),
         steps: 20,
         cfg: 2.0,
-        flow_shift: None,
-        custom_sigmas: vec![],
-        loras: vec![],
+        ..Default::default()
     };
     let mut downloads: Vec<Download> = vec![];
     let urls =

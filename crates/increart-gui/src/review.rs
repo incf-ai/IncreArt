@@ -1670,6 +1670,10 @@ pub fn output_library(ui: &mut egui::Ui, st: &AppState, tex: &mut Textures, out:
         Panel::top("out_presets").show(ui, |ui| preset_tabs(ui, st, out));
         crate::tiles::bar(ui, st, out);
         crate::tiles::keys(ui, st, out);
+        // a discard or the picks' rating undone
+        if !ui.ctx().egui_wants_keyboard_input() && ui.input(|i| i.modifiers.command && i.key_pressed(Key::Z)) {
+            out.push(Msg::UndoReview);
+        }
     }
     if !st.info_hidden.contains(&InfoPanel::Output) {
         Panel::right("out_lineage").default_size(300.0).show(ui, |ui| {
@@ -1695,15 +1699,15 @@ pub fn output_library(ui: &mut egui::Ui, st: &AppState, tex: &mut Textures, out:
             let rejected = r.bad && !r.good && !r.neutral && !r.unreviewed;
             if rejected && !images.is_empty() {
                 ui.horizontal(|ui| {
-                    ui.weak("Images rated bad. Right-click to re-rate or delete.");
+                    ui.weak("Images rated bad. Right-click to re-rate or discard.");
                     let n = images.len();
-                    if ui.button(ic(ph::TRASH, &format!("Delete these {n} rejected…"))).clicked() {
+                    if ui.button(ic(ph::TRASH, &format!("Discard these {n} rejected…"))).clicked() {
                         let text = format!(
-                            "Delete these {n} rejected images ({})? They go to Discarded (restore them from Output \
-                             library → Discarded); their seeds aren't generated again.",
+                            "Discard these {n} rejected images ({})? They go to Discarded (restore them from Output \
+                             library → Discarded, or Ctrl+Z); their seeds aren't generated again.",
                             source_name(st)
                         );
-                        out.push(Msg::Ask(Confirm::new(text, "Delete", Msg::DeleteShownRejected)));
+                        out.push(Msg::Ask(Confirm::new(text, "Discard", Msg::DeleteShownRejected)));
                     }
                 });
             }
@@ -1717,7 +1721,7 @@ pub fn output_library(ui: &mut egui::Ui, st: &AppState, tex: &mut Textures, out:
                 }
                 return;
             }
-            image_grid(ui, st, &root, tex, out, &images, rejected);
+            image_grid(ui, st, &root, tex, out, &images);
         }
     });
 }
@@ -2879,32 +2883,27 @@ pub fn collection_menu(ui: &mut egui::Ui, st: &AppState, images: &[increart_core
 fn discarded_outputs(ui: &mut egui::Ui, st: &AppState, root: &Path, tex: &mut Textures, out: &mut Vec<Msg>) {
     let images = st.discarded_outputs();
     if images.is_empty() {
-        ui.weak("No discarded images. Deleting a rejected image (Delete… on its right-click) puts it here, to restore later.");
+        ui.weak("No discarded images. Discard (right-click an image, or Del) puts one here, to restore later.");
         return;
     }
-    ui.horizontal(|ui| {
-        ui.weak("Restore puts an image back in its project, rated as it was. Images here aren't generated again.");
-        crate::widgets::right_group(ui, "empty_discarded", |ui| {
-            if ui.button(ic(ph::TRASH, "Empty discarded…")).clicked() {
-                let text = format!(
-                    "Delete the {} discarded image(s) permanently? Their links go to the trash; the images stay in the store until Clean up.",
-                    images.len()
-                );
-                out.push(Msg::Ask(Confirm::new(text, "Delete", Msg::EmptyDiscardedOutputs)));
-            }
-        });
-    });
+    let all: Vec<PathBuf> = images.iter().map(|o| o.path.clone()).collect();
+    let mut picks = crate::discards::Picks::load(ui, "outputs", &all);
+    let hint = "Restore puts an image back in its project, rated as it was. Images here aren't generated again.";
+    let mut action = crate::discards::bar(ui, "outputs", hint, picks.sel.len(), all.len(), "image");
     let size = st.grid_cell_size(ZoomGrid::Output) as f32;
     grid_ctrl_scroll(ui, st, ZoomGrid::Output, out);
+    let bg = picks.background(ui);
     ScrollArea::vertical().auto_shrink([false, true]).show(ui, |ui| {
         ui.horizontal_wrapped(|ui| {
             ui.spacing_mut().item_spacing = Vec2::splat(6.0);
             for o in images {
                 let t = tex.thumb(root, &o.image);
                 let tip = format!("{}\ndouble-click: full size", describe(st, o));
-                let selected = st.output_selected.as_ref() == Some(&o.image);
-                let r = thumb(ui, t.as_ref(), size, selected, Some(verdict_color(o.verdict))).on_hover_text(tip);
-                if single_click(ui, &r) || (st.output_selected.is_some() && r.clicked()) {
+                let r = thumb(ui, t.as_ref(), size, false, Some(verdict_color(o.verdict))).on_hover_text(tip);
+                picks.item(ui, &r, &o.path, &all);
+                picks.mark(ui, r.rect, &o.path);
+                let plain = !ui.input(|i| i.modifiers.command || i.modifiers.shift);
+                if plain && (single_click(ui, &r) || (st.output_selected.is_some() && r.clicked())) {
                     out.push(Msg::OutputSelect(Some(o.image.clone())));
                 }
                 if r.double_clicked() {
@@ -2926,7 +2925,20 @@ fn discarded_outputs(ui: &mut egui::Ui, st: &AppState, root: &Path, tex: &mut Te
                         None => {}
                     }
                 }
+                let n = picks.sel.len();
                 r.context_menu(|ui| {
+                    if n > 1 && picks.has(&o.path) {
+                        if ui.button(ic(ph::ARROW_COUNTER_CLOCKWISE, &format!("Restore the {n} selected"))).clicked() {
+                            action = Some(crate::discards::BarAction::Restore);
+                            ui.close();
+                        }
+                        if ui.button(ic(ph::TRASH, &format!("Delete the {n} selected permanently…"))).clicked() {
+                            action = Some(crate::discards::BarAction::Delete);
+                            ui.close();
+                        }
+                        ui.separator();
+                        ui.weak("this image");
+                    }
                     if ui.button(ic(ph::ARROW_COUNTER_CLOCKWISE, "Restore")).clicked() {
                         out.push(restore());
                         ui.close();
@@ -2944,6 +2956,42 @@ fn discarded_outputs(ui: &mut egui::Ui, st: &AppState, root: &Path, tex: &mut Te
             }
         });
     });
+    let sel = picks.sel.clone();
+    action = action.or(picks.finish(ui, &bg, &all));
+    discard_action(action, sel, all.len(), "image", "Their links go to the trash; the images stay in the store until Clean up.", out, |a, s| match a {
+        crate::discards::BarAction::Restore => Msg::RestoreOutputs(s),
+        crate::discards::BarAction::Delete => Msg::DeleteDiscardedOutputs(s),
+        crate::discards::BarAction::Empty => Msg::EmptyDiscardedOutputs,
+    });
+}
+
+/// Carries out a Discarded view's bar action on the selected `sel` (Delete
+/// and Empty ask first; `what`: "image", "project", "idea"; `after`: what
+/// happens to the files).
+pub fn discard_action<T>(
+    action: Option<crate::discards::BarAction>,
+    sel: Vec<T>,
+    total: usize,
+    what: &str,
+    after: &str,
+    out: &mut Vec<Msg>,
+    msg: impl Fn(crate::discards::BarAction, Vec<T>) -> Msg,
+) {
+    use crate::discards::BarAction;
+    let Some(a) = action else { return };
+    let plural = |n: usize| if n == 1 { what.to_string() } else { format!("{what}s") };
+    match a {
+        BarAction::Restore if !sel.is_empty() => out.push(msg(a, sel)),
+        BarAction::Delete if !sel.is_empty() => {
+            let text = format!("Delete the {} selected discarded {} permanently? {after}", sel.len(), plural(sel.len()));
+            out.push(Msg::Ask(Confirm::new(text, "Delete", msg(a, sel))));
+        }
+        BarAction::Empty if total > 0 => {
+            let text = format!("Delete all {total} discarded {} permanently? {after}", plural(total));
+            out.push(Msg::Ask(Confirm::new(text, "Delete", msg(a, vec![]))));
+        }
+        _ => {}
+    }
 }
 
 fn image_grid(
@@ -2953,7 +3001,6 @@ fn image_grid(
     tex: &mut Textures,
     out: &mut Vec<Msg>,
     images: &[&OutputLink],
-    rejected: bool,
 ) {
     let bg = crate::tiles::background(ui, st, out);
     let mut rects = vec![];
@@ -3039,11 +3086,6 @@ fn image_grid(
                     if ui.button(ic(ph::COPY, "Copy path")).clicked() {
                         let p = st.library.as_ref().map(|r| r.join(&o.path)).unwrap_or_else(|| o.path.clone());
                         ui.ctx().copy_text(p.display().to_string());
-                        ui.close();
-                    }
-                    if rejected && ui.button(ic(ph::TRASH, "Delete…")).clicked() {
-                        let text = "Delete this image? It goes to Discarded (restore it from Output library → Discarded); its seed isn't generated again.";
-                        out.push(Msg::Ask(Confirm::new(text, "Delete", Msg::DeleteOutput(o.path.clone()))));
                         ui.close();
                     }
                     ui.separator();

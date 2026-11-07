@@ -42,20 +42,7 @@ fn b64(bytes: &[u8]) -> String {
 /// their native channels.
 pub fn img_gen_body(lib: &Library, run: &Run, seed: u64, opts: &GenOptions) -> Result<Value> {
     let refs = run.refs.iter().map(|r| lib.read_verified(r)).collect::<Result<Vec<_>>>()?;
-    let mut sample = json!({
-        "sample_method": run.sample.method,
-        "sample_steps": run.sample.steps,
-        "guidance": { "txt_cfg": run.sample.cfg },
-    });
-    if !run.sample.scheduler.is_empty() {
-        sample["scheduler"] = json!(run.sample.scheduler);
-    }
-    if let Some(shift) = run.sample.flow_shift {
-        sample["flow_shift"] = json!(shift);
-    }
-    if !run.sample.custom_sigmas.is_empty() {
-        sample["custom_sigmas"] = json!(run.sample.custom_sigmas);
-    }
+    let sample = sample_params(&run.sample);
     let prompt = prompt_sent(&run.prompt, run.alpha);
     let mut body = img_gen_body_from(&prompt, &run.negative_prompt, run.width, run.height, seed, sample, &refs, opts);
     if !run.model.loras.is_empty() {
@@ -68,6 +55,28 @@ pub fn img_gen_body(lib: &Library, run: &Run, seed: u64, opts: &GenOptions) -> R
         }
     }
     Ok(body)
+}
+
+/// The request's `sample_params`: the model's own sampler and schedule
+/// (empty) aren't sent, so the server uses the recipe's.
+pub fn sample_params(s: &crate::model::Sample) -> Value {
+    let mut sample = json!({
+        "sample_steps": s.steps,
+        "guidance": { "txt_cfg": s.cfg },
+    });
+    if !s.method.is_empty() {
+        sample["sample_method"] = json!(s.method);
+    }
+    if !s.scheduler.is_empty() {
+        sample["scheduler"] = json!(s.scheduler);
+    }
+    if let Some(shift) = s.flow_shift {
+        sample["flow_shift"] = json!(shift);
+    }
+    if !s.custom_sigmas.is_empty() {
+        sample["custom_sigmas"] = json!(s.custom_sigmas);
+    }
+    sample
 }
 
 /// The request's `lora` list (both servers take this): each LoRA's path
@@ -180,6 +189,20 @@ mod tests {
             prompt_sent("cute robot sticker.", true),
             "This is an RGBA image with transparency. cute robot sticker. The image has alpha channel and the background is transparent."
         );
+    }
+
+    /// The model's own sampler: none sent (sd-server and KoboldCpp then
+    /// use the recipe's).
+    #[test]
+    fn the_sampler_sent_unless_the_models_own() {
+        use crate::model::Sample;
+        let mut s =
+            Sample { method: String::new(), scheduler: String::new(), steps: 8, cfg: 1.0, flow_shift: None, custom_sigmas: vec![] };
+        let p = sample_params(&s);
+        assert!(p.get("sample_method").is_none() && p.get("scheduler").is_none(), "{p}");
+        (s.method, s.scheduler) = ("euler_a".into(), "karras".into());
+        let p = sample_params(&s);
+        assert_eq!((&p["sample_method"], &p["scheduler"]), (&json!("euler_a"), &json!("karras")));
     }
 
     #[test]
