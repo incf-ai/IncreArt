@@ -14,7 +14,11 @@
         "great-wave.jpg"
       ],
       "in": "museums",
-      "starred": true
+      "starred": true,
+      "also_in": [
+        "cats",
+        "favourites"
+      ]
     },
     {
       "key": "jatte",
@@ -26,7 +30,10 @@
       "images": [
         "grande-jatte.jpg"
       ],
-      "in": "museums"
+      "in": "museums",
+      "also_in": [
+        "travel"
+      ]
     },
     {
       "key": "wheat",
@@ -52,7 +59,10 @@
         "zion-poster.jpg"
       ],
       "in": "posters",
-      "starred": true
+      "starred": true,
+      "also_in": [
+        "travel/national parks"
+      ]
     },
     {
       "key": "canyon",
@@ -64,7 +74,10 @@
       "images": [
         "grand-canyon-poster.jpg"
       ],
-      "in": "posters"
+      "in": "posters",
+      "also_in": [
+        "travel/national parks"
+      ]
     },
     {
       "key": "mars",
@@ -75,7 +88,10 @@
         "space"
       ],
       "in": "posters",
-      "starred": true
+      "starred": true,
+      "also_in": [
+        "space"
+      ]
     },
     {
       "key": "moonwalk",
@@ -89,7 +105,10 @@
         "moonwalk.jpg"
       ],
       "in": "space",
-      "starred": true
+      "starred": true,
+      "also_in": [
+        "favourites"
+      ]
     },
     {
       "key": "earthrise",
@@ -125,7 +144,10 @@
       "images": [
         "sydney-harbour.jpg"
       ],
-      "in": "photos"
+      "in": "photos",
+      "also_in": [
+        "travel"
+      ]
     },
     {
       "key": "mika",
@@ -136,7 +158,10 @@
         "anime"
       ],
       "in": "characters",
-      "starred": true
+      "starred": true,
+      "also_in": [
+        "favourites"
+      ]
     },
     {
       "key": "keeper",
@@ -184,7 +209,55 @@
           "Pixel art 16-bit"
         ]
       ],
-      "verdicts": "gg-nb-"
+      "verdicts": "gg-nb-",
+      "tags": [
+        [
+          "cats",
+          "ukiyo-e",
+          "impressionist",
+          "favourite"
+        ],
+        [
+          "cats",
+          "ukiyo-e",
+          "impressionist"
+        ],
+        [
+          "cats",
+          "ukiyo-e",
+          "stained glass"
+        ],
+        [
+          "cats",
+          "ukiyo-e",
+          "stained glass"
+        ],
+        [
+          "cats",
+          "ukiyo-e",
+          "pixel art"
+        ],
+        [
+          "cats",
+          "ukiyo-e",
+          "pixel art"
+        ]
+      ],
+      "collect": {
+        "Portfolio": [
+          0,
+          1
+        ],
+        "Wallpapers/Landscape": [
+          0,
+          4
+        ],
+        "Cats": [
+          0,
+          1,
+          3
+        ]
+      }
     },
     {
       "folder": "museums",
@@ -215,7 +288,44 @@
           "Tapestry hall"
         ]
       ],
-      "verdicts": "gn-g-b"
+      "verdicts": "gn-g-b",
+      "tags": [
+        [
+          "pointillism",
+          "snow globe",
+          "favourite"
+        ],
+        [
+          "pointillism",
+          "snow globe"
+        ],
+        [
+          "pointillism",
+          "surreal"
+        ],
+        [
+          "pointillism",
+          "surreal",
+          "favourite"
+        ],
+        [
+          "pointillism",
+          "textile"
+        ],
+        [
+          "pointillism",
+          "textile"
+        ]
+      ],
+      "collect": {
+        "Portfolio": [
+          0,
+          3
+        ],
+        "Print": [
+          3
+        ]
+      }
     },
     {
       "folder": "posters",
@@ -234,7 +344,44 @@
       "height": 800,
       "seeds": 5,
       "prompt": "a 1930s WPA travel poster like <image1> and <image2>: \"OLYMPUS MONS NATIONAL PARK\", \"RANGER NATURALIST SERVICE\", red volcano, two moons, {foreground} in the foreground",
-      "verdicts": "gb-bg"
+      "verdicts": "gb-bg",
+      "tags": [
+        [
+          "poster",
+          "wpa",
+          "space",
+          "favourite"
+        ],
+        [
+          "poster",
+          "wpa",
+          "space"
+        ],
+        [
+          "poster",
+          "wpa"
+        ],
+        [
+          "poster",
+          "wpa",
+          "space"
+        ],
+        [
+          "poster",
+          "wpa",
+          "space",
+          "favourite"
+        ]
+      ],
+      "collect": {
+        "Portfolio": [
+          0
+        ],
+        "Print/Posters": [
+          0,
+          4
+        ]
+      }
     },
     {
       "folder": "",
@@ -252,7 +399,39 @@
       "height": 544,
       "seeds": 4,
       "prompt": "The harbour in <image1> at night as a hand-coloured photochrom print, the statue from <image2> standing on the headland, {celebration} over the water, {boats} crossing the bay",
-      "verdicts": "ngb-"
+      "verdicts": "ngb-",
+      "tags": [
+        [
+          "photochrom",
+          "night",
+          "new york"
+        ],
+        [
+          "photochrom",
+          "night",
+          "new york",
+          "favourite"
+        ],
+        [
+          "photochrom",
+          "night"
+        ],
+        [
+          "photochrom",
+          "night"
+        ]
+      ],
+      "collect": {
+        "Portfolio": [
+          1
+        ],
+        "Wallpapers/Landscape": [
+          1
+        ],
+        "Print": [
+          1
+        ]
+      }
     },
     {
       "folder": "characters",
@@ -267,7 +446,35 @@
       "height": 544,
       "seeds": 4,
       "prompt": "anime illustration of Mika, an original character: cheerful bicycle courier, short teal hair, yellow raincoat, a small red fox in her front basket, {place} at {time_of_day}",
-      "verdicts": "g-n-"
+      "verdicts": "g-n-",
+      "tags": [
+        [
+          "character",
+          "anime",
+          "favourite"
+        ],
+        [
+          "character",
+          "anime"
+        ],
+        [
+          "character",
+          "anime"
+        ],
+        [
+          "character",
+          "anime"
+        ]
+      ],
+      "collect": {
+        "Portfolio": [
+          0
+        ],
+        "Characters": [
+          0,
+          2
+        ]
+      }
     },
     {
       "folder": "space",
@@ -298,7 +505,58 @@
           "Assembled from objects"
         ]
       ],
-      "verdicts": "gn-gb-ng-"
+      "verdicts": "gn-gb-ng-",
+      "tags": [
+        [
+          "space",
+          "sculpture",
+          "favourite"
+        ],
+        [
+          "space",
+          "sculpture"
+        ],
+        [
+          "space",
+          "sculpture"
+        ],
+        [
+          "space",
+          "elements",
+          "favourite"
+        ],
+        [
+          "space",
+          "elements"
+        ],
+        [
+          "space",
+          "elements"
+        ],
+        [
+          "space",
+          "objects"
+        ],
+        [
+          "space",
+          "objects"
+        ],
+        [
+          "space",
+          "objects"
+        ]
+      ],
+      "collect": {
+        "Portfolio": [
+          0,
+          3
+        ],
+        "Wallpapers/Square": [
+          0,
+          3,
+          6
+        ]
+      }
     }
   ]
 }

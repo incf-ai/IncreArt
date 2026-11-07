@@ -4,5 +4,26 @@ Project {
     created: "2026-10-29T19:53:20Z",
     sources: [
         "2026.10.29-19.53-0009"
-    ]
+    ],
+    tags: {
+        "2026.10.29-19.58-0002": [
+            "new york",
+            "night",
+            "photochrom"
+        ],
+        "2026.10.29-19.59-0000": [
+            "favourite",
+            "new york",
+            "night",
+            "photochrom"
+        ],
+        "2026.10.29-19.59-0001": [
+            "night",
+            "photochrom"
+        ],
+        "2026.10.29-19.59-0003": [
+            "night",
+            "photochrom"
+        ]
+    }
 }

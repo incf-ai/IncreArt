@@ -5,18 +5,26 @@
 //! reducer and runtime, no window): optionally a PE rewrite of the prompt,
 //! then PE's suggestions for its blanks (the first picked; every project
 //! has some), and for a style sweep its enhanced style prompts. Then it queues the runs on a server preset and
-//! waits for them. `review` applies the spec's verdicts afterwards.
+//! waits for them. `review` applies the spec's verdicts afterwards, and
+//! `organize` its tags and collections.
 //!
 //!     cargo run --release -p increart-gui-core --example demo_library -- \
 //!         build <config.rsn> <server preset> <spec.json> <sources dir> <library>
 //!     cargo run --release -p increart-gui-core --example demo_library -- \
 //!         review <spec.json> <library>
+//!     cargo run --release -p increart-gui-core --example demo_library -- \
+//!         organize <spec.json> <library>
 //!
 //! The config gives the server preset (its chat server does prompt
 //! enhance), the model presets and PE's settings; it is never written.
 //! Verdicts are per project, `g` / `n` / `b` (`-`: left unreviewed), over
 //! its outputs in run then seed order (`review` again puts each back as
 //! the spec says).
+//!
+//! `organize` (after `review`; again changes nothing) puts each idea in its
+//! `also_in` input collections too, gives a project's outputs their `tags`
+//! (a list per output, in the same order as the verdicts) and links them
+//! into the output collections of `collect` (folder → output indices).
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -37,9 +45,11 @@ fn main() {
             build(Path::new(config), preset, &read_spec(Path::new(spec)), Path::new(sources), Path::new(library))
         }
         ["review", spec, library] => review(&read_spec(Path::new(spec)), Path::new(library)),
+        ["organize", spec, library] => organize(&read_spec(Path::new(spec)), Path::new(library)),
         _ => {
             eprintln!("usage: demo_library build <config.rsn> <preset> <spec.json> <sources> <library>");
             eprintln!("       demo_library review <spec.json> <library>");
+            eprintln!("       demo_library organize <spec.json> <library>");
             std::process::exit(2);
         }
     }
@@ -338,20 +348,27 @@ fn build(config: &Path, preset: &str, spec: &Value, sources: &Path, library: &Pa
     app.rt.shutdown(false);
 }
 
+/// A project's outputs in run then seed order (the order of the spec's
+/// verdicts and tags).
+fn outputs_in_order(entry: &increart_core::scan::ProjectEntry) -> Vec<&increart_core::scan::OutputLink> {
+    let mut runs = entry.runs.clone();
+    runs.sort_by_key(|r| (r.created, r.label.clone()));
+    runs.iter()
+        .flat_map(|r| {
+            let mut o: Vec<_> = entry.outputs.iter().filter(|o| o.name.run == r.id).collect();
+            o.sort_by_key(|o| o.name.seed);
+            o
+        })
+        .collect()
+}
+
 fn review(spec: &Value, library: &Path) {
     let lib = Library::open(library).expect("open library");
     let index = lib.scan().expect("scan");
     for p in spec["projects"].as_array().expect("projects") {
         let verdicts = s(p, "verdicts");
         let Some(entry) = index.projects.iter().find(|e| e.name() == s(p, "name")) else { continue };
-        let mut runs = entry.runs.clone();
-        runs.sort_by_key(|r| (r.created, r.label.clone()));
-        let outputs = runs.iter().flat_map(|r| {
-            let mut o: Vec<_> = entry.outputs.iter().filter(|o| o.name.run == r.id).collect();
-            o.sort_by_key(|o| o.name.seed);
-            o
-        });
-        for (o, v) in outputs.zip(verdicts.chars()) {
+        for (o, v) in outputs_in_order(entry).into_iter().zip(verdicts.chars()) {
             let verdict = match v {
                 'g' => Some(Verdict::Good),
                 'n' => Some(Verdict::Neutral),
@@ -360,6 +377,45 @@ fn review(spec: &Value, library: &Path) {
             };
             if o.verdict != verdict {
                 lib.review_output(&o.path, verdict).expect("review");
+            }
+        }
+    }
+}
+
+fn organize(spec: &Value, library: &Path) {
+    let lib = Library::open(library).expect("open library");
+    let index = lib.scan().expect("scan");
+    // ideas by title (the spec's keys aren't kept in the library)
+    for i in spec["ideas"].as_array().expect("ideas") {
+        let Some(idea) = index.ideas.iter().find(|e| e.idea.title == s(i, "title")) else {
+            panic!("no idea titled {:?}", s(i, "title"))
+        };
+        for folder in strs(i, "also_in") {
+            make_folders(&lib, Tree::InputCollections, Path::new(&folder));
+            lib.link_idea(&idea.idea.id, Path::new(&folder)).expect("link idea");
+        }
+    }
+    for p in spec["projects"].as_array().expect("projects") {
+        let entry = index.projects.iter().find(|e| e.name() == s(p, "name")).expect("project");
+        let outputs = outputs_in_order(entry);
+        let tags: Vec<_> = p["tags"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .zip(&outputs)
+            .map(|(t, o)| {
+                let t = t.as_array().expect("tags").iter().filter_map(|x| x.as_str().map(String::from)).collect();
+                (o.image.id.clone(), t)
+            })
+            .collect();
+        if !tags.is_empty() {
+            lib.set_tags(&entry.project.id, &tags).expect("set tags");
+        }
+        for (folder, which) in p["collect"].as_object().into_iter().flatten() {
+            make_folders(&lib, Tree::Collections, Path::new(folder));
+            for n in which.as_array().expect("output indices") {
+                let o = outputs[n.as_u64().expect("index") as usize];
+                lib.add_to_collection(Path::new(folder), &o.image.id).expect("collect");
             }
         }
     }

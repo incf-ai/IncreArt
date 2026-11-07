@@ -4,5 +4,33 @@ Project {
     created: "2026-10-29T19:53:20Z",
     sources: [
         "2026.10.29-19.53-0001"
-    ]
+    ],
+    tags: {
+        "2026.10.29-19.55-0002": [
+            "favourite",
+            "pointillism",
+            "snow globe"
+        ],
+        "2026.10.29-19.55-0003": [
+            "pointillism",
+            "surreal"
+        ],
+        "2026.10.29-19.56-0000": [
+            "pointillism",
+            "textile"
+        ],
+        "2026.10.29-19.56-0001": [
+            "pointillism",
+            "snow globe"
+        ],
+        "2026.10.29-19.56-0002": [
+            "favourite",
+            "pointillism",
+            "surreal"
+        ],
+        "2026.10.29-19.56-0003": [
+            "pointillism",
+            "textile"
+        ]
+    }
 }

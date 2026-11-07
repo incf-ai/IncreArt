@@ -110,7 +110,9 @@ on those platforms yet. Reports are welcome.
 
 Each release zip has an `Example library` folder beside the app: a small
 library to explore before you generate anything, with ideas, six projects
-(three of them style sweeps) and 34 reviewed and unreviewed outputs. Each
+(three of them style sweeps) and 34 reviewed and unreviewed outputs. Ideas
+and outputs have several tags each, and both libraries have collections
+(some nested, some ideas and images in more than one). Each
 project's prompt has blanks, with prompt enhance's suggestions for them and
 one picked. It's in the start-up list the first time you run IncreArt. It's
 an ordinary library, so changes you make to it are saved, and you can remove
@@ -122,7 +124,9 @@ of Art, the Art Institute of Chicago and NASA, and all of them are public
 domain or have no known restrictions. `credits.json` in that folder lists
 each one with its source page. `increart-core`'s `demo_sources` example
 (`cargo run -p increart-core --example demo_sources`) and
-`scripts/demo-library.json` rebuild it from scratch, and
+`scripts/demo-library.json` rebuild it from scratch (`demo_library`'s
+`review` and `organize` steps apply the spec's verdicts, tags and
+collections to a built library), and
 `scripts/update-example-library.sh` puts it in `example-library/`, where the
 release workflow takes it from.
 
