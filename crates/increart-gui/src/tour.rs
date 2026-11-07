@@ -30,6 +30,7 @@ const SCENES: &[&str] = &[
     "02d-model-presets-from-servers",
     "02e-model-wizard",
     "02f-model-setup",
+    "02g-models-yours",
     "54-server-wizard",
     "54a-server-wizard-choose",
     "54c-server-wizard-pe-own-gpu",
@@ -1149,11 +1150,20 @@ impl Tour {
                 ]
             }
             "02f-model-setup" => {
-                // Edit…: the built-in models page, the first three ticked
+                // the Models window on Install built-in, the first three ticked
                 let Some(mut w) = st.model_wizard.clone() else { return vec![] };
                 w.editing = true;
                 w.tab = increart_gui_core::ModelSetupTab::Add;
                 vec![Msg::EditModelWizard(Box::new(w))]
+            }
+            "02g-models-yours" => {
+                // a row clicked: the model open in Your models
+                let Some(mut w) = st.model_wizard.clone() else { return vec![] };
+                w.editing = true;
+                w.tab = increart_gui_core::ModelSetupTab::Yours;
+                let mut e = increart_gui_core::RecipeEditor::new(&st.config.recipes, 0);
+                e.selected = st.config.recipes.len().saturating_sub(1);
+                vec![Msg::EditRecipes(e), Msg::EditModelWizard(Box::new(w))]
             }
             "54-server-wizard" => {
                 // KoboldCpp: two 24 GB cards and an integrated GPU (not ticked)
@@ -1582,15 +1592,25 @@ impl Tour {
                 vec![Msg::Tab(Tab::Projects), Msg::ProjectsTab(ProjectsTab::Generate), Msg::OpenRecipes]
             }
             scene @ ("21c-model-presets-builtin" | "21d-model-presets-lora") => {
-                // the built-in list open, a LoRA variant added; then it selected
+                // a LoRA variant added, selected in Your models; 21c: the
+                // window on Install built-in
                 let mut e = increart_gui_core::RecipeEditor::new(&st.config.recipes, 0);
-                e.builtin = scene.starts_with("21c");
                 if let Some(p) = increart_core::config::catalogue().into_iter().find(|p| p.name.contains("· pixel art"))
                 {
                     e.rows.push(increart_gui_core::RecipeRow { preset: p, origin: None, sigmas: String::new() });
                     e.selected = e.rows.len() - 1;
                 }
-                vec![Msg::Tab(Tab::Projects), Msg::ProjectsTab(ProjectsTab::Generate), Msg::EditRecipes(e)]
+                let mut v = vec![Msg::Tab(Tab::Projects), Msg::ProjectsTab(ProjectsTab::Generate), Msg::EditRecipes(e)];
+                if let Some(mut w) = st.model_wizard.clone() {
+                    w.editing = true;
+                    w.tab = if scene.starts_with("21c") {
+                        increart_gui_core::ModelSetupTab::Add
+                    } else {
+                        increart_gui_core::ModelSetupTab::Yours
+                    };
+                    v.push(Msg::EditModelWizard(Box::new(w)));
+                }
+                v
             }
             "22-output-library-lineage" => {
                 let mut v = vec![

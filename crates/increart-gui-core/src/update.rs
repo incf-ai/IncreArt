@@ -500,7 +500,7 @@ pub enum Msg {
     LocalFiles(Box<increart_core::kobold_image::LocalFiles>),
     /// As `DownloadPresetFiles`, into this folder.
     DownloadPresetFilesInto(String, String, Vec<increart_core::tiers::Download>),
-    /// **Set up models** (DESIGN.md, Setting up models).
+    /// the **Models** window (DESIGN.md, Setting up models).
     OpenModelWizard,
     EditModelWizard(Box<crate::state::ModelWizard>),
     ModelFoldersFound(Vec<increart_core::modelsetup::FoundFolder>),
@@ -1761,7 +1761,7 @@ fn home() -> Option<PathBuf> {
     std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")).map(PathBuf::from)
 }
 
-/// **Set up models** (DESIGN.md, Setting up models).
+/// the **Models** window (DESIGN.md, Setting up models).
 #[inline(never)]
 fn model_wizard(state: &mut AppState, msg: Msg) -> Vec<Effect> {
     use crate::state::ModelWizard;
@@ -1849,6 +1849,14 @@ fn model_wizard(state: &mut AppState, msg: Msg) -> Vec<Effect> {
             let mut added = 0;
             for p in picked {
                 if !c.recipes.iter().any(|r| r.name == p.name) {
+                    // in the models being edited too (the same window), so
+                    // saving them doesn't drop it
+                    if let Some(e) = &mut state.recipe_editor
+                        && !e.rows.iter().any(|r| r.preset.name == p.name)
+                    {
+                        let sigmas = p.custom_sigmas.iter().map(f32::to_string).collect::<Vec<_>>().join(", ");
+                        e.rows.push(crate::RecipeRow { preset: p.clone(), origin: Some(c.recipes.len()), sigmas });
+                    }
                     c.recipes.push(p);
                     added += 1;
                 }
@@ -1874,8 +1882,8 @@ fn model_wizard(state: &mut AppState, msg: Msg) -> Vec<Effect> {
             fx
         }
         Msg::CloseModelWizard => {
-            // the Set up models window; a download goes on (the Models half
-            // shows it; a message says when it's done)
+            // the Models window (the editor closes by CloseRecipes); a
+            // download goes on (the Models half shows it)
             if let Some(w) = &mut state.model_wizard {
                 w.editing = false;
             }

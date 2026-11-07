@@ -2120,8 +2120,8 @@ and its tooltip says how many more are generating.
   server has answered, every preset is offered. A model sweep's checkboxes
   follow the same list (a ticked preset stays to be unticked).
 - The **⚙** beside the Model preset list (and beside the server preset
-  editor's Image model line) opens **Model presets**, a modal editor of
-  config `model_presets`: the list (a ✓ when an open server runs it, naming which
+  editor's Image model line) opens the **Models** window (see Setting up
+  models) on **Your models**, the editor of config `model_presets`: the list (a ✓ when an open server runs it, naming which
   on hover; new, duplicate, move, delete) and the selected one's name,
   recipe, steps, CFG, sampler and scheduler (both picked from
   stable-diffusion.cpp's names; **model default** leaves it to the model:
@@ -2138,6 +2138,8 @@ and its tooltip says how many more are generating.
   the form takes them, and if it was deleted the first preset is chosen.
   Other projects' drafts name their preset, so a rename moves them to the
   form's current one when opened. **Reset to built-ins** replaces the list.
+  Close (or Esc) drops what isn't saved ("Not saved yet: Close drops the
+  changes" says so); Save is greyed with nothing changed.
 - **Preset format** (config `model_presets`, `ModelPreset`): besides
   `name`, `recipe`, `files` (slot → file ID), `steps`, `cfg`, `flow_shift`,
   `custom_sigmas`, `sampler`, `scheduler` and `loras`, a preset may have
@@ -2790,7 +2792,8 @@ in the app's state folder (`$XDG_STATE_HOME/increart` when set, else
 - **Setting up models**: the servers screen's right half, **Models**
   (opened as the screen first shows; its state, `ModelWizard`, stays while
   the app runs, so a download's progress is there when the screen is
-  reopened), read only:
+  reopened), read only; **Manage models…** and **New model…** (a new
+  model, selected, from the selected one's files) in its header:
   - The model folders on one line, a filter row (search: every word in
     the name, recipe or note; kind: image, edit (an edit recipe or
     Kontext), LoRA style (`ModelKind::of`); **Fits GPU ▾**, a popover with
@@ -2807,15 +2810,22 @@ in the app's state folder (`$XDG_STATE_HOME/increart` when set, else
     installed**; each with Model, Size, Files ("ready", "3 files missing",
     "files here, not installed", "download 3 files (9.8 GB)") and Fits GPU,
     and "(4 of 18 shown)" when filtered; each collapsible, open to start.
-  - **Model settings…** opens the models editor; **Edit…** opens **Set up
-    models**, a window of two pages (the same height, so it doesn't jump)
-    and Model settings…; Close or Esc closes it (a download goes on, shown
-    in the half too):
-  - **1. Model folders**: the download folder, your model folders in order
+    A model's name is a link: yours and installed ones open in Your models,
+    selected (scrolled to); one not installed opens Install built-in with
+    it ticked (unless it can't be had).
+  - The **Models** window (`modelwizard::window`): one window for all of
+    it, whatever opens it (the half, Generate's ⚙, the coverage line, the
+    sd-server wizard's Edit your models…), its tabs the same height, so it
+    doesn't jump; Close or Esc closes it (a download goes on, shown in the
+    half too; unsaved edits to your models are dropped):
+  - **Your models**: the models editor (Model presets above), with Reset
+    to built-ins and Save. Its edits stay while switching tabs; models
+    installed meanwhile are added to them too, so Save doesn't drop them.
+  - **Install built-in**: the filter row and the built-in models, ticked
+    to install; **Download and install** (**Install** when nothing's
+    missing).
+  - **Folders**: the download folder, your model folders in order
     (changed in Server settings…), and folders found with model files.
-  - **2. Add built-in models**: the filter row and the built-in models,
-    ticked to install; **Download and install** (**Install** when
-    nothing's missing).
   The pages' parts:
   - **1. Download folder**: where downloads go, the first model folder by default, else
     `~/models`; typed or Browse…. One not yet a model folder is added as

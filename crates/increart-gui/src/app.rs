@@ -1468,8 +1468,9 @@ impl eframe::App for App {
             Phase::Servers(d) => {
                 let st = &self.st;
                 egui::CentralPanel::default().show(ui, |ui| crate::startup::servers(ui, st, &d, &mut out));
-                // the preset editor's gear opens it here too
-                crate::projects::recipes_window(&ctx, st, &mut out);
+                // the Models window: the Models half, and the server setup
+                // editor's gear, open it here
+                crate::modelwizard::window(&ctx, st, &mut out);
             }
             Phase::Main => self.main_window(ui, &mut out),
         }
@@ -1480,7 +1481,7 @@ impl eframe::App for App {
             crate::ideas::edit_window(&ctx, &self.st, &mut self.tex, &mut out);
             crate::settings::window(&ctx, &self.st, &mut out);
             crate::projects::resolutions_window(&ctx, &self.st, &mut out);
-            crate::projects::recipes_window(&ctx, &self.st, &mut out);
+            crate::modelwizard::window(&ctx, &self.st, &mut out);
             crate::projects::scale_window(&ctx, &self.st, &mut out);
             // under the modals it opens (picker, preview, job details)
             crate::tiles::window(&ctx, &self.st, &mut self.tex, &mut out);

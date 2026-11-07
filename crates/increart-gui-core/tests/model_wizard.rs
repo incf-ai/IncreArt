@@ -1,4 +1,5 @@
-//! **Set up models**: folders found, presets picked, what's fetched where.
+//! The **Models** window: folders found, presets picked, what's fetched
+//! where; Your models alongside.
 
 use increart_core::config::{Config, catalogue};
 use increart_core::modelsetup::FoundFolder;
@@ -56,7 +57,24 @@ fn the_folder_found_folders_and_picked_presets_become_the_setup() {
     w.dir = mine.clone();
     w.picked = [first.name.clone(), second.name.clone()].into();
     update(&mut s, Msg::EditModelWizard(Box::new(w)));
+    // Your models open in the same window, a new one started there
+    update(&mut s, Msg::OpenRecipes);
+    let mut e = s.recipe_editor.clone().unwrap();
+    assert!(!e.changed(&s.config.recipes));
+    e.add_new();
+    let mine_row = &mut e.rows.last_mut().unwrap().preset;
+    mine_row.name = "Mine".into();
+    mine_row.files.insert("diffusion_model".into(), "mine.safetensors".into());
+    update(&mut s, Msg::EditRecipes(e));
     let fx = update(&mut s, Msg::ModelWizardGo);
+    // the installed ones are in the editor too, so saving keeps them
+    let e = s.recipe_editor.clone().unwrap();
+    let names: Vec<&str> = e.rows.iter().map(|r| r.preset.name.as_str()).collect();
+    assert_eq!(names, ["Mine", first.name.as_str(), second.name.as_str()]);
+    assert!(e.changed(&s.config.recipes));
+    let mut e2 = e.clone();
+    e2.select_named(&second.name);
+    assert_eq!(e2.selected, 2);
     assert_eq!(s.config.programs.model_dirs, vec![mine.clone(), path]);
     assert!(std::path::Path::new(&mine).is_dir());
     let names: Vec<&str> = s.config.recipes.iter().map(|r| r.name.as_str()).collect();
@@ -69,6 +87,9 @@ fn the_folder_found_folders_and_picked_presets_become_the_setup() {
     assert_eq!(dir, &mine);
     assert_eq!(files.len(), needs.downloads.len(), "only the second's files");
     assert!(s.preset_download.is_some());
+    update(&mut s, Msg::SaveRecipes);
+    let names: Vec<&str> = s.config.recipes.iter().map(|r| r.name.as_str()).collect();
+    assert_eq!(names, ["Mine", first.name.as_str(), second.name.as_str()]);
     // again while it downloads: refused
     update(&mut s, Msg::ModelWizardGo);
     assert!(s.messages.iter().any(|m| m.error && m.text.contains("under way")));

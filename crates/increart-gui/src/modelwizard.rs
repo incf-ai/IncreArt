@@ -1,14 +1,16 @@
 //! **Models**, the servers screen's right half (DESIGN.md, Setting up
 //! models): your models and the built-in ones in three read-only lists
 //! (yours, built-in installed, built-in not installed) with search, filter
-//! and order; **Edit…** opens **Set up models**, a window with the model
-//! folders and the built-in models to add (downloading what isn't there).
+//! and order; **Manage models…** (or a row) opens **Models**, a window with
+//! your models' settings, the built-in models to install (downloading what
+//! isn't there) and the model folders.
 
 use eframe::egui::{self, RichText};
 use increart_core::config::RecipePreset;
 use increart_core::tiers::Gpu;
 use increart_gui_core::{
     AppState, ModelColumn, ModelKind, ModelLists, ModelSetupTab, ModelSort, ModelWizard, Msg, PickKind, PresetNeeds,
+    RecipeEditor,
 };
 
 use crate::widgets::{ACCENT, BAD, GOOD, NEUTRAL, dialog_footer, ic, ph};
@@ -76,9 +78,6 @@ pub fn panel(ui: &mut egui::Ui, st: &AppState, list_height: f32, out: &mut Vec<M
             );
         }
     }
-    if w.editing && servers {
-        setup_window(ui.ctx(), st, &mut w, out);
-    }
     if &w != old {
         out.push(Msg::EditModelWizard(Box::new(w)));
     }
@@ -93,28 +92,34 @@ fn overview(ui: &mut egui::Ui, st: &AppState, w: &mut ModelWizard, list_height: 
         |ui| ui.heading(ic(ph::CUBE, "Models")),
         |ui| {
             if ui
-                .button(RichText::new(ic(ph::PENCIL_SIMPLE, "Edit…")).strong())
-                .on_hover_text("Set up models: the model folders, and built-in models to add and download")
+                .button(ic(ph::PLUS, "New model…"))
+                .on_hover_text("make your own: files, recipe and settings (starting from the selected model's)")
+                .clicked()
+            {
+                let mut e = editor_on(st, None);
+                e.add_new();
+                ui.memory_mut(|m| m.data.insert_temp(crate::projects::scroll_id(), true));
+                out.push(Msg::EditRecipes(e));
+                w.editing = true;
+                w.tab = ModelSetupTab::Yours;
+            }
+            if ui
+                .button(RichText::new(ic(ph::SLIDERS_HORIZONTAL, "Manage models…")).strong())
+                .on_hover_text("each model's files and settings, the built-in models to install, the model folders")
                 .clicked()
             {
                 w.editing = true;
-            }
-            if ui
-                .button(ic(ph::SLIDERS_HORIZONTAL, "Model settings…"))
-                .on_hover_text("each of your models' files and settings; make your own; test one on a server")
-                .clicked()
-            {
-                out.push(Msg::OpenRecipes);
+                w.tab = ModelSetupTab::Yours;
             }
         },
     );
     ui.label(
-        "The image models the servers can load, each its files and the settings it runs with. Edit… sets up the \
-         model folders and installs built-in models (downloading their files).",
+        "The image models the servers can load, each its files and the settings it runs with. Click one to open \
+         it: yours to edit it, a built-in one not installed to install it.",
     );
     let dirs: Vec<&String> = model_dirs.iter().filter(|d| !d.trim().is_empty()).collect();
     ui.weak(match dirs.as_slice() {
-        [] => "No model folders yet: Edit… to choose one.".to_string(),
+        [] => "No model folders yet: Manage models… → Folders to choose one.".to_string(),
         [one] => format!("Model folder: {one}"),
         [first, more @ ..] => format!("Model folders: {first} and {} more", more.len()),
     });
@@ -130,14 +135,14 @@ fn overview(ui: &mut egui::Ui, st: &AppState, w: &mut ModelWizard, list_height: 
             "models_custom",
             &lists.custom,
             Section::Custom,
-            "None: models you make in Model settings… (not built-in ones) are listed here.",
+            "None: models you make (New model…) are listed here.",
         ),
         (
             "Built-in models, installed",
             "models_installed",
             &lists.installed,
             Section::Installed,
-            "None yet: Edit… → 2. Add built-in models.",
+            "None yet: click one below to install it.",
         ),
         (
             "Built-in models, not installed",
@@ -167,7 +172,9 @@ fn overview(ui: &mut egui::Ui, st: &AppState, w: &mut ModelWizard, list_height: 
                         if all.is_empty() {
                             ui.weak(none);
                         } else {
-                            list_table(ui, id, &shown, &gpus, section, &mut w.sort);
+                            if let Some(name) = list_table(ui, id, &shown, &gpus, section, &mut w.sort) {
+                                open_row(ui, st, w, &name, section, out);
+                            }
                         }
                     });
             }
@@ -358,12 +365,14 @@ fn list_table(
     gpus: &[Gpu],
     section: Section,
     sort: &mut ModelSort,
-) {
+) -> Option<String> {
     use egui_extras::{Column, TableBuilder};
     if rows.is_empty() {
         ui.weak("None match the filter.");
-        return;
+        return None;
     }
+    let mut clicked = None;
+    let what = if section == Section::Available { "click to install it" } else { "click to open it" };
     TableBuilder::new(ui)
         .id_salt(id)
         .striped(true)
@@ -378,7 +387,10 @@ fn list_table(
             for (p, needs) in rows {
                 body.row(22.0, |mut row| {
                     row.col(|ui| {
-                        ui.label(&p.name).on_hover_text(tip(p));
+                        let link = ui.add(egui::Link::new(&p.name)).on_hover_text(format!("{}\n\n{what}", tip(p)));
+                        if link.clicked() {
+                            clicked = Some(p.name.clone());
+                        }
                     });
                     row.col(|ui| size_cell(ui, needs));
                     row.col(|ui| {
@@ -388,6 +400,28 @@ fn list_table(
                 });
             }
         });
+    clicked
+}
+
+/// A row of the lists clicked: yours and installed ones open in Your
+/// models, one not installed in Install built-in, ticked.
+fn open_row(ui: &mut egui::Ui, st: &AppState, w: &mut ModelWizard, name: &str, section: Section, out: &mut Vec<Msg>) {
+    w.editing = true;
+    if section == Section::Available {
+        w.tab = ModelSetupTab::Add;
+        let dirs = w.folders(&st.config.programs.model_dirs);
+        let catalogue = increart_core::config::catalogue();
+        if let Some(p) = catalogue.iter().find(|p| p.name == name)
+            && !PresetNeeds::of(p, &dirs, &w.sizes).unavailable
+        {
+            w.picked.insert(name.to_string());
+        }
+        ui.memory_mut(|m| m.data.insert_temp(add_scroll_id(), name.to_string()));
+    } else {
+        w.tab = ModelSetupTab::Yours;
+        ui.memory_mut(|m| m.data.insert_temp(crate::projects::scroll_id(), true));
+        out.push(Msg::EditRecipes(editor_on(st, Some(name))));
+    }
 }
 
 /// A download under way: its progress and Cancel.
@@ -400,89 +434,196 @@ fn download_line(ui: &mut egui::Ui, st: &AppState, out: &mut Vec<Msg>) {
     }
 }
 
-/// **Set up models**: the model folders, and the built-in models to add.
-fn setup_window(ctx: &egui::Context, st: &AppState, w: &mut ModelWizard, out: &mut Vec<Msg>) {
-    let (mut go, mut close) = (false, false);
-    egui::Modal::new(egui::Id::unique("model_setup")).show(ctx, |ui| {
-        ui.set_width(920.0);
-        ui.heading(ic(ph::CUBE, "Set up models"));
-        ui.label(
-            "Where the model files are, and the built-in models to install: only the files that aren't already in \
-             one of the model folders are downloaded.",
-        );
-        ui.add_space(8.0);
+/// The model whose row was last clicked in the Add tab, to scroll to.
+fn add_scroll_id() -> egui::Id {
+    egui::Id::unique("model_add_scroll_to")
+}
+
+/// The model selected in Your models, kept for when it's opened again
+/// (after Save, the editor is new).
+fn selected_id() -> egui::Id {
+    egui::Id::unique("models_window_selected")
+}
+
+/// The editor on `name`, the open one if it's open (keeping its changes).
+fn editor_on(st: &AppState, name: Option<&str>) -> RecipeEditor {
+    let mut e = st.recipe_editor.clone().unwrap_or_else(|| RecipeEditor::new(&st.config.recipes, st.generate.preset));
+    if let Some(name) = name {
+        e.select_named(name);
+    }
+    e
+}
+
+/// **Models** (DESIGN.md, Setting up models): one window, three tabs. **Your
+/// models**, each model's files and settings (the editor); **Install
+/// built-in**, the built-in models to add, downloading what isn't there;
+/// **Folders**, where the files are. Open while the Models half says
+/// (`editing`) or the editor is (`OpenRecipes`, from Generate and the
+/// coverage line).
+pub fn window(ctx: &egui::Context, st: &AppState, out: &mut Vec<Msg>) {
+    let editing = st.model_wizard.as_ref().is_some_and(|w| w.editing);
+    if !editing && st.recipe_editor.is_none() {
+        return;
+    }
+    let Some(old) = &st.model_wizard else {
+        out.push(Msg::OpenModelWizard);
+        return;
+    };
+    let mut w = old.clone();
+    if !w.editing {
+        // opened as the editor
+        w.editing = true;
+        w.tab = ModelSetupTab::Yours;
+    }
+    let mut ed = st.recipe_editor.clone();
+    if w.tab == ModelSetupTab::Yours && ed.is_none() {
+        let name: Option<String> = ctx.data(|d| d.get_temp(selected_id()));
+        ed = Some(editor_on(st, name.as_deref()));
+    }
+    let (mut go, mut close, mut save) = (false, false, false);
+    egui::Modal::new(egui::Id::unique("models_window")).show(ctx, |ui| {
+        ui.set_width(960.0);
         ui.horizontal(|ui| {
-            for (t, label) in
-                [(ModelSetupTab::Folders, "1. Model folders"), (ModelSetupTab::Add, "2. Add built-in models")]
-            {
+            ui.heading(ic(ph::CUBE, "Models"));
+            ui.add_space(16.0);
+            for (t, label) in [
+                (ModelSetupTab::Yours, "Your models"),
+                (ModelSetupTab::Add, "Install built-in"),
+                (ModelSetupTab::Folders, "Folders"),
+            ] {
                 if ui.selectable_label(w.tab == t, RichText::new(label).strong()).clicked() {
                     w.tab = t;
                 }
             }
-            ui.separator();
-            if ui
-                .button(ic(ph::SLIDERS_HORIZONTAL, "Model settings…"))
-                .on_hover_text("each of your models' files and settings; make your own; test one on a server")
-                .clicked()
-            {
-                out.push(Msg::OpenRecipes);
+        });
+        ui.weak(match w.tab {
+            ModelSetupTab::Yours => {
+                "Generate's Model list: what each model loads and the settings it runs with. Saved to config.rsn."
             }
+            ModelSetupTab::Add => {
+                "Built-in models, tested on sd-server and KoboldCpp: tick to install. Only the files that aren't \
+                 already in a model folder are downloaded."
+            }
+            ModelSetupTab::Folders => "Where the model files are found, and where new ones are saved.",
         });
         ui.separator();
-        let height = (ctx.content_rect().height() - 380.0).clamp(200.0, 520.0);
+        let height = (ctx.content_rect().height() - 300.0).clamp(240.0, 640.0);
         // pages as tall as each other, so the window doesn't jump
-        egui::ScrollArea::vertical().id_salt("model_setup_page").min_scrolled_height(height).max_height(height).show(
-            ui,
-            |ui| {
+        if let (ModelSetupTab::Yours, Some(e)) = (w.tab, &mut ed) {
+            ui.vertical(|ui| {
                 ui.set_min_height(height);
-                match w.tab {
-                    ModelSetupTab::Folders => folders_page(ui, st, w, out),
-                    ModelSetupTab::Add => add_page(ui, st, w),
-                }
-            },
-        );
+                // the row's item spacing after the selected model would widen the
+                // window past the other tabs
+                ui.set_max_width(ui.available_width() - ui.spacing().item_spacing.x);
+                crate::projects::recipes_page(ui, st, e, height, out);
+            });
+        } else {
+            egui::ScrollArea::vertical()
+                .id_salt("models_window_page")
+                .min_scrolled_height(height)
+                .max_height(height)
+                .show(ui, |ui| {
+                    ui.set_min_height(height);
+                    ui.set_width(ui.available_width());
+                    match w.tab {
+                        ModelSetupTab::Folders => folders_page(ui, st, &mut w, out),
+                        _ => add_page(ui, st, &mut w),
+                    }
+                });
+        }
         ui.add_space(6.0);
-        let files = w.downloads(&st.config.programs.model_dirs);
-        let picked = w.picked.len();
         download_line(ui, st, out);
         if st.preset_download.is_none() && w.started {
             ui.colored_label(GOOD, ic(ph::CHECK_CIRCLE, "Done: installed, their files in the model folders."));
         }
-        dialog_footer(
-            ui,
-            |ui| {
-                let line = if picked > 0 {
-                    let known: Option<u64> =
-                        files.iter().try_fold(0u64, |n, d| Some(n + w.sizes.get(&d.url).copied().flatten()?));
-                    let s = plural(picked);
-                    match (files.len(), known) {
-                        (0, _) => format!("{picked} model{s}, files already here"),
-                        (n, Some(b)) => format!("{picked} model{s} · {n} files to download, {}", gb(b)),
-                        (n, None) => format!("{picked} model{s} · {n} files to download"),
-                    }
-                } else if w.tab == ModelSetupTab::Folders {
-                    "Next: 2. Add built-in models".to_string()
-                } else {
-                    "Tick models to install them.".to_string()
-                };
-                ui.label(RichText::new(line).color(if picked == 0 { NEUTRAL } else { ACCENT }));
-            },
-            |ui| {
-                close = ui.button("Close   Esc").clicked();
-                let label = if files.is_empty() { "Install" } else { "Download and install" };
-                let can = picked > 0 && !w.dir.trim().is_empty() && st.preset_download.is_none();
-                go = ui
-                    .add_enabled(can, egui::Button::new(RichText::new(ic(ph::DOWNLOAD_SIMPLE, label)).strong()))
-                    .clicked();
-            },
-        );
+        let files = w.downloads(&st.config.programs.model_dirs);
+        let picked = w.picked.len();
+        match (w.tab, &mut ed) {
+            (ModelSetupTab::Yours, Some(e)) => {
+                let problem = e.problem();
+                let changed = e.changed(&st.config.recipes);
+                dialog_footer(
+                    ui,
+                    |ui| {
+                        if ui.button("Reset to built-ins").on_hover_text("replaces the whole list").clicked() {
+                            *e = RecipeEditor::new(&increart_core::config::builtin_recipes(), 0);
+                            e.rows.iter_mut().for_each(|r| r.origin = None);
+                        }
+                        if let Some(p) = &problem {
+                            ui.colored_label(BAD, p);
+                        } else if changed {
+                            ui.colored_label(ACCENT, "Not saved yet: Close drops the changes");
+                        }
+                    },
+                    |ui| {
+                        close = ui.button("Close   Esc").clicked();
+                        let b = egui::Button::new(RichText::new(ic(ph::FLOPPY_DISK, "Save")).strong());
+                        save = ui.add_enabled(problem.is_none() && changed, b).clicked();
+                    },
+                );
+            }
+            _ => {
+                dialog_footer(
+                    ui,
+                    |ui| {
+                        let line = if picked > 0 {
+                            let known: Option<u64> =
+                                files.iter().try_fold(0u64, |n, d| Some(n + w.sizes.get(&d.url).copied().flatten()?));
+                            let s = plural(picked);
+                            match (files.len(), known) {
+                                (0, _) => format!("{picked} model{s} ticked, files already here"),
+                                (n, Some(b)) => format!("{picked} model{s} ticked · {n} files to download, {}", gb(b)),
+                                (n, None) => format!("{picked} model{s} ticked · {n} files to download"),
+                            }
+                        } else if w.tab == ModelSetupTab::Folders {
+                            "Then: Install built-in, to add models".to_string()
+                        } else {
+                            "Tick models to install them.".to_string()
+                        };
+                        ui.label(RichText::new(line).color(if picked == 0 { NEUTRAL } else { ACCENT }));
+                    },
+                    |ui| {
+                        close = ui.button("Close   Esc").clicked();
+                        if w.tab == ModelSetupTab::Add || picked > 0 {
+                            let label = if files.is_empty() { "Install" } else { "Download and install" };
+                            let can = picked > 0 && !w.dir.trim().is_empty() && st.preset_download.is_none();
+                            go = ui
+                                .add_enabled(
+                                    can,
+                                    egui::Button::new(RichText::new(ic(ph::DOWNLOAD_SIMPLE, label)).strong()),
+                                )
+                                .clicked();
+                        }
+                    },
+                );
+            }
+        }
     });
-    // Esc: not while the model settings are open over it
-    let esc = st.recipe_editor.is_none() && ctx.input(|i| i.key_pressed(egui::Key::Escape));
+    if let Some(e) = &ed {
+        let name = e.rows.get(e.selected).map(|r| r.preset.name.clone()).unwrap_or_default();
+        ctx.data_mut(|d| d.insert_temp(selected_id(), name));
+    }
+    let esc = ctx.input(|i| i.key_pressed(egui::Key::Escape));
+    if close || esc {
+        out.push(Msg::CloseModelWizard);
+        if st.recipe_editor.is_some() {
+            out.push(Msg::CloseRecipes);
+        }
+        return;
+    }
+    if &w != old {
+        out.push(Msg::EditModelWizard(Box::new(w)));
+    }
+    if let Some(e) = ed
+        && st.recipe_editor.as_ref() != Some(&e)
+    {
+        out.push(Msg::EditRecipes(e));
+    }
+    if save {
+        out.push(Msg::SaveRecipes);
+    }
     if go {
         out.push(Msg::ModelWizardGo);
-    } else if close || esc {
-        w.editing = false;
     }
 }
 
@@ -627,6 +768,11 @@ fn add_page(ui: &mut egui::Ui, st: &AppState, w: &mut ModelWizard) {
                             "installed, with its files"
                         };
                         let r = r.on_hover_text(tip(p)).on_disabled_hover_text(format!("{}\n\n{why}", tip(p)));
+                        let to: Option<String> = ui.memory(|m| m.data.get_temp(add_scroll_id()));
+                        if to.as_deref() == Some(p.name.as_str()) {
+                            r.scroll_to_me(Some(egui::Align::Center));
+                            ui.memory_mut(|m| m.data.remove::<String>(add_scroll_id()));
+                        }
                         if r.changed() {
                             if on {
                                 w.picked.insert(p.name.clone());

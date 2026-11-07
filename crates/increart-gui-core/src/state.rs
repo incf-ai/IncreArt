@@ -1033,7 +1033,7 @@ pub struct PresetDownload {
     pub at: WizardDownload,
 }
 
-/// **Set up models** (DESIGN.md, Setting up models): where the files go,
+/// the **Models** window (DESIGN.md, Setting up models): where the files go,
 /// folders found holding some, and the built-in presets to download.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct ModelWizard {
@@ -1052,7 +1052,7 @@ pub struct ModelWizard {
     pub gpus: Option<Result<Vec<increart_core::tiers::Gpu>, String>>,
     /// The download asked (its presets added).
     pub started: bool,
-    /// The **Set up models** window (Edit… on the Models half) is open.
+    /// The **Models** window is open.
     pub editing: bool,
     /// Its page.
     pub tab: ModelSetupTab,
@@ -1065,12 +1065,16 @@ pub struct ModelWizard {
     pub sort: ModelSort,
 }
 
-/// The pages of **Set up models**.
+/// The tabs of the **Models** window.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum ModelSetupTab {
+    /// Your models: each one's files and settings (the recipe editor).
     #[default]
-    Folders,
+    Yours,
+    /// Built-in models to install.
     Add,
+    /// Where the model files are.
+    Folders,
 }
 
 /// What kind of model a preset is, for the Models lists' filter.
@@ -1385,8 +1389,6 @@ pub struct RecipeEditor {
     pub selected: usize,
     /// A file picked outside the model folders, said in the editor.
     pub error: Option<String>,
-    /// **Built-in presets** shown (the tested presets, to add).
-    pub builtin: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -1410,7 +1412,36 @@ impl RecipeEditor {
                 sigmas: p.custom_sigmas.iter().map(f32::to_string).collect::<Vec<_>>().join(", "),
             })
             .collect();
-        RecipeEditor { rows, selected: selected.min(recipes.len().saturating_sub(1)), error: None, builtin: false }
+        RecipeEditor { rows, selected: selected.min(recipes.len().saturating_sub(1)), error: None }
+    }
+
+    /// A new model after the others, selected: the selected one's recipe,
+    /// files and LoRAs to start from, no name yet.
+    pub fn add_new(&mut self) {
+        let from = self.rows.get(self.selected).map(|r| &r.preset);
+        let preset = RecipePreset {
+            name: String::new(),
+            recipe: from.map_or("qwen-image-21".into(), |p| p.recipe.clone()),
+            files: from.map(|p| p.files.clone()).unwrap_or_default(),
+            cfg: 2.0,
+            loras: from.map(|p| p.loras.clone()).unwrap_or_default(),
+            ..Default::default()
+        };
+        self.rows.push(RecipeRow { preset, origin: None, sigmas: String::new() });
+        self.selected = self.rows.len() - 1;
+    }
+
+    /// Selects the model called `name`, if there is one.
+    pub fn select_named(&mut self, name: &str) {
+        if let Some(i) = self.rows.iter().position(|r| r.preset.name == name) {
+            self.selected = i;
+            self.error = None;
+        }
+    }
+
+    /// Whether it differs from `recipes` (what Save would change).
+    pub fn changed(&self, recipes: &[RecipePreset]) -> bool {
+        self.rows != RecipeEditor::new(recipes, self.selected).rows
     }
 
     /// Why it can't be saved, if it can't.
@@ -3229,7 +3260,7 @@ pub enum PickKind {
     KoboldBinary,
     /// A model directory (its index; one past the last adds one).
     ModelDir(usize),
-    /// **Set up models**' folder the files go in.
+    /// The **Models** window's folder the files go in.
     ModelWizardDir,
     /// A file for the PE server being edited.
     Pe(PeFile),
@@ -3894,7 +3925,7 @@ pub struct AppState {
     pub preset_download: Option<PresetDownload>,
     /// Model presets' **Test**.
     pub preset_test: Option<PresetTestRun>,
-    /// **Set up models**, while open.
+    /// The Models half's state; `editing`: the **Models** window open.
     pub model_wizard: Option<ModelWizard>,
     /// Download sizes asked this session, by URL (None: not said).
     pub download_sizes: BTreeMap<String, Option<u64>>,
