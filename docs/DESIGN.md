@@ -908,6 +908,13 @@ Decisions:
   layout, history.
 - `increart-gui-core` — `AppState` + pure `update(state, msg) -> effects`
   reducer; all behaviour tested headlessly.
+  Its arms are in parts, each a function of its own (`apply_0` …), which
+  `apply` dispatches to through `part_of` (exhaustive: a new message must be
+  given a part). In one function, unoptimised builds gave every arm's locals
+  their own room: ~300 KB of stack a call, and messages sent from inside an
+  arm nest it, which overflowed test threads' 2 MiB. Now a part is at most
+  ~40 KB unoptimised, ~4 KB in release; keep new arms in a part of a few
+  hundred lines.
 - `increart-gui` — eframe/egui view; thin, no logic.
 
 ## File format: RSN

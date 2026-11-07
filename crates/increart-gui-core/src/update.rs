@@ -2231,6 +2231,566 @@ fn go_to(state: &mut AppState, p: Place) -> Vec<Effect> {
 }
 
 fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
+    // `update`'s arms in parts, each a function of its own: one function
+    // holding all of them took ~300 KB of stack per call unoptimised (the
+    // locals of every arm), and messages sent from inside one nest it.
+    // A message goes to the first part with an arm for it; a guarded arm
+    // that doesn't match hands it on to the next, as the arms were in order.
+    type Part = fn(&mut AppState, Msg, &mut Option<Msg>) -> Vec<Effect>;
+    const PARTS: [Part; 19] = [
+        apply_0, apply_1, apply_2, apply_3, apply_4, apply_5, apply_6, apply_7, apply_8, apply_9, apply_10, apply_11,
+        apply_12, apply_13, apply_14, apply_15, apply_16, apply_17, apply_18,
+    ];
+    let mut msg = msg;
+    for part in &PARTS[part_of(&msg)..] {
+        let mut rest = None;
+        let fx = part(state, msg, &mut rest);
+        match rest {
+            Some(m) => msg = m,
+            None => return fx,
+        }
+    }
+    unreachable!("a message no arm takes")
+}
+
+/// The first part of [`apply`] with an arm for a message (no `_`: a new
+/// message must be given its part).
+fn part_of(msg: &Msg) -> usize {
+    match msg {
+        Msg::SetLibraryPath(..) => 0,
+        Msg::OpenLibrary => 0,
+        Msg::CreateLibrary => 0,
+        Msg::OpenRecentLibrary(..) => 0,
+        Msg::ForgetLibrary(..) => 0,
+        Msg::LibraryWizard(..) => 0,
+        Msg::LibraryOpened(..) => 0,
+        Msg::LibraryUpgrading(..) => 0,
+        Msg::UsageCheck(..) => 18,
+        Msg::SwitchLibrary(..) => 1,
+        Msg::SwitchLibraryNow(..) => 1,
+        Msg::OtherLibrary(..) => 1,
+        Msg::OtherLibraryNow(..) => 1,
+        Msg::CancelSwitch => 1,
+        Msg::OpenPreset(..) => 1,
+        Msg::OpenPresetNow(..) => 1,
+        Msg::EditPreset(..) => 1,
+        Msg::NewPreset => 1,
+        Msg::CancelEdit => 1,
+        Msg::AddStartServer => 1,
+        Msg::AddConnectServer => 1,
+        Msg::AddKoboldServer => 1,
+        Msg::EditServer(..) => 1,
+        Msg::RemoveServer(..) => 1,
+        Msg::SetPresetName(..) => 1,
+        Msg::SavePreset => 1,
+        Msg::SaveAndOpen => 1,
+        Msg::DeletePreset(..) => 1,
+        Msg::ListDevices => 1,
+        Msg::Devices(..) => 1,
+        Msg::ServerWizard(..) => 1,
+        Msg::DraftDevice(..) => 2,
+        Msg::FinishServerWizard => 2,
+        Msg::WizardKobold(..) => 1,
+        Msg::WizardGpus(..) => 1,
+        Msg::WizardRuntime(..) => 1,
+        Msg::EditKoboldWizard(..) => 1,
+        Msg::FinishKoboldWizard => 1,
+        Msg::SaveKoboldWizard => 1,
+        Msg::SaveKoboldWizardLater => 1,
+        Msg::CheckWizardBinary => 1,
+        Msg::WizardDownload(..) => 2,
+        Msg::WizardDownloaded(..) => 2,
+        Msg::CancelWizardDownload => 2,
+        Msg::OpenDraft => 2,
+        Msg::OpenDraftNow => 2,
+        Msg::ServerOpened(..) => 2,
+        Msg::ServersSettled(..) => 2,
+        Msg::ServersStopped(..) => 2,
+        Msg::ServerModels(..) => 2,
+        Msg::ServerLog(..) => 2,
+        Msg::ContinueInBackground => 2,
+        Msg::CancelOpening => 2,
+        Msg::ContinueWithServers => 2,
+        Msg::ContinueWithoutServers => 2,
+        Msg::AskContinueWithoutServers => 2,
+        Msg::WithoutDialog(..) => 2,
+        Msg::CloseServerDialog => 2,
+        Msg::ServerSettings(..) => 2,
+        Msg::ServerStatus(..) => 2,
+        Msg::SetSkipRamCheck(..) => 2,
+        Msg::SetPreview(..) => 2,
+        Msg::SetLogTraffic(..) => 2,
+        Msg::TestServer(..) => 2,
+        Msg::ServerTestStep(..) => 2,
+        Msg::ServerTestDone(..) => 2,
+        Msg::StopServerTest => 2,
+        Msg::CloseServerTest => 2,
+        Msg::ApiTest(..) => 3,
+        Msg::ApiTestEvent(..) => 3,
+        Msg::ApiTestEnded(..) => 3,
+        Msg::ApiTestCheck(..) => 3,
+        Msg::ApiTestSelect(..) => 3,
+        Msg::ApiTestPreset(..) => 3,
+        Msg::ApiTestRun(..) => 3,
+        Msg::ApiTestStop => 3,
+        Msg::ValidateBasic(..) => 3,
+        Msg::ApiTestAdvanced(..) => 3,
+        Msg::ApiTestContinue => 3,
+        Msg::Validations(..) => 3,
+        Msg::Settings(..) => 3,
+        Msg::SetNotifications(..) => 3,
+        Msg::SettingsTab(..) => 3,
+        Msg::StoreInfo(..) => 3,
+        Msg::SetStoreFormat(..) => 3,
+        Msg::ConvertStore => 3,
+        Msg::ConvertStoreConfirmed => 3,
+        Msg::CancelConvert => 3,
+        Msg::Converting(..) => 3,
+        Msg::ExportLibrary(..) => 3,
+        Msg::SaveBugReport => 14,
+        Msg::BugReportSaved(..) => 14,
+        Msg::UnpackLibraryArchive => 3,
+        Msg::Archiving(..) => 3,
+        Msg::CancelArchive => 3,
+        Msg::LibraryExported(..) => 3,
+        Msg::ArchiveUnpacked(..) => 3,
+        Msg::Converted { .. } => 3,
+        Msg::TestSound(..) => 3,
+        Msg::SoundPlayed(..) => 3,
+        Msg::Snooze(..) => 3,
+        Msg::Unsnooze => 3,
+        Msg::Focused(..) => 4,
+        Msg::CloseNoServerWarning => 4,
+        Msg::OpenServerDialog => 2,
+        Msg::Tab(..) => 4,
+        Msg::InboxTab(..) => 4,
+        Msg::ProjectsTab(..) => 4,
+        Msg::Draft(..) => 4,
+        Msg::AddIdea(..) => 4,
+        Msg::DropFiles(..) => 4,
+        Msg::InboxCursor(..) => 4,
+        Msg::InboxFilter(..) => 4,
+        Msg::ReviewCurrentIdea(..) => 4,
+        Msg::ReviewIdea(..) => 4,
+        Msg::SaveIdeas(..) => 4,
+        Msg::EditSaveIdeaName(..) => 4,
+        Msg::SaveIdeaFolder(..) => 4,
+        Msg::SaveIdeaNewFolder(..) => 4,
+        Msg::SaveIdeaFilter(..) => 4,
+        Msg::ConfirmSaveIdea => 4,
+        Msg::SaveIdeaNewProject => 4,
+        Msg::CancelSaveIdea => 4,
+        Msg::NewProjectFromIdeas(..) => 4,
+        Msg::EditFromIdeasName(..) => 4,
+        Msg::FromIdeasParent(..) => 4,
+        Msg::FromIdeasNewFolder(..) => 4,
+        Msg::FromIdeasFilter(..) => 4,
+        Msg::ToggleProjectFolder(..) => 15,
+        Msg::CollapseProjectFolders(..) => 15,
+        Msg::ConfirmFromIdeas => 4,
+        Msg::CancelFromIdeas => 4,
+        Msg::Restore(..) => 4,
+        Msg::SetStar(..) => 4,
+        Msg::DeleteDiscarded(..) => 4,
+        Msg::DeleteDiscardedIdeas(..) => 4,
+        Msg::EmptyDiscardedIdeas => 4,
+        Msg::RestoreIdeas(..) => 4,
+        Msg::RestoreProjects(..) => 4,
+        Msg::DeleteDiscardedProjects(..) => 4,
+        Msg::RestoreOutputs(..) => 4,
+        Msg::DeleteDiscardedOutputs(..) => 4,
+        Msg::RestoreProject(..) => 4,
+        Msg::DeleteDiscardedProject(..) => 4,
+        Msg::EmptyDiscardedProjects => 4,
+        Msg::LibFolder(..) => 5,
+        Msg::LibSmart(..) => 5,
+        Msg::LibInfo(..) => 5,
+        Msg::LibSelect { .. } => 5,
+        Msg::LibClearSelection => 5,
+        Msg::NewFolder(..) => 5,
+        Msg::NewProject(..) => 5,
+        Msg::StartRename(..) => 5,
+        Msg::EditRename(..) => 5,
+        Msg::CommitRename => 5,
+        Msg::CancelRename => 5,
+        Msg::MoveNode(..) => 5,
+        Msg::DeleteNode(..) => 5,
+        Msg::SelectProject(..) => 5,
+        Msg::SelectProjectFolder(..) => 5,
+        Msg::LeaveGenerate(..) => 5,
+        Msg::Generate(..) => 5,
+        Msg::SelectRecipe(..) => 5,
+        Msg::AddRefs(..) => 5,
+        Msg::RefPicker(..) => 5,
+        Msg::RefPickerSource(..) => 5,
+        Msg::RefPickerText(..) => 5,
+        Msg::RefPickerRatings(..) => 5,
+        Msg::RefPickerToggle(..) => 5,
+        Msg::RefPickerAdd => 5,
+        Msg::RemoveImage(..) => 5,
+        Msg::ImageRoles { .. } => 5,
+        Msg::MoveImage { .. } => 5,
+        Msg::RetagConfirm => 5,
+        Msg::RetagDismiss => 6,
+        Msg::QueueGenerate => 14,
+        Msg::QueueChecked => 14,
+        Msg::QueueModelChecked => 14,
+        Msg::QueueSweep(..) => 14,
+        Msg::JobOrder(..) => 14,
+        Msg::JobRandom(..) => 14,
+        Msg::SweepOrderAnswer(..) => 14,
+        Msg::CancelRun(..) => 14,
+        Msg::StopAll(..) => 14,
+        Msg::CancelRuns(..) => 14,
+        Msg::ReviewScope(..) => 15,
+        Msg::ReviewSweep(..) => 15,
+        Msg::ReviewRun(..) => 15,
+        Msg::ReviewAllRuns(..) => 15,
+        Msg::ReviewOrder(..) => 15,
+        Msg::ReviewHideReviewed(..) => 15,
+        Msg::ReviewSearch(..) => 15,
+        Msg::ProjectRuns(..) => 15,
+        Msg::ProjectOrder(..) => 15,
+        Msg::FolderOrder(..) => 15,
+        Msg::NarrowToSiblings(..) => 15,
+        Msg::ShowInfo(..) => 15,
+        Msg::SheetFilter(..) => 15,
+        Msg::SheetZoom { .. } => 15,
+        Msg::GridZoom { .. } => 15,
+        Msg::UiZoom { .. } => 15,
+        Msg::UiZoomStep(..) => 15,
+        Msg::SheetRows(..) => 15,
+        Msg::SheetBands(..) => 15,
+        Msg::SheetCell(..) => 15,
+        Msg::SheetMove(..) => 15,
+        Msg::SheetRate(..) => 15,
+        Msg::SheetRow(..) => 15,
+        Msg::SheetMoreSeeds(..) => 15,
+        Msg::SheetNewSweep => 15,
+        Msg::RunInGenerate(..) => 15,
+        Msg::RecipeInGenerate(..) => 15,
+        Msg::ReviewScopeFolder(..) => 15,
+        Msg::ReviewCursor(..) => 15,
+        Msg::ReviewNext(..) => 15,
+        Msg::ReviewCurrent(..) => 15,
+        Msg::ReviewLink(..) => 16,
+        Msg::UndoReview => 16,
+        Msg::ReviewView(..) => 15,
+        Msg::ToggleReviewGrid => 15,
+        Msg::Compare => 15,
+        Msg::PinCompare(..) => 16,
+        Msg::SwapCompare => 16,
+        Msg::ReviewPinned(..) => 16,
+        Msg::CompareWith(..) => 5,
+        Msg::OutputCompare(..) => 5,
+        Msg::OutputTab(..) => 16,
+        Msg::OutputSource(..) => 16,
+        Msg::DeleteOutput(..) => 16,
+        Msg::DiscardImages(..) => 4,
+        Msg::DownloadPresetFiles(..) => 4,
+        Msg::CancelPresetDownload => 4,
+        Msg::RestoreOutput(..) => 16,
+        Msg::DeleteDiscardedOutput(..) => 16,
+        Msg::EmptyDiscardedOutputs => 16,
+        Msg::DeleteShownRejected => 16,
+        Msg::Ask(..) => 16,
+        Msg::ConfirmYes => 16,
+        Msg::ConfirmNo => 16,
+        Msg::ConfirmFix => 16,
+        Msg::QueueWithPreset(..) => 16,
+        Msg::Scanned(..) => 16,
+        Msg::OpDone(..) => 16,
+        Msg::Engine(..) => 16,
+        Msg::RunsQueued(..) => 16,
+        Msg::DismissMessage(..) => 18,
+        Msg::ClearMessages => 18,
+        Msg::Problem(..) => 18,
+        Msg::Info(..) => 18,
+        Msg::LibraryChanged => 18,
+        Msg::DropReady => 18,
+        Msg::WatchStatus(..) => 18,
+        Msg::FvGo(..) => 17,
+        Msg::FvBack => 17,
+        Msg::FvForward => 17,
+        Msg::FvUp => 17,
+        Msg::FvRefresh => 17,
+        Msg::FvListed(..) => 17,
+        Msg::FvWantPreviews(..) => 17,
+        Msg::FvSelectSet(..) => 17,
+        Msg::FvMoveCursor { .. } => 17,
+        Msg::FvTypeAhead(..) => 17,
+        Msg::FvNewFolder => 17,
+        Msg::FvNewProject => 17,
+        Msg::DropInto { .. } => 17,
+        Msg::FvPreviews(..) => 17,
+        Msg::FvSelect(..) => 17,
+        Msg::FvSelectAll => 17,
+        Msg::FvClearSelection => 17,
+        Msg::FvMode(..) => 17,
+        Msg::FvIconSize(..) => 17,
+        Msg::FvShowMeta(..) => 17,
+        Msg::FvPathEdit(..) => 17,
+        Msg::FvOpen(..) => 17,
+        Msg::FvCopy => 17,
+        Msg::FvCut => 17,
+        Msg::FvPaste(..) => 17,
+        Msg::FvDelete => 17,
+        Msg::FvRename => 18,
+        Msg::FvDeleteConfirmed(..) => 18,
+        Msg::Pick(..) => 16,
+        Msg::Picked(..) => 16,
+        Msg::RemoveDraftImage(..) => 17,
+        Msg::DropRefs(..) => 17,
+        Msg::SetSdServer(..) => 17,
+        Msg::SetModelDirs(..) => 17,
+        Msg::SetKoboldBinary(..) => 17,
+        Msg::SetTimeouts(..) => 17,
+        Msg::CheckKoboldVersion => 17,
+        Msg::KoboldVersion(..) => 17,
+        Msg::Tick(..) => 14,
+        Msg::FlushDrafts => 14,
+        Msg::DraftSaved(..) => 14,
+        Msg::ClearGenerate => 6,
+        Msg::UseImage(..) => 6,
+        Msg::ToInputLibrary(..) => 6,
+        Msg::NewIdeaFromImage(..) => 6,
+        Msg::ClearInit => 6,
+        Msg::NavBack => 0,
+        Msg::NavForward => 0,
+        Msg::ProjectSearch(..) => 0,
+        Msg::DuplicateProject(..) => 6,
+        Msg::EditDuplicateName(..) => 6,
+        Msg::ConfirmDuplicate => 6,
+        Msg::CancelDuplicate => 6,
+        Msg::MoreSeeds(..) => 6,
+        Msg::OpenInGenerate(..) => 8,
+        Msg::PresetsPanel(..) => 6,
+        Msg::PresetsShow(..) => 6,
+        Msg::PresetsSearch(..) => 6,
+        Msg::ApplyPreset { .. } => 6,
+        Msg::PresetFavourite(..) => 8,
+        Msg::SweepToggle(..) => 8,
+        Msg::SweepToggleKey(..) => 8,
+        Msg::SweepTicks(..) => 8,
+        Msg::SweepClearTicks => 8,
+        Msg::StylesOpen => 6,
+        Msg::StylesShow(..) => 6,
+        Msg::StylesSearch(..) => 6,
+        Msg::StylesFilter(..) => 6,
+        Msg::StylesSort(..) => 6,
+        Msg::StylesClose(..) => 6,
+        Msg::PeSuggest(..) => 6,
+        Msg::PeReroll(..) => 7,
+        Msg::PeSuggestOpen(..) => 6,
+        Msg::PeSuggestDialog(..) => 6,
+        Msg::PeSuggestAsk => 7,
+        Msg::PeBatchSuggestOpen(..) => 6,
+        Msg::PeBatchSuggestDialog(..) => 6,
+        Msg::PeBatchSuggestAsk => 6,
+        Msg::PeForgetOffered(..) => 7,
+        Msg::PeClearSuggestions(..) => 7,
+        Msg::PeStatus(..) => 7,
+        Msg::PeReady(..) => 7,
+        Msg::PeOn(..) => 7,
+        Msg::PeProgress(..) => 7,
+        Msg::PeAnswer(..) => 7,
+        Msg::PeStop(..) => 7,
+        Msg::PeRewrite(..) => 6,
+        Msg::PeTextEdit { .. } => 6,
+        Msg::PeTextRetry => 6,
+        Msg::PeTextClose(..) => 6,
+        Msg::PeStyleEnhance(..) => 6,
+        Msg::PeStyleOpen => 6,
+        Msg::PeStyleDialog(..) => 6,
+        Msg::PeStyleAsk => 6,
+        Msg::PeAddedBlanks(..) => 6,
+        Msg::PeLaunch => 7,
+        Msg::PeStart => 7,
+        Msg::PeShutdown => 7,
+        Msg::PeEditorOpen(..) => 7,
+        Msg::PeEditorEdit(..) => 7,
+        Msg::PeEditorSave => 7,
+        Msg::PeEditorClose => 7,
+        Msg::PeListGpus(..) => 8,
+        Msg::PeGpus(..) => 8,
+        Msg::PeSystemPrompt { .. } => 8,
+        Msg::PeSampling { .. } => 8,
+        Msg::PromptSelected => 8,
+        Msg::OpenPresetEditor(..) => 8,
+        Msg::EditPresetEditor(..) => 8,
+        Msg::RestorePresetDefaults => 8,
+        Msg::SavePresetEditor => 8,
+        Msg::ClosePresetEditor => 8,
+        Msg::OpenSavePreset => 8,
+        Msg::EditSavePreset(..) => 8,
+        Msg::ConfirmSavePreset => 8,
+        Msg::CancelSavePreset => 8,
+        Msg::OpenHistory(..) => 9,
+        Msg::HistoryLoaded(..) => 9,
+        Msg::HistorySelect(..) => 9,
+        Msg::HistorySearch(..) => 9,
+        Msg::HistoryCheckpointsOnly(..) => 9,
+        Msg::HistoryEveryEntry(..) => 9,
+        Msg::HistoryRestore(..) => 9,
+        Msg::HistorySettingsOnly(..) => 9,
+        Msg::HistoryRunFilter(..) => 9,
+        Msg::RunHistory(..) => 9,
+        Msg::CloseHistory => 9,
+        Msg::OpenIdea(..) => 10,
+        Msg::EditIdea(..) => 10,
+        Msg::SaveIdea => 10,
+        Msg::CloseIdea => 10,
+        Msg::LibTab(..) => 10,
+        Msg::LibFilter(..) => 10,
+        Msg::LoadImports => 10,
+        Msg::Imports(..) => 10,
+        Msg::ImportDropNow => 10,
+        Msg::OpenResolutions => 10,
+        Msg::OpenScale(..) => 10,
+        Msg::EditScale(..) => 10,
+        Msg::ApplyScale => 10,
+        Msg::CloseScale => 10,
+        Msg::StartProject(..) => 10,
+        Msg::EditStartProject(..) => 10,
+        Msg::ConfirmStartProject => 10,
+        Msg::MoveProject(..) => 10,
+        Msg::EditMoveProject(..) => 10,
+        Msg::ConfirmMoveProject => 10,
+        Msg::CancelMoveProject => 10,
+        Msg::EditNewProjectName(..) => 10,
+        Msg::NewProjectParent(..) => 10,
+        Msg::NewProjectNewFolder(..) => 10,
+        Msg::NewProjectFilter(..) => 10,
+        Msg::ConfirmNewProject => 10,
+        Msg::CancelNewProject => 10,
+        Msg::SweepProject(..) => 11,
+        Msg::EditSweepProjectName(..) => 11,
+        Msg::ConfirmSweepProject => 11,
+        Msg::SweepPicker => 5,
+        Msg::Preview(..) => 11,
+        Msg::PreviewPasted(..) => 11,
+        Msg::LiveView(..) => 11,
+        Msg::LiveViewStep(..) => 11,
+        Msg::QueueingNote(..) => 11,
+        Msg::PreviewAmong(..) => 11,
+        Msg::PreviewStep(..) => 11,
+        Msg::PreviewRow(..) => 11,
+        Msg::PreviewRate(..) => 11,
+        Msg::JobInfo(..) => 11,
+        Msg::JobLog(..) => 11,
+        Msg::EditResolutions(..) => 10,
+        Msg::SaveResolutions => 10,
+        Msg::CloseResolutions => 10,
+        Msg::OpenRecipes => 10,
+        Msg::EditRecipes(..) => 10,
+        Msg::SaveRecipes => 10,
+        Msg::CloseRecipes => 10,
+        Msg::NeedRecipe(..) => 12,
+        Msg::RecipeLoaded(..) => 12,
+        Msg::NeedInputMeta(..) => 12,
+        Msg::InputMetaLoaded(..) => 12,
+        Msg::GoToOutput(..) => 12,
+        Msg::Checkerboard(..) => 12,
+        Msg::ReviewNewest => 12,
+        Msg::ReviewFollow(..) => 12,
+        Msg::FollowPace(..) => 12,
+        Msg::FollowPause(..) => 12,
+        Msg::FollowHold(..) => 12,
+        Msg::OutputFilter(..) => 12,
+        Msg::OutputSearchProjects(..) => 12,
+        Msg::OutputProjectSearch(..) => 12,
+        Msg::OutputRevealed => 12,
+        Msg::OutputPreset(..) => 12,
+        Msg::ShowOutputs(..) => 12,
+        Msg::ResetOutputFilters => 12,
+        Msg::DismissOutputNotice => 12,
+        Msg::OutputSelect(..) => 12,
+        Msg::AddToCollection(..) => 12,
+        Msg::CollectIdeas(..) => 12,
+        Msg::CollectIdeasAsk(..) => 12,
+        Msg::EditCollectIdeas(..) => 12,
+        Msg::ConfirmCollectIdeas => 12,
+        Msg::CancelCollectIdeas => 12,
+        Msg::UncollectIdeas(..) => 12,
+        Msg::NewCollection(..) => 12,
+        Msg::Collect(..) => 10,
+        Msg::EditCollect(..) => 10,
+        Msg::CancelCollect => 10,
+        Msg::ConfirmCollect => 10,
+        Msg::TagImages(..) => 10,
+        Msg::EditTags(..) => 10,
+        Msg::CancelTags => 10,
+        Msg::ConfirmTags => 10,
+        Msg::TagAgain(..) => 11,
+        Msg::UseAsRef(..) => 11,
+        Msg::EditUseRef(..) => 11,
+        Msg::CancelUseRef => 11,
+        Msg::ConfirmUseRef => 11,
+        Msg::RemoveTag(..) => 11,
+        Msg::SetCover(..) => 12,
+        Msg::TitleDialog(..) => 12,
+        Msg::EditTitle(..) => 12,
+        Msg::CommitTitle => 12,
+        Msg::PickImage(..) => 12,
+        Msg::PickSet(..) => 12,
+        Msg::RatePicked(..) => 12,
+        Msg::OpenTile => 12,
+        Msg::TileGenerateImages => 12,
+        Msg::TileIdeas(..) => 12,
+        Msg::InboxPick(..) => 12,
+        Msg::ReviewPickedIdeas(..) => 12,
+        Msg::LibSelectSet(..) => 12,
+        Msg::TileStart(..) => 12,
+        Msg::OpenMarkup(..) => 12,
+        Msg::MarkupEdit(..) => 12,
+        Msg::MarkupUndo => 12,
+        Msg::MarkupRedo => 12,
+        Msg::MarkTools(..) => 12,
+        Msg::MarkupSave(..) => 12,
+        Msg::CloseMarkup => 13,
+        Msg::CloseTile => 12,
+        Msg::TileSaving(..) => 12,
+        Msg::TileSelect(..) => 13,
+        Msg::TileMove(..) => 13,
+        Msg::TileSpan(..) => 13,
+        Msg::TileCols(..) => 13,
+        Msg::TileReflow => 13,
+        Msg::TileRemove(..) => 13,
+        Msg::TileCaption(..) => 13,
+        Msg::TileAddText(..) => 13,
+        Msg::TileText(..) => 13,
+        Msg::TileTextSize(..) => 13,
+        Msg::TileTitle(..) => 13,
+        Msg::TileCaptions(..) => 13,
+        Msg::TileCaptionFormat(..) => 13,
+        Msg::TileSettings(..) => 13,
+        Msg::TileAdd(..) => 13,
+        Msg::TileAddInputs(..) => 13,
+        Msg::TileInputs(..) => 13,
+        Msg::TilePicker(..) => 5,
+        Msg::TileOut(..) => 13,
+        Msg::TilesDone(..) => 13,
+        Msg::OpenExport(..) => 13,
+        Msg::OpenExportIdeas(..) => 13,
+        Msg::EditExport(..) => 13,
+        Msg::ExportFilesRead(..) => 13,
+        Msg::RunExport => 13,
+        Msg::CloseExport => 13,
+        Msg::ExportProgress(..) => 13,
+        Msg::CancelExport => 13,
+        Msg::Exported(..) => 14,
+        Msg::WantSizes(..) => 13,
+        Msg::SizeSampled(..) => 13,
+        Msg::SizeEstimated(..) => 13,
+        Msg::ShowInFileManager(..) => 14,
+        Msg::OpenLogs(..) => 14,
+        Msg::Logs(..) => 14,
+        Msg::OpenInEditor(..) => 14,
+    }
+}
+
+#[inline(never)]
+fn apply_0(state: &mut AppState, msg: Msg, rest: &mut Option<Msg>) -> Vec<Effect> {
     match msg {
         Msg::NavBack | Msg::NavForward => {
             let nav = &mut state.nav;
@@ -2362,6 +2922,16 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
             vec![]
         }
 
+        other => {
+            *rest = Some(other);
+            vec![]
+        }
+    }
+}
+
+#[inline(never)]
+fn apply_1(state: &mut AppState, msg: Msg, rest: &mut Option<Msg>) -> Vec<Effect> {
+    match msg {
         // ------------------------------------------------ switching libraries
         Msg::SwitchLibrary(path) => {
             if state.library.as_deref() == Some(std::path::Path::new(&path)) {
@@ -2730,6 +3300,16 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
                 }
             }
         }
+        other => {
+            *rest = Some(other);
+            vec![]
+        }
+    }
+}
+
+#[inline(never)]
+fn apply_2(state: &mut AppState, msg: Msg, rest: &mut Option<Msg>) -> Vec<Effect> {
+    match msg {
         m @ (Msg::WizardDownload(_) | Msg::CancelWizardDownload | Msg::WizardDownloaded(_)) => {
             wizard_download(state, m)
         }
@@ -3083,6 +3663,16 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
             Some(t) if !t.done => vec![Effect::StopServerTest],
             _ => vec![],
         },
+        other => {
+            *rest = Some(other);
+            vec![]
+        }
+    }
+}
+
+#[inline(never)]
+fn apply_3(state: &mut AppState, msg: Msg, rest: &mut Option<Msg>) -> Vec<Effect> {
+    match msg {
         Msg::ApiTest(true) => {
             // the suite starts the servers itself: not with any open
             let idle = matches!(&state.phase, Phase::Servers(d) if !d.opening)
@@ -3435,6 +4025,16 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
             state.alerts.muted = false;
             vec![]
         }
+        other => {
+            *rest = Some(other);
+            vec![]
+        }
+    }
+}
+
+#[inline(never)]
+fn apply_4(state: &mut AppState, msg: Msg, rest: &mut Option<Msg>) -> Vec<Effect> {
+    match msg {
         Msg::Focused(f) => {
             state.alerts.focused = f;
             if f {
@@ -3692,6 +4292,16 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
         | Msg::RestoreOutputs(_)
         | Msg::DeleteDiscardedOutputs(_)) => discards(state, m),
         m @ (Msg::DownloadPresetFiles(..) | Msg::CancelPresetDownload) => preset_downloads(state, m),
+        other => {
+            *rest = Some(other);
+            vec![]
+        }
+    }
+}
+
+#[inline(never)]
+fn apply_5(state: &mut AppState, msg: Msg, rest: &mut Option<Msg>) -> Vec<Effect> {
+    match msg {
         // ------------------------------------------------ input library
         Msg::LibFolder(f) => {
             // on the Folder tab, the folder view goes there too
@@ -4050,6 +4660,16 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
             mark_generate(state);
             fx
         }
+        other => {
+            *rest = Some(other);
+            vec![]
+        }
+    }
+}
+
+#[inline(never)]
+fn apply_6(state: &mut AppState, msg: Msg, rest: &mut Option<Msg>) -> Vec<Effect> {
+    match msg {
         Msg::RetagDismiss => {
             state.retag = None;
             vec![]
@@ -4425,6 +5045,16 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
             let jobs = jobs.into_iter().map(|j| queue_blank(state, j, Some(&b.form), 0)).collect();
             vec![Effect::PeAsk { servers: pool(state, server), jobs }]
         }
+        other => {
+            *rest = Some(other);
+            vec![]
+        }
+    }
+}
+
+#[inline(never)]
+fn apply_7(state: &mut AppState, msg: Msg, rest: &mut Option<Msg>) -> Vec<Effect> {
+    match msg {
         Msg::PeSuggestAsk => {
             let (Some(server), Some(d)) = (state.pe.server.as_ref().cloned(), state.pe.suggest.clone()) else {
                 return vec![];
@@ -4796,6 +5426,16 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
             state.pe.editor = None;
             vec![]
         }
+        other => {
+            *rest = Some(other);
+            vec![]
+        }
+    }
+}
+
+#[inline(never)]
+fn apply_8(state: &mut AppState, msg: Msg, rest: &mut Option<Msg>) -> Vec<Effect> {
+    match msg {
         Msg::PeListGpus(runtime) => {
             state.pe.gpus = None;
             state.pe.gpus_runtime = runtime;
@@ -4986,6 +5626,16 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
             state.projects_tab = ProjectsTab::Generate;
             fx
         }
+        other => {
+            *rest = Some(other);
+            vec![]
+        }
+    }
+}
+
+#[inline(never)]
+fn apply_9(state: &mut AppState, msg: Msg, rest: &mut Option<Msg>) -> Vec<Effect> {
+    match msg {
         // ------------------------------------------------ prompt history
         Msg::OpenHistory(key) => {
             state.history_view = Some(HistoryView::new(key.clone()));
@@ -5112,6 +5762,16 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
             state.history_view = None;
             vec![]
         }
+        other => {
+            *rest = Some(other);
+            vec![]
+        }
+    }
+}
+
+#[inline(never)]
+fn apply_10(state: &mut AppState, msg: Msg, rest: &mut Option<Msg>) -> Vec<Effect> {
+    match msg {
         // ------------------------------------------------ Edit idea
         Msg::OpenIdea(id) => {
             let fx = flush_idea_edit(state);
@@ -5472,6 +6132,16 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
             state.review_cursor = state.review_cursor.min(state.review_queue().len().saturating_sub(1));
             fx
         }
+        other => {
+            *rest = Some(other);
+            vec![]
+        }
+    }
+}
+
+#[inline(never)]
+fn apply_11(state: &mut AppState, msg: Msg, rest: &mut Option<Msg>) -> Vec<Effect> {
+    match msg {
         Msg::UseAsRef(images, to) => {
             let images: Vec<ImageRef> = images.into_iter().filter(|i| state.output_link(i).is_some()).collect();
             if images.is_empty() || state.library.is_none() {
@@ -5742,6 +6412,16 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
             }
             vec![]
         }
+        other => {
+            *rest = Some(other);
+            vec![]
+        }
+    }
+}
+
+#[inline(never)]
+fn apply_12(state: &mut AppState, msg: Msg, rest: &mut Option<Msg>) -> Vec<Effect> {
+    match msg {
         // ------------------------------------------------ review / output library
         Msg::NeedRecipe(id) => {
             if state.recipes.contains_key(&id) {
@@ -6099,6 +6779,16 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
             }
             lib(state, LibOp::EditedCopy { image, edits, title, to })
         }
+        other => {
+            *rest = Some(other);
+            vec![]
+        }
+    }
+}
+
+#[inline(never)]
+fn apply_13(state: &mut AppState, msg: Msg, rest: &mut Option<Msg>) -> Vec<Effect> {
+    match msg {
         Msg::CloseMarkup => {
             state.markup = None;
             vec![]
@@ -6451,6 +7141,16 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
             Some(_) => vec![Effect::CancelExport],
             None => vec![],
         },
+        other => {
+            *rest = Some(other);
+            vec![]
+        }
+    }
+}
+
+#[inline(never)]
+fn apply_14(state: &mut AppState, msg: Msg, rest: &mut Option<Msg>) -> Vec<Effect> {
+    match msg {
         Msg::Exported(dest, r) => {
             state.busy = state.busy.saturating_sub(1);
             state.exporting = None;
@@ -6639,6 +7339,16 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
         }
         Msg::CancelRuns(runs, how) => runs.into_iter().flat_map(|id| update(state, Msg::CancelRun(id, how))).collect(),
 
+        other => {
+            *rest = Some(other);
+            vec![]
+        }
+    }
+}
+
+#[inline(never)]
+fn apply_15(state: &mut AppState, msg: Msg, rest: &mut Option<Msg>) -> Vec<Effect> {
+    match msg {
         // ------------------------------------------------ review
         Msg::ReviewScopeFolder(f) => {
             leave_sweep(state);
@@ -6991,6 +7701,16 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
             }
             vec![]
         }
+        other => {
+            *rest = Some(other);
+            vec![]
+        }
+    }
+}
+
+#[inline(never)]
+fn apply_16(state: &mut AppState, msg: Msg, rest: &mut Option<Msg>) -> Vec<Effect> {
+    match msg {
         Msg::PinCompare(img) => {
             let queue = state.review_queue();
             let current = queue.get(state.review_cursor).is_some_and(|o| o.image == img);
@@ -7419,6 +8139,16 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
                 update(state, Msg::SetModelDirs(dirs))
             }
         },
+        other => {
+            *rest = Some(other);
+            vec![]
+        }
+    }
+}
+
+#[inline(never)]
+fn apply_17(state: &mut AppState, msg: Msg, rest: &mut Option<Msg>) -> Vec<Effect> {
+    match msg {
         Msg::DropRefs(paths) => {
             if paths.is_empty() || state.project.is_none() {
                 return vec![];
@@ -7780,6 +8510,16 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
             let verb = if matches!(place, FvPlace::Collections | FvPlace::InputLibrary) { "Remove" } else { "Delete" };
             update(state, Msg::Ask(Confirm::new(text, verb, Msg::FvDeleteConfirmed(targets))))
         }
+        other => {
+            *rest = Some(other);
+            vec![]
+        }
+    }
+}
+
+#[inline(never)]
+fn apply_18(state: &mut AppState, msg: Msg, rest: &mut Option<Msg>) -> Vec<Effect> {
+    match msg {
         Msg::FvDeleteConfirmed(targets) => {
             let mut fx = vec![];
             for t in targets {
@@ -7857,6 +8597,10 @@ fn apply(state: &mut AppState, msg: Msg) -> Vec<Effect> {
         }
         Msg::ClearMessages => {
             state.messages.clear();
+            vec![]
+        }
+        other => {
+            *rest = Some(other);
             vec![]
         }
     }
