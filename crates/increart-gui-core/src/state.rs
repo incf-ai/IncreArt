@@ -1110,27 +1110,38 @@ impl ModelKind {
     }
 }
 
-/// The Models lists' order.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum ModelSort {
-    /// As listed (yours as saved, the built-in ones as offered).
-    #[default]
-    Listed,
+/// A column of the Models lists, to sort by.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ModelColumn {
     Name,
-    SmallFirst,
-    LargeFirst,
+    Size,
+    /// Ready first, then the least to download, files missing last.
+    Files,
+    /// Fitting the most ticked GPUs first.
+    Fits,
+}
+
+/// The Models lists' order: a column clicked once sorts by it (A–Z,
+/// smallest, ready, fits most first), twice the other way, a third time
+/// back to the list's order.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ModelSort {
+    pub column: Option<ModelColumn>,
+    pub descending: bool,
 }
 
 impl ModelSort {
-    pub const ALL: [ModelSort; 4] = [ModelSort::Listed, ModelSort::Name, ModelSort::SmallFirst, ModelSort::LargeFirst];
+    pub fn click(&mut self, c: ModelColumn) {
+        *self = match (self.column, self.descending) {
+            (Some(was), false) if was == c => ModelSort { column: Some(c), descending: true },
+            (Some(was), true) if was == c => ModelSort::default(),
+            _ => ModelSort { column: Some(c), descending: false },
+        };
+    }
 
-    pub fn label(self) -> &'static str {
-        match self {
-            ModelSort::Listed => "List order",
-            ModelSort::Name => "Name",
-            ModelSort::SmallFirst => "Smallest first",
-            ModelSort::LargeFirst => "Largest first",
-        }
+    /// Sorted by `c`: Some(descending).
+    pub fn by(&self, c: ModelColumn) -> Option<bool> {
+        (self.column == Some(c)).then_some(self.descending)
     }
 }
 
@@ -1178,12 +1189,36 @@ impl ModelWizard {
                 && (self.kind == ModelKind::All || ModelKind::of(p) == self.kind)
                 && (vram.is_empty() || n.total_bytes.is_none() || vram.iter().any(|v| n.fits(*v) == Some(true)))
         });
-        match self.sort {
-            ModelSort::Listed => {}
-            ModelSort::Name => rows.sort_by_key(|(p, _)| p.name.to_lowercase()),
-            // sizes not known yet last
-            ModelSort::SmallFirst => rows.sort_by_key(|(_, n)| n.total_bytes.unwrap_or(u64::MAX)),
-            ModelSort::LargeFirst => rows.sort_by_key(|(_, n)| std::cmp::Reverse(n.total_bytes.unwrap_or(0))),
+        // each row's key, None (not known yet) last either way
+        let key = |n: &PresetNeeds| -> Option<(u64, u64)> {
+            match self.sort.column? {
+                ModelColumn::Name | ModelColumn::Size => Some((n.total_bytes?, 0)),
+                ModelColumn::Files if n.unavailable => Some((2, 0)),
+                ModelColumn::Files if n.downloads.is_empty() => Some((0, 0)),
+                ModelColumn::Files => Some((1, n.download_bytes.unwrap_or(u64::MAX))),
+                ModelColumn::Fits => {
+                    n.total_bytes?;
+                    let fits = vram.iter().filter(|v| n.fits(**v) == Some(true)).count() as u64;
+                    Some((u64::MAX - fits, n.total_bytes.unwrap_or(0)))
+                }
+            }
+        };
+        if let Some(c) = self.sort.column {
+            let down = self.sort.descending;
+            rows.sort_by(|(pa, na), (pb, nb)| {
+                use std::cmp::Ordering;
+                let o = if c == ModelColumn::Name {
+                    pa.name.to_lowercase().cmp(&pb.name.to_lowercase())
+                } else {
+                    match (key(na), key(nb)) {
+                        (Some(a), Some(b)) => a.cmp(&b),
+                        (Some(_), None) => return Ordering::Less,
+                        (None, Some(_)) => return Ordering::Greater,
+                        (None, None) => Ordering::Equal,
+                    }
+                };
+                if down { o.reverse() } else { o }
+            });
         }
         rows
     }

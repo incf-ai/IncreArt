@@ -2797,9 +2797,11 @@ in the app's state folder (`$XDG_STATE_HOME/increart` when set, else
     a checkbox per GPU, all ticked to start (`gpus_off`): a model is listed
     when it fits one ticked, a size not known yet always, every size with
     none ticked (All / None buttons; the button reads "Fits GPU: any",
-    "Fits GPU 1, 2" or "off"); Reset puts the filters back; sort: list
-    order, name, smallest or largest first, sizes not known last;
-    `ModelWizard::shown`), the GPUs, then three tables (`ModelLists`):
+    "Fits GPU 1, 2" or "off"); Reset puts the filters back;
+    the column headings sort (`ModelSort`): a click by that column (A–Z,
+    smallest, ready then least to download, fitting the most ticked GPUs
+    first), again the other way, a third time the list's order; the
+    arrow shows it; sizes not known last either way; `ModelWizard::shown`), the GPUs, then three tables (`ModelLists`):
     **Your custom models** (your models not named as a built-in one),
     **Built-in models, installed** (your copy), **Built-in models, not
     installed**; each with Model, Size, Files ("ready", "3 files missing",

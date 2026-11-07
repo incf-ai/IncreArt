@@ -1135,7 +1135,12 @@ impl Tour {
                 let gpus = vec![gpu(0, "AMD Radeon RX 7900 XTX"), gpu(1, "AMD Radeon RX 7900 XTX")];
                 let dir = st.config.programs.model_dirs.first().cloned().unwrap_or_else(|| "~/models".into());
                 let picked = increart_core::config::catalogue().into_iter().take(3).map(|p| p.name).collect();
-                let w = increart_gui_core::ModelWizard { dir, picked, ..Default::default() };
+                // sorted by size (the heading's arrow)
+                let sort = increart_gui_core::ModelSort {
+                    column: Some(increart_gui_core::ModelColumn::Size),
+                    descending: false,
+                };
+                let w = increart_gui_core::ModelWizard { dir, picked, sort, ..Default::default() };
                 vec![
                     Msg::CloseRecipes,
                     Msg::OpenModelWizard,

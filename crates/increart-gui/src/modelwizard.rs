@@ -8,7 +8,7 @@ use eframe::egui::{self, RichText};
 use increart_core::config::RecipePreset;
 use increart_core::tiers::Gpu;
 use increart_gui_core::{
-    AppState, ModelKind, ModelLists, ModelSetupTab, ModelSort, ModelWizard, Msg, PickKind, PresetNeeds,
+    AppState, ModelColumn, ModelKind, ModelLists, ModelSetupTab, ModelSort, ModelWizard, Msg, PickKind, PresetNeeds,
 };
 
 use crate::widgets::{ACCENT, BAD, GOOD, NEUTRAL, dialog_footer, ic, ph};
@@ -167,7 +167,7 @@ fn overview(ui: &mut egui::Ui, st: &AppState, w: &mut ModelWizard, list_height: 
                         if all.is_empty() {
                             ui.weak(none);
                         } else {
-                            list_table(ui, id, &shown, &gpus, section);
+                            list_table(ui, id, &shown, &gpus, section, &mut w.sort);
                         }
                     });
             }
@@ -190,12 +190,6 @@ fn filters(ui: &mut egui::Ui, w: &mut ModelWizard, salt: &str) {
             }
         });
         fits_popover(ui, w, salt);
-        ui.weak("Sort:");
-        egui::ComboBox::from_id_salt(("model_sort", salt)).selected_text(w.sort.label()).show_ui(ui, |ui| {
-            for s in ModelSort::ALL {
-                ui.selectable_value(&mut w.sort, s, s.label());
-            }
-        });
         if w.filtering()
             && ui.small_button("Reset").on_hover_text("clear the search, all kinds, every GPU ticked").clicked()
         {
@@ -284,22 +278,38 @@ const NAME_W: f32 = 230.0;
 const SIZE_W: f32 = 62.0;
 const FILES_W: f32 = 190.0;
 
-fn heads(h: &mut egui_extras::TableRow, model_tip: &str) {
+/// The column headings, each a click to sort by it (again: the other way;
+/// a third time: the list's order), the order shown by an arrow.
+fn heads(h: &mut egui_extras::TableRow, model_tip: &str, sort: &mut ModelSort) {
     let heads = [
-        ("Model", model_tip),
-        ("Size", "all its files together, about the GPU memory it needs"),
-        ("Files", "whether its files are in your model folders, or what's downloaded"),
+        (ModelColumn::Name, "Model", model_tip),
+        (ModelColumn::Size, "Size", "all its files together, about the GPU memory it needs"),
+        (ModelColumn::Files, "Files", "whether its files are in your model folders, or what's downloaded"),
         (
+            ModelColumn::Fits,
             "Fits GPU",
             "by GPU number (listed above): ✓ fits in its memory; ✗ too large, it'd spill to RAM (slow) if it runs \
              at all",
         ),
     ];
-    for (title, tip) in heads {
+    for (column, title, tip) in heads {
         h.col(|ui| {
-            let r = ui.strong(title);
-            if !tip.is_empty() {
-                r.on_hover_text(tip);
+            let arrow = match sort.by(column) {
+                Some(false) => format!(" {}", ph::CARET_UP),
+                Some(true) => format!(" {}", ph::CARET_DOWN),
+                None => String::new(),
+            };
+            let r = ui.add(egui::Button::new(RichText::new(format!("{title}{arrow}")).strong()).frame(false));
+            let how = match (sort.by(column), column) {
+                (Some(true), _) => "click: back to the list's order",
+                (_, ModelColumn::Name) => "click: sort A–Z (again: Z–A)",
+                (_, ModelColumn::Size) => "click: smallest first (again: largest)",
+                (_, ModelColumn::Files) => "click: ready first, then least to download (again: the other way)",
+                (_, ModelColumn::Fits) => "click: fitting the most ticked GPUs first (again: the other way)",
+            };
+            let tip = if tip.is_empty() { how.to_string() } else { format!("{tip}\n{how}") };
+            if r.on_hover_text(tip).clicked() {
+                sort.click(column);
             }
         });
     }
@@ -341,7 +351,14 @@ fn tip(p: &RecipePreset) -> String {
 }
 
 /// One of the read-only lists.
-fn list_table(ui: &mut egui::Ui, id: &str, rows: &[(&RecipePreset, PresetNeeds)], gpus: &[Gpu], section: Section) {
+fn list_table(
+    ui: &mut egui::Ui,
+    id: &str,
+    rows: &[(&RecipePreset, PresetNeeds)],
+    gpus: &[Gpu],
+    section: Section,
+    sort: &mut ModelSort,
+) {
     use egui_extras::{Column, TableBuilder};
     if rows.is_empty() {
         ui.weak("None match the filter.");
@@ -356,7 +373,7 @@ fn list_table(ui: &mut egui::Ui, id: &str, rows: &[(&RecipePreset, PresetNeeds)]
         .column(Column::exact(SIZE_W))
         .column(Column::exact(FILES_W).clip(true))
         .column(Column::remainder().at_least(100.0).clip(true))
-        .header(20.0, |mut h| heads(&mut h, ""))
+        .header(20.0, |mut h| heads(&mut h, "", sort))
         .body(|mut body| {
             for (p, needs) in rows {
                 body.row(22.0, |mut row| {
@@ -581,7 +598,11 @@ fn add_page(ui: &mut egui::Ui, st: &AppState, w: &mut ModelWizard) {
         .column(Column::exact(FILES_W + 40.0).clip(true))
         .column(Column::remainder().at_least(100.0).clip(true))
         .header(22.0, |mut h| {
-            heads(&mut h, "tick to install it; greyed: installed with its files, or it can't be downloaded")
+            heads(
+                &mut h,
+                "tick to install it; greyed: installed with its files, or it can't be downloaded",
+                &mut w.sort,
+            )
         })
         .body(|mut body| {
             for (p, needs) in &rows {

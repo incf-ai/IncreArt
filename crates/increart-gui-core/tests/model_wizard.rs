@@ -154,18 +154,33 @@ fn the_models_are_listed_as_yours_installed_and_not_and_filtered() {
     w.gpus_off.insert(1);
     assert_eq!(w.ticked_vram(&[gpu(0, 24.0), gpu(1, 48.0)]), [24.0]);
     assert!(w.filtering());
-    // order: by name; largest first, sizes not known last
-    w.sort = ModelSort::Name;
+    // a heading clicked: by it; again: the other way; a third time: the list's order
+    w.sort.click(ModelColumn::Name);
     let by_name = names(&w.shown(lists.available.clone(), &[]));
     let mut sorted = by_name.clone();
     sorted.sort_by_key(|n| n.to_lowercase());
     assert_eq!(by_name, sorted);
+    w.sort.click(ModelColumn::Name);
+    sorted.reverse();
+    assert_eq!(names(&w.shown(lists.available.clone(), &[])), sorted);
+    w.sort.click(ModelColumn::Name);
+    assert_eq!(w.sort, ModelSort::default());
+    assert_eq!(names(&w.shown(lists.available.clone(), &[])), names(&lists.available));
+    // size: sizes not known last either way
     let mut rows = lists.available.clone();
     rows[3].1.total_bytes = Some(9);
     rows[5].1.total_bytes = Some(20);
-    w.sort = ModelSort::LargeFirst;
+    w.sort.click(ModelColumn::Size);
+    let small = w.shown(rows.clone(), &[]);
+    assert_eq!((small[0].1.total_bytes, small[1].1.total_bytes, small[2].1.total_bytes), (Some(9), Some(20), None));
+    w.sort.click(ModelColumn::Size);
     let big = w.shown(rows.clone(), &[]);
-    assert_eq!((big[0].0.name.as_str(), big[1].0.name.as_str()), (rows[5].0.name.as_str(), rows[3].0.name.as_str()));
-    w.sort = ModelSort::SmallFirst;
-    assert_eq!(w.shown(rows, &[])[0].1.total_bytes, Some(9));
+    assert_eq!((big[0].1.total_bytes, big[1].1.total_bytes, big[2].1.total_bytes), (Some(20), Some(9), None));
+    // another column: by it, ascending
+    w.sort.click(ModelColumn::Fits);
+    assert_eq!(w.sort, ModelSort { column: Some(ModelColumn::Fits), descending: false });
+    // fits the most GPUs first: 9 bytes fits both, then a size not known
+    let fits = w.shown(rows, &[0.000001, 24.0]);
+    assert_eq!(fits[0].1.total_bytes, Some(9));
+    assert_eq!(fits.last().unwrap().1.total_bytes, None);
 }
