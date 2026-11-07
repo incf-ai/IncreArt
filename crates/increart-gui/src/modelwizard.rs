@@ -154,23 +154,22 @@ fn overview(ui: &mut egui::Ui, st: &AppState, w: &mut ModelWizard, list_height: 
         .show(ui, |ui| {
             for (i, (title, id, all, section, none)) in sections.into_iter().enumerate() {
                 if i > 0 {
-                    ui.add_space(10.0);
+                    ui.add_space(6.0);
                 }
                 let shown = w.shown(all.clone(), &vram);
-                ui.horizontal(|ui| {
-                    ui.label(RichText::new(title).strong());
-                    let n = all.len();
-                    if shown.len() < n {
-                        ui.weak(format!("({} of {n} shown)", shown.len()));
-                    } else {
-                        ui.weak(format!("({n})"));
-                    }
-                });
-                if all.is_empty() {
-                    ui.weak(none);
-                } else {
-                    list_table(ui, id, &shown, &gpus, section);
-                }
+                let n = all.len();
+                let count = if shown.len() < n { format!("{} of {n} shown", shown.len()) } else { n.to_string() };
+                // collapsible, open to start (egui keeps each one's state)
+                egui::CollapsingHeader::new(RichText::new(format!("{title}  ({count})")).strong())
+                    .id_salt(id)
+                    .default_open(true)
+                    .show(ui, |ui| {
+                        if all.is_empty() {
+                            ui.weak(none);
+                        } else {
+                            list_table(ui, id, &shown, &gpus, section);
+                        }
+                    });
             }
         });
     ui.add_space(6.0);

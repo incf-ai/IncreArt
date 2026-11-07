@@ -2800,7 +2800,7 @@ in the app's state folder (`$XDG_STATE_HOME/increart` when set, else
     **Built-in models, installed** (your copy), **Built-in models, not
     installed**; each with Model, Size, Files ("ready", "3 files missing",
     "files here, not installed", "download 3 files (9.8 GB)") and Fits GPU,
-    and "(4 of 18 shown)" when filtered.
+    and "(4 of 18 shown)" when filtered; each collapsible, open to start.
   - **Model settings…** opens the models editor; **Edit…** opens **Set up
     models**, a window of two pages (the same height, so it doesn't jump)
     and Model settings…; Close or Esc closes it (a download goes on, shown
