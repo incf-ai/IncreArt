@@ -65,6 +65,11 @@ const SCENES: &[&str] = &[
     "13f-review-image-menu",
     "13g-review-tag",
     "13h-review-use-ref",
+    // zoomed with the wheel at the pointer; compare goes on at the same
+    // place (B stepped, the view kept), then unlinked one side fits alone
+    "13i-review-zoom",
+    "13j-review-compare-zoom",
+    "13k-review-compare-unlinked",
     "14-output-library-rejected",
     "14b-output-library-compare",
     // after 13g (its tags)
@@ -1490,6 +1495,15 @@ impl Tour {
             "10-output-library" => vec![Msg::Tab(Tab::OutputLibrary)],
             "12-review-grid" => vec![Msg::RunsQueued(vec![]), Msg::Tab(Tab::Review), Msg::ReviewView(ReviewView::Grid)],
             "13-review-compare" => vec![Msg::ReviewView(ReviewView::Single), Msg::ReviewCursor(0), Msg::Compare],
+            "13i-review-zoom" => vec![
+                Msg::ContinueWithoutServers,
+                Msg::Tab(Tab::Review),
+                Msg::ReviewScope(None),
+                Msg::ReviewView(ReviewView::Single),
+                Msg::ReviewCursor(0),
+            ],
+            "13j-review-compare-zoom" => vec![Msg::Compare],
+            "13k-review-compare-unlinked" => vec![Msg::LinkCompareZoom(false)],
             "13c-review-compare-with" => {
                 let b = tour_with_refs(st);
                 vec![Msg::Tab(Tab::Review), Msg::ReviewView(ReviewView::Single), Msg::CompareWith(b)]
@@ -2238,6 +2252,11 @@ impl Tour {
         if self.frame == 1 {
             self.started = ctx.input(|i| i.time);
             egui::Popup::close_all(ctx); // menus/popovers left open by the previous scene
+            // Review's images fitted again, but where the zoom scenes go on
+            if !matches!(name, "13j-review-compare-zoom" | "13k-review-compare-unlinked") {
+                crate::review::forget_zoom(ctx);
+                out.push(Msg::LinkCompareZoom(true));
+            }
             out.extend([
                 Msg::CloseHistory,
                 Msg::CloseIdea,
@@ -2751,6 +2770,9 @@ impl Tour {
                 _ => {}
             }
         }
+        if name.starts_with("13i-") || name.starts_with("13j-") || name.starts_with("13k-") {
+            self.zoom_check(name, ctx, st);
+        }
         // zoomed in three steps (+), the view on the image's middle
         // or one image on (→)
         let step = match name {
@@ -3003,6 +3025,61 @@ impl Tour {
         }
         if self.settled == 30 {
             (self.scene, self.frame, self.settled, self.clicked, self.stage) = (self.scene + 1, 0, 0, false, 0);
+        }
+    }
+
+    /// Review's zoom scenes: the wheel at a point of the single image; in
+    /// compare, B stepped with the view kept; unlinked, `0` over the left
+    /// side fits it alone. Once each (a texture loading restarts the count).
+    fn zoom_check(&mut self, name: &str, ctx: &egui::Context, st: &AppState) {
+        let view = |side: &str| {
+            ctx.data(|d| d.get_temp::<crate::zoomview::View>(crate::review::zoom_id_of(true).with(side)))
+                .unwrap_or_default()
+        };
+        let key = |key| egui::Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: Default::default(),
+        };
+        match (self.settled, name) {
+            (5, "13i-review-zoom") if !self.clicked => {
+                self.clicked = true;
+                let wheel = egui::Event::MouseWheel {
+                    unit: egui::MouseWheelUnit::Point,
+                    delta: egui::vec2(0.0, 240.0),
+                    phase: egui::TouchPhase::Move,
+                    source: egui::MouseWheelSource::Unknown,
+                    modifiers: Default::default(),
+                };
+                self.inject = vec![egui::Event::PointerMoved(egui::pos2(560.0, 330.0)), wheel];
+            }
+            (5, "13j-review-compare-zoom") if !self.clicked => {
+                self.clicked = true;
+                self.inject = vec![key(egui::Key::ArrowRight)];
+            }
+            (5, "13k-review-compare-unlinked") if !self.clicked => {
+                self.clicked = true;
+                self.inject = vec![egui::Event::PointerMoved(egui::pos2(500.0, 400.0)), key(egui::Key::Num0)];
+            }
+            (15, _) => {
+                let shared = view("shared");
+                let (ok, what) = match name {
+                    "13i-review-zoom" => (shared.zoomed_in(), format!("{shared:?}")),
+                    "13j-review-compare-zoom" => (
+                        shared.zoomed_in() && st.review_view == ReviewView::Compare && st.review_cursor == 2,
+                        format!("{shared:?}, cursor {}", st.review_cursor),
+                    ),
+                    _ => {
+                        // B is on the left (not swapped)
+                        let (a, b) = (view("a"), view("b"));
+                        (st.compare_unlinked && b.zoom.is_none() && a.zoomed_in(), format!("a {a:?}, b {b:?}"))
+                    }
+                };
+                eprintln!("CHECK {name}: {} ({what})", if ok { "ok" } else { "FAILED" });
+            }
+            _ => {}
         }
     }
 

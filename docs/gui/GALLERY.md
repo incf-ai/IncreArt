@@ -166,6 +166,24 @@ Review → Use as a reference… (`U`) on two picked images: the stack, To (the 
 
 ![13h-review-use-ref](13h-review-use-ref.webp)
 
+## 13i-review-zoom
+
+Review → Single zoomed with the wheel at the pointer: the bar at the image's bottom right (Fit · 100% · − % +)
+
+![13i-review-zoom](13i-review-zoom.webp)
+
+## 13j-review-compare-zoom
+
+A/B compare opened from it, B stepped (→): with Link zoom both sides keep the same part of their images
+
+![13j-review-compare-zoom](13j-review-compare-zoom.webp)
+
+## 13k-review-compare-unlinked
+
+Link zoom unticked: `0` over B fits it alone, A stays zoomed
+
+![13k-review-compare-unlinked](13k-review-compare-unlinked.webp)
+
 ## 14-output-library-rejected
 
 Output library → Grid → Rejected tab: the source's bad images, with Delete these N rejected… (they go to Discarded, under the project's `discarded/`)

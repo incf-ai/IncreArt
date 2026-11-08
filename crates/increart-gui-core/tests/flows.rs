@@ -2589,6 +2589,12 @@ fn review_views_compare_and_rejected() {
     assert_eq!(h.state.review_queue()[h.state.review_cursor].image, second);
     h.send(Msg::SwapCompare);
     assert!(!h.state.compare_flipped);
+    // Link zoom: on each session; unticked, each side zooms on its own
+    assert!(!h.state.compare_unlinked);
+    h.send(Msg::LinkCompareZoom(false));
+    assert!(h.state.compare_unlinked);
+    h.send(Msg::LinkCompareZoom(true));
+    assert!(!h.state.compare_unlinked);
     // right-click → Pin & compare: another image as A, B stays; the current
     // one (B's Pin as A) is pinned and B goes on
     h.send(Msg::ReviewCursor(0));

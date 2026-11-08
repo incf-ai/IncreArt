@@ -3801,7 +3801,23 @@ the keys and mouse buttons go through that view's own history instead.
   selected image, which ←/→ (or the bar's arrows) move through the images
   shown, the lineage panel following B; Esc or **Leave compare** goes back
   to the grid, as does changing tab), over a
-  checkerboard for alpha images. Single and Grid have an info panel on the
+  checkerboard for alpha images. Single's image and both of Compare's
+  sides zoom and pan in place, as the large preview does: the wheel or a
+  pinch at the pointer, `+`/`-`, `0` fit (no `1`: it rates), a left or
+  middle drag pans; with the pointer over an image (or zoomed) a small bar
+  at its bottom right has Fit · 100% · − % +. The view stays as the image
+  changes (← →, rating), so one place can be looked at across seeds, and
+  goes on into Compare when it's opened (Review's single and compare share
+  one; the Output library's compare has its own). A view is kept relative
+  to its image (its middle as a fraction of the width and height, the zoom
+  as a multiple of fit), so in Compare, with **Link zoom** (the compare
+  bar; ticked each session), both sides show the same part of their
+  images even when their sizes differ (an input image and an output, an
+  upscale and its source), stepping B keeping it; unticked, each side
+  zooms on its own (the keys the one under the pointer, else both), and
+  ticking it again takes the side moved last. A double-click still opens
+  the large preview. 100% is one image pixel per screen pixel, the
+  interface zoom and the display's scale counted. Single and Grid have an info panel on the
   right: "3 / 18", the image, and its recipe (project, run, **queued** (its
   revision's time), **generated** (when it was stored, from the run's
   timing; older runs without one give the image ID's minute, "(from its
@@ -3812,6 +3828,7 @@ the keys and mouse buttons go through that view's own history instead.
   window's size, and the image zooms inside it: wheel or pinch at the
   pointer, `+`/`-`, `0` fit, `1` 100%, and a bar under the image (−, %, +,
   Fit, 100%, ✕); zoomed in, dragging pans and a click no longer closes it.
+  Each image opens fitted.
   Opened from Review (single or grid) or the Output library's grid, `←`/`→`
   (or ‹ › with "3 / 18" in the bar) step through that list, and the review
   cursor or Output selection follows, so closing leaves you on that image.

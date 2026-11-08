@@ -15,9 +15,7 @@ use increart_gui_core::{
 };
 
 use crate::textures::Textures;
-use crate::widgets::{
-    BAD, GOOD, NEUTRAL, ic, image_fit_bg, image_menu_items, ph, short, single_click, thumb, verdict_color,
-};
+use crate::widgets::{BAD, GOOD, NEUTRAL, ic, image_menu_items, ph, short, single_click, thumb, verdict_color};
 
 pub const VERDICTS: [(&str, Verdict, egui::Color32); 3] =
     [("Good", Verdict::Good, GOOD), ("Neutral", Verdict::Neutral, NEUTRAL), ("Bad", Verdict::Bad, BAD)];
@@ -541,6 +539,9 @@ fn key_hints(ui: &mut egui::Ui, sheet: bool) {
                 ("Space", "grid / single"),
                 ("C", "A/B compare"),
                 ("Shift+C", "compare with…"),
+                ("wheel / + −", "zoom"),
+                ("drag", "move, zoomed"),
+                ("0", "fit"),
                 ("E", "edit this image"),
                 ("N", "new project from it"),
                 ("D", "duplicate its project"),
@@ -752,8 +753,10 @@ fn single(ui: &mut egui::Ui, st: &AppState, root: &Path, tex: &mut Textures, out
     egui::CentralPanel::default().show(ui, |ui| {
         follow_hold(ui, st, out);
         let t = tex.full_or_thumb(root, &item.image);
-        let (rect, resp) = ui.allocate_exact_size(ui.available_size(), Sense::click());
-        image_fit_bg(&ui.painter_at(rect), rect.shrink(4.0), t.as_ref(), st.checkerboard);
+        let full = crate::zoomview::full_size(tex.dims(root, &item.image), t.as_ref());
+        let (rect, resp) = ui.allocate_exact_size(ui.available_size(), Sense::click_and_drag());
+        let pane = crate::zoomview::Pane { rect: rect.shrink(4.0), resp: resp.clone(), tex: t, full, side: "single" };
+        crate::zoomview::show(ui, zoom_id(st), true, zoom_keys(ui, st), st.checkerboard, &[pane]);
         if resp.double_clicked() {
             out.push(Msg::Preview(Some(item.image.clone())));
         }
@@ -1407,6 +1410,7 @@ fn compare(ui: &mut egui::Ui, st: &AppState, root: &Path, tex: &mut Textures, ou
             if ui.button(ic(ph::X, "Leave compare")).clicked() {
                 out.push(Msg::Compare);
             }
+            link_zoom(ui, st, out);
             let a_rated = a.and_then(|a| st.output_link(a)).is_some();
             ui.weak(if a_rated { "Keys rate B; A has its own buttons." } else { "Keys rate B." });
         });
@@ -1449,6 +1453,7 @@ fn compare_sides(
     });
     // B, the one the arrows change, on the left unless swapped
     let sides = if st.compare_flipped { [(a, true), (b, false)] } else { [(b, false), (a, true)] };
+    let mut panes = vec![];
     ui.columns(2, |cols| {
         for (ui, (image, is_a)) in cols.iter_mut().zip(sides) {
             let link = image.and_then(|i| st.output_link(i));
@@ -1486,8 +1491,10 @@ fn compare_sides(
                     verdict_buttons(ui, out, |v| rate(is_a, o, v));
                 }
                 let t = tex.full_or_thumb(root, image);
-                let (rect, resp) = ui.allocate_exact_size(ui.available_size(), Sense::click());
-                image_fit_bg(&ui.painter_at(rect), rect.shrink(4.0), t.as_ref(), st.checkerboard);
+                let full = crate::zoomview::full_size(tex.dims(root, image), t.as_ref());
+                let (rect, resp) = ui.allocate_exact_size(ui.available_size(), Sense::click_and_drag());
+                let side = if is_a { "a" } else { "b" };
+                panes.push(crate::zoomview::Pane { rect: rect.shrink(4.0), resp: resp.clone(), tex: t, full, side });
                 if resp.double_clicked() {
                     out.push(Msg::Preview(Some(image.clone())));
                 }
@@ -1514,6 +1521,51 @@ fn compare_sides(
             });
         }
     });
+    // zoomed and panned together (Link zoom) or each on its own
+    crate::zoomview::show(ui, zoom_id(st), !st.compare_unlinked, zoom_keys(ui, st), st.checkerboard, &panes);
+}
+
+/// The zoom of Review's single image and compare's sides (one for both:
+/// pinning goes on at the same place), the Output library's compare its own.
+fn zoom_id(st: &AppState) -> egui::Id {
+    zoom_id_of(st.tab == Tab::Review)
+}
+
+pub fn zoom_id_of(review: bool) -> egui::Id {
+    egui::Id::unique(("image_zoom", review))
+}
+
+/// Review's and the Output library's compare zoom forgotten: fitted again
+/// (the tour, between scenes).
+pub fn forget_zoom(ctx: &egui::Context) {
+    ctx.data_mut(|d| {
+        for review in [true, false] {
+            for side in ["shared", "a", "b"] {
+                d.remove::<crate::zoomview::View>(zoom_id_of(review).with(side));
+            }
+        }
+    });
+}
+
+/// `+` / `−` / `0` zoom the image(s) unless something else has the keys.
+fn zoom_keys(ui: &egui::Ui, st: &AppState) -> bool {
+    !(ui.ctx().egui_wants_keyboard_input()
+        || st.previewing()
+        || st.ref_picker.is_some()
+        || st.collect.is_some()
+        || st.tagging.is_some()
+        || st.use_ref.is_some()
+        || st.confirm.is_some())
+}
+
+/// A/B compare's Link zoom: both sides over the same part of their images.
+fn link_zoom(ui: &mut egui::Ui, st: &AppState, out: &mut Vec<Msg>) {
+    let mut linked = !st.compare_unlinked;
+    let tip = "both sides zoom and pan together, over the same part of each image (wheel, drag, + / − / 0)\n\
+               unticked: each on its own; ticking it again takes the last one moved";
+    if ui.checkbox(&mut linked, "Link zoom").on_hover_text(tip).changed() {
+        out.push(Msg::LinkCompareZoom(linked));
+    }
 }
 
 // ---------------------------------------------------------------- output library
@@ -1770,6 +1822,7 @@ fn output_compare(
         if ui.button(ic(ph::X, "Leave compare   Esc")).clicked() {
             out.push(Msg::OutputCompare(None));
         }
+        link_zoom(ui, st, out);
         if let Some(i) = at {
             ui.weak(format!("B: {} / {}", i + 1, images.len()));
         }

@@ -491,6 +491,9 @@ pub enum Msg {
     PinCompare(ImageRef),
     /// A and B change sides on screen (which one steps stays).
     SwapCompare,
+    /// A/B compare's Link zoom: both sides show the same part of their
+    /// images (true), or each zooms and pans on its own.
+    LinkCompareZoom(bool),
     /// Rate the pinned image (A).
     ReviewPinned(Verdict),
     /// `Shift+C` / Compare with…: the picker, for the image to compare this
@@ -2925,6 +2928,7 @@ fn part_of(msg: &Msg) -> usize {
         Msg::Compare => 15,
         Msg::PinCompare(..) => 16,
         Msg::SwapCompare => 16,
+        Msg::LinkCompareZoom(..) => 16,
         Msg::ReviewPinned(..) => 16,
         Msg::CompareWith(..) => 5,
         Msg::OutputCompare(..) => 5,
@@ -8365,6 +8369,10 @@ fn apply_16(state: &mut AppState, msg: Msg, rest: &mut Option<Msg>) -> Vec<Effec
         // the sides change places: the pinned image on the other side
         Msg::SwapCompare => {
             state.compare_flipped = !state.compare_flipped;
+            vec![]
+        }
+        Msg::LinkCompareZoom(on) => {
+            state.compare_unlinked = !on;
             vec![]
         }
         Msg::ReviewPinned(v) => {

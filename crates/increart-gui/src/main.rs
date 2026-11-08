@@ -36,6 +36,7 @@ mod tour;
 mod tree;
 mod watchdog;
 mod widgets;
+mod zoomview;
 
 use std::path::PathBuf;
 

@@ -59,6 +59,9 @@ size (regenerate it with `scripts/make-gui-gallery.sh`).
 | [13f-review-image-menu](13f-review-image-menu.webp) | Review → right-click on the image: pick, copy, crop, compare, the uses with their keys, Add to collection…, Tag… (`L`), Show in file manager |
 | [13g-review-tag](13g-review-tag.webp) | Review → Tag… (`L`) on two images: the stack, the field (Enter adds what's typed), the tags ticked on all, on some ("1 / 2") or added, the Rate row (here bad), the button saying what happens |
 | [13h-review-use-ref](13h-review-use-ref.webp) | Review → Use as a reference… (`U`) on two picked images: the stack, To (the project's Generate form / the input library, `R`), the Rate row (neutral to start), the button saying what happens |
+| [13i-review-zoom](13i-review-zoom.webp) | Review → Single zoomed with the wheel at the pointer: the bar at the image's bottom right (Fit · 100% · − % +) |
+| [13j-review-compare-zoom](13j-review-compare-zoom.webp) | A/B compare opened from it, B stepped (→): with Link zoom both sides keep the same part of their images |
+| [13k-review-compare-unlinked](13k-review-compare-unlinked.webp) | Link zoom unticked: `0` over B fits it alone, A stays zoomed |
 | [14-output-library-rejected](14-output-library-rejected.webp) | Output library → Grid → Rejected tab: the source's bad images, with Delete these N rejected… (they go to Discarded, under the project's `discarded/`) |
 | [14b-output-library-compare](14b-output-library-compare.webp) | Output library → right-click → Compare with…: the Grid shows A beside the selected image (B), ←/→ step B |
 | [14c-output-library-tags](14c-output-library-tags.webp) | Output library filtered by the tag "sky" (Tags under the filters, with counts; by tag in the smart folders), the selected image's tags as chips in the lineage view |

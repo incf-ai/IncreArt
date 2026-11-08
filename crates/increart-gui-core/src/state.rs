@@ -4128,6 +4128,9 @@ pub struct AppState {
     /// on the left and B, the image the arrows change, on the right (Swap
     /// sides); B is on the left by default.
     pub compare_flipped: bool,
+    /// A/B compare: each side zooms and pans on its own (Link zoom
+    /// unticked); linked (the same part of both images) each session.
+    pub compare_unlinked: bool,
     pub output_tab: OutputTab,
     pub output_source: OutputSource,
     /// Set by Show outputs: the Grid warns that filters hide images, or that
@@ -4949,6 +4952,7 @@ impl AppState {
             review_view: ReviewView::Single,
             review_pinned: None,
             compare_flipped: false,
+            compare_unlinked: false,
             output_tab: OutputTab::Grid,
             output_source: OutputSource::AllProjects,
             output_notice: false,

@@ -1366,13 +1366,14 @@ pub fn preview_window(ctx: &egui::Context, st: &AppState, tex: &mut Textures, ke
     let full = egui::vec2(w as f32, h as f32);
     const BAR: f32 = 30.0;
     let room = ctx.content_rect().size() * 0.95 - egui::vec2(0.0, BAR);
-    let fit = (room.x / full.x).min(room.y / full.y);
+    let g = crate::zoomview::Geom::new(ctx, room, full);
     let view_id = egui::Id::unique("image_preview_view");
+    // a view of its own each image
     let mut v = ctx
-        .data(|d| d.get_temp::<PreviewView>(view_id))
-        .filter(|v| v.image == key)
-        .unwrap_or_else(|| PreviewView::new(key, full, fit));
-    v.fit = fit;
+        .data(|d| d.get_temp::<(egui::Id, crate::zoomview::View)>(view_id))
+        .filter(|(image, _)| *image == key)
+        .map(|(_, v)| v)
+        .unwrap_or_default();
     // ← / →: the previous / next image where it was opened from, an output
     // there, so it can be rated (its verdict) and used
     let at = st.preview_position();
@@ -1458,41 +1459,26 @@ pub fn preview_window(ctx: &egui::Context, st: &AppState, tex: &mut Textures, ke
         .show(ctx, |ui| {
             let (zoom_in, zoom_out, fit_key, actual) = keys;
             if zoom_in {
-                v.zoom(v.scale() * 1.25, egui::Vec2::ZERO);
+                v.step(true, g);
             }
             if zoom_out {
-                v.zoom(v.scale() / 1.25, egui::Vec2::ZERO);
+                v.step(false, g);
             }
             if fit_key {
                 v.reset();
             }
             if actual {
-                v.zoom(1.0, egui::Vec2::ZERO);
+                v.actual_size(g);
             }
 
             // a fixed box, nearly the whole window: zooming changes only the image
             let view = room;
             let (rect, resp) = ui.allocate_exact_size(view, egui::Sense::click_and_drag());
-            if let Some(p) = resp.hover_pos() {
-                let (wheel, pinch) = ui.input(|i| (i.smooth_scroll_delta.y, i.zoom_delta()));
-                let f = pinch * (wheel / 200.0).exp();
-                if f != 1.0 {
-                    v.zoom(v.scale() * f, p - rect.center());
-                }
-            }
-            if resp.dragged() {
-                v.center -= resp.drag_delta() / v.scale();
-            }
-            let zoomed_in = v.scale() > fit * 1.001;
-            if resp.dragged() {
-                ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
-            } else if resp.hovered() && zoomed_in {
-                ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
-            }
-            v.clamp(view);
-            let scale = v.scale();
-            let shown = egui::Rect::from_min_size(rect.center() - v.center * scale, full * scale);
-            crate::widgets::image_fit(&ui.painter_at(rect), shown, t.as_ref());
+            v = v.clamped(g);
+            crate::zoomview::interact(ui, &resp, &mut v, g);
+            let zoomed_in = v.zoomed_in();
+            crate::zoomview::draw(&ui.painter_at(rect), rect, v, g, t.as_ref(), true);
+            let percent = v.percent(g);
             let arrows = match (at.is_some(), rows) {
                 (true, true) => " · ← → previous / next · ↑ ↓ style above / below",
                 (true, false) => " · ← → previous / next",
@@ -1506,7 +1492,7 @@ pub fn preview_window(ctx: &egui::Context, st: &AppState, tex: &mut Textures, ke
             let resp = resp.on_hover_text(format!(
                 "{}\n{:.0}% · wheel or + / − zoom, 0 fit{hundred}{arrows}{rate} · {close}{menu}",
                 crate::widgets::size_info(w, h),
-                scale * 100.0
+                percent
             ));
             if let Some(img) = img {
                 resp.context_menu(|ui| {
@@ -1580,24 +1566,24 @@ pub fn preview_window(ctx: &egui::Context, st: &AppState, tex: &mut Textures, ke
                             }
                             ui.separator();
                         }
-                        let one = (scale - 1.0).abs() < 1e-3;
+                        let one = v.is_actual(g);
                         let hint = if rates {
                             "one image pixel per screen pixel"
                         } else {
                             "one image pixel per screen pixel (1)"
                         };
                         if ui.selectable_label(one, "100%").on_hover_text(hint).clicked() {
-                            v.zoom(1.0, egui::Vec2::ZERO);
+                            v.actual_size(g);
                         }
                         if ui.selectable_label(v.zoom.is_none(), "Fit").on_hover_text("fit the window (0)").clicked() {
                             v.reset();
                         }
                         if ui.small_button(ph::MAGNIFYING_GLASS_PLUS).on_hover_text("zoom in (+)").clicked() {
-                            v.zoom(scale * 1.25, egui::Vec2::ZERO);
+                            v.step(true, g);
                         }
-                        ui.label(RichText::new(format!("{:.0}%", scale * 100.0)).monospace());
+                        ui.label(RichText::new(format!("{percent:.0}%")).monospace());
                         if ui.small_button(ph::MAGNIFYING_GLASS_MINUS).on_hover_text("zoom out (−)").clicked() {
-                            v.zoom(scale / 1.25, egui::Vec2::ZERO);
+                            v.step(false, g);
                         }
                     };
                     let left = |ui: &mut egui::Ui| {
@@ -1624,10 +1610,10 @@ pub fn preview_window(ctx: &egui::Context, st: &AppState, tex: &mut Textures, ke
     // a use that opens another tab leaves the preview
     let left = out[used..].iter().any(|m| matches!(m, Msg::UseImage(..)));
     if m.inner || m.should_close() || left {
-        ctx.data_mut(|d| d.remove::<PreviewView>(view_id));
+        ctx.data_mut(|d| d.remove::<(egui::Id, crate::zoomview::View)>(view_id));
         out.push(Msg::Preview(None));
     } else {
-        ctx.data_mut(|d| d.insert_temp(view_id, v));
+        ctx.data_mut(|d| d.insert_temp(view_id, (key, v.clamped(g))));
     }
 }
 
@@ -1700,51 +1686,6 @@ fn verdict_buttons(ui: &mut egui::Ui, current: Option<Verdict>, rtl: bool, out: 
         }
     }
     clicked
-}
-
-/// The large preview's zoom and position, kept while it shows one image.
-#[derive(Clone)]
-struct PreviewView {
-    /// What it shows (an image, a pasted one).
-    image: egui::Id,
-    full: egui::Vec2,
-    /// The scale that fits the window (it follows the window's size).
-    fit: f32,
-    /// `None`: fit.
-    zoom: Option<f32>,
-    /// The image point (in image pixels) at the middle of the view.
-    center: egui::Vec2,
-}
-
-impl PreviewView {
-    fn new(image: egui::Id, full: egui::Vec2, fit: f32) -> Self {
-        PreviewView { image, full, fit, zoom: None, center: full / 2.0 }
-    }
-
-    fn scale(&self) -> f32 {
-        self.zoom.unwrap_or(self.fit)
-    }
-
-    fn reset(&mut self) {
-        (self.zoom, self.center) = (None, self.full / 2.0);
-    }
-
-    /// To scale `s` (from a quarter of fit or 100% to 800%), keeping the
-    /// image point `at` (from the view's middle) where it is.
-    fn zoom(&mut self, s: f32, at: egui::Vec2) {
-        let s = s.clamp(self.fit.min(1.0) * 0.25, self.fit.max(8.0));
-        self.center += at / self.scale() - at / s;
-        self.zoom = Some(s);
-    }
-
-    /// No blank edges: an axis smaller than the view stays centred.
-    fn clamp(&mut self, view: egui::Vec2) {
-        let (s, full) = (self.scale(), self.full);
-        let half = view / 2.0 / s;
-        let axis = |c: f32, f: f32, v: f32, h: f32| if f * s <= v { f / 2.0 } else { c.clamp(h, f - h) };
-        self.center =
-            egui::vec2(axis(self.center.x, full.x, view.x, half.x), axis(self.center.y, full.y, view.y, half.y));
-    }
 }
 
 /// The Scale dialog: a new size with the same aspect, from megapixels or
