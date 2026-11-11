@@ -1049,6 +1049,8 @@ fn koboldcpp_loads_the_model_and_generates() {
     let s = setup();
     let tmp = tempfile::tempdir().unwrap();
     let k = FakeKobold::start("");
+    // (60 ms a generation: a slow runner asked for progress after both)
+    k.with(|st| st.hold_for_progress = true);
     let admin = admin(&k, tmp.path());
     let models = admin.model_dirs[0].clone();
     let run = new_run(&s, "qwen-image-21", 2, false);

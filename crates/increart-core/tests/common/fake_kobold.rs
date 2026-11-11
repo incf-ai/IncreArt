@@ -25,6 +25,12 @@ pub struct State {
     pub down_until: Option<Instant>,
     /// Sampling step of the generation going on (0: none).
     pub step: u32,
+    /// A generation doesn't end before its progress was asked for (up to
+    /// 10 s): what a test of progress needs, however slow the machine is
+    /// at asking.
+    pub hold_for_progress: bool,
+    /// Times progress was asked for while a generation was going on.
+    pub progress_asks: u32,
     /// Every request: (method, path, JSON body).
     pub log: Vec<(String, String, Value)>,
     /// Generations that ran to the end.
@@ -154,6 +160,9 @@ fn handle(st: &Mutex<State>, method: &Method, path: &str, body: Value, auth: &st
         ),
         (Method::Get, "/sdapi/v1/progress") => {
             let step = s.step;
+            if step > 0 {
+                s.progress_asks += 1;
+            }
             let state = json!({"job_count": 1, "sampling_step": step, "sampling_steps": 20});
             (
                 200,
@@ -165,10 +174,15 @@ fn handle(st: &Mutex<State>, method: &Method, path: &str, body: Value, auth: &st
                 return (200, json!({"images": [""], "parameters": {}, "info": "{}"}));
             }
             let (gen_ms, seed) = (s.gen_ms, body["seed"].as_u64().unwrap_or(0));
+            let (hold, asked) = (s.hold_for_progress, s.progress_asks);
             drop(s);
             let t = Instant::now();
-            while t.elapsed() < Duration::from_millis(gen_ms) {
-                st.lock().unwrap().step = (t.elapsed().as_millis() as u64 * 20 / gen_ms.max(1)) as u32 + 1;
+            loop {
+                let held = hold && st.lock().unwrap().progress_asks == asked && t.elapsed() < Duration::from_secs(10);
+                if t.elapsed() >= Duration::from_millis(gen_ms) && !held {
+                    break;
+                }
+                st.lock().unwrap().step = (t.elapsed().as_millis() as u64 * 20 / gen_ms.max(1)).min(19) as u32 + 1;
                 std::thread::sleep(Duration::from_millis(5));
             }
             let mut s = st.lock().unwrap();
