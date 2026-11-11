@@ -4578,6 +4578,24 @@ calls while the window is minimized or hidden, with a clock of the app's own
   have no GPU, so the GPU paths are tested by hand.
 - `INCREART_LINK_MODE` (see Links): CI runs the tests on Windows with hard
   links and with copies too.
+- One toolchain everywhere: `rust-toolchain.toml` names the Rust version,
+  and this machine, CI and the release build all take it from there (CI
+  had taken the newest stable, whose clippy knew lints the one run before
+  pushing didn't). Moving on is a commit that changes the version and
+  fixes what its clippy says.
+- CI gates a release. Nothing here runs Windows or macOS, so what only
+  they show (paths apart by `\`, drive letters, the system's wording of an
+  error, a slower runner) is first seen on CI: of the nine pushes that
+  failed it up to rc20, five were such Windows differences in a test,
+  four a test that depended on the runner's speed and two a newer clippy,
+  and four release candidates (rc9, rc10, rc18, rc20) went out with CI failing, the tag pushed
+  along with main. So `scripts/release.sh <tag> <notes>` checks the commit
+  here, pushes main, waits for its CI run and tags only when every job
+  passed; and the release workflow runs CI on the tag itself (`ci.yml` is
+  called by `release.yml`; a tag's push doesn't start it separately) and
+  builds nothing unless it passes. Tests compare paths by their components
+  (`Path::ends_with`), never as text with `/`, and wait for what they
+  expect with a deadline instead of sleeping a fixed time.
 - Library format: `crates/increart-core/tests/common/sample.rs` writes a
   deterministic on-disk sample library (stores, links, IDs, pixel hashes,
   RSN/JSON chunks) file by file, and `verify.rs` beside it checks one

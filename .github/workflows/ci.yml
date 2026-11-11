@@ -2,17 +2,27 @@
 # platform's release build as a downloadable artifact. Windows runs the
 # tests twice more with libraries on hard links and on copies (what most
 # Windows installs and the Windows example library use; the runner itself
-# can make symlinks).
+# can make symlinks). A release runs it on its tag first (release.yml), and
+# publishes nothing unless every job here passes: a tag's push doesn't
+# start it a second time.
 name: CI
 
 on:
   push:
+    branches: ['**']
   pull_request:
   workflow_dispatch:
+  workflow_call:
+    inputs:
+      ref:
+        description: What to check out (the release's tag)
+        type: string
+        default: ''
 
 # a newer push to the same branch (or PR) cancels the run it supersedes
+# (a release's run is its own group: github.workflow is the caller's name)
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -34,9 +44,10 @@ jobs:
       INCREART_LINK_MODE: ${{ matrix.link_mode }}
     steps:
       - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
         with:
-          components: clippy
+          ref: ${{ inputs.ref }}
+      # the toolchain rust-toolchain.toml names, with its clippy
+      - run: rustup toolchain install
       - name: Linux libraries
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libfontconfig1-dev libxkbcommon-dev

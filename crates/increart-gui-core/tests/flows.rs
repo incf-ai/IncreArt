@@ -1347,7 +1347,8 @@ impl Library_ {
     }
 }
 
-/// The file under `root` whose path ends with `tail`.
+/// The file under `root` whose path ends with `tail` (written with `/`:
+/// compared by path components, Windows' are apart by `\\`).
 fn walkdir_find(root: &Path, tail: &str) -> PathBuf {
     let mut dirs = vec![root.to_path_buf()];
     while let Some(d) = dirs.pop() {
@@ -1355,7 +1356,7 @@ fn walkdir_find(root: &Path, tail: &str) -> PathBuf {
             let p = e.path();
             if p.is_dir() {
                 dirs.push(p);
-            } else if p.to_string_lossy().ends_with(tail) {
+            } else if p.ends_with(Path::new(tail)) {
                 return p;
             }
         }

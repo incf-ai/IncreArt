@@ -1,0 +1,7 @@
+# The toolchain everyone builds with: this machine, CI and the release
+# (rustup reads this file). CI used to take whatever stable was newest, and
+# a newer clippy than the one run before pushing failed it. To move on,
+# change the version here and fix what its clippy says in the same commit.
+[toolchain]
+channel = "1.99.1"
+components = ["clippy", "rustfmt"]

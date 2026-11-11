@@ -29,8 +29,15 @@ jobs:
     with:
       ref: ${{ inputs.tag || github.ref_name }}
 
+  # and the tests on each OS (Windows on links, hard links and copies):
+  # releases went out with these failing while only a push started them
+  ci:
+    uses: ./.github/workflows/ci.yml
+    with:
+      ref: ${{ inputs.tag || github.ref_name }}
+
   build:
-    needs: koboldcpp
+    needs: [koboldcpp, ci]
     strategy:
       fail-fast: false
       matrix:
@@ -51,7 +58,8 @@ jobs:
       - uses: actions/checkout@v7
         with:
           ref: ${{ env.TAG }}
-      - uses: dtolnay/rust-toolchain@stable
+      # the toolchain rust-toolchain.toml names
+      - run: rustup toolchain install
       - name: Linux libraries
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libfontconfig1-dev libxkbcommon-dev
