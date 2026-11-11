@@ -79,13 +79,13 @@ jobs:
         run: |
           mkdir -p models
           for u in $MODEL_URLS; do
-            s=$SECONDS; curl -fsSL --retry 5 -o "models/$(basename "$u")" "$u"; echo "$(basename "$u"): $((SECONDS - s)) s"
+            s=$SECONDS; scripts/fetch.sh "$u" "models/$(basename "$u")"; echo "$(basename "$u"): $((SECONDS - s)) s"
           done
       - name: KoboldCpp
         run: |
           mkdir -p kcpp
-          curl -fsSL --retry 5 -o "kcpp/${{ matrix.asset }}" \
-            "https://github.com/LostRuins/koboldcpp/releases/download/$KCPP/${{ matrix.asset }}"
+          scripts/fetch.sh "https://github.com/LostRuins/koboldcpp/releases/download/$KCPP/${{ matrix.asset }}" \
+            "kcpp/${{ matrix.asset }}"
           chmod +x "kcpp/${{ matrix.asset }}"
       - name: Build the test
         run: cargo test --locked -p increart-gui-core --test koboldcpp_cpu --no-run
