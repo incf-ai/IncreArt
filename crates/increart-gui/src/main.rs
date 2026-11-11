@@ -201,9 +201,18 @@ fn main() -> eframe::Result {
         config.programs.koboldcpp = b;
         config.fill_koboldcpp();
     }
+    // the screenshot tour's window, `INCREART_TOUR_WINDOW=1920x1080` for
+    // shots of another size (scripts/make-promo.sh)
+    let size = std::env::var_os("INCREART_TOUR")
+        .and(std::env::var("INCREART_TOUR_WINDOW").ok())
+        .and_then(|s| {
+            let (w, h) = s.split_once('x')?;
+            Some([w.parse().ok()?, h.parse().ok()?])
+        })
+        .unwrap_or([1400.0, 900.0]);
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_inner_size([1400.0, 900.0])
+            .with_inner_size(size)
             .with_min_inner_size(MIN_WINDOW)
             .with_title("IncreArt"),
         ..Default::default()

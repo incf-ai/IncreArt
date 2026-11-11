@@ -12,7 +12,7 @@ simulated. Retaken by `scripts/make-readme-gallery.sh`; don't edit by hand.
 
 ![Validate servers](gallery/validate-servers.webp)
 
-**Home.** Where the app opens: how ideas become finished images, step by step, each with its tab, its keys and what's waiting there. Start a new project (it asks for reference images too), write an idea, import images or open the drop folder.
+**Home.** Where the app opens, with the logo: how ideas become finished images, step by step, each with its tab, its keys and what's waiting there. Start a new project (it asks for reference images too), write an idea, import images or open the drop folder.
 
 ![Home](gallery/home.webp)
 

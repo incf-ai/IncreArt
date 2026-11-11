@@ -69,7 +69,7 @@ done
 captions=(
     "server-wizard|**Set up servers.** Choose KoboldCpp and IncreArt finds your GPUs, picks a preset for each card's memory and shares the work between them: here two 24 GB cards each make images and run prompt enhance."
     "validate-servers|**Validate servers.** Before a preset is first used, a few minutes of checks that IncreArt and its servers work together: each server answers, lists its models and makes a small image, then a short run goes through all of them. What fails comes with what to try."
-    "home|**Home.** Where the app opens: how ideas become finished images, step by step, each with its tab, its keys and what's waiting there. Start a new project (it asks for reference images too), write an idea, import images or open the drop folder."
+    "home|**Home.** Where the app opens, with the logo: how ideas become finished images, step by step, each with its tab, its keys and what's waiting there. Start a new project (it asks for reference images too), write an idea, import images or open the drop folder."
     "idea-inbox|**Idea inbox.** Ideas come in as text, images or both: typed in, imported, or saved into the drop folder from a browser. Save each one to the input library, discard it or make a new project from it."
     "../input-library.png|**Input library.** Kept ideas in folders, with their source images, ready to start projects from."
     "projects-grid|**Projects.** Each project with its cover and its counts of good, neutral, bad and new images, in folders."

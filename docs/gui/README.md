@@ -138,7 +138,7 @@ size (regenerate it with `scripts/make-gui-gallery.sh`).
 | [98h5-server-logs-folded](98h5-server-logs-folded.webp) | Logs: a KoboldCpp's latest launch, its lines timed, runs of one kind folded (`load_hparams: 8 lines`), find (Ctrl+F), errors only, wrap, follow; Save for a bug report… |
 | [98h6-server-logs-errors-only](98h6-server-logs-errors-only.webp) | Logs → errors only: warnings and errors (amber, red) with the lines around them |
 | [98i-server-start-failed](98i-server-start-failed.webp) | The Servers screen after a preset's servers failed to start: the error under each row, its log a click away |
-| [99a-home](99a-home.webp) | Home, where the app opens: Start a new project… / Write an idea / Import images… / Open the drop folder, what's waiting, how it works in six cards (Collect, Sort the inbox, Input library, Projects, Review, Output library; each with its keys, a count and its button), the latest projects |
+| [99a-home](99a-home.webp) | Home, where the app opens: a card with the logo and "Gotta sketch 'em all!" beside Start a new project… · Write an idea / Import images… · Open the drop folder and what's waiting; how it works in six cards (Collect, Sort the inbox, Input library, Projects, Review, Output library; each with its keys, a count and its button), the latest projects |
 | [99b-home-start-project](99b-home-start-project.webp) | Home → Start a new project…: the name, and whether to add reference images (from the libraries, image files, or not now); the picker opens on its Generate form once it is made |
 
 **[Gallery](GALLERY.md)**: every screen above, one after another at full size.

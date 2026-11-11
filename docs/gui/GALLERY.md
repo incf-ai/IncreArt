@@ -642,7 +642,7 @@ The Servers screen after a preset's servers failed to start: the error under eac
 
 ## 99a-home
 
-Home, where the app opens: Start a new project… / Write an idea / Import images… / Open the drop folder, what's waiting, how it works in six cards (Collect, Sort the inbox, Input library, Projects, Review, Output library; each with its keys, a count and its button), the latest projects
+Home, where the app opens: a card with the logo and "Gotta sketch 'em all!" beside Start a new project… · Write an idea / Import images… · Open the drop folder and what's waiting; how it works in six cards (Collect, Sort the inbox, Input library, Projects, Review, Output library; each with its keys, a count and its button), the latest projects
 
 ![99a-home](99a-home.webp)
 

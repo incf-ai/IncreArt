@@ -39,23 +39,115 @@ pub fn view(ui: &mut egui::Ui, st: &AppState, out: &mut Vec<Msg>) {
     });
 }
 
+/// The logo, with its white glow (2x for a sharp edge on HiDPI screens).
+static LOGO: &[u8] = include_bytes!("../assets/logo.png");
+/// The logo's width on the page (its height follows).
+const LOGO_W: f32 = 300.0;
+/// The hero card: logo on the left, the start buttons on the right;
+/// stacked when the page is narrower than this.
+const HERO_SIDE_BY_SIDE: f32 = 760.0;
+const HERO_FILL: Color32 = Color32::from_rgb(38, 42, 51);
+
+/// The logo decoded once into a texture (mipmapped: it's drawn smaller
+/// than it is).
+fn logo_texture(ctx: &egui::Context) -> Option<egui::TextureHandle> {
+    let id = egui::Id::unique("home_logo");
+    if let Some(t) = ctx.data(|d| d.get_temp::<egui::TextureHandle>(id)) {
+        return Some(t);
+    }
+    let img = image::load_from_memory(LOGO).ok()?.to_rgba8();
+    let size = [img.width() as usize, img.height() as usize];
+    let color = egui::ColorImage::from_rgba_unmultiplied(size, img.as_raw());
+    let options =
+        egui::TextureOptions { mipmap_mode: Some(egui::TextureFilter::Linear), ..egui::TextureOptions::LINEAR };
+    let t = ctx.load_texture("home_logo", color, options);
+    ctx.data_mut(|d| d.insert_temp(id, t.clone()));
+    Some(t)
+}
+
+/// The logo and its tagline, centred in a column `width` wide.
+/// Its height.
+fn brand(ui: &mut egui::Ui, width: f32) -> f32 {
+    ui.allocate_ui_with_layout(Vec2::new(width, 0.0), egui::Layout::top_down(egui::Align::Center), |ui| {
+        if let Some(t) = logo_texture(ui.ctx()) {
+            let size = t.size_vec2() * (LOGO_W / t.size_vec2().x);
+            ui.add(egui::Image::new((t.id(), size)));
+            // the glow's margin is room enough
+            ui.add_space(-12.0);
+        }
+        ui.label(RichText::new("Gotta sketch 'em all!").italics().size(13.0));
+    })
+    .response
+    .rect
+    .height()
+}
+
+/// Home's top: a card with the logo and its tagline, beside (or over,
+/// narrow) what IncreArt does, the buttons to start and what's waiting.
 fn welcome(ui: &mut egui::Ui, st: &AppState, out: &mut Vec<Msg>) {
-    ui.label(RichText::new("Welcome to IncreArt").size(26.0).strong());
+    egui::Frame::new().fill(HERO_FILL).corner_radius(10.0).inner_margin(egui::Margin::symmetric(20, 16)).show(
+        ui,
+        |ui| {
+            ui.set_width(ui.available_width());
+            if ui.available_width() >= HERO_SIDE_BY_SIDE {
+                // the logo and the buttons centred on each other: the shorter
+                // padded by their heights in the last frame (a widget can't
+                // be centred on one placed after it)
+                let id = egui::Id::unique("home_hero_heights");
+                let (left, right) = ui.data(|d| d.get_temp::<(f32, f32)>(id)).unwrap_or_default();
+                let pad = |a: f32, b: f32| ((b - a) / 2.0).max(0.0);
+                let heights = ui
+                    .horizontal_top(|ui| {
+                        let l = ui
+                            .vertical(|ui| {
+                                ui.add_space(pad(left, right));
+                                brand(ui, LOGO_W + 20.0)
+                            })
+                            .inner;
+                        ui.add_space(16.0);
+                        let r = ui
+                            .vertical(|ui| {
+                                ui.add_space(pad(right, left));
+                                ui.vertical(|ui| start(ui, st, out)).response.rect.height()
+                            })
+                            .inner;
+                        (l, r)
+                    })
+                    .inner;
+                if heights != (left, right) {
+                    ui.data_mut(|d| d.insert_temp(id, heights));
+                    ui.ctx().request_repaint();
+                }
+            } else {
+                brand(ui, ui.available_width());
+                ui.add_space(10.0);
+                start(ui, st, out);
+            }
+        },
+    );
+}
+
+/// The hero's right side: the intro, the start buttons, what's waiting.
+fn start(ui: &mut egui::Ui, st: &AppState, out: &mut Vec<Msg>) {
+    ui.add_space(6.0);
     ui.label(
-        "Collect ideas and reference images, keep the good ones, turn them into projects, \
-         generate many seeds on your GPUs, and keep the best results.",
+        RichText::new(
+            "Collect ideas and reference images, keep the good ones, turn them into projects, \
+             generate many seeds on your GPUs, and keep the best results.",
+        )
+        .size(15.0),
     );
     ui.add_space(12.0);
-    let big = |icon: &str, text: &str| {
-        egui::Button::new(RichText::new(ic(icon, text)).size(16.0)).min_size(Vec2::new(0.0, 36.0))
-    };
-    ui.horizontal_wrapped(|ui| {
-        ui.spacing_mut().item_spacing = Vec2::new(10.0, 10.0);
+    // two rows of two, the same width: making things, then bringing them in
+    const BUTTON: Vec2 = Vec2::new(220.0, 36.0);
+    let big = |icon: &str, text: &str| egui::Button::new(RichText::new(ic(icon, text)).size(16.0)).min_size(BUTTON);
+    ui.spacing_mut().item_spacing = Vec2::new(10.0, 10.0);
+    ui.horizontal(|ui| {
         let start = egui::Button::new(
             RichText::new(ic(ph::ROCKET_LAUNCH, "Start a new project…")).size(16.0).strong().color(Color32::WHITE),
         )
         .fill(ACCENT.gamma_multiply(0.75))
-        .min_size(Vec2::new(0.0, 36.0));
+        .min_size(BUTTON);
         if ui.add(start).on_hover_text("name it, pick its reference images, then write the prompt").clicked() {
             out.push(Msg::StartProject(true));
         }
@@ -67,6 +159,8 @@ fn welcome(ui: &mut egui::Ui, st: &AppState, out: &mut Vec<Msg>) {
             out.push(Msg::Tab(Tab::IdeaInbox));
             out.push(Msg::InboxTab(InboxTab::NewIdea));
         }
+    });
+    ui.horizontal(|ui| {
         if ui
             .add(big(ph::FILE_ARROW_DOWN, "Import images…"))
             .on_hover_text("image or .txt files, each a new idea in the Idea inbox")
