@@ -429,7 +429,7 @@ fn engine_run(cx: &mut Ctx, stop_one: bool) -> Verdict {
                 }
                 problems.push(p);
             }
-            Event::ModelLoaded { .. } => {}
+            Event::ModelLoaded { .. } | Event::WarmUp { .. } => {}
             Event::Log { line, .. } => {
                 // "[server] seed N: sent": where it went (Progress comes only
                 // with steps polled, which a quick job may not have)

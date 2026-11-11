@@ -106,6 +106,25 @@ pub fn unanswered(
     }
 }
 
+/// How a started server ended ([`ServerProcess::exited`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Exit {
+    pub status: String,
+    /// Its log's last lines (progress bars left out).
+    pub last: Vec<String>,
+}
+
+/// The last `n` lines of a log's text worth reading: progress bars
+/// (`|###  | 3/35`) and blank lines left out.
+fn last_lines(text: &str, n: usize) -> Vec<String> {
+    let lines: Vec<String> = text
+        .split(['\n', '\r'])
+        .map(|l| l.trim().replace("\u{1b}[K", ""))
+        .filter(|l| !l.is_empty() && !l.starts_with('|'))
+        .collect();
+    lines[lines.len().saturating_sub(n)..].to_vec()
+}
+
 /// A server the app talks to. Dropping it stops the process if the app
 /// started it; an attached server is left running.
 #[derive(Debug)]
@@ -118,6 +137,8 @@ pub struct ServerProcess {
     pub log: Option<PathBuf>,
     /// KoboldCpp: its process group is stopped, not just the launcher.
     group: bool,
+    /// Where this start's lines begin in `log`.
+    log_start: u64,
 }
 
 impl ServerProcess {
@@ -129,6 +150,17 @@ impl ServerProcess {
     /// Lets a started server outlive the app: dropping this no longer stops it.
     pub fn detach(&mut self) {
         self.child = None;
+    }
+
+    /// A process the app started that has since exited (crashed, or
+    /// killed): how it ended ("signal: 11 (SIGSEGV) (core dumped)") and the
+    /// last lines its log says, once; after that it's no longer
+    /// [`Self::launched`].
+    pub fn exited(&mut self) -> Option<Exit> {
+        let status = self.child.as_mut()?.try_wait().ok()??;
+        self.child = None;
+        let last = self.log.as_ref().map(|l| last_lines(&tail(l, self.log_start), 3)).unwrap_or_default();
+        Some(Exit { status: status.to_string(), last })
     }
 
     pub fn stop(&mut self) {
@@ -184,10 +216,19 @@ fn visible_device(device: &str) -> Option<(&'static str, &str, &str)> {
     Some((var, prefix, n))
 }
 
-/// The environment for [`command_args`].
+/// The environment for [`command_args`]. A ROCm server also gets ggml's
+/// graphs off (`GGML_CUDA_DISABLE_GRAPHS`): the HIP runtime walks a graph
+/// it's given recursively, and a big one (a VAE encoding a reference
+/// image) runs it out of stack, crashing sd-server (ROCm 7.2: 16–32 MB of
+/// stack wanted, 8 MB there).
 pub fn command_env(server: &ServerConfig) -> Vec<(String, String)> {
     let ServerConfig::Start { device, .. } = server else { return vec![] };
-    visible_device(device).map(|(var, _, n)| vec![(var.into(), n.into())]).unwrap_or_default()
+    let mut env: Vec<(String, String)> =
+        visible_device(device).map(|(var, _, n)| vec![(var.into(), n.into())]).unwrap_or_default();
+    if device.to_lowercase().starts_with("rocm") {
+        env.push(("GGML_CUDA_DISABLE_GRAPHS".into(), "1".into()));
+    }
+    env
 }
 
 /// The command line the app starts `server` with, as its log's header shows
@@ -256,6 +297,7 @@ pub fn open_cancellable(
         child: None,
         log: None,
         group: false,
+        log_start: 0,
     };
     let asked = match client.capabilities() {
         Ok(_) => return Ok(proc),
@@ -291,6 +333,7 @@ pub fn open_cancellable(
     }
     proc.child = Some(child);
     proc.log = Some(log.clone());
+    proc.log_start = start;
     wait_up(proc, log, start, wait, cancel)
 }
 
@@ -334,6 +377,7 @@ fn open_kobold(
         child: None,
         log: None,
         group: true,
+        log_start: 0,
     };
     let asked = match client.capabilities() {
         Ok(_) => return Ok(proc),
@@ -347,6 +391,7 @@ fn open_kobold(
         .map_err(|why| LaunchError::Spawn { name: name.clone(), why })?;
     proc.child = Some(child);
     proc.log = Some(log.clone());
+    proc.log_start = start;
     wait_up(proc, log, start, wait, cancel)
 }
 
@@ -552,7 +597,9 @@ mod tests {
             command_args(&server, &shared).join(" "),
             "--listen-ip 127.0.0.1 --listen-port 1235 --backend ROCm0 --model-dir /m --fa --conditioning-cache-size 32 --offload-to-cpu"
         );
-        assert_eq!(command_env(&server), vec![("HIP_VISIBLE_DEVICES".to_string(), "1".to_string())]);
+        let env =
+            |pairs: &[(&str, &str)]| pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect::<Vec<_>>();
+        assert_eq!(command_env(&server), env(&[("HIP_VISIBLE_DEVICES", "1"), ("GGML_CUDA_DISABLE_GRAPHS", "1")]));
         let vulkan = ServerConfig::Start {
             name: "v".into(),
             host: "127.0.0.1".into(),
@@ -564,6 +611,13 @@ mod tests {
         assert!(command_env(&vulkan).is_empty());
         let remote = ServerConfig::Connect { name: "box".into(), url: "http://h:1".into(), device: String::new() };
         assert!(command_args(&remote, &shared).is_empty());
+    }
+
+    #[test]
+    fn a_crashs_last_lines_leave_out_progress_bars() {
+        let log = "02:45:13.841 [I] loading tensors completed\n02:45:14.434 \n  |=>     |  1/35 - 1.19s/it\u{1b}[K\r  |==>    |  2/35\u{1b}[K";
+        assert_eq!(last_lines(log, 3), vec!["02:45:13.841 [I] loading tensors completed", "02:45:14.434"]);
+        assert_eq!(last_lines("a\nb\nc\nd\n", 2), vec!["c", "d"]);
     }
 
     #[test]
@@ -585,7 +639,7 @@ mod tests {
             command_line(&server, &shared, state)
                 .unwrap()
                 .unwrap()
-                .starts_with("HIP_VISIBLE_DEVICES=1 \"/opt/sd server\" --listen-ip 127.0.0.1 --listen-port 1235 ")
+                .starts_with("GGML_CUDA_DISABLE_GRAPHS=1 HIP_VISIBLE_DEVICES=1 \"/opt/sd server\" --listen-ip 127.0.0.1 --listen-port 1235 ")
         );
         let k = crate::kobold::KoboldServer {
             name: "k 1".into(),

@@ -12,7 +12,7 @@ SDCPP_ROOT=${SDCPP_ROOT:-/mnt/storage/sdcpp}
 SDCPP_REPO=${SDCPP_REPO:-https://github.com/leejet/stable-diffusion.cpp}
 # Known-good commit; bump deliberately after checking docs/qwen_image_2.1.md
 # and examples/server/api.md for API changes.
-SDCPP_REV=${SDCPP_REV:-fd21ecfceef2665d2c5f2db8536e3202d864fd30}
+SDCPP_REV=${SDCPP_REV:-32d516c0197ed5ca31305b8575e14eb1451fad33}
 GPU_TARGETS=${GPU_TARGETS:-gfx1201}
 
 backends=("$@")

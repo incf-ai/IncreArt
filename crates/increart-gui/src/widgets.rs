@@ -20,6 +20,26 @@ pub struct DraggedImages(pub Vec<increart_core::ImageRef>);
 pub struct DraggedIdeas(pub Vec<increart_core::Id>);
 
 /// Megapixels, e.g. "1.05 MP".
+/// A number field: egui's `DragValue` reading typed numbers with
+/// [`parse_number`] (egui's own takes only a decimal point: "1,5"
+/// megapixels kept the "1" typed first and made 1152 × 864).
+pub fn drag_value<Num: egui::emath::Numeric>(value: &mut Num) -> egui::DragValue<'_> {
+    egui::DragValue::new(value).custom_parser(parse_number)
+}
+
+/// A typed number: spaces ignored, a decimal comma taken ("1,5", "0,75")
+/// when it's the only comma, there's no point and not exactly three digits
+/// follow it; other commas are thousands separators ("1,152", "1,234.5").
+pub fn parse_number(text: &str) -> Option<f64> {
+    let t: String = text.chars().filter(|c| !c.is_whitespace()).map(|c| if c == '−' { '-' } else { c }).collect();
+    let decimal_comma = match t.split_once(',') {
+        Some((_, after)) => !t.contains('.') && !after.contains(',') && after.len() != 3,
+        None => false,
+    };
+    let t = if decimal_comma { t.replace(',', ".") } else { t.replace(',', "") };
+    t.parse().ok()
+}
+
 pub fn mp(w: u32, h: u32) -> String {
     format!("{:.2} MP", w as f64 * h as f64 / 1e6)
 }
@@ -775,5 +795,23 @@ mod tests {
             ["square", "67% landscape", "67% portrait", "56% landscape", "98% landscape"]
         );
         assert_eq!(size_info(1344, 896), "1344 × 896 · 67% landscape · 1.20 MP");
+    }
+
+    #[test]
+    fn typed_numbers_take_a_decimal_comma() {
+        let cases = [
+            ("1,5", 1.5),
+            ("0,75", 0.75),
+            ("1.5", 1.5),
+            (" 2 ", 2.0),
+            ("1,152", 1152.0),
+            ("1,234.5", 1234.5),
+            ("−0,5", -0.5),
+        ];
+        for (t, v) in cases {
+            assert_eq!(parse_number(t), Some(v), "{t}");
+        }
+        assert_eq!(parse_number("1,2,3"), Some(123.0));
+        assert_eq!(parse_number("x"), None);
     }
 }

@@ -165,7 +165,7 @@ pub fn body(p: &RecipePreset) -> serde_json::Value {
         flow_shift: p.flow_shift,
         custom_sigmas: p.custom_sigmas.clone(),
     };
-    let prompt = p.prompt_with_triggers(PROMPT);
+    let prompt = p.prompt_queued(PROMPT);
     let opts = crate::request::GenOptions::default();
     let sample = crate::request::sample_params(&sample);
     let mut body = crate::request::img_gen_body_from(&prompt, "", 512, 512, 1, sample, &[], &opts);

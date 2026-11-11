@@ -139,6 +139,14 @@ pub enum Msg {
     ServerOpened(u32, usize, Result<(), String>),
     /// Every server of the draft has answered or failed.
     ServersSettled(u32),
+    /// A server the app started has exited by itself (crashed): (attempt,
+    /// its slot among the servers opened, its name, how it ended).
+    ServerExited(u32, usize, String, increart_core::launcher::Exit),
+    /// Start a crashed server again (by name), as [`Effect::RestartServer`].
+    RestartServer(String),
+    /// A crashed server started again, or didn't: (attempt, slot, name,
+    /// result).
+    ServerRestarted(u32, usize, String, Result<(), String>),
     /// The servers [`Effect::StopServers`] (or [`Effect::OpenServers`])
     /// stopped are gone (the names of
     /// those the app had started; connected ones are only let go).
@@ -397,6 +405,8 @@ pub enum Msg {
     SweepOrderAnswer(Option<bool>),
     /// Stop a run: Finish & stop or Stop now.
     CancelRun(Id, Stop),
+    /// Skip on a server's warm-up (by index).
+    SkipWarmUp(usize),
     /// Stop every active run.
     StopAll(Stop),
     /// Several runs: a project's or a sweep's (Jobs).
@@ -757,8 +767,29 @@ pub enum Msg {
     },
     /// Ask again (with the instructions).
     PeTextRetry,
+    /// Rewrite for this job instead ([`increart_core::pe::REWRITE`] or
+    /// [`increart_core::pe::REWRITE_H3`]), asking again.
+    PeTextJob(&'static str),
     /// Close the window, using the answer or not.
     PeTextClose(PeUse),
+    /// **Develop idea…**: the window for talking a text (the Generate
+    /// prompt, the New idea form's, an idea's) through with the chat model,
+    /// the guide its model's; asks at once when there's an idea. The
+    /// Generate prompt's conversation kept with the project's draft goes on
+    /// when the prompt is still its idea or its last prompt.
+    PeDevelop(PeTarget),
+    /// The Develop idea window's idea and reply, as edited.
+    PeDevelopEdit {
+        idea: String,
+        reply: String,
+    },
+    /// Send the reply (the answer to the last exchange) and ask for the
+    /// next; `write_now`: the prompt, no more questions.
+    PeDevelopSend {
+        write_now: bool,
+    },
+    /// Start the conversation again from the idea.
+    PeDevelopRestart,
     /// Improve these styles' prompts with the default settings (empty:
     /// those of the styles that will run not enhanced yet).
     PeStyleEnhance(Vec<increart_core::prompts::PresetKey>),
@@ -881,9 +912,12 @@ pub enum Msg {
     LiveView(Option<(Id, u64)>),
     /// The live view on the previous (-1) / next (1) seed being generated.
     LiveViewStep(isize),
-    /// What saving a queued run or sweep (project, label) is doing and how
-    /// far (0..1); `None` when done.
-    QueueingNote(Id, String, Option<(String, f32)>),
+    /// Cancel on a run or sweep being saved before it's queued (project,
+    /// label).
+    CancelQueueing(Id, String),
+    /// What hashing the model files of runs saved and queued is doing (how
+    /// far); None: done (their images can be written).
+    HashingNote(Vec<Id>, Option<(String, f32)>),
     /// Shows the image large, ← / → stepping through the list.
     PreviewAmong(Vec<ImageRef>, ImageRef),
     /// The large preview's next (1) or previous (-1) image in
@@ -1147,6 +1181,12 @@ pub enum Effect {
         shared: increart_core::config::Programs,
         attempt: u32,
     },
+    /// Start the server in this slot of this opening attempt again, as it
+    /// was opened (it crashed); answered by [`Msg::ServerRestarted`].
+    RestartServer {
+        attempt: u32,
+        slot: usize,
+    },
     /// Start the engine with the servers that came up, and queue every run
     /// with pending seeds.
     StartEngine {
@@ -1244,6 +1284,7 @@ pub enum Effect {
     Lib(Box<LibOp>),
     QueueRun(Id),
     CancelRun(Id, Stop),
+    SkipWarmUp(usize),
     Rescan,
     /// Show the system file picker (desktop portal, else zenity).
     Pick {
@@ -1533,6 +1574,29 @@ pub enum LibOp {
 pub struct Queued {
     pub project: Id,
     pub form: Box<increart_core::model::GenerateDraft>,
+    /// Set by Cancel (or Stop all) while it's being saved: the worker stops
+    /// hashing and saves nothing.
+    pub cancel: CancelFlag,
+}
+
+/// A flag the GUI sets and a worker thread reads; equal when it's the same
+/// flag.
+#[derive(Clone, Debug, Default)]
+pub struct CancelFlag(pub std::sync::Arc<std::sync::atomic::AtomicBool>);
+
+impl CancelFlag {
+    pub fn set(&self) {
+        self.0.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+    pub fn is_set(&self) -> bool {
+        self.0.load(std::sync::atomic::Ordering::SeqCst)
+    }
+}
+
+impl PartialEq for CancelFlag {
+    fn eq(&self, other: &Self) -> bool {
+        std::sync::Arc::ptr_eq(&self.0, &other.0)
+    }
 }
 
 /// How much of a history entry Restore puts back.
@@ -1549,6 +1613,8 @@ pub enum Restore {
 #[derive(Clone, Debug, PartialEq)]
 pub enum OpOk {
     Done,
+    /// A run or sweep cancelled while it was being saved: nothing saved.
+    Cancelled,
     Idea(Id),
     Tiled(Id),
     /// An edited copy's image, and where it goes.
@@ -1667,8 +1733,14 @@ fn queue_checked(state: &mut AppState) -> Vec<Effect> {
     if still_saving(state, &project, &f.label) {
         return vec![];
     }
-    let queued = Box::new(Queued { project: project.clone(), form: Box::new(f.to_draft(&state.config)) });
+    let cancel = CancelFlag::default();
+    let queued = Box::new(Queued {
+        project: project.clone(),
+        form: Box::new(f.to_draft(&state.config)),
+        cancel: cancel.clone(),
+    });
     state.queueing.push((project.clone(), f.label.clone()));
+    state.queueing_cancel.insert((project.clone(), f.label.clone()), cancel);
     let op = LibOp::CreateRun {
         project,
         form: f.clone(),
@@ -1817,17 +1889,25 @@ fn model_wizard(state: &mut AppState, msg: Msg) -> Vec<Effect> {
                 .cloned()
                 .unwrap_or_else(|| increart_core::modelsetup::default_dir(&home).to_string_lossy().into_owned());
             // the sizes of what isn't there
-            let mut urls: Vec<String> = increart_core::config::catalogue()
+            // every size's, for the size menus; all of a model of several
+            // (the size recommended weighs each file, there or not)
+            let catalogue = increart_core::config::catalogue();
+            let mut urls: Vec<String> = catalogue
                 .iter()
-                .flat_map(|p| crate::state::missing_downloads(p, dirs))
+                .flat_map(|p| p.each_size())
+                .flat_map(|p| crate::state::missing_downloads(&p, dirs))
                 .map(|d| d.url)
+                .chain(catalogue.iter().filter(|p| p.sizes.len() > 1).flat_map(|p| {
+                    p.each_size().into_iter().flat_map(|s| s.downloads.into_values().collect::<Vec<_>>())
+                }))
                 .collect();
             urls.sort();
             urls.dedup();
             // asked once a session
             urls.retain(|u| !state.download_sizes.contains_key(u));
             let sizes = state.download_sizes.clone();
-            state.model_wizard = Some(ModelWizard { dir, sizes, ..Default::default() });
+            let picked_size = crate::state::installed_sizes(&state.config.recipes);
+            state.model_wizard = Some(ModelWizard { dir, sizes, picked_size, ..Default::default() });
             let mut fx = vec![
                 Effect::FindModelFolders { home, more: vec![] },
                 Effect::DetectGpus(state.gpu_runtime),
@@ -1896,8 +1976,9 @@ fn model_wizard(state: &mut AppState, msg: Msg) -> Vec<Effect> {
             }
             let dir = w.dir.trim().to_string();
             let dirs = w.folders(&state.config.programs.model_dirs);
+            // at the size picked, kept without the others
             let picked: Vec<RecipePreset> =
-                increart_core::config::catalogue().into_iter().filter(|p| w.picked.contains(&p.name)).collect();
+                w.catalogue().iter().filter(|p| w.picked.contains(&p.name)).map(RecipePreset::installed).collect();
             w.started = true;
             if fetch && let Err(e) = std::fs::create_dir_all(&dir) {
                 state.messages_error(format!("Couldn't make {dir}: {e}"));
@@ -2753,6 +2834,9 @@ fn part_of(msg: &Msg) -> usize {
         Msg::OpenDraftNow => 2,
         Msg::ServerOpened(..) => 2,
         Msg::ServersSettled(..) => 2,
+        Msg::ServerExited(..) => 2,
+        Msg::RestartServer(..) => 2,
+        Msg::ServerRestarted(..) => 2,
         Msg::ServersStopped(..) => 2,
         Msg::ServerModels(..) => 2,
         Msg::ServerLog(..) => 2,
@@ -2888,6 +2972,7 @@ fn part_of(msg: &Msg) -> usize {
         Msg::JobRandom(..) => 14,
         Msg::SweepOrderAnswer(..) => 14,
         Msg::CancelRun(..) => 14,
+        Msg::SkipWarmUp(..) => 14,
         Msg::StopAll(..) => 14,
         Msg::CancelRuns(..) => 14,
         Msg::ReviewScope(..) => 15,
@@ -3063,7 +3148,12 @@ fn part_of(msg: &Msg) -> usize {
         Msg::PeRewrite(..) => 6,
         Msg::PeTextEdit { .. } => 6,
         Msg::PeTextRetry => 6,
+        Msg::PeTextJob(..) => 6,
         Msg::PeTextClose(..) => 6,
+        Msg::PeDevelop(_) => 6,
+        Msg::PeDevelopEdit { .. } => 6,
+        Msg::PeDevelopSend { .. } => 6,
+        Msg::PeDevelopRestart => 6,
         Msg::PeStyleEnhance(..) => 6,
         Msg::PeStyleOpen => 6,
         Msg::PeStyleDialog(..) => 6,
@@ -3136,7 +3226,8 @@ fn part_of(msg: &Msg) -> usize {
         Msg::PreviewPasted(..) => 11,
         Msg::LiveView(..) => 11,
         Msg::LiveViewStep(..) => 11,
-        Msg::QueueingNote(..) => 11,
+        Msg::CancelQueueing(..) => 11,
+        Msg::HashingNote(..) => 11,
         Msg::PreviewAmong(..) => 11,
         Msg::PreviewStep(..) => 11,
         Msg::PreviewRow(..) => 11,
@@ -3990,7 +4081,11 @@ fn apply_2(state: &mut AppState, msg: Msg, rest: &mut Option<Msg>) -> Vec<Effect
             });
             fx
         }
-        Msg::ServerOpened(attempt, _, _) | Msg::ServersSettled(attempt) | Msg::ServerLog(attempt, _, _)
+        Msg::ServerOpened(attempt, _, _)
+        | Msg::ServersSettled(attempt)
+        | Msg::ServerLog(attempt, _, _)
+        | Msg::ServerExited(attempt, ..)
+        | Msg::ServerRestarted(attempt, ..)
             if attempt != state.open_attempt =>
         {
             vec![]
@@ -4055,6 +4150,62 @@ fn apply_2(state: &mut AppState, msg: Msg, rest: &mut Option<Msg>) -> Vec<Effect
             }
             if let (Some(_), Err(e)) = (&state.background, r) {
                 state.messages_error(e);
+            }
+            vec![]
+        }
+        Msg::ServerExited(_, slot, name, exit) => {
+            let now = state.now;
+            let crash = state.server_crashes.entry(name.clone()).or_default();
+            crash.at.retain(|t| now - t < crate::state::CRASH_WINDOW_S);
+            crash.at.push(now);
+            crash.attempt = state.open_attempt;
+            crash.slot = slot;
+            crash.why = exit.status.clone();
+            crash.down = true;
+            let again = crash.at.len() <= crate::state::AUTO_RESTARTS;
+            crash.restarting = again;
+            let times = crash.at.len();
+            let last = match exit.last.as_slice() {
+                [] => String::new(),
+                lines => format!(" Its log's last lines: {}", lines.join(" ⏎ ")),
+            };
+            let next = if again {
+                "Starting it again; its jobs go back to the queue.".to_string()
+            } else {
+                format!(
+                    "It crashed {times} times in 30 min, so it isn't started again by itself: \
+                     Restart it in Servers (Jobs) once the cause is fixed."
+                )
+            };
+            state.messages_server_error(format!("{name}: crashed ({}). {next}{last}", exit.status));
+            if let Some(i) = state.servers.iter().position(|s| s.name == name) {
+                state.server_loading.remove(&i);
+                state.warm_ups.remove(&i);
+            }
+            if again { vec![Effect::RestartServer { attempt: state.open_attempt, slot }] } else { vec![] }
+        }
+        Msg::RestartServer(name) => {
+            let attempt = state.open_attempt;
+            match state.server_crashes.get_mut(&name) {
+                Some(c) if c.down && !c.restarting && c.attempt == attempt => {
+                    c.restarting = true;
+                    vec![Effect::RestartServer { attempt, slot: c.slot }]
+                }
+                _ => vec![],
+            }
+        }
+        Msg::ServerRestarted(_, _, name, r) => {
+            let Some(c) = state.server_crashes.get_mut(&name) else { return vec![] };
+            c.restarting = false;
+            match r {
+                Ok(()) => {
+                    c.down = false;
+                    state.messages_info(format!("Started sd-server {name} again"));
+                }
+                Err(e) => {
+                    c.why = format!("starting it again failed: {e}");
+                    state.messages_server_error(format!("{name}: starting it again after it crashed failed: {e}"));
+                }
             }
             vec![]
         }
@@ -5496,21 +5647,21 @@ fn apply_6(state: &mut AppState, msg: Msg, rest: &mut Option<Msg>) -> Vec<Effect
             vec![]
         }
         Msg::PeRewrite(target) => {
-            let original = match &target {
-                PeTarget::Prompt => state.generate.prompt.clone(),
-                PeTarget::NewIdea => state.draft.text.clone(),
-                PeTarget::Idea(id) => match &state.idea_edit {
-                    Some(ed) if ed.id == *id => ed.text.clone(),
-                    _ => state.idea(id).map(|e| e.idea.text.clone()).unwrap_or_default(),
-                },
-                PeTarget::Describe(_) => String::new(),
-            };
+            let original = target_text(state, &target);
             if original.trim().is_empty() && !matches!(target, PeTarget::Describe(_)) {
                 state.messages_error("Nothing to rewrite: write some text first");
                 return vec![];
             }
             // the same text again keeps the instructions given
             let how = state.pe.text.as_ref().filter(|t| t.target == target).map(|t| t.how.clone()).unwrap_or_default();
+            let job = match &target {
+                PeTarget::Describe(_) => increart_core::pe::DESCRIBE,
+                PeTarget::Prompt if state.h3_form() => increart_core::pe::REWRITE_H3,
+                // an idea again keeps the job chosen for it
+                _ => {
+                    state.pe.text.as_ref().filter(|t| t.target == target).map_or(increart_core::pe::REWRITE, |t| t.job)
+                }
+            };
             let mut fx = stop_text_ask(state);
             state.pe.text = Some(PeText {
                 target,
@@ -5521,8 +5672,107 @@ fn apply_6(state: &mut AppState, msg: Msg, rest: &mut Option<Msg>) -> Vec<Effect
                 waiting: None,
                 error: None,
                 images: 0,
+                job,
+                develop: None,
             });
             fx.extend(ask_text(state));
+            fx
+        }
+        Msg::PeDevelop(target) => {
+            if state.pe.server.is_none() {
+                state.messages_error(NO_CHAT);
+                return vec![];
+            }
+            if matches!(target, PeTarget::Describe(_)) {
+                return vec![];
+            }
+            // open already for this text: kept as it is
+            if state.pe.text.as_ref().is_some_and(|t| t.develop.is_some() && t.target == target) {
+                return vec![];
+            }
+            let text = target_text(state, &target);
+            let job = match &target {
+                PeTarget::Prompt if state.h3_form() => increart_core::pe::REWRITE_H3,
+                // a text again keeps the job chosen for it
+                _ => {
+                    state.pe.text.as_ref().filter(|t| t.target == target).map_or(increart_core::pe::REWRITE, |t| t.job)
+                }
+            };
+            // the conversation kept with the draft, if the prompt is still
+            // what it was about (its idea, or the last prompt written)
+            let kept = state.generate.develop.clone().filter(|c| {
+                let p = text.trim();
+                target == PeTarget::Prompt
+                    && !c.turns.is_empty()
+                    && (p.is_empty() || p == c.idea.trim() || c.last_prompt().is_some_and(|l| l.trim() == p))
+            });
+            let (develop, last) = match kept {
+                Some(c) => {
+                    let last = c.last_prompt().unwrap_or_default().to_string();
+                    (Develop { idea: c.idea, turns: c.turns, ..Default::default() }, last)
+                }
+                None => (Develop { idea: text.clone(), ..Default::default() }, String::new()),
+            };
+            let resumed = !develop.turns.is_empty();
+            let mut fx = stop_text_ask(state);
+            state.pe.text = Some(PeText {
+                target,
+                original: develop.idea.clone(),
+                how: String::new(),
+                text: last.clone(),
+                answer: last,
+                waiting: None,
+                error: None,
+                images: 0,
+                job,
+                develop: Some(develop),
+            });
+            if !resumed && !text.trim().is_empty() {
+                fx.extend(ask_text(state));
+            }
+            fx
+        }
+        Msg::PeDevelopEdit { idea, reply } => {
+            if let Some(d) = state.pe.text.as_mut().and_then(|t| t.develop.as_mut()) {
+                (d.idea, d.reply) = (idea, reply);
+            }
+            vec![]
+        }
+        Msg::PeDevelopSend { write_now } => {
+            let Some(t) = state.pe.text.as_mut().filter(|t| t.waiting.is_none()) else { return vec![] };
+            let Some(d) = t.develop.as_mut() else { return vec![] };
+            if d.idea.trim().is_empty() {
+                state.messages_error("Write the idea first");
+                return vec![];
+            }
+            let reply = std::mem::take(&mut d.reply);
+            match d.turns.last_mut() {
+                Some(last) if last.answer.trim().is_empty() => last.answer = reply.trim().to_string(),
+                // a reply with nothing asked yet goes with the idea
+                None if !reply.trim().is_empty() => d.idea = format!("{}\n\n{}", d.idea.trim(), reply.trim()),
+                _ => {}
+            }
+            // nothing answered and none asked for: asked to write it
+            let unanswered = d.turns.last().is_some_and(|l| l.answer.is_empty());
+            d.write_now = write_now || unanswered;
+            t.original = d.idea.clone();
+            keep_develop(state);
+            ask_text(state)
+        }
+        Msg::PeDevelopRestart => {
+            let mut fx = stop_text_ask(state);
+            if let Some(t) = &mut state.pe.text
+                && let Some(d) = &mut t.develop
+            {
+                d.turns.clear();
+                d.write_now = false;
+                (t.text, t.answer, t.error) = (String::new(), String::new(), None);
+                t.original = d.idea.clone();
+                if !d.idea.trim().is_empty() {
+                    fx.extend(ask_text(state));
+                }
+            }
+            keep_develop(state);
             fx
         }
         Msg::PeTextEdit { how, text } => {
@@ -5532,6 +5782,27 @@ fn apply_6(state: &mut AppState, msg: Msg, rest: &mut Option<Msg>) -> Vec<Effect
             vec![]
         }
         Msg::PeTextRetry => ask_text(state),
+        Msg::PeTextJob(job) => {
+            match &mut state.pe.text {
+                Some(t) if t.job != job && !matches!(t.target, PeTarget::Describe(_)) => t.job = job,
+                _ => return vec![],
+            }
+            // developing: the prompt just written is written again by the
+            // new guide; questions waiting for answers stay
+            if let Some(d) = state.pe.text.as_mut().and_then(|t| t.develop.as_mut()) {
+                use increart_core::pe::DevelopReply;
+                match d.turns.last() {
+                    Some(l) if matches!(l.said, DevelopReply::Prompt(_)) && l.answer.is_empty() => {
+                        d.turns.pop();
+                        d.write_now = true;
+                    }
+                    Some(_) => return vec![],
+                    None if d.idea.trim().is_empty() => return vec![],
+                    None => {}
+                }
+            }
+            ask_text(state)
+        }
         Msg::PeTextClose(how) => {
             let mut fx = stop_text_ask(state);
             let Some(t) = state.pe.text.take() else { return fx };
@@ -5953,6 +6224,24 @@ fn apply_7(state: &mut AppState, msg: Msg, rest: &mut Option<Msg>) -> Vec<Effect
                 PeKey::Text(ask) => {
                     let Some(t) = state.pe.text.as_mut().filter(|t| t.waiting == Some(ask)) else { return vec![] };
                     t.waiting = None;
+                    if let Some(d) = &mut t.develop {
+                        use increart_core::pe::{DevelopReply, DevelopTurn, parse_develop};
+                        match r.map(|a| parse_develop(&a)) {
+                            Ok(DevelopReply::Questions(q) | DevelopReply::Prompt(q)) if q.trim().is_empty() => {
+                                t.error = Some("The server answered with nothing".into())
+                            }
+                            Ok(said) => {
+                                if let DevelopReply::Prompt(p) = &said {
+                                    (t.text, t.answer) = (p.clone(), p.clone());
+                                }
+                                d.turns.push(DevelopTurn { said, answer: String::new() });
+                            }
+                            Err(e) => t.error = Some(e),
+                        }
+                        keep_develop(state);
+                        ask_added_blanks(state);
+                        return vec![];
+                    }
                     match r.map(|a| increart_core::pe::clean_text(&a)) {
                         Ok(a) if !a.is_empty() => (t.text, t.answer) = (a.clone(), a),
                         Ok(_) => t.error = Some("The server answered with nothing".into()),
@@ -6920,16 +7209,17 @@ fn apply_11(state: &mut AppState, msg: Msg, rest: &mut Option<Msg>) -> Vec<Effec
             (state.preview, state.preview_among) = (None, None);
             vec![]
         }
-        Msg::QueueingNote(project, label, note) => {
-            let key = (project, label);
-            match note {
-                Some(n) if state.queueing.contains(&key) => {
-                    state.queueing_notes.insert(key, n);
-                }
-                _ => {
-                    state.queueing_notes.remove(&key);
-                }
+        Msg::HashingNote(runs, note) => {
+            for r in runs {
+                match &note {
+                    Some(n) => state.hashing_notes.insert(r, n.clone()),
+                    None => state.hashing_notes.remove(&r),
+                };
             }
+            vec![]
+        }
+        Msg::CancelQueueing(project, label) => {
+            cancel_queueing(state, &(project, label));
             vec![]
         }
         Msg::LiveView(seed) => {
@@ -7976,7 +8266,12 @@ fn apply_14(state: &mut AppState, msg: Msg, rest: &mut Option<Msg>) -> Vec<Effec
             }
             vec![Effect::CancelRun(id, how)]
         }
+        Msg::SkipWarmUp(server) => vec![Effect::SkipWarmUp(server)],
         Msg::StopAll(how) => {
+            // runs still being saved never start
+            for key in state.queueing.clone() {
+                cancel_queueing(state, &key);
+            }
             let runs: Vec<Id> = state.active_runs.iter().cloned().collect();
             update(state, Msg::CancelRuns(runs, how))
         }
@@ -8486,7 +8781,7 @@ fn apply_16(state: &mut AppState, msg: Msg, rest: &mut Option<Msg>) -> Vec<Effec
                     // (which op failed isn't known: a failed run or sweep
                     // can be queued again)
                     state.queueing.clear();
-                    state.queueing_notes.clear();
+                    state.queueing_cancel.clear();
                     state.messages_error(e)
                 }
                 Ok(ok) => fx.extend(op_done(state, ok)),
@@ -10075,11 +10370,7 @@ pub fn sweep_defaults(vary: increart_core::prompts::SweepVary, f: &GenerateForm)
 fn still_saving(state: &mut AppState, project: &Id, label: &str) -> bool {
     let saving = state.queueing.iter().any(|(p, l)| p == project && l == label);
     if saving {
-        let doing = state
-            .queueing_notes
-            .get(&(project.clone(), label.to_string()))
-            .map_or(String::new(), |(n, _)| format!(": {n} (see Jobs)"));
-        state.messages_info(format!("{} is still being saved{doing}", label.trim()));
+        state.messages_info(format!("{} is still being saved", label.trim()));
     }
     saving
 }
@@ -10144,8 +10435,11 @@ fn queue_sweep(state: &mut AppState, confirmed: bool) -> Vec<Effect> {
     if still_saving(state, &project, &state.generate.label.clone()) {
         return vec![];
     }
-    let queued = Box::new(Queued { project: project.clone(), form: Box::new(state.generate.to_draft(&state.config)) });
+    let cancel = CancelFlag::default();
+    let form = Box::new(state.generate.to_draft(&state.config));
+    let queued = Box::new(Queued { project: project.clone(), form, cancel: cancel.clone() });
     state.queueing.push((project.clone(), state.generate.label.clone()));
+    state.queueing_cancel.insert((project.clone(), state.generate.label.clone()), cancel);
     let op = LibOp::CreateSweep {
         project,
         runs,
@@ -10425,7 +10719,7 @@ pub enum PeUse {
 
 /// Asks for the rewrite / describe window's text (again).
 fn ask_text(state: &mut AppState) -> Vec<Effect> {
-    use increart_core::pe::{DESCRIBE, REWRITE, TextAsk, text_message};
+    use increart_core::pe::{TextAsk, text_message};
     let Some(server) = state.pe.server.as_ref().cloned() else {
         state.pe.text = None;
         state.messages_error(NO_CHAT);
@@ -10453,6 +10747,7 @@ fn ask_text(state: &mut AppState) -> Vec<Effect> {
         PeTarget::Describe(img) => (vec![img.clone()], None, ""),
     };
     let describe = matches!(t.target, PeTarget::Describe(_));
+    let h3 = t.job == increart_core::pe::REWRITE_H3;
     if !server.vision() {
         if describe {
             state.pe.text = None;
@@ -10461,21 +10756,40 @@ fn ask_text(state: &mut AppState) -> Vec<Effect> {
         }
         (refs, start) = (vec![], None);
     }
-    let ask = TextAsk {
-        original: t.original.clone(),
-        what: what.into(),
-        how: t.how.clone(),
-        images: refs.len(),
-        start: start.is_some(),
+    let (system, sampling, text) = match &t.develop {
+        Some(d) => {
+            use increart_core::pe::{DEVELOP, DevelopAsk, develop_message, develop_system};
+            let ask = DevelopAsk {
+                idea: d.idea.clone(),
+                turns: d.turns.clone(),
+                images: refs.len(),
+                start: start.is_some(),
+                write_now: d.write_now,
+            };
+            let pe = &state.config.pe;
+            (develop_system(pe, t.job), pe.sampling(DEVELOP), develop_message(&ask))
+        }
+        None => {
+            let ask = TextAsk {
+                original: t.original.clone(),
+                what: what.into(),
+                how: t.how.clone(),
+                images: refs.len(),
+                start: start.is_some(),
+            };
+            let pe = &state.config.pe;
+            (pe.system_prompt(t.job).to_string(), pe.sampling(t.job), text_message(&ask))
+        }
     };
     let images: Vec<PathBuf> = refs.iter().chain(&start).map(|r| r.path(&root)).collect();
     let job = PeJob {
         id: 0,
         key: PeKey::Text(0),
-        system: state.config.pe.system_prompt(if describe { DESCRIBE } else { REWRITE }).to_string(),
-        sampling: state.config.pe.sampling(if describe { DESCRIBE } else { REWRITE }),
-        text: text_message(&ask),
-        max_tokens: 700,
+        system,
+        sampling,
+        text,
+        // MiniMax-H3's captions run long (a dense poster: several hundred words)
+        max_tokens: if h3 { 1400 } else { 700 },
         images,
         image_size: increart_core::pe::TEXT_IMAGE_SIZE,
     };
@@ -10490,6 +10804,32 @@ fn ask_text(state: &mut AppState) -> Vec<Effect> {
 }
 
 /// Stops the rewrite / describe window's ask, if it's waiting.
+/// The text a rewrite or a Develop idea conversation starts from.
+fn target_text(state: &AppState, target: &PeTarget) -> String {
+    match target {
+        PeTarget::Prompt => state.generate.prompt.clone(),
+        PeTarget::NewIdea => state.draft.text.clone(),
+        PeTarget::Idea(id) => match &state.idea_edit {
+            Some(ed) if ed.id == *id => ed.text.clone(),
+            _ => state.idea(id).map(|e| e.idea.text.clone()).unwrap_or_default(),
+        },
+        PeTarget::Describe(_) => String::new(),
+    }
+}
+
+/// Keeps the Generate prompt's Develop idea conversation with the
+/// project's draft (none once started over), to go on with later.
+fn keep_develop(state: &mut AppState) {
+    let Some(t) = state.pe.text.as_ref().filter(|t| t.target == PeTarget::Prompt) else { return };
+    let Some(d) = &t.develop else { return };
+    let chat =
+        (!d.turns.is_empty()).then(|| increart_core::pe::DevelopChat { idea: d.idea.clone(), turns: d.turns.clone() });
+    if state.generate.develop != chat {
+        state.generate.develop = chat;
+        mark_generate(state);
+    }
+}
+
 fn stop_text_ask(state: &mut AppState) -> Vec<Effect> {
     match state.pe.text.as_ref().and_then(|t| t.waiting) {
         Some(id) => update(state, Msg::PeStop(vec![id])),
@@ -10546,7 +10886,7 @@ fn use_text(state: &mut AppState, t: PeText, how: PeUse) -> Vec<Effect> {
         let server = state.pe.server.as_ref().cloned().unwrap_or_default();
         let v = increart_core::model::PromptVariant {
             text: t.text.clone(),
-            origin: PeText::origin(&server, &state.config.pe, false),
+            origin: PeText::origin(&server, &state.config.pe, t.job),
         };
         LibOp::AddVariant(id.clone(), v)
     };
@@ -11656,13 +11996,27 @@ fn runnable_preset(state: &mut AppState) {
 
 /// A queued run or sweep is saved: Queue works for its label again.
 fn saved_queued(state: &mut AppState, q: &Queued) {
-    state.queueing.retain(|(p, l)| !(*p == q.project && *l == q.form.label));
-    state.queueing_notes.remove(&(q.project.clone(), q.form.label.clone()));
+    let key = (q.project.clone(), q.form.label.clone());
+    // (a later Queue of the label, after this one was cancelled, is its own)
+    if state.queueing_cancel.get(&key).is_some_and(|c| *c != q.cancel) {
+        return;
+    }
+    state.queueing.retain(|k| *k != key);
+    state.queueing_cancel.remove(&key);
+}
+
+/// Stops saving a run or sweep being saved before it's queued (hashing its
+/// model files): it's gone from the list at once; the worker saves nothing.
+fn cancel_queueing(state: &mut AppState, key: &(Id, String)) {
+    if let Some(c) = state.queueing_cancel.remove(key) {
+        c.set();
+    }
+    state.queueing.retain(|k| k != key);
 }
 
 fn op_done(state: &mut AppState, ok: OpOk) -> Vec<Effect> {
     match ok {
-        OpOk::Done | OpOk::Idea(_) => {}
+        OpOk::Done | OpOk::Cancelled | OpOk::Idea(_) => {}
         OpOk::Tiled(_) => state.messages_info("Tiled image added to the input library"),
         OpOk::Edited(id, to) => return edited(state, ImageRef::input(id), to),
         OpOk::ImportedRefs(ids) => {
@@ -11798,6 +12152,20 @@ fn engine_event(state: &mut AppState, e: Event) -> Vec<Effect> {
             state.server_jobs.insert(server, runs.clone());
             state.sent_seeds.insert(server, seeds);
             state.alerts.server_runs.entry(server).or_default().extend(runs);
+            // a load, then its warm-up, timed as one (as load times are)
+            let loading = s.strip_prefix("loading ").map(str::to_string).or_else(|| {
+                let warming = s == "warming up";
+                warming.then(|| model.as_ref().map(|m| m.recipe.clone())).flatten()
+            });
+            match loading {
+                Some(recipe) if state.server_loading.get(&server).is_none_or(|(r, _)| *r != recipe) => {
+                    state.server_loading.insert(server, (recipe, state.now));
+                }
+                Some(_) => {}
+                None => {
+                    state.server_loading.remove(&server);
+                }
+            }
             if let Some(st) = state.servers.get_mut(server) {
                 st.model = model.map(|m| m.recipe);
                 let was_idle = st.idle_since.is_some();
@@ -11884,6 +12252,17 @@ fn engine_event(state: &mut AppState, e: Event) -> Vec<Effect> {
         }
         Event::Problem(p) => {
             state.messages_server_error(p);
+            vec![]
+        }
+        Event::WarmUp { server, phase, run } => {
+            match phase {
+                Some(phase) => {
+                    state.warm_ups.insert(server, (phase, run));
+                }
+                None => {
+                    state.warm_ups.remove(&server);
+                }
+            }
             vec![]
         }
         Event::ModelLoaded { server, recipe, took_s } => {

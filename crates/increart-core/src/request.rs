@@ -8,16 +8,82 @@ use crate::error::Result;
 use crate::library::Library;
 use crate::model::{LoraFile, Mode, Recipe, Run};
 
-/// Qwen-Image 2.1 decides on alpha from the prompt (DESIGN.md, Transparency).
+/// The prompt as the server gets it: Qwen-Image 2.1 decides on alpha from
+/// the prompt (DESIGN.md, Transparency). References are in the model's own
+/// syntax already, made so when the run was queued ([`native_refs`]).
 pub fn prompt_sent(prompt: &str, alpha: bool) -> String {
+    let prompt = prompt.to_string();
     if alpha {
         let p = prompt.trim().trim_end_matches('.');
         format!(
             "This is an RGBA image with transparency. {p}. The image has alpha channel and the background is transparent."
         )
     } else {
-        prompt.to_string()
+        prompt
     }
+}
+
+/// sd-server's recipes for MiniMax-H3-Image (MiniMax's own) and P-H3-Image
+/// (Pruna AI's, pruned from the MiniMax-H3 video model): the same text
+/// encoder family, references named `<Picture N>`.
+pub const MINIMAX_H3_IMAGE: [&str; 2] = ["minimax-h3-image", "p-h3-image"];
+
+/// `<imageN>` as `<Picture N>`: MiniMax-H3's text encoder sees each
+/// reference as `<Picture N>: ` before the prompt (P-H3-Image also puts
+/// `Edit <Picture 1>. ` before a prompt that doesn't start `Edit <Picture N>`).
+pub fn picture_tags(prompt: &str) -> String {
+    let mut out = String::with_capacity(prompt.len() + 8);
+    let mut rest = prompt;
+    while let Some(at) = rest.find("<image") {
+        out.push_str(&rest[..at]);
+        let after = &rest[at + "<image".len()..];
+        let digits = after.bytes().take_while(u8::is_ascii_digit).count();
+        if digits > 0 && after[digits..].starts_with('>') {
+            out.push_str(&format!("<Picture {}>", &after[..digits]));
+            rest = &after[digits + 1..];
+        } else {
+            out.push_str("<image");
+            rest = after;
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+/// The prompt's references in `recipe`'s own syntax, either syntax being
+/// accepted: `<Picture N>` for MiniMax-H3-Image and P-H3-Image
+/// ([`picture_tags`]), `<imageN>` for the others ([`as_image_tags`]). Done
+/// when a run is queued, unless its model preset takes them as written
+/// (`RecipePreset::refs_as_written`).
+pub fn native_refs(recipe: &str, prompt: &str) -> String {
+    let p = as_image_tags(prompt);
+    if MINIMAX_H3_IMAGE.contains(&recipe) { picture_tags(&p) } else { p }
+}
+
+/// `<Picture N>` (MiniMax-H3's way) as `<imageN>`. Any case, the space
+/// optional; anything else is left alone.
+pub fn as_image_tags(prompt: &str) -> String {
+    const WORD: &str = "<picture";
+    if !prompt.to_ascii_lowercase().contains(WORD) {
+        return prompt.to_string();
+    }
+    let mut out = String::with_capacity(prompt.len());
+    let mut rest = prompt;
+    while let Some(at) = rest.to_ascii_lowercase().find(WORD) {
+        out.push_str(&rest[..at]);
+        let after = &rest[at + WORD.len()..];
+        let n = after.trim_start_matches(' ');
+        let digits = n.bytes().take_while(u8::is_ascii_digit).count();
+        if digits > 0 && n[digits..].starts_with('>') {
+            out.push_str(&format!("<image{}>", &n[..digits]));
+            rest = &n[digits + 1..];
+        } else {
+            out.push_str(&rest[at..at + WORD.len()]);
+            rest = after;
+        }
+    }
+    out.push_str(rest);
+    out
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -123,6 +189,16 @@ pub fn img_gen_body_from(
     })
 }
 
+/// A warm-up body for sd-server: its schedule one step, sent rather than
+/// left out (sd-server takes a recipe's own sigmas, MiniMax-H3's 7, over
+/// `sample_steps` otherwise; KoboldCpp takes no sigmas, nor needs them).
+pub fn one_step_sigmas(mut body: Value) -> Value {
+    if let Some(sample) = body.get_mut("sample_params").and_then(Value::as_object_mut) {
+        sample.insert("custom_sigmas".into(), json!([1.0, 0.0]));
+    }
+    body
+}
+
 /// A small throwaway job after launch or load, so lazy weight loading
 /// doesn't land on the first real seed.
 pub fn warmup_body() -> Value {
@@ -136,6 +212,20 @@ pub fn warmup_body() -> Value {
         "output_format": "png",
         "preview": "none",
     })
+}
+
+/// A seed's `img_gen` body as a warm-up: one step (its own schedule
+/// dropped), no previews; the prompt, size and references kept, as the
+/// server's conditioning cache is keyed by them.
+pub fn as_warm_up(mut body: Value) -> Value {
+    if let Some(sample) = body.get_mut("sample_params").and_then(Value::as_object_mut) {
+        sample.insert("sample_steps".into(), json!(1));
+        sample.remove("custom_sigmas");
+    }
+    body["batch_count"] = json!(1);
+    body["preview"] = json!("none");
+    body["embed_image_metadata"] = json!(false);
+    body
 }
 
 /// Where and how an image was generated, for its recipe.
@@ -182,6 +272,26 @@ pub fn recipe(run: &Run, seed: u64, p: &Provenance) -> Recipe {
 mod tests {
     use super::*;
 
+    /// A warm-up from a seed's request keeps what the conditioning cache is
+    /// keyed by and samples one step.
+    #[test]
+    fn warm_up_from_a_seed() {
+        let opts = GenOptions { preview: "proj".into(), ..Default::default() };
+        let sample = json!({ "sample_steps": 20, "custom_sigmas": [1.0, 0.5, 0.0], "guidance": { "txt_cfg": 4.0 } });
+        let body = img_gen_body_from("a fox", "", 800, 608, 3, sample, &[b"png".to_vec()], &opts);
+        let w = as_warm_up(body.clone());
+        for k in ["prompt", "width", "height", "ref_images"] {
+            assert_eq!(w[k], body[k], "{k}");
+        }
+        assert_eq!(w["sample_params"]["sample_steps"], 1);
+        assert!(w["sample_params"].get("custom_sigmas").is_none());
+        let w = one_step_sigmas(w);
+        assert_eq!(w["sample_params"]["custom_sigmas"], json!([1.0, 0.0]), "one step, not the recipe's");
+        assert_eq!(one_step_sigmas(warmup_body())["sample_params"]["custom_sigmas"], json!([1.0, 0.0]));
+        assert_eq!(w["sample_params"]["guidance"], body["sample_params"]["guidance"]);
+        assert_eq!(w["preview"], "none");
+    }
+
     #[test]
     fn rgba_wrapper() {
         assert_eq!(prompt_sent("a fox.", false), "a fox.");
@@ -189,6 +299,27 @@ mod tests {
             prompt_sent("cute robot sticker.", true),
             "This is an RGBA image with transparency. cute robot sticker. The image has alpha channel and the background is transparent."
         );
+    }
+
+    /// Each model's references in its own syntax, written either way:
+    /// MiniMax-H3-Image's `<Picture N>`, the others' `<imageN>`; a tag that
+    /// isn't one is left alone.
+    #[test]
+    fn references_in_each_models_syntax() {
+        let p = "Edit <image1>. Give the cat the scarf from <Picture 2>, as in <picture12>.";
+        let h3 = "Edit <Picture 1>. Give the cat the scarf from <Picture 2>, as in <Picture 12>.";
+        assert_eq!(native_refs("minimax-h3-image", p), h3);
+        assert_eq!(native_refs("p-h3-image", p), h3);
+        assert_eq!(
+            native_refs("qwen-image-21", h3),
+            "Edit <image1>. Give the cat the scarf from <image2>, as in <image12>."
+        );
+        assert_eq!(picture_tags("<image> <imageX> <image3 <image4>"), "<image> <imageX> <image3 <Picture 4>");
+        assert_eq!(picture_tags("a café <image1>"), "a café <Picture 1>");
+        for left in ["<Picture>", "<Picture x>", "<Picture 3", "Picture 1", "<pictures 1>", "a fox"] {
+            assert_eq!(as_image_tags(left), left);
+        }
+        assert_eq!(as_image_tags("<PICTURE 12> café"), "<image12> café");
     }
 
     /// The model's own sampler: none sent (sd-server and KoboldCpp then

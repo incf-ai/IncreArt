@@ -495,7 +495,7 @@ fn images_pane(
     let saving = st.queueing.iter().any(|(p, _)| st.project.as_ref() == Some(p));
     if group.is_some() || saving {
         Panel::bottom("gen_live").resizable(false).show(ui, |ui| {
-            saving_rows(ui, st, st.project.as_ref());
+            saving_rows(ui, st, st.project.as_ref(), out);
             if let Some(g) = &group {
                 live_section(ui, st, root, tex, g, out);
             }
@@ -1704,7 +1704,8 @@ pub fn scale_window(ctx: &egui::Context, st: &AppState, out: &mut Vec<Msg>) {
         egui::Grid::new("scale_grid").num_columns(2).spacing([12.0, 6.0]).show(ui, |ui| {
             ui.radio_value(&mut e.by, ScaleBy::Megapixels, "Megapixels");
             let max_mp = hi as f32 * hi as f32 / 1e6;
-            let r = ui.add(egui::DragValue::new(&mut e.megapixels).range(0.05..=max_mp).speed(0.01).fixed_decimals(2));
+            let r = ui
+                .add(crate::widgets::drag_value(&mut e.megapixels).range(0.05..=max_mp).speed(0.01).fixed_decimals(2));
             if r.changed() {
                 e.by = ScaleBy::Megapixels;
             }
@@ -1714,7 +1715,7 @@ pub fn scale_window(ctx: &egui::Context, st: &AppState, out: &mut Vec<Msg>) {
                     (e.by, e.side) = (by, current);
                 }
                 let mut v = if e.by == by { e.side } else { current };
-                let r = ui.add(egui::DragValue::new(&mut v).range(lo..=hi).speed(32).update_while_editing(false));
+                let r = ui.add(crate::widgets::drag_value(&mut v).range(lo..=hi).speed(32).update_while_editing(false));
                 if r.changed() {
                     (e.by, e.side) = (by, v);
                 }
@@ -1767,7 +1768,7 @@ pub fn resolutions_window(ctx: &egui::Context, st: &AppState, out: &mut Vec<Msg>
                 }
                 ui.add_sized([150.0, 20.0], egui::TextEdit::singleline(&mut r.name));
                 for v in [&mut r.width, &mut r.height] {
-                    let d = egui::DragValue::new(v).range(32..=4096).speed(32).update_while_editing(false);
+                    let d = crate::widgets::drag_value(v).range(32..=4096).speed(32).update_while_editing(false);
                     if ui.add(d).changed() {
                         *v = increart_gui_core::round32(*v).min(4096);
                     }
@@ -1944,10 +1945,12 @@ pub fn recipes_page(
                                 });
                                 ui.end_row();
                                 ui.label("Steps");
-                                ui.add(egui::DragValue::new(&mut p.steps).range(1..=200));
+                                ui.add(crate::widgets::drag_value(&mut p.steps).range(1..=200));
                                 ui.end_row();
                                 ui.label("CFG");
-                                ui.add(egui::DragValue::new(&mut p.cfg).range(0.0..=30.0).speed(0.1).max_decimals(2));
+                                ui.add(
+                                    crate::widgets::drag_value(&mut p.cfg).range(0.0..=30.0).speed(0.1).max_decimals(2),
+                                );
                                 ui.end_row();
                                 ui.label("Flow shift");
                                 ui.horizontal(|ui| {
@@ -1956,7 +1959,12 @@ pub fn recipes_page(
                                         p.flow_shift = on.then_some(3.0);
                                     }
                                     if let Some(v) = &mut p.flow_shift {
-                                        ui.add(egui::DragValue::new(v).range(0.01..=20.0).speed(0.05).max_decimals(2));
+                                        ui.add(
+                                            crate::widgets::drag_value(v)
+                                                .range(0.01..=20.0)
+                                                .speed(0.05)
+                                                .max_decimals(2),
+                                        );
                                     } else {
                                         ui.weak("the recipe's");
                                     }
@@ -1975,6 +1983,26 @@ pub fn recipes_page(
                                         .desired_width(320.0)
                                         .hint_text("the recipe's"),
                                 );
+                                ui.end_row();
+                                ui.label("References");
+                                let (native, other) =
+                                    if increart_core::request::MINIMAX_H3_IMAGE.contains(&p.recipe.as_str()) {
+                                        ("<Picture N>", "<imageN>")
+                                    } else {
+                                        ("<imageN>", "<Picture N>")
+                                    };
+                                let mut convert = !p.refs_as_written;
+                                if ui
+                                    .checkbox(&mut convert, format!("Accept {other} too, sent as {native}"))
+                                    .on_hover_text(format!(
+                                        "A prompt naming reference images either way, <imageN> or MiniMax-H3's \
+                                         <Picture N>, is put in this model's {native} when queued. Off: the \
+                                         tags go as written."
+                                    ))
+                                    .changed()
+                                {
+                                    p.refs_as_written = !convert;
+                                }
                                 ui.end_row();
                                 ui.label("Note");
                                 ui.add(
@@ -2154,7 +2182,7 @@ pub fn recipes_page(
                                         l.file = id;
                                     }
                                     ui.add(
-                                        egui::DragValue::new(&mut l.weight)
+                                        crate::widgets::drag_value(&mut l.weight)
                                             .range(-4.0..=4.0)
                                             .speed(0.01)
                                             .max_decimals(2),
@@ -2739,6 +2767,7 @@ fn generate(ui: &mut egui::Ui, st: &AppState, tex: &mut Textures, out: &mut Vec<
             }
             ui.horizontal(|ui| {
                 crate::rewrite::button(ui, st, increart_gui_core::PeTarget::Prompt, "Rewrite", out);
+                crate::rewrite::develop_button(ui, st, increart_gui_core::PeTarget::Prompt, out);
                 ui.weak("For a transparent background, ask for it in the prompt (e.g. \"make the background transparent\").");
             });
             let style_sweep = f.sweep.on && f.sweep.vary == increart_core::prompts::SweepVary::Style;
@@ -2746,7 +2775,22 @@ fn generate(ui: &mut egui::Ui, st: &AppState, tex: &mut Textures, out: &mut Vec<
                 ui.add_space(4.0);
                 crate::presets::prompt_blanks(ui, st, &mut f, out);
             }
-            ui.label("Negative prompt");
+            // CFG 1 runs without the negative prompt (sd-server skips that pass)
+            let unused = (f.cfg - 1.0).abs() < 1e-3;
+            ui.horizontal(|ui| {
+                ui.label("Negative prompt");
+                if unused {
+                    let note = "(not used at CFG 1)";
+                    let hint = "At CFG 1 the model runs once, with the prompt alone: the negative prompt changes \
+                                nothing. Raise CFG to use it (slower: two passes a step), or say what you want in \
+                                the prompt.";
+                    if f.negative.trim().is_empty() {
+                        ui.weak(note).on_hover_text(hint);
+                    } else {
+                        ui.colored_label(NEUTRAL, format!("{} {note}", ph::INFO)).on_hover_text(hint);
+                    }
+                }
+            });
             ui.add(egui::TextEdit::singleline(&mut f.negative).desired_width(f32::INFINITY));
             if f.sweep.on {
                 ui.add_space(6.0);
@@ -2783,7 +2827,7 @@ fn generate(ui: &mut egui::Ui, st: &AppState, tex: &mut Textures, out: &mut Vec<
                     if i == 1 {
                         ui.label("×");
                     }
-                    let r = ui.add(egui::DragValue::new(v).range(256..=2048).speed(32).update_while_editing(false));
+                    let r = ui.add(crate::widgets::drag_value(v).range(256..=2048).speed(32).update_while_editing(false));
                     if r.changed() {
                         *v = increart_gui_core::round32(*v).clamp(256, 2048);
                     }
@@ -2806,16 +2850,16 @@ fn generate(ui: &mut egui::Ui, st: &AppState, tex: &mut Textures, out: &mut Vec<
             });
             egui::Grid::new("gen_params").num_columns(4).spacing([12.0, 6.0]).show(ui, |ui| {
                 ui.label("Steps");
-                ui.add(egui::DragValue::new(&mut f.steps).range(1..=100));
+                ui.add(crate::widgets::drag_value(&mut f.steps).range(1..=100));
                 ui.label("CFG");
-                ui.add(egui::DragValue::new(&mut f.cfg).range(1.0..=20.0).speed(0.1).fixed_decimals(1));
+                ui.add(crate::widgets::drag_value(&mut f.cfg).range(1.0..=20.0).speed(0.1).fixed_decimals(1));
                 ui.end_row();
                 ui.label("Flow shift");
                 ui.horizontal(|ui| {
                     let mut on = f.flow_shift.is_some();
                     ui.checkbox(&mut on, "");
                     let mut v = f.flow_shift.unwrap_or(3.0);
-                    ui.add_enabled(on, egui::DragValue::new(&mut v).range(0.0..=20.0).speed(0.1).fixed_decimals(1));
+                    ui.add_enabled(on, crate::widgets::drag_value(&mut v).range(0.0..=20.0).speed(0.1).fixed_decimals(1));
                     f.flow_shift = on.then_some(v);
                     if !on {
                         ui.weak("recipe schedule");
@@ -2828,10 +2872,10 @@ fn generate(ui: &mut egui::Ui, st: &AppState, tex: &mut Textures, out: &mut Vec<
                 scheduler_combo(ui, "gen_scheduler", &mut f.scheduler);
                 ui.end_row();
                 ui.label("Seeds");
-                ui.add(egui::DragValue::new(&mut f.seeds).range(1..=999));
+                ui.add(crate::widgets::drag_value(&mut f.seeds).range(1..=999));
                 ui.label("First seed");
                 ui.horizontal(|ui| {
-                    ui.add(egui::DragValue::new(&mut f.first_seed));
+                    ui.add(crate::widgets::drag_value(&mut f.first_seed));
                     let next = st.next_seed();
                     if f.first_seed != 0
                         && ui
@@ -3309,17 +3353,24 @@ pub fn server_list(ui: &mut egui::Ui, st: &AppState, out: &mut Vec<Msg>) {
             ui.label("");
             ui.end_row();
         }
-        for s in &st.servers {
+        for (i, s) in st.servers.iter().enumerate() {
             ui.label(RichText::new(&s.name).strong());
             ui.label(&s.device);
+            let crash = st.crash_of(&s.name);
             let c = if s.state == "ready" {
                 GOOD
-            } else if s.state.contains("retrying") {
+            } else if s.state.contains("retrying") || crash.is_some() {
                 BAD
             } else {
                 NEUTRAL
             };
-            state_cell(ui, RichText::new(&s.state).color(c));
+            // a crashed server's own state, not the engine's retrying
+            let shown = match crash {
+                Some(c) if c.restarting => "crashed, starting again…",
+                Some(_) => "crashed",
+                None => &s.state,
+            };
+            state_cell(ui, RichText::new(shown).color(c));
             ui.label(s.model.clone().unwrap_or_default());
             let log = s.config.as_ref().map(|c| increart_core::launcher::log_path(Path::new(""), c));
             log_button(
@@ -3328,6 +3379,32 @@ pub fn server_list(ui: &mut egui::Ui, st: &AppState, out: &mut Vec<Msg>) {
                 out,
             );
             ui.end_row();
+            // how it crashed, under its state, with Restart
+            if let Some(c) = crash
+                && let Some(text) = c.text()
+            {
+                ui.label("");
+                ui.label("");
+                state_cell(ui, RichText::new(text).weak().small()).on_hover_text(CRASH_TIP);
+                if !c.restarting && ui.small_button("Restart").on_hover_text("Start this server again").clicked() {
+                    out.push(Msg::RestartServer(s.name.clone()));
+                } else if c.restarting {
+                    ui.label("");
+                }
+                ui.label("");
+                ui.end_row();
+            }
+            // what its warm-up is doing, under its state, with Skip
+            if let Some(text) = warm_up_text(st, i) {
+                ui.label("");
+                ui.label("");
+                state_cell(ui, RichText::new(text).weak().small()).on_hover_text(WARM_UP_TIP);
+                if ui.small_button("Skip").on_hover_text(SKIP_WARM_UP_TIP).clicked() {
+                    out.push(Msg::SkipWarmUp(i));
+                }
+                ui.label("");
+                ui.end_row();
+            }
             // its speed this session, under its state
             if let Some(speed) = st.server_speed(&s.name) {
                 ui.label("");
@@ -3369,6 +3446,43 @@ pub fn log_button(ui: &mut egui::Ui, file: String, out: &mut Vec<Msg>) {
 
 /// A server's state in a fixed width, cut with "…" (whole on hover): it
 /// changes many times a second, and the list mustn't change width with it.
+const WARM_UP_TIP: &str = "After loading a model, a server makes one throwaway image at 1 step before \
+the first seed: sd-server only reads the model's weights then (its load just notes the files), so the \
+first seed isn't slowed by it. Made from the next run's prompt and references, their text encoding is \
+kept for that run's seeds (with a big text encoder that's minutes saved).";
+
+const SKIP_WARM_UP_TIP: &str = "The first seed does this instead: nothing is lost but the time spent so \
+far, and that seed's time includes reading the model.";
+
+/// A crashed server's line, hovered.
+const CRASH_TIP: &str = "The server's process ended by itself (a crash), so nothing answered on its port. \
+     Its jobs went back to the queue. Its log (the button on its row) says what it was doing.";
+
+/// A server warming up: what it's doing ("warm-up: reading the model,
+/// encoding r01's prompt"), how long it's been at it since its load began
+/// and how long its loads usually take (with their warm-up).
+pub fn warm_up_text(st: &AppState, server: usize) -> Option<String> {
+    use increart_core::engine::WarmUpPhase;
+    use increart_gui_core::timing::duration;
+    let (phase, run) = st.warm_ups.get(&server)?;
+    let label = run.as_ref().and_then(|r| st.run_progress(r)).map(|p| p.label.trim().to_string());
+    let reading = match &label {
+        Some(l) => format!("reading the model, encoding {l}'s prompt"),
+        None => "reading the model".to_string(),
+    };
+    let what = match phase {
+        WarmUpPhase::Sent => "sending its warm-up image".to_string(),
+        WarmUpPhase::Queued(n) if *n > 0 => format!("warm-up waiting in its queue (behind {n})"),
+        WarmUpPhase::Queued(_) => "warm-up waiting in its queue".to_string(),
+        WarmUpPhase::Working => format!("warm-up: {reading}"),
+    };
+    let Some((recipe, since)) = st.server_loading.get(&server) else { return Some(what) };
+    let name = &st.servers.get(server)?.name;
+    let usual =
+        st.load_times.get(name, recipe).map_or(String::new(), |t| format!(" (usually ~{})", duration(t as f64)));
+    Some(format!("{what} · {}{usual}", duration(st.now - since)))
+}
+
 fn state_cell(ui: &mut egui::Ui, text: RichText) -> egui::Response {
     const W: f32 = 240.0;
     let h = ui.spacing().interact_size.y;
@@ -3458,20 +3572,27 @@ pub fn pe_list(ui: &mut egui::Ui, st: &AppState, out: &mut Vec<Msg>) {
 }
 
 /// **Finish & stop all** / **Stop all now**, above the runs (not scrolled
-/// away with them), greyed out while nothing generates; on the right, in
-/// the order of each project's buttons below (Stop now in the corner).
+/// away with them), greyed out while nothing generates nor is being saved
+/// (both cancel runs being saved); on the right, in the order of each
+/// project's buttons below (Stop now in the corner).
 pub fn stop_all_row(ui: &mut egui::Ui, st: &AppState, out: &mut Vec<Msg>) {
     dialog_buttons(ui, |ui| {
         let all = st.active_runs.len();
-        let unfinishing = st.active_runs.iter().any(|r| !st.finishing.contains(r));
+        let saving = !st.queueing.is_empty();
+        let unfinishing = saving || st.active_runs.iter().any(|r| !st.finishing.contains(r));
         if ui
-            .add_enabled(all > 0, egui::Button::new(RichText::new(ic(ph::STOP, "Stop all now")).color(BAD)))
+            .add_enabled(all > 0 || saving, egui::Button::new(RichText::new(ic(ph::STOP, "Stop all now")).color(BAD)))
             .on_hover_text("everything stops; images being generated are thrown away")
             .clicked()
         {
-            let runs = if all == 1 { "the run".to_string() } else { format!("all {all} runs") };
-            let text = format!("Stop {runs} now? The images being generated are thrown away.");
-            out.push(Msg::Ask(Confirm::new(text, "Stop now", Msg::StopAll(Stop::Now))));
+            if all == 0 {
+                // only runs being saved: nothing generated is lost
+                out.push(Msg::StopAll(Stop::Now));
+            } else {
+                let runs = if all == 1 { "the run".to_string() } else { format!("all {all} runs") };
+                let text = format!("Stop {runs} now? The images being generated are thrown away.");
+                out.push(Msg::Ask(Confirm::new(text, "Stop now", Msg::StopAll(Stop::Now))));
+            }
         }
         if ui
             .add_enabled(unfinishing, egui::Button::new(ic(ph::STOP_CIRCLE, "Finish & stop all")))
@@ -3489,7 +3610,7 @@ pub fn stop_all_row(ui: &mut egui::Ui, st: &AppState, out: &mut Vec<Msg>) {
 pub fn run_list(ui: &mut egui::Ui, st: &AppState, tex: &mut Textures, out: &mut Vec<Msg>) {
     use increart_gui_core::RunItem;
     let groups = st.run_groups();
-    saving_rows(ui, st, None);
+    saving_rows(ui, st, None, out);
     if groups.is_empty() {
         if st.queueing.is_empty() {
             ui.weak("Nothing generating.");
@@ -3607,6 +3728,7 @@ fn run_line(ui: &mut egui::Ui, st: &AppState, r: &increart_gui_core::RunProgress
                 .iter()
                 .map(|(seed, step, n)| format!("s{seed} {step}/{n}"))
                 .chain(r.sent.iter().map(|(seed, _, phase)| format!("s{seed} {}", phase_word(*phase))))
+                .chain(st.hashing_notes.get(&r.run).map(|(_, f)| format!("hashing {:.0}%", f * 100.0)))
                 .collect();
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 stop_buttons(ui, &r.run, finishing, r.sampling.len(), true, out);
@@ -3734,8 +3856,20 @@ fn job_block(
             if let Some(text) = live_timing(st, j) {
                 ui.weak(RichText::new(text).small());
             }
+            hashing_line(ui, st, &j.run);
         });
     }
+}
+
+/// While a queued run's model files are hashed (the first time): what's
+/// read, how far.
+fn hashing_line(ui: &mut egui::Ui, st: &AppState, run: &increart_core::Id) {
+    let Some((text, fraction)) = st.hashing_notes.get(run) else { return };
+    ui.add(egui::Label::new(RichText::new(text).weak().small()).truncate()).on_hover_text(
+        "the model files' hashes go in the recipes; each file is hashed once (cached in the library). It's \
+         generating meanwhile: images done before it ends are written when it does",
+    );
+    ui.add(egui::ProgressBar::new(*fraction).desired_height(4.0));
 }
 
 /// A running job's timing line: "1.71 s/it · 34.2 s/image · 4 done in
@@ -3882,12 +4016,10 @@ fn sent_lines(ui: &mut egui::Ui, j: &increart_gui_core::RunProgress) {
 }
 
 /// Runs and sweeps being saved before they're queued (`project`: only
-/// its), each with what it's doing, a bar while that takes a while
-/// (hashing a model file the first time).
-fn saving_rows(ui: &mut egui::Ui, st: &AppState, project: Option<&increart_core::Id>) {
+/// its), each with Cancel.
+fn saving_rows(ui: &mut egui::Ui, st: &AppState, project: Option<&increart_core::Id>, out: &mut Vec<Msg>) {
     for (p, label) in st.queueing.iter().filter(|(p, _)| project.is_none_or(|x| x == p)) {
         let name = st.index.project(p).map(|e| e.name()).unwrap_or_default();
-        let note = st.queueing_notes.get(&(p.clone(), label.clone()));
         egui::Frame::group(ui.style()).show(ui, |ui| {
             ui.set_width(ui.available_width());
             ui.horizontal(|ui| {
@@ -3896,14 +4028,12 @@ fn saving_rows(ui: &mut egui::Ui, st: &AppState, project: Option<&increart_core:
                     if project.is_some() { label.trim().to_string() } else { format!("{name} · {}", label.trim()) };
                 ui.label(RichText::new(title).strong());
                 ui.weak("being saved, then queued");
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui.small_button(ic(ph::X, "Cancel")).on_hover_text("not saved nor queued").clicked() {
+                        out.push(Msg::CancelQueueing(p.clone(), label.clone()));
+                    }
+                });
             });
-            if let Some((text, fraction)) = note {
-                ui.add(egui::Label::new(RichText::new(text).weak().small()).truncate()).on_hover_text(
-                    "the model files' hashes go in the run's recipe; each file is hashed once (cached in the \
-                     library), so a model's first run waits for it",
-                );
-                ui.add(egui::ProgressBar::new(*fraction).desired_height(4.0));
-            }
         });
     }
 }
@@ -4572,6 +4702,78 @@ fn name_combo(ui: &mut egui::Ui, id: &str, v: &mut String, names: &[&str]) -> eg
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Types `keys` (text, or "\n" for Enter) into the Scale dialog's
+    /// megapixel field, a frame each, the messages applied between frames
+    /// as the app does; the Generate form's size after.
+    fn scale_by_typing(keys: &[&str]) -> (u32, u32) {
+        use increart_gui_core::{AppState, Msg, ScaleTarget, update};
+        let mut config = increart_core::config::Config::default();
+        config.normalize();
+        let mut st = AppState::new(config, None);
+        (st.generate.width, st.generate.height) = (800, 608);
+        update(&mut st, Msg::OpenScale(ScaleTarget::Generate));
+        let ctx = egui::Context::default();
+        let frame = |st: &mut AppState, events: Vec<egui::Event>| {
+            let raw = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1400.0, 900.0))),
+                events,
+                ..Default::default()
+            };
+            let mut out = vec![];
+            let mut done = ctx.run_ui(raw, |ui| scale_window(ui.ctx(), st, &mut out));
+            done.textures_delta.clear();
+            for m in out {
+                update(st, m);
+            }
+        };
+        frame(&mut st, vec![]);
+        frame(&mut st, vec![]);
+        frame(&mut st, vec![]);
+        // the megapixel field: the dialog's first number field
+        let field = ctx.viewport(|v| {
+            v.prev_pass
+                .widgets
+                .layers()
+                .flat_map(|(_, ws)| ws.iter())
+                .find(|w| w.sense.senses_drag() && w.sense.is_focusable())
+                .map(|w| w.rect)
+        });
+        let at = field.expect("the megapixel field").center();
+        let button = |pressed| egui::Event::PointerButton {
+            pos: at,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: Default::default(),
+        };
+        frame(&mut st, vec![egui::Event::PointerMoved(at), button(true)]);
+        frame(&mut st, vec![button(false)]);
+        frame(&mut st, vec![]);
+        for k in keys {
+            let e = match *k {
+                "\n" => egui::Event::Key {
+                    key: egui::Key::Enter,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: Default::default(),
+                },
+                t => egui::Event::Text(t.into()),
+            };
+            frame(&mut st, vec![e]);
+            frame(&mut st, vec![]);
+        }
+        assert!(st.scale.is_none(), "applied and closed");
+        (st.generate.width, st.generate.height)
+    }
+
+    #[test]
+    fn megapixels_typed_into_scale_are_the_size() {
+        assert_eq!(scale_by_typing(&["1", ".", "5", "\n"]), (1408, 1056));
+        assert_eq!(scale_by_typing(&["2", "\n"]), (1632, 1248));
+        // a decimal comma: egui's own parser kept the "1" (1152 × 864)
+        assert_eq!(scale_by_typing(&["1", ",", "5", "\n"]), (1408, 1056));
+    }
 
     #[test]
     fn image_tags_go_in_at_the_cursor() {

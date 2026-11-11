@@ -198,6 +198,38 @@ pub struct RecipePreset {
     /// on).
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub note: String,
+    /// The size its files are, one of a built-in's `sizes` (empty: it has
+    /// one size).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub size: String,
+    /// A built-in's sizes, listed once and the size picked
+    /// ([`RecipePreset::with_size`]): each the files it changes and their
+    /// downloads; the preset's own files are its `size`'s.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sizes: Vec<PresetSize>,
+    /// Reference tags go to the model as written. Off (the default), a
+    /// prompt naming references either way (`<imageN>`, `<Picture N>`) is
+    /// put in the model's own syntax when a run is queued
+    /// ([`RecipePreset::prompt_queued`]).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub refs_as_written: bool,
+}
+
+/// One size of a built-in model preset (smaller files: less memory and
+/// download, lower quality).
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename = "Size")]
+pub struct PresetSize {
+    pub name: String,
+    /// Slot → file ID, for the slots this size changes.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub files: std::collections::BTreeMap<String, String>,
+    /// File ID → URL, for those files.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub downloads: std::collections::BTreeMap<String, String>,
+    /// What's particular to it (put after the preset's note).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub note: String,
 }
 
 impl RecipePreset {
@@ -218,6 +250,39 @@ impl RecipePreset {
             .collect()
     }
 
+    /// The preset as listed at the size named (its sizes still listed;
+    /// not one already at another size): the slots that
+    /// size changes take its files, its downloads added, its note after the
+    /// preset's. A size it hasn't: the preset as it is.
+    pub fn with_size(&self, name: &str) -> RecipePreset {
+        let Some(size) = self.sizes.iter().find(|s| s.name == name) else {
+            return self.clone();
+        };
+        let mut p = self.clone();
+        p.size = size.name.clone();
+        p.files.extend(size.files.clone());
+        p.downloads.extend(size.downloads.clone());
+        if !size.note.is_empty() {
+            p.note = if p.note.is_empty() { size.note.clone() } else { format!("{} {}", p.note, size.note) };
+        }
+        p
+    }
+
+    /// Each of its sizes ([`RecipePreset::with_size`]), or itself when it
+    /// has one.
+    pub fn each_size(&self) -> Vec<RecipePreset> {
+        if self.sizes.is_empty() {
+            vec![self.clone()]
+        } else {
+            self.sizes.iter().map(|s| self.with_size(&s.name)).collect()
+        }
+    }
+
+    /// As it's kept in your models: the size it is, not the others.
+    pub fn installed(&self) -> RecipePreset {
+        RecipePreset { sizes: vec![], ..self.clone() }
+    }
+
     /// The same preset loading `files` (a [`RecipePreset::resolved`]).
     pub fn with_files(&self, files: std::collections::BTreeMap<String, String>) -> RecipePreset {
         RecipePreset { files, ..self.clone() }
@@ -225,6 +290,15 @@ impl RecipePreset {
 
     /// The prompt with each LoRA's trigger words before it, unless it has
     /// them already (any case).
+    /// The prompt a run of this preset is queued with: its trigger words
+    /// added ([`RecipePreset::prompt_with_triggers`]) and its references in
+    /// the model's syntax ([`crate::request::native_refs`]) unless
+    /// `refs_as_written`.
+    pub fn prompt_queued(&self, prompt: &str) -> String {
+        let p = self.prompt_with_triggers(prompt);
+        if self.refs_as_written { p } else { crate::request::native_refs(&self.recipe, &p) }
+    }
+
     pub fn prompt_with_triggers(&self, prompt: &str) -> String {
         let low = prompt.to_lowercase();
         let missing: Vec<&str> = self
@@ -265,6 +339,9 @@ impl Default for RecipePreset {
             alternatives: Default::default(),
             downloads: Default::default(),
             note: String::new(),
+            size: String::new(),
+            sizes: vec![],
+            refs_as_written: false,
         }
     }
 }
@@ -2083,25 +2160,74 @@ mod tests {
         assert!(c.len() >= 14, "{}", c.len());
         let names: std::collections::BTreeSet<&str> = c.iter().map(|p| p.name.as_str()).collect();
         assert_eq!(names.len(), c.len(), "a name twice");
-        for p in c.iter().chain(&builtin_recipes()) {
-            assert!(p.files.contains_key("diffusion_model"), "{}", p.name);
-            for f in p.all_files() {
-                assert!(
-                    p.downloads.get(f).is_some_and(|u| u.starts_with("https://"))
-                        || p.name == "Qwen-Image 2.1" && f.contains("int8"),
-                    "{}: {f}",
-                    p.name
-                );
+        for listed in c.iter().chain(&builtin_recipes()) {
+            let text = rsnfmt::to_string(listed).unwrap();
+            assert_eq!(&rsnfmt::from_str::<RecipePreset>(&text).unwrap(), listed, "{text}");
+            if !listed.sizes.is_empty() {
+                assert!(listed.sizes.iter().any(|s| s.name == listed.size), "{}: its own size listed", listed.name);
+                let names: std::collections::BTreeSet<&str> = listed.sizes.iter().map(|s| s.name.as_str()).collect();
+                assert_eq!(names.len(), listed.sizes.len(), "{}: a size twice", listed.name);
             }
-            for slot in p.files.keys() {
-                assert!(MODEL_SLOTS.contains(&slot.as_str()), "{}: {slot}", p.name);
+            for p in &listed.each_size() {
+                assert!(p.files.contains_key("diffusion_model"), "{}", p.name);
+                for f in p.all_files() {
+                    assert!(
+                        p.downloads.get(f).is_some_and(|u| u.starts_with("https://"))
+                            || p.name == "Qwen-Image 2.1" && f.contains("int8"),
+                        "{}: {f}",
+                        p.name
+                    );
+                }
+                for slot in p.files.keys() {
+                    assert!(MODEL_SLOTS.contains(&slot.as_str()), "{}: {slot}", p.name);
+                }
             }
-            let text = rsnfmt::to_string(p).unwrap();
-            assert_eq!(&rsnfmt::from_str::<RecipePreset>(&text).unwrap(), p, "{text}");
+            for size in &listed.sizes {
+                for slot in size.files.keys() {
+                    assert!(listed.files.contains_key(slot), "{} {}: {slot} it hasn't", listed.name, size.name);
+                }
+            }
         }
         // the LoRA variants bring their trigger
         let z = c.iter().find(|p| p.name == "Z-Image Turbo · pixel art").unwrap();
         assert_eq!(z.loras[0].trigger, "Pixel art style.");
+    }
+
+    /// A model of several sizes: the slots a size changes take its files
+    /// and downloads, the others the preset's; kept in your models without
+    /// the other sizes.
+    #[test]
+    fn a_preset_at_each_size() {
+        let map = |kv: &[(&str, &str)]| kv.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
+        let p = RecipePreset {
+            name: "m".into(),
+            files: map(&[("diffusion_model", "d/big.safetensors"), ("vae", "vae/v.safetensors")]),
+            downloads: map(&[("d/big.safetensors", "https://x/big"), ("vae/v.safetensors", "https://x/v")]),
+            note: "Tested.".into(),
+            size: "Big".into(),
+            sizes: vec![
+                PresetSize { name: "Big".into(), ..Default::default() },
+                PresetSize {
+                    name: "Small".into(),
+                    files: map(&[("diffusion_model", "d/small.gguf")]),
+                    downloads: map(&[("d/small.gguf", "https://x/small")]),
+                    note: "Lower quality.".into(),
+                },
+            ],
+            ..Default::default()
+        };
+        let small = p.with_size("Small");
+        assert_eq!((small.size.as_str(), small.files["diffusion_model"].as_str()), ("Small", "d/small.gguf"));
+        assert_eq!(small.files["vae"], "vae/v.safetensors");
+        assert_eq!(small.downloads["d/small.gguf"], "https://x/small");
+        assert_eq!(small.note, "Tested. Lower quality.");
+        assert_eq!(small.sizes, p.sizes, "still listed");
+        assert_eq!(p.with_size("Big"), RecipePreset { size: "Big".into(), ..p.clone() }, "its own");
+        assert_eq!(p.with_size("Huge"), p, "a size it hasn't");
+        assert_eq!(p.each_size().iter().map(|s| s.size.as_str()).collect::<Vec<_>>(), ["Big", "Small"]);
+        let kept = small.installed();
+        assert!(kept.sizes.is_empty() && kept.size == "Small");
+        assert_eq!(rsnfmt::from_str::<RecipePreset>(&rsnfmt::to_string(&p).unwrap()).unwrap(), p);
     }
 
     /// A slot's first file `have` takes, the preferred where none.

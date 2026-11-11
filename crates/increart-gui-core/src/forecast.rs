@@ -205,6 +205,9 @@ pub struct SimServer {
     pub recipe: Option<String>,
     /// Seconds to load each model.
     pub load_s: HashMap<String, f64>,
+    /// Seconds until it's done loading `recipe` (and warming up) when it's
+    /// doing that now; 0: free.
+    pub busy_s: f64,
 }
 
 /// Seconds after which a forecast is made again even with nothing changed.
@@ -254,6 +257,8 @@ pub fn simulate(runs: &[SimRun], servers: &[SimServer], order: Order, random: Op
     // the job generating on each server: when it ends
     let mut head: Vec<Option<f64>> = vec![None; servers.len()];
     let mut loading: Vec<Option<f64>> = vec![None; servers.len()];
+    // a load (with its warm-up) going on now: done when it's done
+    let mut warming: Vec<Option<f64>> = vec![None; servers.len()];
     let mut plan: HashMap<Id, (Option<f64>, Option<f64>)> = runs.iter().map(|r| (r.id.clone(), (None, None))).collect();
     let mut left: Vec<usize> = runs.iter().map(|r| r.seeds + r.sampling.len()).collect();
     let base = Instant::now();
@@ -286,6 +291,9 @@ pub fn simulate(runs: &[SimRun], servers: &[SimServer], order: Order, random: Op
                     }
                     // not working: never answers, so never takes a seed
                     Action::Probe { .. } => {}
+                    Action::WarmUp { server } if servers[server].busy_s > t => {
+                        warming[server] = Some(servers[server].busy_s);
+                    }
                     Action::WarmUp { server } => {
                         sched.warmed(server, true, now);
                     }
@@ -304,7 +312,8 @@ pub fn simulate(runs: &[SimRun], servers: &[SimServer], order: Order, random: Op
             }
         }
         // the next job or load to end
-        let next = head.iter().chain(loading.iter()).flatten().copied().fold(f64::INFINITY, f64::min);
+        let next =
+            head.iter().chain(loading.iter()).chain(warming.iter()).flatten().copied().fold(f64::INFINITY, f64::min);
         if !next.is_finite() {
             break;
         }
@@ -314,6 +323,10 @@ pub fn simulate(runs: &[SimRun], servers: &[SimServer], order: Order, random: Op
             if loading[s].is_some_and(|e| e <= t) {
                 loading[s] = None;
                 sched.loaded(s, LoadResult::Ok, now);
+            }
+            if warming[s].is_some_and(|e| e <= t) {
+                warming[s] = None;
+                sched.warmed(s, true, now);
             }
             if head[s].is_some_and(|e| e <= t) {
                 head[s] = None;
@@ -352,7 +365,7 @@ mod tests {
     }
 
     fn server(recipe: &str) -> SimServer {
-        SimServer { working: true, recipe: Some(recipe.into()), load_s: HashMap::new() }
+        SimServer { working: true, recipe: Some(recipe.into()), load_s: HashMap::new(), busy_s: 0.0 }
     }
 
     fn at(p: &Plan, n: u32) -> (Option<f64>, Option<f64>) {
@@ -400,6 +413,16 @@ mod tests {
         // (15 s), then 2 more (35 s); gpu1 its 2 at 30 s each, as the
         // engine would (no seed moves to a server once sent)
         assert_eq!(at(&p, 1), (Some(0.0), Some(60.0)));
+    }
+
+    /// A server loading (or warming up after a load) takes its seeds once
+    /// that's done, not at once.
+    #[test]
+    fn a_server_loading_now_starts_when_it_is_done() {
+        let mut s = server("q");
+        s.busy_s = 100.0;
+        let p = simulate(&[run(1, "q", 2, &[10.0])], &[s], Order::Spread, None);
+        assert_eq!(at(&p, 1), (Some(100.0), Some(120.0)));
     }
 
     #[test]
@@ -504,8 +527,9 @@ mod bench {
                 image_s: vec![34.0, 36.0],
             })
             .collect();
-        let servers: Vec<SimServer> =
-            (0..2).map(|_| SimServer { working: true, recipe: Some("q".into()), load_s: HashMap::new() }).collect();
+        let servers: Vec<SimServer> = (0..2)
+            .map(|_| SimServer { working: true, recipe: Some("q".into()), load_s: HashMap::new(), busy_s: 0.0 })
+            .collect();
         for order in [Order::Spread, Order::BySweep, Order::Sequential] {
             let t = std::time::Instant::now();
             let p = simulate(&runs, &servers, order, None);

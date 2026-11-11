@@ -832,7 +832,7 @@ rewrites).
   transparent pixels as if it were there). A KoboldCpp without `mmproj`
   gets no images, and can't describe.
 - **System prompts** are per job (`fill_blanks`, `style_prompt`,
-  `style_part`, `rewrite`, `describe`),
+  `style_part`, `rewrite`, `rewrite_minimax_h3`, `describe`),
   shared by every chat server, with a built-in default for each. The
   server status window's Prompt enhance section shows the chat server in
   use, how it runs, its state, and each job's system prompt in a
@@ -856,6 +856,88 @@ rewrites).
   attached (Generate: the references, then the start image; an idea: its
   images) and the instructions, if any. The answer is cleaned (code fences,
   a "Rewritten prompt:" label and quotes around it all are dropped).
+- **Rewriting for MiniMax-H3-Image** (`rewrite_minimax_h3`): the rewrite
+  window's job when the Generate form's model preset has the
+  `minimax-h3-image` recipe (or Pruna's `p-h3-image`; else `rewrite`;
+  **Write for: Any model · MiniMax-H3-Image** switches and asks
+  again, and the same text asked again keeps the one chosen). Its system
+  prompt is IncreArt's own wording of the rules of MiniMax-H3-Image's own
+  prompt enhancer (MiniMax-H3-Image-PE's `prompt/t2i/task_prompt.txt` and
+  `prompt/edit/task_prompt.txt`). Without images: one fluent English
+  paragraph, no quality tags; a scene's light with its direction and
+  shadows and its shot size; a designed thing (poster, card, UI, chart,
+  infographic) region by region in reading order with each region's
+  position, words and pictures; every main element placed in the frame;
+  every fact kept, asked-for text quoted and placed, no extra main
+  subjects; a body in action with a named facing to the camera
+  (front-facing, left-facing profile, rear three-quarter…) and a direction
+  in the frame, one frozen moment, and a framing that shows which hand
+  holds what. With images, MiniMax's edit structure: each thing kept or
+  borrowed defined first ("The man in the yellow raincoat in <image1> is
+  <Subject 1>."), one "The target image …" sentence, one clause per subject
+  (fully preserved, partially preserved with what stays and what changes,
+  an exact property supplied, a loose reference), then only what changes
+  or is new; a change of style makes everything partially preserved. Three
+  short worked examples (an action scene, an edit, a style change) and a
+  last check, since an 8B chat model follows examples far more than rules
+  (Qwen3-VL 8B: without them no facing words and no `<Subject N>`s; with
+  them both, and "fully preserved" for a restyled subject went from 4 of 4
+  to 0 of 8 once said where it's defined). An answer in MiniMax-H3-Image-PE's
+  JSON (`{"expanded_caption": …, "aspect_ratio": …}`) is read for its caption
+  (`clean_text`). Up to 1400 tokens (700 for the others). MiniMax's text
+  itself isn't copied: its licence (the MiniMax-H3-Image Community License,
+  which covers the PE prompts) excludes the US, EU, UK and South Korea and
+  asks for a NOTICE file and its use policy passed on.
+- **Developing an idea** (Generate's **Develop idea…**, beside Rewrite;
+  `develop`): a conversation, in the rewrite window's state (`PeText` with
+  `develop: Some(Develop { idea, turns, reply, write_now })`, so its ask,
+  progress, Stop, Jobs and **Use as the prompt** are the rewrite's). The
+  idea is the Generate prompt (typed in the window when there's none:
+  **Start**). The system prompt is the conversation's (`develop`: ask at
+  most three short numbered questions about what would change the picture
+  a lot, each with a suggested answer in brackets, after `QUESTIONS:`; or
+  write the prompt after `PROMPT:`; after a prompt, changes are asked for
+  and it's written whole again), then the guide: the form's model's
+  rewrite prompt (`rewrite`, or `rewrite_minimax_h3` for MiniMax-H3-Image,
+  switched with **Write for**; per model, as the rewrite chooses it:
+  `develop_system`). The message is the idea, the attached images (as for
+  a rewrite), the conversation so far as a transcript ("You asked: … They
+  answered: …", "You wrote the prompt: …"; one user message, so any chat
+  server and a small model follow it) and what's wanted next
+  (`develop_message`). The answer is read by its first marker, else as
+  questions when a line asks something (a bracketed suggestion after the
+  "?" allowed), else as a prompt (`parse_develop`). The window (a modal:
+  the rest of the app waits; × or Esc closes it, discarding, a click
+  outside doesn't, so a half-typed answer isn't lost): the idea
+  (with the references' thumbnails, **Start over**), the conversation as
+  bubbles (its questions; your answers on the right; the last prompt
+  written pointing below, earlier ones folded), the reply box (**Send**,
+  Ctrl+Enter; Send with nothing answered, or **Write the prompt now**,
+  writes it with the suggestions for what's left), and the last prompt to
+  edit, checked for lost tags, and **Use as the prompt** / **Copy** /
+  **Discard** (the rewrite's use buttons: for an idea **Use as the text**
+  and **Keep as a variant**). Switching the guide writes the last prompt
+  again by it. Ideas have it too (`PeDevelop(PeTarget)`): **Develop idea…**
+  in the New idea form and the Edit idea window, **Develop with PE…** in an
+  idea's menu, with the idea's images and the general guide. The Generate
+  prompt's conversation is kept with the project's draft
+  (`GenerateDraft::develop`, a `DevelopChat { idea, turns }`, saved when
+  an answer comes or one is sent, dropped by **Start over**: `keep_develop`),
+  so **Develop idea…** goes on with it after closing, a project switch or a
+  restart while the prompt is still its idea or its last prompt (nothing
+  asked); another prompt starts a new one, which replaces it once it has an
+  exchange. Tried with Qwen3-VL 8B Q4: it asks useful questions with
+  suggestions and follows the H3 guide (tour scenes 91d1–91d3); with the
+  example of the format in the system prompt its suggestions are always in
+  brackets, but it asks even about an idea that says enough (**Write the
+  prompt now** skips them). The `minimax-h3-ref2va` skill's
+  sectioned format (for the H3 video model; not MiniMax-H3-Image-PE's
+  one-paragraph edit format above) was tried too: with MiniMax-H3-Image, the sections
+  gave the same pictures as one dense paragraph for a scene, a poster and
+  a two-reference edit (`<Subject N>` definitions, retention markers),
+  and misspelled a poster's words more often (2 of 3 seeds against 0), so
+  the guide is the paragraph's. A short prompt was far worse for the scene
+  and the poster, as good for the edit.
 - **Describing** (**Describe with PE…** in any image's right-click menu,
   next to Copy image): the image alone, asking for a one-paragraph
   description as a prompt (subject, composition, setting, lighting,
@@ -1091,6 +1173,12 @@ Config {
   aspect) and **Aspect** (1:1, 5:4, 4:3, 3:2, 16:10, 16:9, 2:1, 21:9, each
   landscape or portrait; swap width and height; or the aspect of a reference,
   "Like <image1>"), keeping about the same megapixels, rounded to 32.
+- Number fields everywhere read a decimal comma ("1,5", "0,75": the only
+  comma, no point, not three digits after it; other commas are thousands
+  separators, "1,152"): `widgets::drag_value`. egui's own parser takes
+  only a point, and a field keeps its last good value while typing, so
+  "1,5" megapixels in Scale kept the "1" typed first and made 1152 × 864
+  for 800 × 608, with no word.
 - If `resolutions` is missing or empty, the built-in list above is used (and
   written back the first time the list is edited).
 - Width and height must be multiples of 32 (sd.cpp rounds output sizes up to
@@ -1356,8 +1444,18 @@ its project. Clean up keeps any output another run refers to.
 
 `Recipe` (embedded in each PNG as an `iTXt` chunk `increart:recipe`, RSN):
 
-- `prompt_original`, `prompt_sent` (after rewrite and/or the RGBA wrapper),
-  negative_prompt, width, height, seed, `alpha: bool`
+- `prompt_original`, `prompt_sent` (after rewrite and/or the RGBA
+  wrapper), negative_prompt, width, height, seed, `alpha: bool`. A prompt may name references
+  either way, `<imageN>` or MiniMax-H3's `<Picture N>` (the name its text
+  encoder gives each reference): when a run is queued its prompt is put in
+  the model's own syntax (`RecipePreset::prompt_queued`, `native_refs`:
+  `<Picture N>` for `minimax-h3-image` and `p-h3-image`, `<imageN>` for the
+  others), unless the model preset's **Accept … too** box is unticked
+  (`refs_as_written`, ticked by default; the run's prompt is then as
+  typed). The run keeps the converted prompt, so a retry sends what was
+  queued; the Generate form keeps it as typed. The tag finder (renumbering,
+  missing references: `image_tags`) reads both and renumbering keeps each
+  tag's syntax; prompt enhance's answers are put in `<imageN>`
 - sample params: method, scheduler, steps, cfg, flow_shift, custom_sigmas.
   An empty scheduler and `flow_shift: None` are left out of the request, so
   the recipe's own (resolution-dependent) flow schedule applies
@@ -1454,7 +1552,8 @@ key of the pixel index and of verification; the BLAKE3 is what an output's
 recipe records for each image it was made from (Recipe, `inputs`).
 
 Model weights are the exception: they are identified by the SHA-256 of the
-file bytes.
+file bytes (hashed after a run is queued, see Generate's queueing; an
+image waits for them).
 
 ### Image stores
 
@@ -1734,12 +1833,62 @@ its details window, and for every run at once in the Jobs header:
   had starved the desktop (no swap; increbot shares the RAM). Server
   settings' **Wait for free RAM before loading a model** unticked skips
   the wait and the message. Remote servers load freely.
-- **Warm-up**: after launch or load, each server runs one small throwaway job
-  (e.g. 512², 1 step) so lazy weight loading doesn't land on the first real
-  seed. One not done after 20 minutes is cancelled and counts as a failed
+- **Warm-up**: after launch or load, each server runs one throwaway job so
+  lazy weight loading doesn't land on the first real seed. After a load
+  it's the first queued run of that model's seed at one step, no
+  previews, no metadata (`request::as_warm_up`): sd-server's conditioning
+  cache is keyed by the prompt, size and references, so the run's seeds
+  find its text encoding there. With a text encoder streamed through the
+  GPU from RAM (MiniMax-H3's 26 GB Qwen3-VL beside its DiT on one 32 GB
+  card) that pass alone took 237 s, and a 512² "warm-up" image had made
+  the first seed do it again. With no run of the model queued (after
+  launch) it's the small one (512², 1 step). To sd-server either goes
+  with `custom_sigmas: [1.0, 0.0]` (`request::one_step_sigmas`): left out,
+  sd-server took the recipe's own sigmas over `sample_steps` and
+  MiniMax-H3's warm-up ran its 6 steps; KoboldCpp takes no sigmas and
+  gets none. The load's time
+  (`Event::ModelLoaded`, kept as load times) is until the warm-up after
+  it is done, as a lazy server reads the weights then: `models/load`
+  returned in 0.7 s for a load that took minutes, and the forecast had
+  said "starts in ~0 s". A run-made warm-up the server refuses or fails
+  makes the next one the small one (a run's own request mustn't give the
+  model up for every run; its seeds fail on their own). Stop (either) on
+  the run a warm-up was made from cancels it (`Cmd::StopWarmUp`: it's
+  taken as done, its time not a load's), as the server would otherwise
+  spend minutes on a stopped run. The worker says the warm-up job's phase
+  as it changes (`Event::WarmUp { phase: Sent | Queued(n) | Working, run
+  }`, None when over), shown under the server in Servers (and in the top
+  bar's server tooltip): "warm-up: reading the model, encoding r01's
+  prompt · 2 min 10 s (usually ~4 min)", from when its load began, with
+  what a warm-up is for in its tooltip, and **Skip** (`skip_warm_up`: the
+  same cancel; the first seed then reads the weights, its time says so).
+  The API says nothing finer while a lazy server reads weights and
+  encodes (steps come with sampling only), so that's one phase. One not done after 20 minutes is cancelled and counts as a failed
   warm-up (a server that never ends it had kept its worker for good, its
   runs waiting with no word); commands coming meanwhile wait for it, and
   the engine closing ends the wait.
+
+- **Crashes**: a server the app started that exits by itself is noticed
+  within a second (`ServerProcess::exited`, a runtime thread watching
+  them; KoboldCpp's launcher, which may restart itself, not): it had left
+  nothing on its port, the engine said "unreachable, retrying" for good
+  and the dead sd-server stayed a zombie. It's said with how it ended and
+  its log's last lines (progress bars left out), with its log button
+  ("sd-rocm1: crashed (signal: 11 (SIGSEGV) (core dumped)). Starting it
+  again…"), shown "crashed" in Servers and the top bar, and started again
+  as it was opened (`Effect::RestartServer`, in its slot); the engine
+  finds it on its port, its jobs back in the queue, and loads its model
+  again. Twice within 30 minutes (`AUTO_RESTARTS`, `CRASH_WINDOW_S`): a
+  crash every time a job starts would only loop, so the third waits for
+  **Restart** under it in Servers.
+- **ROCm graphs off**: started ROCm sd-servers get
+  `GGML_CUDA_DISABLE_GRAPHS=1` (`launcher::command_env`). With ggml's HIP
+  graphs on (sd.cpp's build default), ROCm 7.2.4's runtime walks the graph
+  it's given recursively (21,700 frames deep in libamdhip64 under
+  `ggml_backend_cuda_graph_compute`, from MiniMax-H3's VAE encoding an
+  800×608 reference image); that wants 16–32 MB of stack, sd-server's job
+  thread has 8 MB, and it segfaulted ~2 s into every edit (earlier builds
+  hung there). Without graphs the encode takes 6.7 s.
 
 32 GB per GPU fits the int8 diffusion model + int8 text encoder;
 `--offload-to-cpu` is a per-server config option if it doesn't (on ROCm it
@@ -1879,14 +2028,29 @@ quitting:
   Queueing keeps the draft (with the next label and seed) so a variation is
   one edit away; **Clear** resets it. Copying a project copies its draft.
   Queue again before that run or sweep is saved (a double-click; the label
-  moves on only once it is) says "r05 is still being saved" (with what
-  it's doing, see Jobs) and saves nothing: a sweep saved twice showed each
-  style twice on its contact sheet. Saving hashes the preset's model files
-  for the recipe, each once (cached in the library's `cache/`); a model's
-  first run in a library waits for that (minutes for a 20–30 GiB file), so
-  the hashing tells the GUI how far it is (`Msg::QueueingNote`: "hashing
-  qwen_image.safetensors once: 12.3 of 29.0 GiB", a bar), shown in Jobs and
-  in Generate's panel until the run is saved.
+  moves on only once it is) says "r05 is still being saved" and saves
+  nothing: a sweep saved twice showed each
+  style twice on its contact sheet. A run or sweep being saved has
+  **Cancel** (and **Stop all now** / **Finish & stop all** cancel it too):
+  it's off the list at once and nothing is saved, even when it waits
+  behind other library work (`Queued::cancel`, a `CancelFlag` the worker
+  checks; `OpOk::Cancelled`); Queue again for the label saves its own.
+  The recipe's model file hashes (each file hashed once, cached in the
+  library's `cache/`) don't hold the run up: it's saved with the hashes
+  cached and queued at once, and the files not hashed yet (a model's
+  first run in a library: minutes for a 20–30 GiB file on a hard disk)
+  are hashed after on a thread of their own, one file at a time
+  (`hash_behind`; two reads at once on one disk only slow each other),
+  said on the run in Jobs and Generate's panel ("hashing
+  qwen_image.safetensors once: 12.3 of 29.0 GiB", a bar:
+  `Msg::HashingNote`), then put in its `run.rsn`
+  (`Library::fill_model_hashes`). It generates meanwhile (the model's load
+  reads the same file, from the page cache when the hash read it first);
+  the engine holds the images done before the hashes are in
+  (`Engine::hashing` / `hashed`; "done; written once its model files are
+  hashed" in the generation log) and writes them with the hashes after
+  (with what's known if the engine stops first). Hashing before saving
+  had held Queue up for minutes with no way to stop it.
 - Run labels count from `r00` (a sweep counts once), always past the highest
   `rNN` the project already has, so libraries numbered from `r01` carry on.
 - **New idea**: `input/draft.rsn` (`IdeaDraft { title, text, tags, images }`;
@@ -2205,6 +2369,12 @@ and its tooltip says how many more are generating.
   - `downloads`: file ID → URL, for its files, alternatives and LoRAs.
   - `note`: a line on what it is (the built-in ones say where they were
     tested).
+  - `size` and `sizes` (built-in ones): a model of several sizes is listed
+    once, its `files` and `downloads` those of the size `size` names, and
+    `sizes` each size (`Size { name, files, downloads, note }`): the slots
+    it changes, their downloads, and what's particular to it (after the
+    preset's note). Installed, your copy is the size picked (`size` says
+    which; `sizes` isn't kept); installing another size replaces it.
   - A LoRA's `trigger`: the words it was trained on. They go before the
     run's prompt ("Pixel art style. a lighthouse") when the prompt hasn't
     them (any case); the form keeps the prompt as typed.
@@ -2226,7 +2396,14 @@ and its tooltip says how many more are generating.
   Klein, Krea 2 Turbo and Turbo Edit, MOSS-Image SFT, Qwen-Image 2.1,
   FLUX.1 dev and Kontext, Fibo 2 Edit Turbo, Qwen-Image Edit 2509 and 2511),
   then each with a sample LoRA ("Z-Image Turbo · pixel art"), every one
-  made on sd-server and on KoboldCpp 1.124.2 with and without its LoRA.
+  made on sd-server and on KoboldCpp 1.124.2 with and without its LoRA;
+  and MiniMax-H3-Image (Comfy-Org's int8 DiT and Qwen3-VL-32B text
+  encoder, fp16 VAE; 6 steps, CFG 1, the recipe's sigmas), on sd-server
+  `32d516c` only (not tried on KoboldCpp): about 6 min cold, 16 s for a
+  1024² image after, the text encoder kept in RAM; its edits crashed the
+  HIP build's VAE encode until ROCm servers got ggml's graphs off (see
+  ROCm graphs off). Its note gives
+  its licence's excluded territories.
   A row says whether an open server runs it ("runs on …"), its files are
   there, or **Download N files**; **Add** puts it in the list (Save keeps
   it), **Show** selects one already there. **Back to the list** returns.
@@ -2864,13 +3041,13 @@ in the app's state folder (`$XDG_STATE_HOME/increart` when set, else
     arrow shows it; sizes not known last either way; `ModelWizard::shown`), the GPUs, then three tables (`ModelLists`):
     **Your custom models** (your models not named as a built-in one),
     **Built-in models, installed** (your copy), **Built-in models, not
-    installed**; each with Model, Size, Files ("ready", "3 files missing",
+    installed**; each with Model, GPU, Files ("ready", "3 files missing",
     "files here, not installed", "download 3 files (9.8 GB)") and Fits GPU,
     and "(4 of 18 shown)" when filtered; each collapsible, open to start.
     A model a server already running can run (`runs_remotely`: open, or
     as it said when asked) whose files aren't all here, or any it runs
     when no server preset starts one here (`remote_only`), is "on proxy"
-    in Files (✓, "nothing to download here"), its Size "—" when not known;
+    in Files (✓, "nothing to download here"), its GPU "—" when not known;
     with only remote servers there's no Fits GPU (the column, its filter
     and the GPU line: the GPUs are theirs, not this computer's).
     Above them, **On your servers, not set up yet** lists the files
@@ -2963,24 +3140,48 @@ in the app's state folder (`$XDG_STATE_HOME/increart` when set, else
     many files and how many models it leaves with nothing to download.
     A flat mirror of a folder isn't made: the models' files are
     `slot/file` paths, and names repeat across tools.
-  - **3. Add built-in models**: in a table (Model, Size, Files, Fits GPU
+  - **3. Add built-in models**: in a table (Model, GPU, Files, Fits GPU
     — "0 ✓ 1 ✗" by GPU number with more than one; the header stays put, each header says what its
     column means on hover; a fixed height, so the window doesn't jump as
-    sizes come in), each with its files' size together
-    (about the memory it takes: each slot's file there, else the one
-    fetched or linked, and its LoRAs), what's needed ("files here",
+    sizes come in), each with the GPU memory it needs at once
+    (`PresetNeeds::gpu_bytes`): the diffusion model (the `diffusion_model`,
+    `model` and `uncond_diffusion_model` slots, each slot's file there,
+    else the one fetched or linked) and its LoRAs, plus 2 GiB for the
+    compute buffers (`GPU_RESERVE`). That's what sd-server's auto-fit keeps
+    on the GPU: it places the diffusion model, then the text encoder, then
+    the VAE, each on the GPU while it fits, else in RAM (streamed in when
+    used), so the text encoder of a big model is in RAM, not loaded next
+    to it. The hover says that, the amount with everything on the GPU
+    (`gpu_all_bytes`) and the files' size together. Then what's needed ("files here",
     "download 3 files (9.8 GB)", "files found elsewhere, link 4" (green;
     the hover lists each file and where it is), "link 3, download 1",
     and for an installed one "ready", "3 files elsewhere, to link", "2
     files missing"; a slot with no file there, none found and no download:
     "2 files not there, no download" ("· 1 found elsewhere" when others
-    are), its Size "?" and no Fits GPU (its size isn't known, so a part of
+    are), its GPU "?" and no Fits GPU (its size isn't known, so a part of
     it isn't shown as fitting)), and for each GPU (listed as the
-    KoboldCpp wizard lists them) whether it fits: its files under 95 % of
-    the card's memory. Sizes of what isn't there are asked of Hugging Face
+    KoboldCpp wizard lists them) whether it fits (`PresetNeeds::fit`,
+    against 95 % of the card's memory): ✓ green when everything does, ✓
+    yellow when the diffusion model does but the text encoder or VAE will
+    be in RAM (slower to encode, but it runs), ✗ when the diffusion model
+    doesn't. The GPU column sorts by the GPU need. Sizes of what isn't there are asked of Hugging Face
     (HEAD, a dozen at a time, once a session). One already a preset with
     its files there, or with a file neither there nor downloadable, can't
-    be ticked. One you have a copy of with other files (files,
+    be ticked. A model of several sizes (MiniMax-H3-Image: BF16, Int8,
+    and Int8 with its text encoder in Q4 or Q2 GGUF) has a **size menu** beside its name, each size with
+    its GPU need ("Int8 · GPU 23.1 GB · recommended", "· yours" on your copy's;
+    the hover: its note, the GPU memory as above and its files), and the row, the download and the copy
+    installed are the size picked (`ModelWizard::picked_size`, starting at
+    your copy's size (`installed_sizes`: the size it names, else the size
+    whose files it has), else the recommended one). The recommended size
+    (`ModelWizard::recommended_size`) is for the largest discrete GPU: the
+    first size (they're listed best first) that fits whole, else the first
+    whose diffusion model fits, else the smallest; none until the GPUs and
+    every size's files are known, when the size listed is used. Every
+    size's download sizes are asked, for the menu. The same menu is beside
+    the name in the servers screen's Models half (Built-in models, not
+    installed). The lists name its size ("MiniMax-H3-Image
+    (Int8, Q4 encoder)"). One you have a copy of with other files (files,
     alternatives or LoRAs: an older built-in, or edited) can be:
     "update: link 2, download 1 (…)"; installing replaces your copy with
     the built-in under the same name ("1 model updated to the built-in's
@@ -3443,9 +3644,12 @@ the keys and mouse buttons go through that view's own history instead.
   into the Input library; Input library; Projects; Review; Output library),
   each with its keys, a count and a button to its tab (Collect's opens the
   drop folder, and counts only files waiting there: they are imported as
-  soon as they have finished copying). Above them: **Start a
-  new project…**, **Write an idea**, **Import images…**, **Open the drop
-  folder**, and links to the ideas and images waiting. Below: the six
+  soon as they have finished copying). Above them a card: the logo (with
+  its white glow, `assets/logo.png`) and its tagline, "Gotta sketch 'em
+  all!", beside what IncreArt does, two rows of buttons (**Start a new
+  project…** · **Write an idea**, **Import images…** · **Open the drop
+  folder**) and links to the ideas and images waiting; the logo centred
+  on that column, over it when the page is narrow. Below: the six
   projects with the latest runs. **Start a new project** asks the name
   (`new project`, numbered if taken; made at the top of `projects/`) and
   whether to add reference images: from the libraries (the default; From
@@ -3669,8 +3873,10 @@ the keys and mouse buttons go through that view's own history instead.
   Review this run / the contact sheet, Show outputs (a single run), Details,
   Open in Generate, Show in history. The **runs** checkbox above the tree
   hides them (kept in `config.rsn`, `hide_project_runs`).
-- **Generate panel**: prompt (+ **Rewrite** with diff; **Presets…** and
-  **Save as preset…**, see Prompt presets), negative, size presets
+- **Generate panel**: prompt (+ **Rewrite** with diff, **Develop idea…**; **Presets…** and
+  **Save as preset…**, see Prompt presets), negative (at CFG 1 "(not used
+  at CFG 1)" beside it, marked when there is one: sd-server skips the
+  negative pass when text and image CFG are both 1), size presets
   from `config.rsn`, editable, plus a one-off custom size (see Config file →
   Resolutions), steps/cfg/flow-shift,
   seeds count and first seed (see Seeds), preset recipe, **Transparent** toggle, reference strip
@@ -3718,7 +3924,9 @@ the keys and mouse buttons go through that view's own history instead.
   discarded…** (asks first) does it for all of them.
 - **Jobs**: per-run progress and per-server state (loading / draining /
   generating). Runs being saved show first ("r02 · being saved, then
-  queued", what saving is doing and a bar). A seed handed to a server but
+  queued", **Cancel**); a run whose model files are being hashed says so
+  under it ("hashing x.safetensors once: 4.8 of 25.3 GiB", a bar; "hashing
+  19%" on a compact row). A seed handed to a server but
   not sampling yet shows as a line under its run with a spinner: "seed 5:
   sending to kcpp0", "queued on kcpp0, waiting its turn" or "starting on
   kcpp0" (in a sweep's lines "s5 queued"); the engine says each server's
@@ -4199,8 +4407,14 @@ working with their loaded models (by recipe), 2 jobs held per server and
 generated one after another, a seed being sampled now taking what's left
 of it, and a model switch its load. So a run waiting behind others, or for
 a model no server has, gets its real turn, and a slow server keeps the
-seeds it holds, as in the engine. Not simulated: which files a server can
-load (any server is taken to load any model), warm-ups, failures.
+seeds it holds, as in the engine. A server loading a model or warming up
+now takes its seeds once that's done: its load time less how long it's
+been at it (from when it started loading, the warm-up after counting as
+the load's; a tenth of the load time at least while it goes over;
+`AppState::server_loading`, `SimServer::busy_s`). Not simulated: which
+files a server can load (any server is taken to load any model), the
+warm-up after a load in the simulation (its time is in the load's),
+failures.
 
 - **Seconds per image**, per run and server (by its device): the run's own
   images there; else images like it there (same model, size, steps,
@@ -4209,8 +4423,8 @@ load (any server is taken to load any model), warm-ups, failures.
   seconds per step × steps; else the library's nearest, scaled by steps,
   passes and megapixels (the model on that device, the model anywhere, the
   device with any model, anything); else the rough formula for one R9700.
-- **Load times**: each load the engine does (its `ModelLoaded` event) is
-  kept in `load-times.rsn` in the app's state folder, by server and
+- **Load times**: each load the engine does, with its warm-up (its
+  `ModelLoaded` event), is kept in `load-times.rsn` in the app's state folder, by server and
   recipe, as the mean with the last; a load not timed yet takes the
   model's mean on the other servers, else the server's for other models,
   else 60 s.

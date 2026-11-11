@@ -259,6 +259,59 @@
         note: "Edits the start image or reference images. Tested on sd-server (fd21ecf) and KoboldCpp 1.124.2."
     },
     ModelPreset {
+        name: "MiniMax-H3-Image",
+        recipe: "minimax-h3-image",
+        files: {
+            "diffusion_model": "diffusion_models/minimax_h3_image_pruned_int8_convrot.safetensors",
+            "llm": "text_encoders/qwen3vl_32b_minimax_h3_int8_convrot.safetensors",
+            "vae": "vae/minimax_h3_image_vae_fp16.safetensors"
+        },
+        steps: 6,
+        cfg: 1,
+        downloads: {
+            "diffusion_models/minimax_h3_image_pruned_int8_convrot.safetensors": "https://huggingface.co/Comfy-Org/MiniMax-H3-Image/resolve/main/diffusion_models/minimax_h3_image_pruned_int8_convrot.safetensors",
+            "text_encoders/qwen3vl_32b_minimax_h3_int8_convrot.safetensors": "https://huggingface.co/Comfy-Org/MiniMax-H3-Image/resolve/main/text_encoders/qwen3vl_32b_minimax_h3_int8_convrot.safetensors",
+            "vae/minimax_h3_image_vae_fp16.safetensors": "https://huggingface.co/Comfy-Org/MiniMax-H3-Image/resolve/main/vae/minimax_h3_image_vae_fp16.safetensors"
+        },
+        note: "Generates, and edits reference images (named <Picture N> for it). Tested on sd-server (32d516c); not tested on KoboldCpp. The diffusion model (21 GB in Int8) runs on the GPU; on a 32 GB card sd-server keeps the text encoder in RAM. Editing crashed (or hung) sd-server's HIP build in the VAE encode: ggml's HIP graphs run ROCm's runtime out of stack there, so the app starts ROCm sd-servers with them off (GGML_CUDA_DISABLE_GRAPHS=1). Its licence (MiniMax H3 Community License) excludes the US, EU, UK and South Korea.",
+        size: "Int8",
+        sizes: [
+            Size {
+                name: "BF16",
+                files: {
+                    "diffusion_model": "diffusion_models/minimax_h3_image_pruned_bf16.safetensors"
+                },
+                downloads: {
+                    "diffusion_models/minimax_h3_image_pruned_bf16.safetensors": "https://huggingface.co/Comfy-Org/MiniMax-H3-Image/resolve/main/diffusion_models/minimax_h3_image_pruned_bf16.safetensors"
+                },
+                note: "BF16: images like Int8's; on a 32 GB card it runs from RAM (93 s for a 1024² image against 16 s)."
+            },
+            Size {
+                name: "Int8"
+            },
+            Size {
+                name: "Int8, Q4 encoder",
+                files: {
+                    "llm": "text_encoders/qwen3vl_32b_minimax_h3-Q4_K_M.gguf"
+                },
+                downloads: {
+                    "text_encoders/qwen3vl_32b_minimax_h3-Q4_K_M.gguf": "https://huggingface.co/leejet/MiniMax-H3-GGUF/resolve/main/qwen3vl_32b_minimax_h3-Q4_K_M.gguf"
+                },
+                note: "The text encoder in Q4_K_M (leejet's GGUF): images like Int8's, 17 s for a 1024² image."
+            },
+            Size {
+                name: "Int8, Q2 encoder",
+                files: {
+                    "llm": "text_encoders/qwen3vl_32b_minimax_h3-Q2_K_M.gguf"
+                },
+                downloads: {
+                    "text_encoders/qwen3vl_32b_minimax_h3-Q2_K_M.gguf": "https://huggingface.co/leejet/MiniMax-H3-GGUF/resolve/main/qwen3vl_32b_minimax_h3-Q2_K_M.gguf"
+                },
+                note: "The text encoder in Q2_K (leejet's GGUF): images a little different from Int8's, text still clean; 15 s for a 1024² image."
+            }
+        ]
+    },
+    ModelPreset {
         name: "Z-Image Turbo · pixel art",
         recipe: "z-image-turbo",
         files: {

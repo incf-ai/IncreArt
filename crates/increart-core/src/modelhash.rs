@@ -33,7 +33,16 @@ struct Entry {
 /// The file's SHA-256, from `cache` (an RSN file) when its size and mtime
 /// are unchanged, else computed and cached.
 pub fn sha256_cached(cache: &Path, file: &Path) -> Result<String> {
-    sha256_cached_progress(cache, file, |_, _| {})
+    sha256_cached_progress(cache, file, |_, _| true)
+}
+
+/// `file`'s hash when it's in `cache` (and still its size and time),
+/// without reading the file.
+pub fn cached(cache: &Path, file: &Path) -> Option<String> {
+    let meta = std::fs::metadata(file).ok()?;
+    let mtime = meta.modified().ok().and_then(|t| t.duration_since(UNIX_EPOCH).ok()).map_or(0, |d| d.as_secs());
+    let c: Cache = rsnfmt::read(cache).unwrap_or_default();
+    c.files.get(&*file.to_string_lossy()).filter(|e| e.size == meta.len() && e.mtime == mtime).map(|e| e.sha256.clone())
 }
 
 /// Whether `file`'s hash is in `cache` (and still its size and time).
@@ -44,8 +53,9 @@ pub fn is_cached(cache: &Path, file: &Path) -> bool {
     c.files.get(&*file.to_string_lossy()).is_some_and(|e| e.size == meta.len() && e.mtime == mtime)
 }
 
-/// [`sha256_cached`], telling `progress` (bytes read, size) as it reads.
-pub fn sha256_cached_progress(cache: &Path, file: &Path, mut progress: impl FnMut(u64, u64)) -> Result<String> {
+/// [`sha256_cached`], telling `progress` (bytes read, size) as it reads;
+/// it returns false to stop (an `Interrupted` error, nothing cached).
+pub fn sha256_cached_progress(cache: &Path, file: &Path, mut progress: impl FnMut(u64, u64) -> bool) -> Result<String> {
     let meta = std::fs::metadata(file).at(file)?;
     let size = meta.len();
     let mtime = meta.modified().ok().and_then(|t| t.duration_since(UNIX_EPOCH).ok()).map_or(0, |d| d.as_secs());
@@ -68,7 +78,10 @@ pub fn sha256_cached_progress(cache: &Path, file: &Path, mut progress: impl FnMu
         }
         h.update(&buf[..n]);
         read += n as u64;
-        progress(read, size);
+        if !progress(read, size) {
+            let source = std::io::Error::new(std::io::ErrorKind::Interrupted, "stopped");
+            return Err(crate::error::Error::Io { path: file.to_path_buf(), source });
+        }
     }
     let sha256 = hex(&h.finalize());
     c.files.insert(key, Entry { size, mtime, sha256: sha256.clone() });
@@ -93,5 +106,16 @@ mod tests {
         assert_eq!(sha256_cached(&cache, &f).unwrap(), "cached");
         std::fs::write(&f, b"abcd").unwrap();
         assert_ne!(sha256_cached(&cache, &f).unwrap(), "cached");
+    }
+
+    #[test]
+    fn stopped_hashing_caches_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let (cache, f) = (dir.path().join("hashes.rsn"), dir.path().join("w.bin"));
+        std::fs::write(&f, b"abc").unwrap();
+        assert!(sha256_cached_progress(&cache, &f, |_, _| false).is_err());
+        assert!(!is_cached(&cache, &f));
+        assert!(sha256_cached_progress(&cache, &f, |_, _| true).is_ok());
+        assert!(is_cached(&cache, &f));
     }
 }

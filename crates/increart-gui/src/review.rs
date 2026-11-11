@@ -307,7 +307,7 @@ fn follow_controls(ui: &mut egui::Ui, st: &AppState, out: &mut Vec<Msg>) {
 }
 
 fn secs(v: &mut f32) -> egui::DragValue<'_> {
-    egui::DragValue::new(v).range(0.5..=3600.0).speed(0.5).suffix(" s")
+    crate::widgets::drag_value(v).range(0.5..=3600.0).speed(0.5).suffix(" s")
 }
 
 fn follow_pace(ui: &mut egui::Ui, st: &AppState, out: &mut Vec<Msg>) {
@@ -321,7 +321,7 @@ fn follow_pace(ui: &mut egui::Ui, st: &AppState, out: &mut Vec<Msg>) {
         ui.add(secs(&mut p.fixed_secs));
         ui.end_row();
         ui.add_enabled_ui(p.auto, |ui| ui.label("keep this many ahead"));
-        ui.add_enabled(p.auto, egui::DragValue::new(&mut p.lag).range(0..=100))
+        ui.add_enabled(p.auto, crate::widgets::drag_value(&mut p.lag).range(0..=100))
             .on_hover_text("ahead of it: quicker, to catch up; short of it: slower");
         ui.end_row();
         ui.add_enabled_ui(p.auto, |ui| ui.label("shortest"));

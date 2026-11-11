@@ -114,7 +114,7 @@ pub fn window(ctx: &egui::Context, st: &AppState, out: &mut Vec<Msg>) {
                     ui.horizontal(|ui| {
                         ui.add(egui::TextEdit::singleline(host).desired_width(140.0));
                         ui.label("port");
-                        ui.add(egui::DragValue::new(port).range(1..=65535));
+                        ui.add(crate::widgets::drag_value(port).range(1..=65535));
                     });
                     ui.end_row();
                     ui.label("Runs on");
@@ -122,7 +122,7 @@ pub fn window(ctx: &egui::Context, st: &AppState, out: &mut Vec<Msg>) {
                     ui.end_row();
                     ui.label("Context");
                     ui.horizontal(|ui| {
-                        ui.add(egui::DragValue::new(context).range(0..=131072).speed(256));
+                        ui.add(crate::widgets::drag_value(context).range(0..=131072).speed(256));
                         ui.weak(if *context == 0 { "tokens (KoboldCpp's default)" } else { "tokens" });
                     })
                     .response
@@ -246,7 +246,7 @@ fn device_choice(ui: &mut egui::Ui, st: &AppState, device: &mut PeDevice, out: &
         PeDevice::Cpu { threads } => {
             ui.horizontal(|ui| {
                 ui.label("Threads");
-                ui.add(egui::DragValue::new(threads).range(0..=256));
+                ui.add(crate::widgets::drag_value(threads).range(0..=256));
                 ui.weak(if *threads == 0 { "(KoboldCpp's choice)" } else { "" });
             });
         }

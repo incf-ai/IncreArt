@@ -42,6 +42,98 @@ tags like <image1> and <image2> (they name the attached reference images, the fi
 Follow the user's instructions for the rewrite if there are any. Write it in the prompt's language. Reply \
 with only the rewritten prompt: no title, no quotes, no explanations.";
 
+/// The job rewriting a prompt for MiniMax-H3-Image (the recipes of
+/// [`crate::request::MINIMAX_H3_IMAGE`]): the rewrite window's choice when
+/// the Generate form's model preset is one, or when asked for.
+pub const REWRITE_H3: &str = "rewrite_minimax_h3";
+
+/// The built-in system prompt for [`REWRITE_H3`]: IncreArt's own wording of
+/// what MiniMax-H3-Image's prompt enhancer asks for (MiniMax-H3-Image-PE's
+/// published text-to-image and edit task prompts): one English caption
+/// paragraph, bodies oriented to the camera, grips readable, designed
+/// things laid out region by region; edits as `<Subject N>` definitions, a
+/// target overview, one preservation clause per subject, then only what
+/// changes. MiniMax's text itself isn't copied: its licence excludes the
+/// US, EU, UK and South Korea and asks for notices this public repository
+/// can't give.
+pub const DEFAULT_REWRITE_H3: &str = "You rewrite prompts for MiniMax-H3-Image, an image generator and editor \
+that reads its prompt with a vision-language model and follows long, precise descriptions closely. Work like a \
+visual designer planning the picture, not a word expander: keep every fact the user gave, then complete the \
+image with things a viewer can actually see. Reply with one fluent English paragraph and nothing else: no title, \
+no quotes around it, no lists, no keywords or quality tags (\"masterpiece\", \"highly detailed\", \"8k\", \
+\"sharp focus\", \"dynamic\").\n\
+\n\
+WITHOUT IMAGES (a new picture). First decide what it is. A scene or photograph: who or what, how they stand and \
+what they touch, their size, the setting, the light (its source, direction and colour, and where the shadows \
+fall), and the camera (shot size such as full body or waist-up, angle, lens, depth of field) or the medium. A \
+designed thing (poster, cover, character card, packaging, web page, app screen, chart, infographic, diagram, \
+menu, product sheet): plan it region by region in reading order (a title at the top, a hero image in the middle, \
+a row of three cards, a footer) and give each region its position, its exact words, what its pictures show, and \
+its colours, type and materials; say what each icon or label shows instead of writing \"icons\" or \"details\", \
+and add the few small parts such a thing normally has (a subtitle, a legend, units, a footer line) when they \
+help. Place every main element in the frame (left, right, centre, foreground, upper corner).\n\
+Keep names, counts, numbers, colours, style, medium, orientation and left/right/top/bottom order exactly. Don't \
+add main subjects; extra people stay small in the background. Text that should appear is quoted exactly, in \
+double quotes, in the language the user wrote it in, and placed (\"the sign above the door reads \\\"OPEN \
+LATE\\\" in red neon\"). Labels sit on what they name, arrows go from one named thing to another, and a chart \
+has its title, axes, units and values.\n\
+A body in action: fix the setting and one camera first, then state how the body faces that camera \
+(front-facing, back-facing, left-facing profile, right-facing profile, front three-quarter or rear \
+three-quarter) and which way it moves in the frame (leftward, rightward, toward the camera, or away into the \
+scene), never only \"forward\" or \"toward the door\". A figure moving away shows its back, one coming closer \
+shows its face and chest, one moving sideways is seen in profile. Keep the gaze, the torso's lean, the leading \
+arm or leg and the planted foot consistent with that direction and with one frozen moment. For hands, grips, \
+weapons, tools, carrying or touching, choose a framing that shows the contact clearly (waist-up when the hands \
+or face matter), and say which hand holds or touches what and how the fingers sit.\n\
+Content first, then style: a clean plain background suits icons, logos and character assets; a believable \
+setting, light and lens suit photographs. Replace mood words and generic adjectives with what shows them: \
+light, colour, expression, weather, texture. A plain scene usually needs 150 to 250 words; a dense poster or \
+infographic may need many more.\n\
+\n\
+WITH IMAGES (an edit). The images are numbered in order: the first attached is <image1>, the second <image2>, \
+and so on. Write the paragraph in three parts, in this order. First, name each thing from the images that the \
+result keeps or borrows from as a subject, with just enough visible detail to tell it apart: \"The woman in a \
+red coat in <image1> is <Subject 1>. The pattern of the scarf in <image2> is <Subject 2>.\" Copy any readable \
+text in it exactly, in single quotes. When only a property is borrowed (a colour, pattern, pose, lighting or \
+style), name that property, not the whole object. Don't number what is removed or brand new. Second, one \
+sentence starting \"The target image\" that sums up the result, then one sentence for each subject saying how \
+it is used: \"<Subject 1> is fully preserved.\" (only when nothing about it changes, not even its style or \
+medium: never describe it again), \"<Subject 1> \
+is partially preserved; her face and coat stay, while she now sits instead of standing.\", \"<Subject 2> \
+supplies the exact pattern for the new tie.\" or \"<Subject 2> serves as a loose style reference.\" A change of \
+the whole picture's style or medium makes it one subject that is partially preserved (its composition, poses \
+and identities stay; the medium changes). Third, only what changes or is new, richly and concretely: its look, \
+material, size and place, its light and shadow, and how it meets what is there; describe what fills a removed \
+area, never the removed thing, and don't describe what stays. New text goes in single quotes. Look at the \
+images and refer only to what is really in them.\n\
+\n\
+EXAMPLES (the shape to follow, not words to reuse).\n\
+\"a knight swinging an axe at a dragon\" becomes: A full-body view from slightly above shows a knight at \
+screen left in right-facing profile, lunging rightward toward a red dragon that rears at screen right. His left \
+foot is planted ahead on the cracked flagstones, his right leg braced behind, and his torso leans into the swing \
+as both hands grip the ash haft of a steel axe raised over his right shoulder, the right hand above the left, \
+fingers wrapped tight; his gaze follows the blade toward the dragon's lowered head. … (then the armour, the \
+dragon, the courtyard, and low sunlight from the left casting long shadows to the right)\n\
+\"put a party hat on the dog and make it night\", with one image, becomes: The brown dog lying on the green \
+sofa in <image1> is <Subject 1>. The living room in <image1> is <Subject 2>. The target image shows <Subject 1> \
+wearing a party hat in <Subject 2> at night. <Subject 1> is partially preserved; its breed, fur and pose stay, \
+while it now wears a hat. <Subject 2> is partially preserved; its furniture and layout stay, while day becomes \
+night. A cone-shaped paper hat striped pink and gold sits tilted on the dog's head, held by a thin white elastic \
+under its chin, a small gold pompom on top. The window behind the sofa now shows a deep blue night sky, and a \
+floor lamp at the right casts warm light and soft shadows to the left.\n\
+\"make <image1> a linocut print\" becomes: The whole scene of <image1>, a girl riding a bicycle down a \
+cobbled street, is <Subject 1>. The target image shows <Subject 1> as a black-and-white linocut print. \
+<Subject 1> is partially preserved; its composition, the girl's pose and identity stay, while the photograph \
+becomes a carved print. Thick black lines gouged in confident strokes outline the girl and the bicycle, the \
+cobbles become rows of carved ovals, the sky is bare paper with parallel cut lines, and uneven ink pressure \
+leaves a slightly speckled texture.\n\
+\n\
+Before replying, check: a body in action has one of the named facings and a direction in the frame; no quality \
+tags; in an edit every kept thing is a <Subject N> with its own sentence, \"fully preserved\" is used only for \
+what doesn't change at all (after a change of style or medium nothing is fully preserved: everything \
+in the picture is partially preserved), and what stays isn't described again. Keep tags like <image1> and blanks like \
+{name} and {preset} exactly as written. Follow the user's instructions for the rewrite if there are any.";
+
 /// The job improving a style sweep's prompt for one style.
 pub const STYLE_PROMPT: &str = "style_prompt";
 
@@ -88,12 +180,45 @@ is doing, the composition and framing, the setting, lighting, colours, materials
 style or medium (photo, painting, 3D render, …), with any text in it quoted. Follow the user's \
 instructions if there are any. Reply with only the description, one paragraph: no title, no preamble.";
 
+/// The job developing an idea into a prompt by talking it through (the
+/// Develop idea window): asking about what's unclear, then writing the
+/// prompt by the guide of the Generate form's model (its rewrite job's
+/// system prompt, put after this one: [`develop_system`]).
+pub const DEVELOP: &str = "develop";
+
+/// The built-in system prompt for [`DEVELOP`]: the conversation, not the
+/// prompt's form (that's the guide's).
+pub const DEFAULT_DEVELOP: &str = "You help someone turn an idea for a picture into a prompt for an image \
+generator by talking it through with them. Read the idea, and look at any attached images (the first image \
+attached is <image1>, the second <image2>, and so on).\n\
+\n\
+If something that would change the picture a lot is unclear or missing (what the subject looks like, what to \
+take from each reference image, the composition, the style or medium, words that should appear, the mood), ask \
+about it: reply with QUESTIONS: on a line of its own, then at most three short numbered questions, each \
+ending with your suggested answer in square brackets so they can simply agree, like this:\n\
+\n\
+QUESTIONS:\n\
+1. What should the poster say? [\"WINTER READS\" across the top]\n\
+2. How is the fox drawn? [a warm watercolor storybook style]\n\
+\n\
+If the idea already says enough for a good picture, write the prompt at once; ask only what \
+would change this picture a lot, never about details you can choose well yourself or what they have already said, and don't ask a \
+second round unless their answers raised something new. When you know enough, when they say to go ahead, \
+or when told to write the prompt now, reply with PROMPT: on a line of its own, then the prompt, written by \
+the guide below; where they left a question unanswered, use your suggestion. Never ask and write a prompt \
+in the same reply. After a prompt, they may ask for changes: write the whole prompt again with them. Reply \
+with nothing else: no greeting, no explanation.\n\
+\n\
+The guide for writing the prompt follows. Where it says how to reply, that is the text after PROMPT:.";
+
 /// The jobs a server's system prompts are for, with their built-in prompt.
-pub const JOBS: [(&str, &str); 5] = [
+pub const JOBS: [(&str, &str); 7] = [
     (FILL_BLANKS, DEFAULT_FILL_BLANKS),
     (STYLE_PROMPT, DEFAULT_STYLE_PROMPT),
     (STYLE_PART, DEFAULT_STYLE_PART),
     (REWRITE, DEFAULT_REWRITE),
+    (REWRITE_H3, DEFAULT_REWRITE_H3),
+    (DEVELOP, DEFAULT_DEVELOP),
     (DESCRIBE, DEFAULT_DESCRIBE),
 ];
 
@@ -845,6 +970,138 @@ pub fn text_message(a: &TextAsk) -> String {
     s
 }
 
+/// The system prompt for developing an idea for a model: the
+/// conversation's ([`DEVELOP`]), then the guide, `guide` being the model's
+/// rewrite job ([`REWRITE`], [`REWRITE_H3`]).
+pub fn develop_system(pe: &PeConfig, guide: &str) -> String {
+    format!("{}\n\n{}", pe.system_prompt(DEVELOP).trim(), pe.system_prompt(guide).trim())
+}
+
+/// One exchange of a Develop idea conversation: what the model said (its
+/// questions, or a prompt) and the user's answer to it (empty while it's
+/// the last, not answered yet).
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename = "Turn")]
+pub struct DevelopTurn {
+    pub said: DevelopReply,
+    #[serde(default)]
+    pub answer: String,
+}
+
+/// A Develop idea conversation as kept with a project's Generate draft:
+/// the idea and the exchanges, to go on with later.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename = "Develop")]
+pub struct DevelopChat {
+    pub idea: String,
+    #[serde(default)]
+    pub turns: Vec<DevelopTurn>,
+}
+
+impl DevelopChat {
+    /// The last prompt written, if any.
+    pub fn last_prompt(&self) -> Option<&str> {
+        self.turns.iter().rev().find_map(|t| match &t.said {
+            DevelopReply::Prompt(p) => Some(p.as_str()),
+            DevelopReply::Questions(_) => None,
+        })
+    }
+}
+
+/// What the model said in a Develop idea conversation.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub enum DevelopReply {
+    /// Its questions, as written (numbered, each with a suggestion).
+    Questions(String),
+    /// A prompt.
+    Prompt(String),
+}
+
+impl Default for DevelopReply {
+    fn default() -> Self {
+        DevelopReply::Questions(String::new())
+    }
+}
+
+/// Asking for the next step of a Develop idea conversation.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct DevelopAsk {
+    pub idea: String,
+    /// The exchanges so far, each answered (the last may not be when
+    /// `write_now`).
+    pub turns: Vec<DevelopTurn>,
+    /// How many reference images are attached (`<image1>`…).
+    pub images: usize,
+    /// The img2img start image is attached too, after them.
+    pub start: bool,
+    /// Write the prompt now, with no more questions.
+    pub write_now: bool,
+}
+
+/// The user message for a [`DevelopAsk`]: the idea, the images, the
+/// conversation so far as a transcript (one message, so any chat server
+/// and a small model follow it), then what's wanted next.
+pub fn develop_message(a: &DevelopAsk) -> String {
+    let mut s = format!("The idea:\n\n{}\n\n", a.idea.trim());
+    match a.images {
+        0 => {}
+        1 => s.push_str("The reference image <image1> is attached.\n\n"),
+        n => s.push_str(&format!("The reference images <image1> to <image{n}> are attached, in order.\n\n")),
+    }
+    if a.start {
+        s.push_str("The start image (the picture being transformed) is attached last.\n\n");
+    }
+    if !a.turns.is_empty() {
+        s.push_str("The conversation so far:\n\n");
+        for t in &a.turns {
+            match &t.said {
+                DevelopReply::Questions(q) => s.push_str(&format!("You asked:\n{}\n\n", q.trim())),
+                DevelopReply::Prompt(p) => s.push_str(&format!("You wrote the prompt:\n{}\n\n", p.trim())),
+            }
+            if !t.answer.trim().is_empty() {
+                s.push_str(&format!("They answered:\n{}\n\n", t.answer.trim()));
+            }
+        }
+    }
+    let last_prompt = matches!(a.turns.last(), Some(DevelopTurn { said: DevelopReply::Prompt(_), .. }));
+    s.push_str(if a.write_now {
+        "Write the prompt now (PROMPT:), with no more questions."
+    } else if last_prompt {
+        "Write the whole prompt again with what they asked for (PROMPT:), or ask (QUESTIONS:) if it's unclear."
+    } else if a.turns.is_empty() {
+        "Ask your questions (QUESTIONS:), or write the prompt (PROMPT:) if the idea is clear enough."
+    } else {
+        "Write the prompt (PROMPT:), or ask (QUESTIONS:) only about something new their answers raised."
+    });
+    s
+}
+
+/// The model's reply in a Develop idea conversation: after `PROMPT:` a
+/// prompt, after `QUESTIONS:` questions; without either, questions when it
+/// asks something (a line ending in "?"), else a prompt.
+pub fn parse_develop(answer: &str) -> DevelopReply {
+    // the first marker said (a question may mention a "prompt:")
+    let lower = answer.to_ascii_lowercase();
+    let after = |at: usize, word: &str| answer[at + word.len()..].trim_start_matches(['*', ' ']).trim().to_string();
+    match (lower.find("prompt:"), lower.find("questions:")) {
+        (Some(p), q) if q.is_none_or(|q| p < q) => return DevelopReply::Prompt(clean_text(&after(p, "prompt:"))),
+        (_, Some(q)) => return DevelopReply::Questions(after(q, "questions:")),
+        _ => {}
+    }
+    let a = answer.trim();
+    // a question, its suggestion in brackets after it
+    let asks = |l: &str| {
+        let l = l.trim_end();
+        let l = match l.chars().last() {
+            Some(']') => l.rfind('[').map_or(l, |at| &l[..at]),
+            Some(')') => l.rfind('(').map_or(l, |at| &l[..at]),
+            _ => l,
+        };
+        l.trim_end().ends_with('?')
+    };
+    if a.lines().any(asks) { DevelopReply::Questions(a.to_string()) } else { DevelopReply::Prompt(clean_text(a)) }
+}
+
 /// Asking for a style's prompt improved.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct StyleAsk {
@@ -903,6 +1160,24 @@ pub fn style_message(a: &StyleAsk) -> String {
 /// An answer as text to use: without code fences, a leading "Rewritten
 /// prompt:" and quotes around it all.
 pub fn clean_text(answer: &str) -> String {
+    crate::request::as_image_tags(&clean_text_as_written(&caption_of(answer)))
+}
+
+/// The caption of an answer in MiniMax-H3-Image-PE's JSON
+/// (`{"expanded_caption": …, "aspect_ratio": …}`), else the answer.
+fn caption_of(answer: &str) -> String {
+    let t = answer.trim().trim_start_matches("```json").trim_start_matches("```").trim_end_matches("```").trim();
+    match serde_json::from_str::<Value>(t) {
+        Ok(Value::Object(o)) => match o.get("expanded_caption").and_then(Value::as_str) {
+            Some(c) => c.to_string(),
+            None => answer.to_string(),
+        },
+        _ => answer.to_string(),
+    }
+}
+
+/// [`clean_text`] without the `<Picture N>` tags made `<imageN>`.
+fn clean_text_as_written(answer: &str) -> String {
     let mut s = answer.trim();
     if let Some(rest) = s.strip_prefix("```") {
         s = rest.split_once('\n').map_or("", |(_, r)| r);
@@ -1064,6 +1339,50 @@ pub fn parse_suggestions(answer: &str) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
+    /// The model's reply read as questions or a prompt, by its marker (the
+    /// first said), else by whether it asks something.
+    #[test]
+    fn a_develop_reply_is_questions_or_a_prompt() {
+        use super::{DevelopReply::*, parse_develop};
+        assert_eq!(
+            parse_develop("QUESTIONS:\n1. Day or night? [night]\n2. Which hand? [left]"),
+            Questions("1. Day or night? [night]\n2. Which hand? [left]".into())
+        );
+        assert_eq!(parse_develop("**PROMPT:** \"A fox in the snow.\""), Prompt("A fox in the snow.".into()));
+        assert_eq!(
+            parse_develop("Questions:\n1. Should the prompt: be long? [yes]"),
+            Questions("1. Should the prompt: be long? [yes]".into())
+        );
+        assert_eq!(parse_develop("1. Day or night? [night]"), Questions("1. Day or night? [night]".into()));
+        assert_eq!(parse_develop("A fox in the snow at dusk."), Prompt("A fox in the snow at dusk.".into()));
+    }
+
+    /// The conversation goes to the model as a transcript, ending with
+    /// what's wanted next; the system prompt is the conversation's, then
+    /// the model's guide.
+    #[test]
+    fn a_develop_ask_as_a_transcript() {
+        use super::*;
+        let q = DevelopTurn { said: DevelopReply::Questions("1. Day or night? [night]".into()), answer: "dusk".into() };
+        let mut a = DevelopAsk { idea: "a fox <image1>".into(), turns: vec![], images: 1, ..Default::default() };
+        let first = develop_message(&a);
+        assert!(
+            first.starts_with("The idea:\n\na fox <image1>\n\nThe reference image <image1> is attached."),
+            "{first}"
+        );
+        assert!(first.ends_with("if the idea is clear enough."), "{first}");
+        a.turns.push(q);
+        let second = develop_message(&a);
+        assert!(second.contains("You asked:\n1. Day or night? [night]\n\nThey answered:\ndusk"), "{second}");
+        assert!(second.ends_with("only about something new their answers raised."), "{second}");
+        a.turns.push(DevelopTurn { said: DevelopReply::Prompt("A fox at dusk.".into()), answer: "add snow".into() });
+        assert!(develop_message(&a).contains("You wrote the prompt:\nA fox at dusk.\n\nThey answered:\nadd snow"));
+        a.write_now = true;
+        assert!(develop_message(&a).ends_with("with no more questions."));
+        let sys = develop_system(&PeConfig::default(), REWRITE_H3);
+        assert!(sys.starts_with(DEFAULT_DEVELOP) && sys.ends_with(DEFAULT_REWRITE_H3.trim()), "{sys}");
+    }
+
     use super::*;
 
     #[test]
@@ -1221,6 +1540,10 @@ mod tests {
         assert_eq!(clean_text("Rewritten prompt: \"a red fox\""), "a red fox");
         assert_eq!(clean_text("```text\na fox\n```"), "a fox");
         assert_eq!(clean_text("a fox: red"), "a fox: red");
+        // MiniMax-H3-Image-PE's answer: its caption
+        let json = r#"{"expanded_caption":"The sign reads \"OPEN\" above <Picture 1>.","aspect_ratio":"4:5"}"#;
+        assert_eq!(clean_text(json), "The sign reads \"OPEN\" above <image1>.");
+        assert_eq!(clean_text("{\"a\": 1}"), "{\"a\": 1}", "other JSON as it is");
         assert_eq!(clean_text("\"a\" and \"b\""), "\"a\" and \"b\"");
         let lost = lost_tags("<image1> and <image2> {material} {preset} <b>", "<image1> in {preset}");
         assert_eq!(lost, ["<image2>", "{material}"]);

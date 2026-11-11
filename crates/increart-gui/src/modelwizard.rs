@@ -9,8 +9,8 @@ use eframe::egui::{self, RichText};
 use increart_core::config::RecipePreset;
 use increart_core::tiers::Gpu;
 use increart_gui_core::{
-    AppState, ModelColumn, ModelKind, ModelLists, ModelSetupTab, ModelSort, ModelWizard, Msg, PickKind, PresetNeeds,
-    RecipeEditor,
+    AppState, GpuFit, ModelColumn, ModelKind, ModelLists, ModelSetupTab, ModelSort, ModelWizard, Msg, PickKind,
+    PresetNeeds, RecipeEditor,
 };
 
 use crate::widgets::{ACCENT, BAD, GOOD, NEUTRAL, dialog_footer, ic, ph};
@@ -86,7 +86,7 @@ pub fn panel(ui: &mut egui::Ui, st: &AppState, list_height: f32, out: &mut Vec<M
 }
 
 fn overview(ui: &mut egui::Ui, st: &AppState, w: &mut ModelWizard, list_height: f32, out: &mut Vec<Msg>) {
-    let catalogue = increart_core::config::catalogue();
+    let catalogue = w.catalogue();
     let model_dirs = &st.config.programs.model_dirs;
     let lists = ModelLists::of(&st.config.recipes, &catalogue, model_dirs, &w.sizes, w.index.as_deref());
     egui::Sides::new().show(
@@ -167,9 +167,7 @@ fn overview(ui: &mut egui::Ui, st: &AppState, w: &mut ModelWizard, list_height: 
                     .show(ui, |ui| {
                         if all.is_empty() {
                             ui.weak(none);
-                        } else if let Some((name, mend)) =
-                            list_table(ui, st, id, &shown, &gpus, fits, section, &mut w.sort)
-                        {
+                        } else if let Some((name, mend)) = list_table(ui, st, id, &shown, &gpus, fits, section, w) {
                             // an older copy to update: in Add models, ticked
                             let section = if mend { Section::Available } else { section };
                             open_row(ui, st, w, &name, section, out);
@@ -315,7 +313,7 @@ fn links_tip(needs: &PresetNeeds) -> Option<String> {
     Some(format!("found elsewhere, linked into the download folder (not downloaded):\n{}", lines.join("\n")))
 }
 
-const NAME_W: f32 = 230.0;
+const NAME_W: f32 = 260.0;
 const SIZE_W: f32 = 62.0;
 const FILES_W: f32 = 190.0;
 
@@ -324,13 +322,19 @@ const FILES_W: f32 = 190.0;
 fn heads(h: &mut egui_extras::TableRow, model_tip: &str, sort: &mut ModelSort, fits: bool) {
     let heads = [
         (ModelColumn::Name, "Model", model_tip),
-        (ModelColumn::Size, "Size", "all its files together, about the GPU memory it needs"),
+        (
+            ModelColumn::Size,
+            "GPU",
+            "the most GPU memory it needs at once: its diffusion model and working memory; the text encoder and \
+             VAE run from RAM when they don't fit beside it (hover a size: all of it on the GPU, and the files)",
+        ),
         (ModelColumn::Files, "Files", "whether its files are in your model folders, or what's downloaded"),
         (
             ModelColumn::Fits,
             "Fits GPU",
-            "by GPU number (listed above): ✓ fits in its memory; ✗ too large, it'd spill to RAM (slow) if it runs \
-             at all",
+            "by GPU number (listed above): ✓ all of it fits; ✓ in amber, its diffusion model fits, the text \
+             encoder and VAE from RAM (a new prompt a little slower); ✗ its diffusion model doesn't fit: each step \
+             from RAM, slow",
         ),
     ];
     for (column, title, tip) in heads {
@@ -360,8 +364,8 @@ fn heads(h: &mut egui_extras::TableRow, model_tip: &str, sort: &mut ModelSort, f
 }
 
 fn size_cell(ui: &mut egui::Ui, needs: &PresetNeeds) {
-    match needs.total_bytes {
-        Some(b) => ui.label(gb(b)),
+    match needs.gpu_bytes() {
+        Some(b) => ui.label(gb(b)).on_hover_text(gpu_tip(needs)),
         None if needs.unavailable => {
             ui.weak("?").on_hover_text("a file is missing (and can't be downloaded): not known")
         }
@@ -372,8 +376,8 @@ fn size_cell(ui: &mut egui::Ui, needs: &PresetNeeds) {
 /// Size for a model a server already running has the files for: the
 /// download's when known, else not known here (not "a file is missing").
 fn remote_size_cell(ui: &mut egui::Ui, needs: &PresetNeeds) {
-    match needs.total_bytes {
-        Some(b) => ui.label(gb(b)),
+    match needs.gpu_bytes() {
+        Some(b) => ui.label(gb(b)).on_hover_text(gpu_tip(needs)),
         None => ui.weak("—").on_hover_text("its files are on the server: their size isn't known here"),
     };
 }
@@ -398,14 +402,21 @@ fn fits_cell(ui: &mut egui::Ui, needs: &PresetNeeds, gpus: &[Gpu]) {
     }
     for g in gpus {
         let label = if gpus.len() > 1 { format!("{} ", g.number) } else { String::new() };
-        match needs.fits(g.vram_gib) {
-            Some(true) => {
+        match needs.fit(g.vram_gib) {
+            Some(GpuFit::Whole) => {
                 ui.label(RichText::new(format!("{label}✓")).color(GOOD))
-                    .on_hover_text(format!("fits {} ({:.0} GB)", g.name, g.vram_gib));
+                    .on_hover_text(format!("all of it fits {} ({:.0} GB)", g.name, g.vram_gib));
             }
-            Some(false) => {
+            Some(GpuFit::Diffusion) => {
+                ui.label(RichText::new(format!("{label}✓")).color(NEUTRAL)).on_hover_text(format!(
+                    "its diffusion model fits {} ({:.0} GB), the text encoder and VAE run from RAM (sd-server puts \
+                     them there itself; a new prompt a little slower)",
+                    g.name, g.vram_gib
+                ));
+            }
+            Some(GpuFit::No) => {
                 ui.label(RichText::new(format!("{label}✗")).color(BAD)).on_hover_text(format!(
-                    "larger than {} ({:.0} GB): spills to RAM, slow, if it runs at all",
+                    "its diffusion model is larger than {} ({:.0} GB): it runs from RAM, each step slow",
                     g.name, g.vram_gib
                 ));
             }
@@ -414,6 +425,76 @@ fn fits_cell(ui: &mut egui::Ui, needs: &PresetNeeds, gpus: &[Gpu]) {
             }
         }
     }
+}
+
+/// Its name, and the size when it has several (`MiniMax-H3-Image (Int8, Q4 encoder)`).
+fn with_size(p: &RecipePreset) -> String {
+    if p.size.is_empty() { p.name.clone() } else { format!("{} ({})", p.name, p.size) }
+}
+
+/// **Size ▾** beside a built-in model of several sizes not installed (in
+/// the lists and Add models): each size with the GPU memory it needs, the
+/// one recommended for the GPU and yours marked; picked, the row (and
+/// what's downloaded) is that size's.
+fn size_menu(ui: &mut egui::Ui, w: &mut ModelWizard, p: &RecipePreset, dirs: &[String], have: Option<&str>) {
+    if p.sizes.len() < 2 {
+        return;
+    }
+    let recommended = w.recommended_size(p);
+    let mut picked = p.size.clone();
+    egui::ComboBox::from_id_salt(("model_size", &p.name))
+        .selected_text(&p.size)
+        .width(70.0)
+        .show_ui(ui, |ui| {
+            ui.set_min_width(330.0);
+            for s in p.each_size() {
+                let needs = PresetNeeds::of(&s, dirs, &w.sizes, w.index.as_deref());
+                let gpu = needs.gpu_bytes().map_or("…".to_string(), |b| format!("GPU {}", gb(b)));
+                let mut marks = String::new();
+                if recommended.as_deref() == Some(s.size.as_str()) {
+                    marks.push_str(" · recommended");
+                }
+                if have == Some(s.size.as_str()) {
+                    marks.push_str(" · yours");
+                }
+                let note = s.sizes.iter().find(|z| z.name == s.size).map(|z| z.note.clone()).unwrap_or_default();
+                let r = ui.selectable_value(&mut picked, s.size.clone(), format!("{} · {gpu}{marks}", s.size));
+                let files: Vec<String> = s.files.values().cloned().collect();
+                let mut tip = gpu_tip(&needs);
+                if !note.is_empty() {
+                    tip = format!("{note}\n\n{tip}");
+                }
+                r.on_hover_text(format!("{tip}\n\n{}", files.join("\n")));
+            }
+        })
+        .response
+        .on_hover_text(
+            "its size: smaller files need less GPU memory and download, at some cost in quality; the one \
+             recommended for your GPU is picked to start",
+        );
+    if picked != p.size {
+        w.picked_size.insert(p.name.clone(), picked);
+    }
+}
+
+/// What a model needs of the GPU, as sd-server places it.
+fn gpu_tip(needs: &PresetNeeds) -> String {
+    let (Some(gpu), Some(all), Some(diffusion), Some(files)) =
+        (needs.gpu_bytes(), needs.gpu_all_bytes(), needs.diffusion_bytes, needs.total_bytes)
+    else {
+        return "its size isn't known yet".into();
+    };
+    let reserve = gb(increart_gui_core::GPU_RESERVE);
+    format!(
+        "GPU memory: {} at most at once: its diffusion model ({}) and {reserve} working memory, the text encoder \
+         and VAE ({}) run from RAM when they don't fit beside it (sd-server does this itself).\nAll of it on the \
+         GPU: {} (a new prompt a little faster).\nFiles: {}.",
+        gb(gpu),
+        gb(diffusion),
+        gb(files - diffusion),
+        gb(all),
+        gb(files)
+    )
 }
 
 fn tip(p: &RecipePreset) -> String {
@@ -430,7 +511,7 @@ fn list_table(
     gpus: &[Gpu],
     fits: bool,
     section: Section,
-    sort: &mut ModelSort,
+    w: &mut ModelWizard,
 ) -> Option<(String, bool)> {
     use egui_extras::{Column, TableBuilder};
     if rows.is_empty() {
@@ -451,7 +532,8 @@ fn list_table(
     } else {
         table.column(Column::remainder().at_least(FILES_W).clip(true))
     };
-    table.header(20.0, |mut h| heads(&mut h, "", sort, fits)).body(|mut body| {
+    let dirs = st.config.programs.model_dirs.clone();
+    table.header(20.0, |mut h| heads(&mut h, "", &mut w.sort, fits)).body(|mut body| {
         for (p, needs) in rows {
             // on a server already running: when the files here don't do (or none start here)
             let short = needs.unavailable || !needs.downloads.is_empty();
@@ -461,9 +543,14 @@ fn list_table(
                     // your older copy, its files not there: to update
                     let mend = needs.update && needs.unavailable;
                     let what = if mend { "click to update it to the built-in's files" } else { what };
-                    let link = ui.add(egui::Link::new(&p.name)).on_hover_text(format!("{}\n\n{what}", tip(p)));
+                    // not installed: the size in its menu beside it
+                    let name = if section == Section::Available { p.name.clone() } else { with_size(p) };
+                    let link = ui.add(egui::Link::new(name)).on_hover_text(format!("{}\n\n{what}", tip(p)));
                     if link.clicked() {
                         clicked = Some((p.name.clone(), mend));
+                    }
+                    if section == Section::Available {
+                        size_menu(ui, w, p, &dirs, None);
                     }
                 });
                 if on.is_empty() {
@@ -629,7 +716,7 @@ fn open_row(ui: &mut egui::Ui, st: &AppState, w: &mut ModelWizard, name: &str, s
     if section == Section::Available {
         w.tab = ModelSetupTab::Add;
         let dirs = w.folders(&st.config.programs.model_dirs);
-        let catalogue = increart_core::config::catalogue();
+        let catalogue = w.catalogue();
         if let Some(p) = catalogue.iter().find(|p| p.name == name)
             && !PresetNeeds::of(p, &dirs, &w.sizes, w.index.as_deref()).unavailable
         {
@@ -730,7 +817,11 @@ pub fn window(ctx: &egui::Context, st: &AppState, out: &mut Vec<Msg>) {
             remote_note(ui, st, &mut w, out);
         }
         ui.separator();
-        let height = (ctx.content_rect().height() - 300.0).clamp(240.0, 640.0);
+        // the download's progress (and Done) under the page, as tall as last
+        // frame: the page gives up that much, so the window keeps its size
+        let below_id = egui::Id::unique("models_window_below");
+        let below: f32 = ctx.data(|d| d.get_temp(below_id)).unwrap_or(0.0);
+        let height = ((ctx.content_rect().height() - 300.0).clamp(240.0, 640.0) - below).max(120.0);
         // pages as tall as each other, so the window doesn't jump
         if let (ModelSetupTab::Yours, Some(e)) = (w.tab, &mut ed) {
             ui.vertical(|ui| {
@@ -755,9 +846,15 @@ pub fn window(ctx: &egui::Context, st: &AppState, out: &mut Vec<Msg>) {
                 });
         }
         ui.add_space(6.0);
+        let top = ui.cursor().top();
         download_line(ui, st, out);
         if st.preset_download.is_none() && w.started {
             ui.colored_label(GOOD, ic(ph::CHECK_CIRCLE, "Done: installed, their files in the model folders."));
+        }
+        let used = ui.cursor().top() - top;
+        if (used - below).abs() > 0.5 {
+            ctx.data_mut(|d| d.insert_temp(below_id, used));
+            ctx.request_repaint();
         }
         let remote = st.picked_remote(&w);
         let (links, files) = w.plan_except(&st.config.programs.model_dirs, &remote);
@@ -781,9 +878,10 @@ pub fn window(ctx: &egui::Context, st: &AppState, out: &mut Vec<Msg>) {
                         }
                     },
                     |ui| {
-                        close = ui.button("Close   Esc").clicked();
+                        // right to left: Save in the corner, Close to its left
                         let b = egui::Button::new(RichText::new(ic(ph::FLOPPY_DISK, "Save")).strong());
                         save = ui.add_enabled(problem.is_none() && changed, b).clicked();
+                        close = ui.button("Close   Esc").clicked();
                     },
                 );
             }
@@ -824,7 +922,7 @@ pub fn window(ctx: &egui::Context, st: &AppState, out: &mut Vec<Msg>) {
                         ui.label(RichText::new(line).color(if picked == 0 { NEUTRAL } else { ACCENT }));
                     },
                     |ui| {
-                        close = ui.button("Close   Esc").clicked();
+                        // right to left: Add in the corner, Close to its left
                         if w.tab == ModelSetupTab::Add || picked > 0 {
                             let label = if files.is_empty() { "Add" } else { "Download and add" };
                             let fetch = !files.is_empty() || !links.is_empty();
@@ -837,6 +935,7 @@ pub fn window(ctx: &egui::Context, st: &AppState, out: &mut Vec<Msg>) {
                                 )
                                 .clicked();
                         }
+                        close = ui.button("Close   Esc").clicked();
                     },
                 );
             }
@@ -1091,7 +1190,7 @@ tick to add it to your models (nothing downloaded)"
 
 fn builtin_page(ui: &mut egui::Ui, st: &AppState, w: &mut ModelWizard) {
     use egui_extras::{Column, TableBuilder};
-    let catalogue = increart_core::config::catalogue();
+    let catalogue = w.catalogue();
     let dirs = w.folders(&st.config.programs.model_dirs);
     let fits = !st.remote_only();
     filters(ui, w, "setup", fits);
@@ -1159,6 +1258,7 @@ fn builtin_page(ui: &mut egui::Ui, st: &AppState, w: &mut ModelWizard) {
                             name = name.weak();
                         }
                         let r = ui.add_enabled(enabled, egui::Checkbox::new(&mut on, name));
+                        size_menu(ui, w, p, &dirs, mine.map(|m| m.size.as_str()));
                         let why = if have {
                             "installed, with its files"
                         } else if needs.unavailable {

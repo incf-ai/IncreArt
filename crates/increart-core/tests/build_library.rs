@@ -917,6 +917,13 @@ fn drafts_are_saved_copied_and_protect_their_images() {
         images: vec![],
         strength: 0.75,
         source_idea: None,
+        develop: Some(increart_core::pe::DevelopChat {
+            idea: "a fox poster".into(),
+            turns: vec![increart_core::pe::DevelopTurn {
+                said: increart_core::pe::DevelopReply::Questions("1. Its title? [WINTER READS]".into()),
+                answer: "yes".into(),
+            }],
+        }),
     };
     lib.save_generate_draft(&project, &draft).unwrap();
     let idea_draft =

@@ -1347,6 +1347,22 @@ impl Library_ {
     }
 }
 
+/// The file under `root` whose path ends with `tail`.
+fn walkdir_find(root: &Path, tail: &str) -> PathBuf {
+    let mut dirs = vec![root.to_path_buf()];
+    while let Some(d) = dirs.pop() {
+        for e in std::fs::read_dir(&d).unwrap().flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                dirs.push(p);
+            } else if p.to_string_lossy().ends_with(tail) {
+                return p;
+            }
+        }
+    }
+    panic!("no {tail} under {}", root.display())
+}
+
 fn write_pngs(lib: &mut increart_core::Library, run: &increart_core::Id, seeds: &[u64]) {
     let (_, def) = lib.find_run(run).unwrap();
     for &seed in seeds {
@@ -5014,6 +5030,44 @@ fn preview_steps_through_review_and_the_output_library() {
     assert_eq!(h.state.preview_position(), None);
     h.send(Msg::PreviewStep(1));
     assert_eq!(h.state.preview.as_ref(), Some(&shown[0]));
+}
+
+/// A run whose model files weren't hashed before is saved and queued at
+/// once; they're hashed after, said while they are, and put in its run.
+#[test]
+fn a_runs_model_files_are_hashed_after_it_is_queued() {
+    let mut h = Harness::new();
+    h.send(Msg::NewProject(PathBuf::new()));
+    h.send(Msg::CommitRename);
+    h.settle();
+    let models = tempfile::tempdir().unwrap();
+    let preset = h.state.config.recipes[h.state.generate.preset].clone();
+    for id in preset.files.values() {
+        let file = models.path().join(id);
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::write(&file, id.as_bytes()).unwrap();
+    }
+    h.state.config.programs.model_dirs = vec![models.path().to_string_lossy().into()];
+    let mut f = h.state.generate.clone();
+    f.prompt = "a fox".into();
+    h.send(Msg::Generate(f));
+    h.send(Msg::QueueGenerate);
+    h.settle();
+    assert!(h.errors().is_empty(), "{:?}", h.errors());
+    // (hashed on a thread of its own, which settle doesn't wait for)
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while !h.state.hashing_notes.is_empty() && std::time::Instant::now() < deadline {
+        h.settle();
+    }
+    assert!(h.state.hashing_notes.is_empty(), "said until done: {:?}", h.state.hashing_notes);
+    let run = h.state.project_entry().unwrap().runs[0].id.clone();
+    let file = walkdir_find(&h.root, &format!("runs/{run}/run.rsn"));
+    let def: increart_core::model::Run = increart_core::rsnfmt::read(&file).unwrap();
+    let cache = models.path().join("hashes.rsn");
+    for (slot, f) in &def.model.files {
+        let want = increart_core::modelhash::sha256_cached(&cache, &models.path().join(&f.id)).unwrap();
+        assert_eq!(f.sha256, want, "{slot}");
+    }
 }
 
 #[test]
@@ -8692,22 +8746,68 @@ fn random_order_goes_to_the_engine_with_this_starts_salt() {
     assert!(fx.iter().any(|f| matches!(f, Effect::SetJobOrder(Order::Sequential, None))), "{fx:?}");
 }
 
-/// A run being saved says what it's doing (hashing a model file the first
-/// time, how far) until it's saved or saving fails; Queue pressed again
-/// meanwhile says so too.
+/// A server's warm-up is kept as it says how far it is, until it's over;
+/// Skip goes to the engine.
 #[test]
-fn a_run_being_saved_says_what_it_is_doing() {
+fn a_warm_up_is_shown_and_can_be_skipped() {
+    use increart_core::engine::{Event, WarmUpPhase};
+    let mut s = dialog_state(vec![], None);
+    let run = increart_core::Id::new(increart_core::id::now(), 1);
+    let phase = Some(WarmUpPhase::Working);
+    update(&mut s, Msg::Engine(Event::WarmUp { server: 0, phase, run: Some(run.clone()) }));
+    assert_eq!(s.warm_ups.get(&0), Some(&(WarmUpPhase::Working, Some(run))));
+    let fx = update(&mut s, Msg::SkipWarmUp(0));
+    assert!(matches!(fx[..], [Effect::SkipWarmUp(0)]), "{fx:?}");
+    update(&mut s, Msg::Engine(Event::WarmUp { server: 0, phase: None, run: None }));
+    assert!(s.warm_ups.is_empty());
+}
+
+/// A run being saved until saving fails: Queue works again for its label.
+#[test]
+fn a_run_whose_saving_fails_can_be_queued_again() {
     let mut s = dialog_state(vec![], None);
     let project = increart_core::Id::new(increart_core::id::now(), 1);
-    let note = |n: &str, f: f32| Some((n.to_string(), f));
-    // not being saved: nothing kept
-    update(&mut s, Msg::QueueingNote(project.clone(), "r02".into(), note("hashing a.safetensors once", 0.5)));
-    assert!(s.queueing_notes.is_empty());
     s.queueing.push((project.clone(), "r02".into()));
-    update(&mut s, Msg::QueueingNote(project.clone(), "r02".into(), note("hashing a.safetensors once", 0.5)));
-    assert_eq!(s.queueing_notes.get(&(project.clone(), "r02".into())).map(|(_, f)| *f), Some(0.5));
     update(&mut s, Msg::OpDone(Err("disk full".into()), None));
-    assert!(s.queueing.is_empty() && s.queueing_notes.is_empty(), "failed: Queue works again");
+    assert!(s.queueing.is_empty(), "failed: Queue works again");
+}
+
+/// Cancel on a run being saved (hashing its model files) takes it off the
+/// list at once and saves nothing; Queue again for the label saves its own,
+/// and Stop all cancels the ones being saved too.
+#[test]
+fn a_run_being_saved_can_be_cancelled() {
+    let mut h = Harness::new();
+    h.send(Msg::NewProject(PathBuf::new()));
+    h.send(Msg::CommitRename);
+    h.settle();
+    h.state.no_server_warned = true;
+    let project = h.state.project.clone().unwrap();
+    let mut f = h.state.generate.clone();
+    f.prompt = "a fox".into();
+    h.send(Msg::Generate(f));
+    // (its effects held back: the worker gets to it after the Cancel)
+    let first = update(&mut h.state, Msg::QueueGenerate);
+    let label = h.state.queueing[0].1.clone();
+    let flag = h.state.queueing_cancel[&(project.clone(), label.clone())].clone();
+    h.send(Msg::CancelQueueing(project.clone(), label.clone()));
+    assert!(flag.is_set() && h.state.queueing.is_empty() && h.state.queueing_cancel.is_empty());
+    // queued again before the cancelled one's worker got to it
+    let second = update(&mut h.state, Msg::QueueGenerate);
+    assert_eq!(h.state.queueing.len(), 1, "not refused as still being saved");
+    first.into_iter().chain(second).for_each(|f| h.rt.run(f));
+    h.settle();
+    assert_eq!(h.state.project_entry().unwrap().runs.len(), 1, "only the second saved");
+    assert!(h.state.queueing.is_empty() && h.state.queueing_cancel.is_empty());
+    assert!(!h.state.messages.iter().any(|m| m.error), "{:?}", h.state.messages);
+
+    let fx = update(&mut h.state, Msg::QueueGenerate);
+    assert_eq!(h.state.queueing.len(), 1);
+    h.send(Msg::StopAll(increart_core::engine::Stop::Now));
+    assert!(h.state.queueing.is_empty());
+    fx.into_iter().for_each(|f| h.rt.run(f));
+    h.settle();
+    assert_eq!(h.state.project_entry().unwrap().runs.len(), 1, "stopped before it was saved");
 }
 
 /// A preset's other files per slot: each server is offered the ones it has
@@ -8821,4 +8921,269 @@ fn a_presets_missing_files_downloaded() {
     update(&mut s, Msg::DownloadPresetFiles(p.name.clone(), files.clone()));
     assert_eq!(update(&mut s, Msg::WizardDownloaded(Ok(()))), [Effect::ListLoadable]);
     assert!(s.messages.iter().any(|m| m.text == format!("{}: its {} files downloaded", p.name, files.len())));
+}
+
+/// With a MiniMax-H3-Image model preset on the Generate form, the prompt is
+/// rewritten for it (its own system prompt, room for a long caption);
+/// **Write for** switches between it and the general rewrite, asking again,
+/// and an idea is rewritten in general unless switched.
+#[test]
+fn prompt_enhance_rewrites_for_minimax_h3_image() {
+    use increart_core::config::RecipePreset;
+    use increart_core::pe::{DEFAULT_REWRITE, DEFAULT_REWRITE_H3, PeRun, PeServer, REWRITE, REWRITE_H3};
+    let asked = |fx: &[Effect]| {
+        fx.iter()
+            .find_map(|f| match f {
+                Effect::PeAsk { jobs, .. } => Some((jobs[0].system.clone(), jobs[0].max_tokens)),
+                _ => None,
+            })
+            .expect("an ask")
+    };
+    let mut h = Harness::new();
+    h.send(Msg::NewProject(PathBuf::new()));
+    h.send(Msg::CommitRename);
+    h.settle();
+    // nothing listens there: only the asks are looked at
+    let url = "http://127.0.0.1:9".to_string();
+    h.state.pe.server = Some(PeServer { name: "fake".into(), run: PeRun::Connect { url }, ..Default::default() });
+    let h3 = RecipePreset {
+        name: "MiniMax-H3-Image".into(),
+        recipe: "minimax-h3-image".into(),
+        steps: 6,
+        cfg: 1.0,
+        ..Default::default()
+    };
+    let qwen =
+        RecipePreset { name: "Qwen".into(), recipe: "qwen-image-21".into(), steps: 20, cfg: 2.0, ..Default::default() };
+    h.state.config.recipes = vec![qwen, h3];
+    h.state.generate.prompt = "a cat holding a sign".into();
+
+    h.state.generate.preset = 0;
+    let fx = h.send(Msg::PeRewrite(PeTarget::Prompt));
+    assert_eq!(h.state.pe.text.as_ref().unwrap().job, REWRITE);
+    assert_eq!(asked(&fx), (DEFAULT_REWRITE.to_string(), 700));
+    h.send(Msg::PeTextClose(PeUse::Discard));
+
+    h.state.generate.preset = 1;
+    assert!(h.state.h3_form());
+    let fx = h.send(Msg::PeRewrite(PeTarget::Prompt));
+    assert_eq!(h.state.pe.text.as_ref().unwrap().job, REWRITE_H3);
+    assert_eq!(asked(&fx), (DEFAULT_REWRITE_H3.to_string(), 1400));
+    // switched: asked again with the general prompt; the same job again asks nothing
+    let fx = h.send(Msg::PeTextJob(REWRITE));
+    assert_eq!(asked(&fx).0, DEFAULT_REWRITE);
+    assert!(h.send(Msg::PeTextJob(REWRITE)).is_empty(), "already that job");
+    h.send(Msg::PeTextClose(PeUse::Discard));
+
+    // an idea: the general rewrite, MiniMax-H3's when switched, kept for it next time
+    h.state.draft.text = "a lighthouse poster".into();
+    h.send(Msg::PeRewrite(PeTarget::NewIdea));
+    assert_eq!(h.state.pe.text.as_ref().unwrap().job, REWRITE);
+    let fx = h.send(Msg::PeTextJob(REWRITE_H3));
+    assert_eq!(asked(&fx).0, DEFAULT_REWRITE_H3);
+    h.send(Msg::PeRewrite(PeTarget::NewIdea));
+    assert_eq!(h.state.pe.text.as_ref().unwrap().job, REWRITE_H3);
+    // a system prompt of the user's for it is the one asked with
+    h.state.config.pe.system_prompts.insert(REWRITE_H3.into(), "mine".into());
+    assert_eq!(asked(&h.send(Msg::PeTextRetry)).0, "mine");
+}
+
+/// Develop idea…: the Generate prompt talked through with the chat model,
+/// the guide the form's model's rewrite prompt; its questions answered (or
+/// left to its suggestions), the prompt written, changes asked for, the
+/// guide switched, started over, and the prompt used.
+#[test]
+fn prompt_enhance_develops_an_idea_in_a_conversation() {
+    use increart_core::config::RecipePreset;
+    use increart_core::pe::{
+        DEFAULT_DEVELOP, DEFAULT_REWRITE, DEFAULT_REWRITE_H3, DevelopReply, PeRun, PeServer, REWRITE, REWRITE_H3,
+    };
+    let ask = |fx: &[Effect]| {
+        fx.iter()
+            .find_map(|f| match f {
+                Effect::PeAsk { jobs, .. } if !jobs.is_empty() => Some(jobs[0].clone()),
+                _ => None,
+            })
+            .expect("an ask")
+    };
+    let mut h = Harness::new();
+    h.send(Msg::NewProject(PathBuf::new()));
+    h.send(Msg::CommitRename);
+    h.settle();
+    let url = "http://127.0.0.1:9".to_string();
+    h.state.pe.server = Some(PeServer { name: "fake".into(), run: PeRun::Connect { url }, ..Default::default() });
+    let h3 =
+        RecipePreset { name: "H3".into(), recipe: "minimax-h3-image".into(), steps: 6, cfg: 1.0, ..Default::default() };
+    h.state.config.recipes = vec![h3];
+    h.state.generate.preset = 0;
+
+    // no idea yet: the window opens, nothing asked until there is one
+    h.state.generate.prompt = String::new();
+    assert!(h.send(Msg::PeDevelop(PeTarget::Prompt)).iter().all(|f| !matches!(f, Effect::PeAsk { .. })));
+    assert!(h.send(Msg::PeDevelopSend { write_now: false }).is_empty(), "no idea");
+    h.send(Msg::PeDevelopEdit { idea: "a fox poster".into(), reply: String::new() });
+    let job = ask(&h.send(Msg::PeDevelopSend { write_now: false }));
+    assert!(job.system.starts_with(DEFAULT_DEVELOP) && job.system.ends_with(DEFAULT_REWRITE_H3.trim()));
+    assert!(
+        job.text.starts_with("The idea:\n\na fox poster") && job.text.contains("Ask your questions"),
+        "{}",
+        job.text
+    );
+    let t = h.state.pe.text.as_ref().unwrap();
+    assert_eq!((t.job, t.waiting), (REWRITE_H3, Some(job.id)));
+
+    // its questions; answered
+    h.send(Msg::PeAnswer(job.id, Ok("QUESTIONS:\n1. Any words? [none]".into())));
+    let d = h.state.pe.text.as_ref().unwrap().develop.as_ref().unwrap();
+    assert_eq!(d.turns[0].said, DevelopReply::Questions("1. Any words? [none]".into()));
+    h.send(Msg::PeDevelopEdit { idea: d.idea.clone(), reply: "\"WINTER READS\"".into() });
+    let job = ask(&h.send(Msg::PeDevelopSend { write_now: false }));
+    assert!(job.text.contains("You asked:\n1. Any words? [none]\n\nThey answered:\n\"WINTER READS\""), "{}", job.text);
+    assert!(!job.text.contains("with no more questions"));
+    // the prompt: in the conversation and to use
+    h.send(Msg::PeAnswer(job.id, Ok("PROMPT:\nA fox poster titled \"WINTER READS\".".into())));
+    let t = h.state.pe.text.as_ref().unwrap();
+    assert_eq!(t.text, "A fox poster titled \"WINTER READS\".");
+    assert_eq!(t.develop.as_ref().unwrap().turns.len(), 2);
+
+    // a change asked for: the prompt written again
+    h.send(Msg::PeDevelopEdit { idea: "a fox poster".into(), reply: "add snow".into() });
+    let job = ask(&h.send(Msg::PeDevelopSend { write_now: false }));
+    assert!(job.text.contains("You wrote the prompt:") && job.text.contains("They answered:\nadd snow"));
+    h.send(Msg::PeAnswer(job.id, Ok("PROMPT: A fox poster in the snow.".into())));
+    // the guide switched: the last prompt written again by it
+    let job = ask(&h.send(Msg::PeTextJob(REWRITE)));
+    assert!(job.system.ends_with(DEFAULT_REWRITE.trim()) && job.text.ends_with("with no more questions."));
+    assert_eq!(h.state.pe.text.as_ref().unwrap().develop.as_ref().unwrap().turns.len(), 2, "the old prompt dropped");
+    h.send(Msg::PeAnswer(job.id, Ok("PROMPT: A snowy fox poster.".into())));
+
+    // started over: asked from the idea again; questions left unanswered:
+    // Send writes the prompt with the suggestions
+    let job = ask(&h.send(Msg::PeDevelopRestart));
+    assert!(!job.text.contains("conversation so far"));
+    h.send(Msg::PeAnswer(job.id, Ok("1. Day or night? [night]".into())));
+    let job = ask(&h.send(Msg::PeDevelopSend { write_now: false }));
+    assert!(job.text.ends_with("with no more questions."), "{}", job.text);
+    h.send(Msg::PeAnswer(job.id, Ok("A fox at night.".into())));
+    assert_eq!(h.state.pe.text.as_ref().unwrap().text, "A fox at night.");
+
+    // used: the Generate prompt
+    h.send(Msg::PeTextClose(PeUse::Use));
+    assert!(h.state.pe.text.is_none());
+    assert_eq!(h.state.generate.prompt, "A fox at night.");
+
+    // the conversation is kept with the project's draft
+    let kept = h.state.generate.develop.clone().expect("kept with the draft");
+    assert_eq!((kept.idea.as_str(), kept.turns.len()), ("a fox poster", 2));
+    assert_eq!(kept.last_prompt(), Some("A fox at night."));
+    assert_eq!(h.state.generate.to_draft(&h.state.config).develop, Some(kept.clone()));
+    // opened again with the prompt it wrote: it goes on, nothing asked
+    assert!(h.send(Msg::PeDevelop(PeTarget::Prompt)).iter().all(|f| !matches!(f, Effect::PeAsk { .. })));
+    let t = h.state.pe.text.as_ref().unwrap();
+    assert_eq!((t.text.as_str(), t.develop.as_ref().unwrap().turns.len()), ("A fox at night.", 2));
+    h.send(Msg::PeTextClose(PeUse::Discard));
+    assert_eq!(h.state.generate.develop, Some(kept.clone()), "closing keeps it");
+    // another prompt: a new conversation about it, the old kept until
+    // the new one has something
+    h.state.generate.prompt = "a lighthouse".into();
+    let job = ask(&h.send(Msg::PeDevelop(PeTarget::Prompt)));
+    assert!(job.text.starts_with("The idea:\n\na lighthouse"));
+    assert_eq!(h.state.generate.develop, Some(kept));
+    h.send(Msg::PeAnswer(job.id, Ok("1. Day or night? [night]".into())));
+    assert_eq!(h.state.generate.develop.as_ref().unwrap().idea, "a lighthouse");
+    // started over: none kept
+    let job = ask(&h.send(Msg::PeDevelopRestart));
+    assert!(h.state.generate.develop.is_none());
+    h.send(Msg::PeStop(vec![job.id]));
+    h.send(Msg::PeTextClose(PeUse::Discard));
+
+    // the New idea form's text, developed and used; the general guide
+    let mut d = h.state.draft.clone();
+    d.text = "a cat cafe sign".into();
+    h.send(Msg::Draft(d));
+    let job = ask(&h.send(Msg::PeDevelop(PeTarget::NewIdea)));
+    assert!(job.system.ends_with(DEFAULT_REWRITE.trim()) && job.text.starts_with("The idea:\n\na cat cafe sign"));
+    h.send(Msg::PeAnswer(job.id, Ok("PROMPT: A hand-painted cat cafe sign.".into())));
+    h.send(Msg::PeTextClose(PeUse::Use));
+    assert_eq!(h.state.draft.text, "A hand-painted cat cafe sign.");
+    assert!(h.state.generate.develop.is_none(), "an idea's conversation isn't the draft's");
+}
+
+/// A prompt naming references either way is queued in the model's own
+/// syntax (`<Picture N>` for MiniMax-H3-Image, `<imageN>` for the others),
+/// unless its model preset takes them as written; the form keeps the
+/// prompt as typed.
+#[test]
+fn references_are_queued_in_the_models_syntax() {
+    use increart_core::config::RecipePreset;
+    let mut h = Harness::new();
+    h.send(Msg::NewProject(PathBuf::new()));
+    h.send(Msg::CommitRename);
+    h.settle();
+    let preset = |name: &str, recipe: &str, as_written: bool| RecipePreset {
+        name: name.into(),
+        recipe: recipe.into(),
+        steps: 6,
+        cfg: 1.0,
+        refs_as_written: as_written,
+        ..Default::default()
+    };
+    h.state.config.recipes = vec![
+        preset("H3", "minimax-h3-image", false),
+        preset("Qwen", "qwen-image-21", false),
+        preset("Qwen literal", "qwen-image-21", true),
+    ];
+    let typed = "Edit <image1>. The hat from <Picture 2>.";
+    let mut queued = vec![];
+    for i in 0..3 {
+        h.send(Msg::SelectRecipe(i));
+        let mut f = h.state.generate.clone();
+        (f.prompt, f.seeds) = (typed.into(), 1);
+        h.send(Msg::Generate(f));
+        h.send(Msg::QueueGenerate);
+        h.settle();
+        assert_eq!(h.state.generate.prompt, typed, "the form keeps it as typed");
+        queued.push(h.state.project_entry().unwrap().runs.last().unwrap().prompt.clone());
+    }
+    assert_eq!(queued, ["Edit <Picture 1>. The hat from <Picture 2>.", "Edit <image1>. The hat from <image2>.", typed]);
+}
+
+/// A started server that crashes is said (with its log's last lines) and
+/// started again by itself, twice within 30 min; the third crash waits for
+/// Restart. Started again, it's no longer shown as crashed.
+#[test]
+fn a_crashed_server_is_started_again() {
+    use increart_core::launcher::Exit;
+    let mut s = dialog_state(vec![], None);
+    s.open_attempt = 4;
+    let exit = Exit { status: "signal: 11 (SIGSEGV) (core dumped)".into(), last: vec!["EDIT mode".into()] };
+    let crash = |s: &mut AppState| update(s, Msg::ServerExited(4, 1, "sd-rocm1".into(), exit.clone()));
+    let fx = crash(&mut s);
+    assert!(matches!(fx[..], [Effect::RestartServer { attempt: 4, slot: 1 }]), "{fx:?}");
+    let said = &s.messages.last().unwrap().text;
+    assert!(said.starts_with("sd-rocm1: crashed (signal: 11 (SIGSEGV)") && said.contains("EDIT mode"), "{said}");
+    assert!(s.crash_of("sd-rocm1").unwrap().text().unwrap().contains("starting it again"));
+    // one from an attempt before is no one's
+    assert!(update(&mut s, Msg::ServerRestarted(3, 1, "sd-rocm1".into(), Ok(()))).is_empty());
+    assert!(s.crash_of("sd-rocm1").is_some());
+    update(&mut s, Msg::ServerRestarted(4, 1, "sd-rocm1".into(), Ok(())));
+    assert!(s.crash_of("sd-rocm1").is_none(), "running again");
+
+    s.now += 60.0;
+    assert_eq!(crash(&mut s).len(), 1, "the second within 30 min: again");
+    update(&mut s, Msg::ServerRestarted(4, 1, "sd-rocm1".into(), Ok(())));
+    s.now += 60.0;
+    assert!(crash(&mut s).is_empty(), "the third: not by itself");
+    let c = s.crash_of("sd-rocm1").unwrap();
+    assert!(!c.restarting && c.text().unwrap().starts_with("crashed 3 times in 30 min"), "{c:?}");
+    let fx = update(&mut s, Msg::RestartServer("sd-rocm1".into()));
+    assert!(matches!(fx[..], [Effect::RestartServer { attempt: 4, slot: 1 }]), "{fx:?}");
+    assert!(update(&mut s, Msg::RestartServer("sd-rocm1".into())).is_empty(), "once");
+    update(&mut s, Msg::ServerRestarted(4, 1, "sd-rocm1".into(), Err("no reply".into())));
+    let c = s.crash_of("sd-rocm1").unwrap();
+    assert!(c.why.contains("no reply") && !c.restarting, "{c:?}");
+
+    // half an hour on, crashes before don't count
+    s.now += 31.0 * 60.0;
+    assert_eq!(crash(&mut s).len(), 1);
 }

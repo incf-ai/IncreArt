@@ -107,8 +107,8 @@ fn idea_card(
     r
 }
 
-/// An idea's menu: **Rewrite with PE…** in the Edit window, so Use there
-/// changes its text.
+/// An idea's menu: **Rewrite with PE…** and **Develop with PE…** in the
+/// Edit window, so Use there changes its text.
 fn rewrite_item(ui: &mut egui::Ui, st: &AppState, id: &increart_core::Id, out: &mut Vec<Msg>) {
     let r = ui.add_enabled(st.pe.server.is_some(), egui::Button::new(ic(ph::MAGIC_WAND, "Rewrite with PE…")));
     if r.on_hover_text("open it to edit, and ask the prompt-enhance server for better text")
@@ -117,6 +117,15 @@ fn rewrite_item(ui: &mut egui::Ui, st: &AppState, id: &increart_core::Id, out: &
     {
         out.push(Msg::OpenIdea(id.clone()));
         out.push(Msg::PeRewrite(increart_gui_core::PeTarget::Idea(id.clone())));
+        ui.close();
+    }
+    let r = ui.add_enabled(st.pe.server.is_some(), egui::Button::new(ic(ph::CHATS_CIRCLE, "Develop with PE…")));
+    if r.on_hover_text("open it to edit, and talk it through with the prompt-enhance server: it asks, then writes")
+        .on_disabled_hover_text("needs a prompt-enhance server")
+        .clicked()
+    {
+        out.push(Msg::OpenIdea(id.clone()));
+        out.push(Msg::PeDevelop(increart_gui_core::PeTarget::Idea(id.clone())));
         ui.close();
     }
 }
@@ -431,7 +440,8 @@ pub fn edit_window(ctx: &egui::Context, st: &AppState, tex: &mut Textures, out: 
                         tools.push(Msg::ShowInFileManager(entry.dir.clone()));
                     }
                     let target = increart_gui_core::PeTarget::Idea(ed.id.clone());
-                    crate::rewrite::button(ui, st, target, "Rewrite with PE", &mut tools);
+                    crate::rewrite::button(ui, st, target.clone(), "Rewrite with PE", &mut tools);
+                    crate::rewrite::develop_button(ui, st, target, &mut tools);
                 },
                 |ui| {
                     if ui.button(RichText::new(ic(ph::FLOPPY_DISK, "Save")).strong()).clicked() {
@@ -506,6 +516,7 @@ fn new_idea(ui: &mut egui::Ui, st: &AppState, tex: &mut Textures, out: &mut Vec<
                 out.push(Msg::AddIdea(AddIdea::NewProject));
             }
             crate::rewrite::button(ui, st, increart_gui_core::PeTarget::NewIdea, "Rewrite with PE", out);
+            crate::rewrite::develop_button(ui, st, increart_gui_core::PeTarget::NewIdea, out);
             if ui.button(ic(ph::CLOCK_COUNTER_CLOCKWISE, "History…")).clicked() {
                 out.push(Msg::OpenHistory(increart_core::HistoryKey::NewIdea));
             }
@@ -1704,8 +1715,10 @@ fn kv(ui: &mut egui::Ui, key: &str, value: &str) {
     ui.end_row();
 }
 
-/// The `<imageN>` tags in a prompt, each once, in order.
+/// The `<imageN>` tags in a prompt (`<Picture N>` too, as `<imageN>`),
+/// each once, in order.
 fn image_tags(text: &str) -> Vec<String> {
+    let text = &increart_core::request::as_image_tags(text);
     let mut tags: Vec<String> = vec![];
     for (i, _) in text.match_indices("<image") {
         let rest = &text[i + 6..];

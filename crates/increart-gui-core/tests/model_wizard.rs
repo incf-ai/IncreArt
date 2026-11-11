@@ -43,7 +43,11 @@ fn the_folder_found_folders_and_picked_presets_become_the_setup() {
     let dirs = w.folders(&[]);
     let needs = PresetNeeds::of(first, &dirs, &w.sizes, None);
     assert!(needs.downloads.is_empty() && needs.total_bytes == Some(12) && !needs.unavailable, "{needs:?}");
-    assert_eq!(needs.fits(1.0), Some(true));
+    // with sd-server's working memory beside it
+    assert_eq!(needs.diffusion_bytes, Some(4));
+    assert_eq!(needs.gpu_bytes(), Some(4 + GPU_RESERVE));
+    assert_eq!(needs.fit(1.0), Some(GpuFit::No));
+    assert_eq!(needs.fit(3.0), Some(GpuFit::Whole));
     let second = &catalogue()[1];
     let needs = PresetNeeds::of(second, &dirs, &w.sizes, None);
     assert!(!needs.downloads.is_empty() && needs.download_bytes.is_none(), "sizes not known yet");
@@ -163,9 +167,10 @@ fn the_models_are_listed_as_yours_installed_and_not_and_filtered() {
     // fits a ticked GPU: sizes not known shown; none ticked: every size
     w.kind = ModelKind::All;
     assert_eq!(w.shown(lists.available.clone(), &[24.0]).len(), lists.available.len());
+    let size = |n: &mut PresetNeeds, b: u64| (n.total_bytes, n.diffusion_bytes) = (Some(b), Some(b));
     let mut sized = lists.available.clone();
-    sized[0].1.total_bytes = Some(30 << 30);
-    sized[1].1.total_bytes = Some(10 << 30);
+    size(&mut sized[0].1, 30 << 30);
+    size(&mut sized[1].1, 10 << 30);
     let fits = w.shown(sized.clone(), &[24.0]);
     assert!(
         !fits.iter().any(|(p, _)| p.name == sized[0].0.name) && fits.iter().any(|(p, _)| p.name == sized[1].0.name)
@@ -192,8 +197,8 @@ fn the_models_are_listed_as_yours_installed_and_not_and_filtered() {
     assert_eq!(names(&w.shown(lists.available.clone(), &[])), names(&lists.available));
     // size: sizes not known last either way
     let mut rows = lists.available.clone();
-    rows[3].1.total_bytes = Some(9);
-    rows[5].1.total_bytes = Some(20);
+    size(&mut rows[3].1, 9);
+    size(&mut rows[5].1, 20);
     w.sort.click(ModelColumn::Size);
     let small = w.shown(rows.clone(), &[]);
     assert_eq!((small[0].1.total_bytes, small[1].1.total_bytes, small[2].1.total_bytes), (Some(9), Some(20), None));
@@ -343,4 +348,141 @@ fn an_older_copy_of_a_built_in_says_so_and_install_updates_it() {
     // its VAE and text encoder linked from koboldcpp/, not downloaded
     assert!(tmp.path().join(&builtin.files["vae"]).is_file());
     assert!(tmp.path().join(&builtin.files["llm"]).is_file());
+}
+
+/// A built-in model of several sizes is listed once; the size picked is
+/// what's downloaded and installed, the copy saying its size, and the
+/// window opened again starts at it. Picking another replaces it.
+#[test]
+fn a_built_in_installed_at_the_size_picked() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_string_lossy().into_owned();
+    let listed = catalogue().into_iter().find(|p| p.sizes.len() > 1).expect("a model of several sizes");
+    let small = listed.sizes.iter().find(|s| s.name != listed.size).unwrap().clone();
+    let mut s = state(vec![dir.clone()]);
+    let fx = update(&mut s, Msg::OpenModelWizard);
+    let Some(Effect::DownloadSizes(urls)) = fx.iter().find(|f| matches!(f, Effect::DownloadSizes(_))) else {
+        panic!("{fx:?}")
+    };
+    assert!(small.downloads.values().all(|u| urls.contains(u)), "every size's asked, for the menu");
+    update(&mut s, Msg::ModelFoldersFound(vec![]));
+    let mut w = s.model_wizard.clone().unwrap();
+    assert_eq!(w.catalogue().iter().filter(|p| p.name == listed.name).count(), 1, "listed once");
+    w.dir = dir.clone();
+    w.picked = [listed.name.clone()].into();
+    w.picked_size.insert(listed.name.clone(), small.name.clone());
+    let (_, files) = w.plan(std::slice::from_ref(&dir));
+    for f in small.files.values() {
+        assert!(files.iter().any(|d| &d.file == f), "{f} downloaded: {files:?}");
+    }
+    let replaced = &listed.files["diffusion_model"];
+    assert!(!files.iter().any(|d| &d.file == replaced), "not the other size's");
+    update(&mut s, Msg::EditModelWizard(Box::new(w)));
+    let fx = update(&mut s, Msg::ModelWizardGo);
+    assert!(fx.iter().any(|f| matches!(f, Effect::DownloadModels { .. })), "{fx:?}");
+    let mine = s.config.recipes.iter().find(|r| r.name == listed.name).unwrap().clone();
+    assert_eq!(mine.size, small.name);
+    assert!(mine.sizes.is_empty(), "kept without the other sizes");
+    assert_eq!(mine.files["diffusion_model"], small.files["diffusion_model"]);
+    assert_eq!(mine, listed.with_size(&small.name).installed());
+    // opened again: at your copy's size
+    // (the download done)
+    s.model_wizard = None;
+    s.preset_download = None;
+    update(&mut s, Msg::OpenModelWizard);
+    let w = s.model_wizard.clone().unwrap();
+    assert_eq!(w.picked_size.get(&listed.name), Some(&small.name));
+    let at = w.catalogue().into_iter().find(|p| p.name == listed.name).unwrap();
+    assert!(!differs(&mine, &at), "not an older copy");
+    // another size: your copy replaced, under the same name
+    let mut w = w;
+    w.dir = dir.clone();
+    w.picked = [listed.name.clone()].into();
+    w.picked_size.insert(listed.name.clone(), listed.size.clone());
+    update(&mut s, Msg::EditModelWizard(Box::new(w)));
+    update(&mut s, Msg::ModelWizardGo);
+    let mine = s.config.recipes.iter().find(|r| r.name == listed.name).unwrap();
+    assert_eq!((mine.size.as_str(), &mine.files), (listed.size.as_str(), &listed.files));
+    assert_eq!(s.config.recipes.iter().filter(|r| r.name == listed.name).count(), 1);
+}
+
+/// What a model needs of the GPU is its diffusion model and sd-server's
+/// working memory (the text encoder and VAE from RAM when they don't fit
+/// beside it); a model of several sizes starts at the one recommended for
+/// the largest GPU: whole on it, else its diffusion model on it, else the
+/// smallest. Yours, once installed, comes first.
+#[test]
+fn the_gpu_memory_by_part_and_the_size_recommended() {
+    use increart_core::config::{PresetSize, RecipePreset};
+    use increart_core::tiers::Gpu;
+    let map = |kv: &[(&str, &str)]| kv.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
+    let p = RecipePreset {
+        name: "m".into(),
+        files: map(&[("diffusion_model", "d/int8"), ("llm", "te/int8"), ("vae", "vae/v")]),
+        downloads: map(&[("d/int8", "u/d8"), ("te/int8", "u/te8"), ("vae/v", "u/v")]),
+        size: "Int8".into(),
+        sizes: vec![
+            PresetSize {
+                name: "BF16".into(),
+                files: map(&[("diffusion_model", "d/bf16")]),
+                downloads: map(&[("d/bf16", "u/d16")]),
+                ..Default::default()
+            },
+            PresetSize { name: "Int8".into(), ..Default::default() },
+            PresetSize {
+                name: "Int8, Q2 encoder".into(),
+                files: map(&[("llm", "te/q2")]),
+                downloads: map(&[("te/q2", "u/teq2")]),
+                ..Default::default()
+            },
+        ],
+        ..Default::default()
+    };
+    let gib = |g: u64| Some(g << 30);
+    let sizes: std::collections::BTreeMap<String, Option<u64>> =
+        [("u/d16", gib(38)), ("u/d8", gib(20)), ("u/te8", gib(25)), ("u/teq2", gib(12)), ("u/v", gib(1))]
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), v))
+            .collect();
+    let needs = PresetNeeds::of(&p, &[], &sizes, None);
+    assert_eq!((needs.diffusion_bytes, needs.total_bytes), (gib(20), gib(46)));
+    assert_eq!(needs.gpu_bytes(), gib(22), "the diffusion model and the reserve");
+    assert_eq!(needs.gpu_all_bytes(), gib(48));
+    assert_eq!(needs.fit(32.0), Some(GpuFit::Diffusion));
+    assert_eq!(needs.fit(16.0), Some(GpuFit::No));
+    assert_eq!(needs.fit(64.0), Some(GpuFit::Whole));
+    let gpu = |vram_gib, integrated| Gpu { number: 0, name: String::new(), vram_gib, integrated };
+    let mut w = ModelWizard { sizes, ..Default::default() };
+    assert_eq!(w.recommended_size(&p), None, "the GPUs not known yet");
+    let recommended = |w: &mut ModelWizard, gpus: Vec<Gpu>| {
+        w.gpus = Some(Ok(gpus));
+        w.recommended_size(&p)
+    };
+    // 32 GB: none whole, the first whose diffusion model fits
+    assert_eq!(recommended(&mut w, vec![gpu(32.0, false)]).as_deref(), Some("Int8"));
+    // 40 GB: whole with the smaller encoder (35 + 2) before BF16's diffusion model alone
+    assert_eq!(recommended(&mut w, vec![gpu(40.0, false)]).as_deref(), Some("Int8, Q2 encoder"));
+    // 96 GB: BF16 whole
+    assert_eq!(recommended(&mut w, vec![gpu(96.0, false)]).as_deref(), Some("BF16"));
+    // nothing fits: the smallest
+    assert_eq!(recommended(&mut w, vec![gpu(8.0, false)]).as_deref(), Some("Int8, Q2 encoder"));
+    // an integrated GPU's shared memory doesn't count beside a discrete one
+    assert_eq!(recommended(&mut w, vec![gpu(96.0, true), gpu(32.0, false)]).as_deref(), Some("Int8"));
+    // a file's size not known yet: none
+    w.sizes.remove("u/d16");
+    assert_eq!(recommended(&mut w, vec![gpu(32.0, false)]), None);
+}
+
+/// A copy of a built-in from before it had sizes is the size with its
+/// files.
+#[test]
+fn an_older_copy_is_the_size_with_its_files() {
+    let listed = catalogue().into_iter().find(|p| p.sizes.len() > 1).unwrap();
+    let mut old = listed.installed();
+    old.size.clear();
+    assert_eq!(installed_sizes(&[old]).get(&listed.name), Some(&listed.size));
+    let other = listed.sizes.iter().find(|s| s.name != listed.size).unwrap();
+    let mut old = listed.with_size(&other.name).installed();
+    old.size.clear();
+    assert_eq!(installed_sizes(&[old]).get(&listed.name), Some(&other.name));
 }

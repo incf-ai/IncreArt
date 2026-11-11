@@ -706,11 +706,11 @@ fn setting_sweep(ui: &mut egui::Ui, st: &AppState, f: &mut GenerateForm) {
             });
             ui.separator();
             ui.label("from");
-            ui.add(egui::DragValue::new(&mut r[0]).speed(0.1).max_decimals(2));
+            ui.add(crate::widgets::drag_value(&mut r[0]).speed(0.1).max_decimals(2));
             ui.label("to");
-            ui.add(egui::DragValue::new(&mut r[1]).speed(0.1).max_decimals(2));
+            ui.add(crate::widgets::drag_value(&mut r[1]).speed(0.1).max_decimals(2));
             ui.label("by");
-            ui.add(egui::DragValue::new(&mut r[2]).speed(0.05).range(0.01..=1000.0).max_decimals(2));
+            ui.add(crate::widgets::drag_value(&mut r[2]).speed(0.05).range(0.01..=1000.0).max_decimals(2));
             if ui.button("Fill").on_hover_text("replace the values with this range").clicked() {
                 f.sweep.values = range_values(r[0], r[1], r[2]);
             }
@@ -863,7 +863,7 @@ fn style_sweep(ui: &mut egui::Ui, st: &AppState, f: &mut GenerateForm, out: &mut
             ui.radio_value(&mut random, false, "all of them");
             ui.radio_value(&mut random, true, "a random");
             let mut k = sw.random.max(1);
-            ui.add_enabled(random, egui::DragValue::new(&mut k).range(1..=999));
+            ui.add_enabled(random, crate::widgets::drag_value(&mut k).range(1..=999));
             ui.label("of them");
             sw.random = if random { k } else { 0 };
             if random && ui.button(ic(ph::SHUFFLE, "Reroll")).on_hover_text("pick another random set").clicked() {
@@ -1061,11 +1061,6 @@ fn name_grid(ui: &mut egui::Ui, id: &str, names: &[&str]) {
             ui.end_row();
         }
     });
-}
-
-/// Text of a table cell, cut to its width (the whole of it on hover).
-fn cell_text(ui: &mut egui::Ui, text: impl Into<egui::WidgetText>) -> egui::Response {
-    ui.add(egui::Label::new(text).truncate())
 }
 
 /// Above the blanks: Clear all, Random picks (of the values offered),
@@ -1524,7 +1519,7 @@ fn form_grid(
         );
         ui.end_row();
         ui.label("How many");
-        ui.add(egui::DragValue::new(&mut form.count).range(1..=30));
+        ui.add(crate::widgets::drag_value(&mut form.count).range(1..=30));
         ui.end_row();
         ui.label("Temperature");
         ui.horizontal(|ui| {
@@ -1662,7 +1657,7 @@ fn slot_table(
     use egui_extras::{Column, TableBuilder};
     use increart_core::prompts::needing_slot;
     TableBuilder::new(ui)
-        .id_salt("sweep_slots_v2")
+        .id_salt("sweep_slots_v3")
         .striped(true)
         .vscroll(false)
         .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
@@ -1670,7 +1665,8 @@ fn slot_table(
         .column(Column::initial(170.0).at_least(110.0).clip(true))
         .column(Column::auto())
         .column(Column::remainder().at_least(160.0).clip(true))
-        .column(Column::initial(100.0).at_least(70.0).clip(true))
+        // as wide as what it says ("only Assembled from objects"), not clipped
+        .column(Column::auto().at_least(70.0))
         .header(20.0, |mut h| {
             for title in ["Blank", "Value, in every run", "", "Suggestions (click to use)", "Needed by"] {
                 h.col(|ui| {
@@ -1728,9 +1724,12 @@ fn slot_table(
                         let tip = need.iter().map(|(_, p)| p.name.as_str()).collect::<Vec<_>>().join("\n");
                         // one style of several: its value sets nothing for the rest
                         if need.len() == 1 && parts.len() == 1 && chosen.len() > 1 {
-                            cell_text(
-                                ui,
-                                RichText::new(format!("only {}", need[0].1.name)).color(crate::widgets::NEUTRAL),
+                            // whole (the column is as wide as this): extend, not truncate
+                            ui.add(
+                                egui::Label::new(
+                                    RichText::new(format!("only {}", need[0].1.name)).color(crate::widgets::NEUTRAL),
+                                )
+                                .extend(),
                             )
                             .on_hover_text(format!(
                                 "only {}'s prompt has {{{n}}}: the other {} styles don't use its value. To set a \
@@ -1740,7 +1739,7 @@ fn slot_table(
                             ));
                             return;
                         }
-                        let r = cell_text(ui, RichText::new(parts.join(", ")).weak());
+                        let r = ui.add(egui::Label::new(RichText::new(parts.join(", ")).weak()).extend());
                         if need.len() > 1 {
                             r.on_hover_text(tip);
                         }
@@ -2119,7 +2118,7 @@ fn enhance_dialog(ctx: &egui::Context, st: &AppState, out: &mut Vec<Msg>) {
             ui.end_row();
             ui.label("Longest");
             ui.horizontal(|ui| {
-                ui.add(egui::DragValue::new(&mut a.max_tokens).range(100..=2000).speed(10));
+                ui.add(crate::widgets::drag_value(&mut a.max_tokens).range(100..=2000).speed(10));
                 ui.weak("tokens (about ¾ of a word each)");
             });
             ui.end_row();

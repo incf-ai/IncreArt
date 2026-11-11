@@ -213,6 +213,9 @@ const EXTRA_SCENES: &[&str] = &[
     "91c1d-jobs-enhancing",
     "91c2-rewrite-writing",
     "91d-rewrite-prompt",
+    "91d1-develop-questions",
+    "91d2-develop-prompt",
+    "91d3-develop-revise",
     "91e-describe-image",
     "92-check-sheet-arrows",
     "92b-check-sheet-arrows-folded",
@@ -272,6 +275,10 @@ const EXTRA_SCENES: &[&str] = &[
     "R4-output-lineage",
     "R5-input-library",
     "R6-projects-grid",
+    // the promo's Generate (scripts/make-promo.sh), after 02-server-dialog and
+    // 03-idea-inbox-grid: moonwalk-styles' sweep, whose blanks each style
+    // needs its own of, with prompt enhance's suggestions
+    "P1-generate-moonwalk",
     // the README's gallery (docs/readme/GALLERY.md, scripts/make-readme-gallery.sh),
     // on the demo library too, after 02-server-dialog
     "G01-server-wizard",
@@ -661,6 +668,35 @@ impl Tour {
                 f.sweep.on = false;
                 f.prompt = "cute robot mascot sticker waving, like <image1>".into();
                 vec![Msg::Generate(f), Msg::PeRewrite(increart_gui_core::PeTarget::Prompt)]
+            }
+            "91d1-develop-questions" => {
+                // Develop idea… on a rough idea: the chat model's questions
+                // (the tour waits for them); the guide the form's model's
+                let mut f = st.generate.clone();
+                f.sweep.on = false;
+                f.prompt = "poster for our library's winter reading challenge, a fox reading by a fire".into();
+                vec![
+                    Msg::PeTextClose(increart_gui_core::PeUse::Discard),
+                    Msg::Tab(Tab::Projects),
+                    Msg::ProjectsTab(ProjectsTab::Generate),
+                    Msg::Generate(f),
+                    Msg::PeDevelop(increart_gui_core::PeTarget::Prompt),
+                ]
+            }
+            "91d2-develop-prompt" => {
+                // the questions answered: the prompt written
+                let Some(d) = st.pe.text.as_ref().and_then(|t| t.develop.as_ref()) else { return vec![] };
+                let reply = "Title \"WINTER READING CHALLENGE\", and \"Read 5 books by March 1\" at the bottom. \
+                             Cosy picture-book illustration. The rest as you suggest."
+                    .to_string();
+                vec![Msg::PeDevelopEdit { idea: d.idea.clone(), reply }, Msg::PeDevelopSend { write_now: false }]
+            }
+            "91d3-develop-revise" => {
+                // a change asked for: the prompt written again
+                let Some(d) = st.pe.text.as_ref().and_then(|t| t.develop.as_ref()) else { return vec![] };
+                let reply =
+                    "Snow falling outside a window behind the fox, and make the fox a girl in a red scarf.".into();
+                vec![Msg::PeDevelopEdit { idea: d.idea.clone(), reply }, Msg::PeDevelopSend { write_now: false }]
             }
             "91e-describe-image" => {
                 let mut v = vec![Msg::PeTextClose(increart_gui_core::PeUse::Discard)];
@@ -1996,10 +2032,11 @@ impl Tour {
                 Msg::ReviewView(ReviewView::Grid),
             ],
             "R2-review-compare" => vec![Msg::ReviewView(ReviewView::Single), Msg::ReviewCursor(0), Msg::Compare],
-            "R3-generate" => {
+            "R3-generate" | "P1-generate-moonwalk" => {
                 let mut v = vec![Msg::Compare, Msg::Tab(Tab::Projects), Msg::ProjectsTab(ProjectsTab::Generate)];
                 // its draft: a style sweep with prompt enhance's suggestions
-                if let Some(p) = st.index.projects.iter().find(|p| p.name() == "great-wave-cat") {
+                let project = if name == "R3-generate" { "great-wave-cat" } else { "moonwalk-styles" };
+                if let Some(p) = st.index.projects.iter().find(|p| p.name() == project) {
                     v.push(Msg::SelectProject(p.project.id.clone()));
                 }
                 v

@@ -1842,6 +1842,23 @@ impl Library {
         Err(Error::NotFound(format!("run {id}")))
     }
 
+    /// Fills in the hashes a run's model files lack (`sha256` by file id;
+    /// hashed after the run was saved, so it could be queued at once).
+    pub fn fill_model_hashes(&mut self, id: &Id, sha256: &BTreeMap<String, String>) -> Result<()> {
+        let (project_dir, mut run) = self.find_run(id)?;
+        let mut changed = false;
+        let files = run.model.files.values_mut().map(|f| (&f.id, &mut f.sha256));
+        for (file, hash) in files.chain(run.model.loras.iter_mut().map(|l| (&l.id, &mut l.sha256))) {
+            if hash.is_empty()
+                && let Some(h) = sha256.get(file)
+            {
+                *hash = h.clone();
+                changed = true;
+            }
+        }
+        if changed { self.save_run(&project_dir, &run) } else { Ok(()) }
+    }
+
     fn save_run(&self, project_dir: &Path, run: &Run) -> Result<()> {
         rsnfmt::write(&project_dir.join("runs").join(run.id.as_str()).join(RUN_FILE), run)
     }

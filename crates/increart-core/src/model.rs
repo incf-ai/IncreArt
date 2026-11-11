@@ -770,6 +770,9 @@ pub struct GenerateDraft {
     /// Sweep mode's settings.
     #[serde(default, skip_serializing_if = "crate::prompts::Sweep::is_default")]
     pub sweep: crate::prompts::Sweep,
+    /// The Develop idea conversation about the prompt, to go on with.
+    #[serde(default, serialize_with = "bare", skip_serializing_if = "Option::is_none")]
+    pub develop: Option<crate::pe::DevelopChat>,
 }
 
 /// An image in the Generate form's list: a reference (`<imageN>`, numbered

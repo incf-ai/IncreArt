@@ -37,6 +37,9 @@ struct Session {
     /// The shared settings `servers` were opened with.
     opened_with: Option<increart_core::config::Programs>,
     engine: Option<Engine>,
+    /// Runs whose model files are being hashed (after they were saved and
+    /// queued): an engine started meanwhile holds their images too.
+    hashing: std::collections::HashSet<Id>,
     /// The opening attempt `servers` belongs to.
     attempt: u32,
     /// Set to stop the current opening attempt (and servers it started).
@@ -192,6 +195,7 @@ impl Runtime {
         let (work, jobs) = mpsc::channel::<Effect>();
         let (engine_events, engine_updates) = mpsc::channel();
         let ctx = Ctx { tx, wake: Arc::new(wake), session: Arc::default(), paths: Arc::default(), engine_events };
+        watch_exits(&ctx);
         let queued = Arc::new(AtomicUsize::new(0));
         let (wctx, wqueued) = (ctx.clone(), queued.clone());
         std::thread::Builder::new().name("library".into()).spawn(move || {
@@ -200,6 +204,8 @@ impl Runtime {
                 // StopServers sent just before it.
                 if let Effect::OpenServers { servers, shared, attempt } = fx {
                     open_servers(&wctx, servers, shared, attempt);
+                } else if let Effect::RestartServer { attempt, slot } = fx {
+                    restart_server(&wctx, attempt, slot);
                 } else {
                     let started = matches!(fx, Effect::StartEngine { .. });
                     let msgs = work_on(&wctx, fx);
@@ -1284,6 +1290,84 @@ fn open_servers(ctx: &Ctx, servers: Vec<ServerConfig>, cfg: increart_core::confi
     });
 }
 
+/// Watches the servers the app started for one exiting by itself (a
+/// crash: sd-server segfaulting leaves nothing listening, and the engine
+/// would only retry it), once a second; says each as [`Msg::ServerExited`].
+fn watch_exits(ctx: &Ctx) {
+    let session = Arc::downgrade(&ctx.session);
+    let (tx, wake) = (ctx.tx.clone(), ctx.wake.clone());
+    let spawned = std::thread::Builder::new().name("server exits".into()).spawn(move || {
+        loop {
+            std::thread::sleep(Duration::from_secs(1));
+            let Some(session) = session.upgrade() else { return };
+            let exits: Vec<_> = {
+                let mut s = session.lock_or_recover();
+                let attempt = s.attempt;
+                s.servers
+                    .iter_mut()
+                    .enumerate()
+                    // KoboldCpp's launcher may restart itself: its own business
+                    .filter(|(_, slot)| matches!(slot, Some((ServerConfig::Start { .. }, _))))
+                    .filter_map(|(i, slot)| {
+                        let (_, p) = slot.as_mut()?;
+                        p.exited().map(|e| Msg::ServerExited(attempt, i, p.name.clone(), e))
+                    })
+                    .collect()
+            };
+            drop(session);
+            for m in exits {
+                if tx.send(m).is_err() {
+                    return;
+                }
+                wake();
+            }
+        }
+    });
+    if let Err(e) = spawned {
+        increart_core::applog::line("error", &format!("couldn't watch servers for crashes: {e}"));
+    }
+}
+
+/// Starts the server in `slot` of opening attempt `attempt` again, as it
+/// was opened (it crashed), on a thread of its own; the engine finds it on
+/// its port and loads its model again.
+fn restart_server(ctx: &Ctx, attempt: u32, slot: usize) {
+    let (server, cfg, cancel) = {
+        let s = ctx.session.lock_or_recover();
+        let server =
+            s.servers.get(slot).and_then(|o| o.as_ref()).filter(|(_, p)| !p.launched()).map(|(c, _)| c.clone());
+        match (server, &s.opened_with) {
+            (Some(server), Some(cfg)) if s.attempt == attempt => (server, cfg.clone(), s.cancel.clone()),
+            _ => return,
+        }
+    };
+    let ctx = ctx.clone();
+    std::thread::spawn(move || {
+        let name = server.name().to_string();
+        let opened = launcher::open_cancellable(
+            &server,
+            &cfg,
+            &ctx.paths.logs(),
+            increart_core::config::timeouts().server_start(),
+            &cancel,
+        );
+        let result = opened.map(|p| {
+            let unkept = {
+                let mut s = ctx.session.lock_or_recover();
+                let current = s.attempt == attempt;
+                match s.servers.get_mut(slot) {
+                    Some(o) if current => o.replace((server, p)),
+                    _ => Some((server, p)),
+                }
+            };
+            // (a server opened for an attempt since stops: not with the session locked)
+            drop(unkept);
+        });
+        let _ = ctx.tx.send(Msg::ServerRestarted(attempt, slot, name, result.map_err(|e| e.to_string())));
+        (ctx.wake)();
+    });
+}
+
 /// While a server starts: what its log says, twice a second (loading
 /// tensors 294/396 …), as [`Msg::ServerLog`].
 fn watch_start_log(
@@ -1770,6 +1854,9 @@ fn work_on(ctx: &Ctx, fx: Effect) -> Vec<Msg> {
                     return vec![Msg::Problem(format!("couldn't start generating: {e}")), Msg::RunsQueued(vec![])];
                 }
             };
+            for r in &ctx.session.lock_or_recover().hashing {
+                engine.hashing(r);
+            }
             for r in &pending {
                 engine.queue_run(r);
             }
@@ -1783,6 +1870,12 @@ fn work_on(ctx: &Ctx, fx: Effect) -> Vec<Msg> {
         Effect::QueueRun(id) => {
             if let Some(e) = &ctx.session.lock_or_recover().engine {
                 e.queue_run(&id);
+            }
+            vec![]
+        }
+        Effect::SkipWarmUp(server) => {
+            if let Some(e) = &ctx.session.lock_or_recover().engine {
+                e.skip_warm_up(server);
             }
             vec![]
         }
@@ -1800,21 +1893,39 @@ fn work_on(ctx: &Ctx, fx: Effect) -> Vec<Msg> {
                 LibOp::CreateSweep { queue, .. } => Some(*queue),
                 _ => None,
             };
-            hash_ahead(ctx, &lib, &op);
+            // cancelled while waiting behind other work
+            if queued_of(&op).is_some_and(|q| q.cancel.is_set()) {
+                return vec![Msg::OpDone(Ok(OpOk::Cancelled), None)];
+            }
+            let unhashed = unhashed_files(&lib, &op);
             let result = {
                 let mut l = lib.lock_or_recover();
                 lib_op(&mut l, op)
             };
             let queue_run = queue_run || matches!(&op_queue, Some(true));
-            if let Some(e) = &ctx.session.lock_or_recover().engine
-                && queue_run
+            let runs = match &result {
+                Ok(OpOk::Run(id, _)) => vec![id.clone()],
+                Ok(OpOk::Sweep(ids, ..)) => ids.clone(),
+                _ => vec![],
+            };
             {
-                match &result {
-                    Ok(OpOk::Run(id, _)) => e.queue_run(id),
-                    // all at once: the scheduler's round robin goes breadth-first
-                    Ok(OpOk::Sweep(ids, ..)) => ids.iter().for_each(|id| e.queue_run(id)),
-                    _ => {}
+                let mut session = ctx.session.lock_or_recover();
+                if !unhashed.is_empty() {
+                    session.hashing.extend(runs.iter().cloned());
                 }
+                if let Some(e) = &session.engine {
+                    // held for their hashes first, then queued: all at once
+                    // (the scheduler's round robin goes breadth-first)
+                    if !unhashed.is_empty() {
+                        runs.iter().for_each(|id| e.hashing(id));
+                    }
+                    if queue_run {
+                        runs.iter().for_each(|id| e.queue_run(id));
+                    }
+                }
+            }
+            if !unhashed.is_empty() && !runs.is_empty() {
+                hash_behind(ctx.clone(), lib.clone(), runs, unhashed);
             }
             let ix = lib.lock_or_recover().scan().ok();
             vec![Msg::OpDone(result, ix)]
@@ -1843,6 +1954,7 @@ fn work_on(ctx: &Ctx, fx: Effect) -> Vec<Msg> {
         | Effect::ValidationAsked(..)
         | Effect::PlaySound { .. }
         | Effect::OpenServers { .. }
+        | Effect::RestartServer { .. }
         | Effect::Pick { .. }
         | Effect::PeAsk { .. }
         | Effect::PeStop(_)
@@ -2397,45 +2509,98 @@ fn new_project_from_ideas(lib: &mut Library, ids: &[Id], folder: &Path, name: &s
     Ok(OpOk::ProjectFromIdeas { project, prompt, refs, idea: ids.first().cloned() })
 }
 
-/// Hashes a new run's model files into the library's cache before the
-/// library is locked for it: reading a model of many GB takes minutes,
-/// and the engine (starting the runs queued before) needs the library.
-fn hash_ahead(ctx: &Ctx, lib: &Mutex<Library>, op: &LibOp) {
-    let (presets, model_dirs, queued): (Vec<&RecipePreset>, _, _) = match op {
-        LibOp::CreateRun { preset, model_dirs, queued, .. } => (vec![&**preset], model_dirs, queued),
-        LibOp::CreateSweep { runs, model_dirs, queued, .. } => {
-            (runs.iter().map(|(_, _, p)| p).collect(), model_dirs, queued)
-        }
-        _ => return,
+/// What a run or sweep was queued from (none: another library op).
+fn queued_of(op: &LibOp) -> Option<&crate::Queued> {
+    match op {
+        LibOp::CreateRun { queued, .. } | LibOp::CreateSweep { queued, .. } => Some(queued),
+        _ => None,
+    }
+}
+
+/// A new run's (or sweep's) model files found in a model folder whose hash
+/// isn't cached yet (by file id): hashed after it's saved and queued.
+fn unhashed_files(lib: &Mutex<Library>, op: &LibOp) -> Vec<(String, PathBuf)> {
+    let (presets, model_dirs): (Vec<&RecipePreset>, _) = match op {
+        LibOp::CreateRun { preset, model_dirs, .. } => (vec![&**preset], model_dirs),
+        LibOp::CreateSweep { runs, model_dirs, .. } => (runs.iter().map(|(_, _, p)| p).collect(), model_dirs),
+        _ => return vec![],
     };
-    let (project, label) = (queued.project.clone(), queued.form.label.clone());
     let cache = lib.lock_or_recover().root().join("cache/model-hashes.rsn");
     let ids = presets.iter().flat_map(|p| p.files.values().chain(p.loras.iter().map(|l| &l.file)));
-    let files: std::collections::BTreeSet<PathBuf> = ids
-        .filter(|id| !id.starts_with('@'))
-        .filter_map(|id| increart_core::config::model_file_on_disk(id, model_dirs))
+    let files: std::collections::BTreeMap<String, PathBuf> = ids
+        .filter(|id| !id.is_empty() && !id.starts_with('@'))
+        .filter_map(|id| increart_core::config::model_file_on_disk(id, model_dirs).map(|f| (id.clone(), f)))
         .collect();
-    // the ones not hashed before, said as they're read (a few times a second)
-    let new: Vec<&PathBuf> = files.iter().filter(|f| !modelhash::is_cached(&cache, f)).collect();
-    for (i, f) in new.iter().enumerate() {
-        let name = f.file_name().unwrap_or_default().to_string_lossy().into_owned();
-        let mut said = std::time::Instant::now() - std::time::Duration::from_secs(1);
-        let _ = modelhash::sha256_cached_progress(&cache, f, |read, size| {
-            if said.elapsed() < std::time::Duration::from_millis(250) && read < size {
-                return;
+    files.into_iter().filter(|(_, f)| !modelhash::is_cached(&cache, f)).collect()
+}
+
+/// Hashes the model files of runs just saved and queued (reading a model
+/// of many GB takes minutes), one thread at a time, said as they're read
+/// (`Msg::HashingNote`); then puts the hashes in the runs and lets the
+/// engine write the images it held for them.
+fn hash_behind(ctx: Ctx, lib: Arc<Mutex<Library>>, runs: Vec<Id>, files: Vec<(String, PathBuf)>) {
+    // one file read at a time: two at once on a disk only slow each other
+    static ONE: Mutex<()> = Mutex::new(());
+    /// Said done however the thread ends (a panic too): an engine holding
+    /// the runs' images would hold them for good.
+    struct Done(Ctx, Vec<Id>);
+    impl Drop for Done {
+        fn drop(&mut self) {
+            let Done(ctx, runs) = self;
+            let mut session = ctx.session.lock_or_recover();
+            for r in runs.iter() {
+                session.hashing.remove(r);
+                if let Some(e) = &session.engine {
+                    e.hashed(r);
+                }
             }
-            said = std::time::Instant::now();
-            let gib = |b: u64| b as f64 / (1u64 << 30) as f64;
-            let of = if new.len() > 1 { format!(" (file {} of {})", i + 1, new.len()) } else { String::new() };
-            let note = format!("hashing {name} once{of}: {:.1} of {:.1} GiB", gib(read), gib(size));
-            let fraction = read as f32 / size.max(1) as f32;
-            let _ = ctx.tx.send(Msg::QueueingNote(project.clone(), label.clone(), Some((note, fraction))));
+            drop(session);
+            let _ = ctx.tx.send(Msg::HashingNote(std::mem::take(runs), None));
             (ctx.wake)();
-        });
+        }
     }
-    if !new.is_empty() {
-        let _ = ctx.tx.send(Msg::QueueingNote(project, label, Some(("saving the run".into(), 1.0))));
-        (ctx.wake)();
+    let spawned = std::thread::Builder::new().name("model hashes".into()).spawn(move || {
+        let _done = Done(ctx.clone(), runs.clone());
+        let note = |n: Option<(String, f32)>| {
+            let _ = ctx.tx.send(Msg::HashingNote(runs.clone(), n));
+            (ctx.wake)();
+        };
+        note(Some(("waiting to hash its model files".into(), 0.0)));
+        let _one = ONE.lock_or_recover();
+        let cache = lib.lock_or_recover().root().join("cache/model-hashes.rsn");
+        let mut hashes = std::collections::BTreeMap::new();
+        for (i, (id, f)) in files.iter().enumerate() {
+            let name = f.file_name().unwrap_or_default().to_string_lossy().into_owned();
+            let mut said = std::time::Instant::now() - std::time::Duration::from_secs(1);
+            let hashed = modelhash::sha256_cached_progress(&cache, f, |read, size| {
+                if said.elapsed() >= std::time::Duration::from_millis(250) || read == size {
+                    said = std::time::Instant::now();
+                    let gib = |b: u64| b as f64 / (1u64 << 30) as f64;
+                    let of =
+                        if files.len() > 1 { format!(" (file {} of {})", i + 1, files.len()) } else { String::new() };
+                    let text = format!("hashing {name} once{of}: {:.1} of {:.1} GiB", gib(read), gib(size));
+                    note(Some((text, read as f32 / size.max(1) as f32)));
+                }
+                true
+            });
+            match hashed {
+                Ok(h) => {
+                    hashes.insert(id.clone(), h);
+                }
+                Err(e) => increart_core::applog::line("error", &format!("hashing {}: {e}", f.display())),
+            }
+        }
+        {
+            let mut l = lib.lock_or_recover();
+            for r in &runs {
+                if let Err(e) = l.fill_model_hashes(r, &hashes) {
+                    increart_core::applog::line("error", &format!("putting model hashes in run {r}: {e}"));
+                }
+            }
+        }
+    });
+    if let Err(e) = spawned {
+        increart_core::applog::line("error", &format!("couldn't start hashing model files: {e}"));
     }
 }
 
@@ -2443,8 +2608,9 @@ fn hash_ahead(ctx: &Ctx, lib: &Mutex<Library>, op: &LibOp) {
 /// library's `cache/`) when they can be found in a model directory.
 fn new_run(lib: &Library, f: &GenerateForm, preset: &RecipePreset, model_dirs: &[String]) -> NewRun {
     let cache = lib.root().join("cache/model-hashes.rsn");
+    // (one not hashed yet is filled in after: hash_behind)
     let sha256 = |id: &str| match increart_core::config::model_file_on_disk(id, model_dirs) {
-        Some(file) if !id.starts_with('@') => modelhash::sha256_cached(&cache, &file).unwrap_or_default(),
+        Some(file) if !id.starts_with('@') => modelhash::cached(&cache, &file).unwrap_or_default(),
         _ => String::new(),
     };
     let files = preset
@@ -2461,7 +2627,7 @@ fn new_run(lib: &Library, f: &GenerateForm, preset: &RecipePreset, model_dirs: &
     NewRun {
         sweep: None,
         label: f.label.clone(),
-        prompt: preset.prompt_with_triggers(&f.prompt),
+        prompt: preset.prompt_queued(&f.prompt),
         negative_prompt: f.negative.clone(),
         // the prompt as typed (the old Transparent wrapper broke edits)
         alpha: false,

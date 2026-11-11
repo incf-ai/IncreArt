@@ -122,7 +122,7 @@ impl Fake {
         self.with(|s| {
             s.log
                 .iter()
-                .filter(|(_, p, b)| p.ends_with("/img_gen") && b["prompt"] != "warm-up")
+                .filter(|(_, p, b)| p.ends_with("/img_gen") && !is_warm_up(b))
                 .map(|(_, _, b)| b.clone())
                 .collect()
         })
@@ -150,6 +150,12 @@ fn model_status(s: &State) -> Value {
 
 /// The PNG sd-server would return: a small image coloured by the seed, RGBA
 /// for an RGBA prompt, with its own `parameters` chunk.
+/// A warm-up's body: the small throwaway one, or a seed's as a warm-up
+/// (`request::as_warm_up`: no metadata asked for).
+pub fn is_warm_up(body: &Value) -> bool {
+    body["prompt"] == "warm-up" || body["embed_image_metadata"] == false
+}
+
 pub fn result_png(body: &Value) -> Vec<u8> {
     sized_png(body, (32, 32))
 }

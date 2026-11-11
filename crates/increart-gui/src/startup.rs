@@ -544,7 +544,7 @@ fn kobold_fields(
                 ui.horizontal(|ui| {
                     ui.add(egui::TextEdit::singleline(host).desired_width(120.0));
                     ui.label("port");
-                    ui.add(egui::DragValue::new(port).range(1024..=65535));
+                    ui.add(crate::widgets::drag_value(port).range(1024..=65535));
                 });
                 ui.end_row();
                 ui.label("Runs on");
@@ -621,7 +621,7 @@ fn kobold_fields(
                 });
                 ui.horizontal(|ui| {
                     label(ui, "Context");
-                    ui.add(egui::DragValue::new(&mut c.context).range(0..=131072).speed(256));
+                    ui.add(crate::widgets::drag_value(&mut c.context).range(0..=131072).speed(256));
                     ui.weak("tokens (0: KoboldCpp's default)");
                 });
             }
@@ -1969,7 +1969,7 @@ fn kobold_wizard(
                             ui.checkbox(&mut w.on, format!("{}  {}", w.gpu.number, w.gpu.name));
                             if w.by_hand {
                                 ui.add(
-                                    egui::DragValue::new(&mut w.gpu.vram_gib)
+                                    crate::widgets::drag_value(&mut w.gpu.vram_gib)
                                         .range(0.0..=1024.0)
                                         .speed(0.5)
                                         .max_decimals(1)
@@ -2170,7 +2170,15 @@ pub fn download_progress(ui: &mut egui::Ui, downloads: &[tiers::Download], at: &
         ui.horizontal(|ui| {
             ui.spinner();
             let file = name(at.file).unwrap_or_default();
-            ui.label(format!("Checking what's there already ({} of {}): {file}", at.file + 1, downloads.len()));
+            // cut short, not widening the window, for a long file name
+            ui.add(
+                egui::Label::new(format!(
+                    "Checking what's there already ({} of {}): {file}",
+                    at.file + 1,
+                    downloads.len()
+                ))
+                .truncate(),
+            );
         });
     } else {
         let mut line = match at.all_total {
@@ -2424,7 +2432,7 @@ fn editor(ui: &mut egui::Ui, st: &AppState, d: &ServerDialog, editing: Editing, 
                             ui.label("device");
                             ui.add(egui::TextEdit::singleline(device).desired_width(80.0));
                             ui.label("port");
-                            ui.add(egui::DragValue::new(port).range(1024..=65535));
+                            ui.add(crate::widgets::drag_value(port).range(1024..=65535));
                         }
                         ServerConfig::Connect { name, url, device } => {
                             ui.label(ic(ph::PLUGS_CONNECTED, "sd-server at"));

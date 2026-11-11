@@ -164,3 +164,32 @@ fn start_connect_and_stop() {
         other => panic!("{other:?}"),
     }
 }
+
+#[test]
+#[cfg(unix)]
+fn a_started_server_that_crashes_says_how() {
+    let tmp = tempfile::tempdir().unwrap();
+    let bin = env!("CARGO_BIN_EXE_increart-test-sd-server");
+    let shared =
+        Programs { sd_server: SdServerConfig { binary: bin.into(), ..Default::default() }, ..Default::default() };
+    let server = ServerConfig::Start {
+        name: "crashy".into(),
+        host: "127.0.0.1".into(),
+        port: free_port(),
+        device: "x".into(),
+        args: vec!["--crash-after".into(), "300".into()],
+    };
+    let mut proc = launcher::open(&server, &shared, &tmp.path().join("logs"), Duration::from_secs(20)).unwrap();
+    assert_eq!(proc.exited(), None, "still running");
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    let exit = loop {
+        if let Some(e) = proc.exited() {
+            break e;
+        }
+        assert!(std::time::Instant::now() < deadline, "never exited");
+        std::thread::sleep(Duration::from_millis(50));
+    };
+    assert!(exit.status.contains("SIGABRT"), "{exit:?}");
+    assert_eq!(exit.last.last().map(String::as_str), Some("generating"), "{exit:?}");
+    assert!(!proc.launched() && proc.exited().is_none(), "said once");
+}

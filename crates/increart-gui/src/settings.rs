@@ -84,7 +84,7 @@ pub fn timeouts(ui: &mut egui::Ui, st: &AppState, out: &mut Vec<Msg>) {
     egui::Grid::new("timeouts").num_columns(3).spacing([12.0, 6.0]).show(ui, |ui| {
         for (name, what, secs) in rows {
             ui.label(name);
-            ui.add(egui::DragValue::new(secs).range(1..=86_400).speed(1.0).suffix(" s"));
+            ui.add(crate::widgets::drag_value(secs).range(1..=86_400).speed(1.0).suffix(" s"));
             ui.add(egui::Label::new(RichText::new(what).weak()).wrap());
             ui.end_row();
         }
@@ -262,14 +262,14 @@ fn notifications(ui: &mut egui::Ui, st: &AppState, n: &mut Notifications, out: &
 fn rule(ui: &mut egui::Ui, id: &str, r: &mut AlertRule, what: &str, unit: &str, out: &mut Vec<Msg>) {
     ui.horizontal(|ui| {
         ui.checkbox(&mut r.on, what);
-        ui.add_enabled(r.on, egui::DragValue::new(&mut r.threshold).range(1..=100_000));
+        ui.add_enabled(r.on, crate::widgets::drag_value(&mut r.threshold).range(1..=100_000));
         ui.label(unit);
     });
     ui.add_enabled_ui(r.on, |ui| {
         ui.horizontal(|ui| {
             ui.add_space(24.0);
             ui.label("repeat every");
-            ui.add(egui::DragValue::new(&mut r.repeat_minutes).range(1..=1440));
+            ui.add(crate::widgets::drag_value(&mut r.repeat_minutes).range(1..=1440));
             ui.label("min while it lasts · sound");
             sound_pick(ui, id, &mut r.sound);
             if ui.small_button(ph::PLAY).on_hover_text("play it").clicked() {

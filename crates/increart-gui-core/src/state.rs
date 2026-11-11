@@ -1045,6 +1045,9 @@ pub struct ModelWizard {
     pub add: BTreeSet<String>,
     /// Built-in presets ticked, by name.
     pub picked: BTreeSet<String>,
+    /// The size picked of each built-in with several (by name; not there:
+    /// the size it's listed at), to start the size your copy is.
+    pub picked_size: BTreeMap<String, String>,
     /// Files servers already running list ticked in Add models (each a
     /// model of `AppState::server_model_offers`), by file ID.
     pub picked_files: BTreeSet<String>,
@@ -1195,7 +1198,70 @@ impl<'a> ModelLists<'a> {
     }
 }
 
+/// The size of each built-in model of several sizes your copy is (by
+/// name: the size it says, else the one with its files, as a copy from
+/// before sizes), for [`ModelWizard::picked_size`] to start with.
+pub fn installed_sizes(recipes: &[RecipePreset]) -> BTreeMap<String, String> {
+    increart_core::config::catalogue()
+        .into_iter()
+        .filter(|c| c.sizes.len() > 1)
+        .filter_map(|c| {
+            let mine = recipes.iter().find(|r| r.name == c.name)?;
+            let size = c
+                .sizes
+                .iter()
+                .find(|s| s.name == mine.size)
+                .or_else(|| c.sizes.iter().find(|s| c.with_size(&s.name).files == mine.files))?;
+            Some((c.name.clone(), size.name.clone()))
+        })
+        .collect()
+}
+
 impl ModelWizard {
+    /// The built-in models, each at the size picked
+    /// ([`ModelWizard::picked_size`]), else the one recommended.
+    pub fn catalogue(&self) -> Vec<RecipePreset> {
+        increart_core::config::catalogue()
+            .into_iter()
+            .map(|p| {
+                let size = self.picked_size.get(&p.name).cloned().or_else(|| self.recommended_size(&p));
+                match size {
+                    Some(size) => p.with_size(&size),
+                    None => p,
+                }
+            })
+            .collect()
+    }
+
+    /// The size of a built-in model of several recommended for the largest
+    /// GPU: the first listed (best first) that fits on it whole, else the
+    /// first whose diffusion model fits (the text encoder from RAM), else
+    /// the smallest. None: one size, or the GPUs or the files' sizes not
+    /// known yet (the size it's listed at).
+    pub fn recommended_size(&self, p: &RecipePreset) -> Option<String> {
+        if p.sizes.len() < 2 {
+            return None;
+        }
+        let gpus = self.gpus.as_ref()?.as_ref().ok()?;
+        // a discrete GPU's memory, when there's one (an integrated one shares RAM)
+        let discrete = gpus.iter().any(|g| !g.integrated);
+        let vram = gpus
+            .iter()
+            .filter(|g| !discrete || !g.integrated)
+            .map(|g| g.vram_gib)
+            .fold(None, |m: Option<f64>, v| Some(m.map_or(v, |m| m.max(v))))?;
+        let fits: Vec<(String, GpuFit)> = p
+            .each_size()
+            .into_iter()
+            .map(|s| Some((s.size.clone(), PresetNeeds::of(&s, &[], &self.sizes, None).fit(vram)?)))
+            .collect::<Option<_>>()?;
+        [GpuFit::Whole, GpuFit::Diffusion]
+            .iter()
+            .find_map(|want| fits.iter().find(|(_, f)| f == want))
+            .or(fits.last())
+            .map(|(name, _)| name.clone())
+    }
+
     /// Of `rows`, those the search, kind and fit filter let through, in the
     /// chosen order; `vram`: the memory in GiB of each GPU ticked in Fits
     /// GPU (none: every size). A size not known yet is shown.
@@ -1214,14 +1280,14 @@ impl ModelWizard {
         // each row's key, None (not known yet) last either way
         let key = |n: &PresetNeeds| -> Option<(u64, u64)> {
             match self.sort.column? {
-                ModelColumn::Name | ModelColumn::Size => Some((n.total_bytes?, 0)),
+                ModelColumn::Name | ModelColumn::Size => Some((n.gpu_bytes()?, 0)),
                 ModelColumn::Files if n.unavailable => Some((2, 0)),
                 ModelColumn::Files if n.downloads.is_empty() => Some((0, 0)),
                 ModelColumn::Files => Some((1, n.download_bytes.unwrap_or(u64::MAX))),
                 ModelColumn::Fits => {
-                    n.total_bytes?;
-                    let fits = vram.iter().filter(|v| n.fits(**v) == Some(true)).count() as u64;
-                    Some((u64::MAX - fits, n.total_bytes.unwrap_or(0)))
+                    // whole on a GPU counts more than with its text encoder in RAM
+                    let fits: u64 = vram.iter().filter_map(|v| n.fit(*v)).map(|f| f as u64).sum();
+                    Some((u64::MAX - fits, n.gpu_bytes()?))
                 }
             }
         };
@@ -1276,8 +1342,11 @@ pub struct PresetNeeds {
     pub links: Vec<Link>,
     /// Their size (None: one not known yet).
     pub download_bytes: Option<u64>,
-    /// All its files', there or to fetch: roughly the memory it takes.
+    /// All its files', there or to fetch.
     pub total_bytes: Option<u64>,
+    /// Its diffusion model's files (and LoRAs'): what stays on the GPU
+    /// while the text encoder and VAE run from RAM ([`GpuNeed`]).
+    pub diffusion_bytes: Option<u64>,
     /// A slot with none of its files there nor a download.
     pub unavailable: bool,
     /// How many such slots (none found elsewhere either).
@@ -1285,6 +1354,41 @@ pub struct PresetNeeds {
     /// Your copy of a built-in model, its files not the built-in's now
     /// (an older one, or edited): installing the built-in replaces it.
     pub update: bool,
+}
+
+/// The GPU memory sd-server sets aside beside a model's weights while it
+/// runs (its auto-fit's reserve for the diffusion model and the text
+/// encoder; the VAE's is less).
+pub const GPU_RESERVE: u64 = 2 << 30;
+
+/// A model's files by part, as sd-server places them: the diffusion model
+/// runs every step, so it stays on the GPU; the text encoder (once per
+/// prompt) and the VAE (once per image) go to RAM when they don't fit
+/// beside it, and run from there on the GPU.
+pub fn slot_part(slot: &str) -> ModelPart {
+    match slot {
+        "diffusion_model" | "model" | "uncond_diffusion_model" => ModelPart::Diffusion,
+        "vae" => ModelPart::Vae,
+        _ => ModelPart::TextEncoder,
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ModelPart {
+    Diffusion,
+    TextEncoder,
+    Vae,
+}
+
+/// How a model fits a GPU.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum GpuFit {
+    /// Its diffusion model doesn't: it runs from RAM, each step slow.
+    No,
+    /// Its diffusion model does, the text encoder and VAE from RAM.
+    Diffusion,
+    /// All of it.
+    Whole,
 }
 
 /// Whether your copy of a built-in model has other files than it now
@@ -1328,6 +1432,7 @@ impl PresetNeeds {
         };
         let mut missing = 0;
         let mut total = Some(0u64);
+        let mut diffusion = Some(0u64);
         let mut more: Vec<Link> = vec![];
         // each slot's file there, else the one linked or fetched; a slot with
         // no download, linked if found
@@ -1336,31 +1441,78 @@ impl PresetNeeds {
                 .choices(slot)
                 .find(|f| model_file_on_disk(f, dirs).is_some())
                 .or_else(|| p.choices(slot).find(|f| p.downloads.contains_key(*f)));
-            match f {
-                Some(f) => total = total.zip(size_of(f)).map(|(a, b)| a + b),
+            let bytes = match f {
+                Some(f) => size_of(f),
                 None => match p.choices(slot).find_map(|f| found(f)) {
                     Some(l) => {
-                        total = total.map(|t| t + l.bytes);
+                        let b = l.bytes;
                         more.push(l);
+                        Some(b)
                     }
-                    None => missing += 1,
+                    None => {
+                        missing += 1;
+                        None
+                    }
                 },
+            };
+            total = total.zip(bytes).map(|(a, b)| a + b);
+            if slot_part(slot) == ModelPart::Diffusion {
+                diffusion = diffusion.zip(bytes).map(|(a, b)| a + b);
             }
         }
+        // applied to the diffusion model, on the GPU with it
         for l in p.loras.iter().filter(|l| !l.file.is_empty()) {
-            total = total.zip(size_of(&l.file)).map(|(a, b)| a + b);
+            let bytes = size_of(&l.file);
+            total = total.zip(bytes).map(|(a, b)| a + b);
+            diffusion = diffusion.zip(bytes).map(|(a, b)| a + b);
         }
         links.extend(more);
         let download_bytes = downloads.iter().try_fold(0u64, |n, d| Some(n + sizes.get(&d.url).copied().flatten()?));
         // a file missing: its size isn't known, so neither is the whole
         let unavailable = missing > 0;
         let total_bytes = if unavailable { None } else { total };
-        PresetNeeds { downloads, links, download_bytes, total_bytes, unavailable, missing, update: false }
+        let diffusion_bytes = if unavailable { None } else { diffusion };
+        PresetNeeds {
+            downloads,
+            links,
+            download_bytes,
+            total_bytes,
+            diffusion_bytes,
+            unavailable,
+            missing,
+            update: false,
+        }
     }
 
-    /// Whether it fits a GPU of `vram_gib` (its files a little under it).
+    /// The most GPU memory it needs at once: its diffusion model and the
+    /// reserve (the text encoder and VAE from RAM).
+    pub fn gpu_bytes(&self) -> Option<u64> {
+        Some(self.diffusion_bytes? + GPU_RESERVE)
+    }
+
+    /// The GPU memory all of it on the GPU takes (the reserve once: the
+    /// parts run one after another).
+    pub fn gpu_all_bytes(&self) -> Option<u64> {
+        Some(self.total_bytes? + GPU_RESERVE)
+    }
+
+    /// How it fits a GPU of `vram_gib` (a little under it: the desktop
+    /// and other programs use some).
+    pub fn fit(&self, vram_gib: f64) -> Option<GpuFit> {
+        let room = vram_gib * 0.95 * (1u64 << 30) as f64;
+        Some(if self.gpu_all_bytes()? as f64 <= room {
+            GpuFit::Whole
+        } else if self.gpu_bytes()? as f64 <= room {
+            GpuFit::Diffusion
+        } else {
+            GpuFit::No
+        })
+    }
+
+    /// Whether it runs at speed on a GPU of `vram_gib`: its diffusion
+    /// model fits, the rest maybe from RAM.
     pub fn fits(&self, vram_gib: f64) -> Option<bool> {
-        Some(self.total_bytes? as f64 <= vram_gib * 0.95 * (1u64 << 30) as f64)
+        Some(self.fit(vram_gib)? > GpuFit::No)
     }
 }
 
@@ -1395,10 +1547,7 @@ impl ModelWizard {
     ) -> (Vec<Link>, Vec<increart_core::tiers::Download>) {
         let dirs = self.folders(model_dirs);
         let (mut links, mut downloads): (Vec<Link>, Vec<increart_core::tiers::Download>) = (vec![], vec![]);
-        for p in increart_core::config::catalogue()
-            .iter()
-            .filter(|p| self.picked.contains(&p.name) && !remote.contains(&p.name))
-        {
+        for p in self.catalogue().iter().filter(|p| self.picked.contains(&p.name) && !remote.contains(&p.name)) {
             let needs = PresetNeeds::of(p, &dirs, &self.sizes, self.index.as_deref());
             for l in needs.links {
                 if !links.iter().any(|o| o.file == l.file) {
@@ -1426,7 +1575,7 @@ impl ModelWizard {
         let dirs = self.folders(model_dirs);
         let mut links: Vec<Link> = vec![];
         let mut whole = 0;
-        for p in increart_core::config::catalogue().iter() {
+        for p in self.catalogue().iter() {
             let needs = PresetNeeds::of(p, &dirs, &self.sizes, self.index.as_deref());
             if needs.links.is_empty() {
                 continue;
@@ -2358,6 +2507,9 @@ pub struct GenerateForm {
     pub source_idea: Option<Id>,
     /// Sweep mode: a run per chosen prompt preset.
     pub sweep: Sweep,
+    /// The Develop idea conversation about the prompt, kept with the
+    /// draft to go on with.
+    pub develop: Option<increart_core::pe::DevelopChat>,
 }
 
 /// A row of Review's scope tree at a folder: a subfolder or a project.
@@ -2413,37 +2565,44 @@ pub fn images_of(refs: &[ImageRef], init: Option<&ImageRef>) -> Vec<GenerateImag
     v
 }
 
-/// The `<imageN>` tags in a prompt: (byte range, N). Accepts `<image2>`,
-/// `<Image 2>` and the like.
+/// The reference tags in a prompt: (byte range, N). Accepts `<image2>`,
+/// `<Image 2>` and MiniMax-H3's `<Picture 2>` and the like (either syntax
+/// is put in the model's when queued).
 pub fn image_tags(prompt: &str) -> Vec<(std::ops::Range<usize>, usize)> {
     let lower = prompt.to_ascii_lowercase();
     let mut out = vec![];
+    let next = |from: usize| {
+        ["<image", "<picture"].iter().filter_map(|w| lower[from..].find(w).map(|i| (i + from, w.len()))).min()
+    };
     let mut from = 0;
-    while let Some(at) = lower[from..].find("<image").map(|i| i + from) {
-        let rest = &lower[at + 6..];
+    while let Some((at, word)) = next(from) {
+        let rest = &lower[at + word..];
         let digits_at = rest.len() - rest.trim_start_matches(' ').len();
         let digits: String = rest[digits_at..].chars().take_while(char::is_ascii_digit).collect();
-        let end = at + 6 + digits_at + digits.len();
+        let end = at + word + digits_at + digits.len();
         if !digits.is_empty() && lower[end..].starts_with('>') {
             if let Ok(n) = digits.parse() {
                 out.push((at..end + 1, n));
             }
             from = end + 1;
         } else {
-            from = at + 6;
+            from = at + word;
         }
     }
     out
 }
 
 /// The prompt with its tags renumbered by `map` (old N → new N, or `None`
-/// for an image that's no longer a reference: "[removed image]").
+/// for an image that's no longer a reference: "[removed image]"); each tag
+/// keeps its syntax.
 pub fn retag(prompt: &str, map: &std::collections::BTreeMap<usize, Option<usize>>) -> String {
     let mut s = String::new();
     let mut last = 0;
     for (range, n) in image_tags(prompt) {
         s.push_str(&prompt[last..range.start]);
+        let picture = prompt[range.clone()].to_ascii_lowercase().starts_with("<picture");
         match map.get(&n) {
+            Some(Some(m)) if picture => s.push_str(&format!("<Picture {m}>")),
             Some(Some(m)) => s.push_str(&format!("<image{m}>")),
             Some(None) => s.push_str("[removed image]"),
             None => s.push_str(&prompt[range.clone()]),
@@ -3060,6 +3219,26 @@ pub struct PeText {
     pub error: Option<String>,
     /// How many images went with the ask.
     pub images: usize,
+    /// The job asked ([`increart_core::pe::REWRITE`],
+    /// [`increart_core::pe::REWRITE_H3`] or
+    /// [`increart_core::pe::DESCRIBE`]): its system prompt and sampling.
+    /// Developing an idea, the rewrite job whose prompt is the guide.
+    pub job: &'static str,
+    /// Developing an idea (the Develop idea window) instead of rewriting:
+    /// the conversation; `text` is the last prompt written.
+    pub develop: Option<Develop>,
+}
+
+/// The Develop idea window's conversation: the idea, the exchanges so far
+/// (the model's questions or prompts and the answers), and the reply being
+/// written to the last.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Develop {
+    pub idea: String,
+    pub turns: Vec<increart_core::pe::DevelopTurn>,
+    pub reply: String,
+    /// The ask waiting (or last) was for the prompt, no more questions.
+    pub write_now: bool,
 }
 
 impl PeText {
@@ -3067,10 +3246,9 @@ impl PeText {
     pub fn origin(
         server: &increart_core::pe::PeServer,
         pe: &increart_core::pe::PeConfig,
-        describe: bool,
+        job: &str,
     ) -> increart_core::model::VariantOrigin {
-        use increart_core::pe::{DESCRIBE, REWRITE, prompt_hash};
-        let job = if describe { DESCRIBE } else { REWRITE };
+        use increart_core::pe::prompt_hash;
         increart_core::model::VariantOrigin::Rewritten {
             model: server.name.clone(),
             system_prompt_hash: prompt_hash(pe.system_prompt(job)),
@@ -3090,6 +3268,15 @@ pub enum PeStatus {
 }
 
 impl AppState {
+    /// Whether the Generate form's model preset is a MiniMax-H3-Image one
+    /// (its prompts are rewritten for it: [`increart_core::pe::REWRITE_H3`]).
+    pub fn h3_form(&self) -> bool {
+        self.config
+            .recipes
+            .get(self.generate.preset)
+            .is_some_and(|r| increart_core::request::MINIMAX_H3_IMAGE.contains(&r.recipe.as_str()))
+    }
+
     /// The values prompt enhance offered for a blank of the Generate sweep,
     /// to pick from (saved with the project's draft).
     pub fn blank_shown(&self, key: &BlankKey) -> Option<&Vec<String>> {
@@ -3374,6 +3561,7 @@ impl GenerateForm {
             strength: increart_core::model::default_strength(),
             source_idea: None,
             sweep: Sweep::default(),
+            develop: None,
         };
         if let Some(p) = config.recipes.first() {
             f.apply_preset(0, p);
@@ -3404,6 +3592,7 @@ impl GenerateForm {
             strength: self.strength,
             source_idea: self.source_idea.clone(),
             sweep: self.sweep.clone(),
+            develop: self.develop.clone(),
         }
     }
 
@@ -3428,6 +3617,7 @@ impl GenerateForm {
             source_idea: d.source_idea.clone(),
             // ticks from before Modify style was split, in the style tasks
             sweep: d.sweep.current(&increart_core::prompts::builtin()),
+            develop: d.develop.clone(),
         }
     }
 
@@ -3873,6 +4063,47 @@ pub struct Message {
     pub folder: Option<PathBuf>,
 }
 
+/// A server the app started that crashed ([`crate::Msg::ServerExited`]).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ServerCrash {
+    /// The opening attempt and slot it was started in (to start it again).
+    pub attempt: u32,
+    pub slot: usize,
+    /// When it crashed (`now`), within [`CRASH_WINDOW_S`]: started again by
+    /// itself up to [`AUTO_RESTARTS`] times in that.
+    pub at: Vec<f64>,
+    /// How it ended, or why starting it again failed.
+    pub why: String,
+    /// Not running (crashed, and not started again yet).
+    pub down: bool,
+    /// Being started again.
+    pub restarting: bool,
+}
+
+/// How long crashes count against starting a server again by itself.
+pub const CRASH_WINDOW_S: f64 = 30.0 * 60.0;
+/// A crashed server is started again by itself this many times within
+/// [`CRASH_WINDOW_S`]; after that it waits for Restart (its cause wants
+/// fixing: a crash every time a job starts would only loop).
+pub const AUTO_RESTARTS: usize = 2;
+
+impl ServerCrash {
+    /// Under a crashed server's state: "crashed: signal 11 (SIGSEGV) ·
+    /// restarting…"; none once it runs again.
+    pub fn text(&self) -> Option<String> {
+        if !self.down {
+            return None;
+        }
+        Some(if self.restarting {
+            format!("crashed ({}) · starting it again…", self.why)
+        } else if self.at.len() > AUTO_RESTARTS {
+            format!("crashed {} times in 30 min, not started again: {}", self.at.len(), self.why)
+        } else {
+            format!("down: {}", self.why)
+        })
+    }
+}
+
 /// An inline rename in a tree: which node, and the edited name.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Renaming {
@@ -4151,9 +4382,21 @@ pub struct AppState {
     /// one before it's saved (a double-click) would save it twice, as the
     /// label only moves on once it is.
     pub queueing: Vec<(Id, String)>,
-    /// What saving each of `queueing` is doing (hashing a model file the
-    /// first time, how far), when it takes a while.
-    pub queueing_notes: HashMap<(Id, String), (String, f32)>,
+    /// Servers (by index) loading a model or warming up after a load (or
+    /// launch): the model's recipe and since when (`now`), for the
+    /// forecast's time left of it.
+    pub server_loading: HashMap<usize, (String, f64)>,
+    /// Servers the app started that crashed, by name.
+    pub server_crashes: HashMap<String, ServerCrash>,
+    /// Servers (by index) warming up: how far, and the run it was made
+    /// from (none: the small one).
+    pub warm_ups: HashMap<usize, (increart_core::engine::WarmUpPhase, Option<Id>)>,
+    /// Each of `queueing`'s cancel flag (Cancel, Stop all).
+    pub queueing_cancel: HashMap<(Id, String), crate::update::CancelFlag>,
+    /// Runs saved and queued whose model files are being hashed (the first
+    /// time), by run: what it's doing, how far. Their images are written
+    /// once it's done.
+    pub hashing_notes: HashMap<Id, (String, f32)>,
     /// The seeds each server (by index) has been handed, and how far each
     /// got (being sent, queued there, generating).
     pub sent_seeds: HashMap<usize, Vec<increart_core::engine::SentSeed>>,
@@ -4611,7 +4854,7 @@ impl AppState {
         if !self.remote_only() {
             return BTreeSet::new();
         }
-        increart_core::config::catalogue()
+        w.catalogue()
             .iter()
             .filter(|p| w.picked.contains(&p.name) && !self.runs_remotely(p).is_empty())
             .map(|p| p.name.clone())
@@ -4963,7 +5206,11 @@ impl AppState {
             saving_bug_report: false,
             no_server_warned: false,
             queueing: vec![],
-            queueing_notes: HashMap::new(),
+            queueing_cancel: HashMap::new(),
+            hashing_notes: HashMap::new(),
+            server_loading: HashMap::new(),
+            server_crashes: HashMap::new(),
+            warm_ups: HashMap::new(),
             sent_seeds: HashMap::new(),
             folder_view: FolderView::new(FvPlace::Projects),
             parked_folder_views: FvPlace::ALL[1..].iter().map(|p| FolderView::new(*p)).collect(),
@@ -6832,6 +7079,12 @@ impl AppState {
 
     /// An error about a server (`"<name>: …"`, as the engine words them),
     /// with that server's log when the app started it.
+    /// The crash of server `name` (from the servers open now), while it's
+    /// down.
+    pub fn crash_of(&self, name: &str) -> Option<&ServerCrash> {
+        self.server_crashes.get(name).filter(|c| c.down && c.attempt == self.open_attempt)
+    }
+
     pub fn messages_server_error(&mut self, text: impl Into<String>) {
         let text = text.into();
         increart_core::applog::line("error", &text);
@@ -7147,13 +7400,24 @@ impl AppState {
         let recipes: BTreeSet<&str> = runs.iter().map(|r| r.recipe.as_str()).collect();
         self.servers
             .iter()
-            .map(|s| crate::forecast::SimServer {
-                working: server_working(&s.state),
-                recipe: s.model.clone(),
-                load_s: recipes
-                    .iter()
-                    .filter_map(|r| Some((r.to_string(), self.load_times.get(&s.name, r)? as f64)))
-                    .collect(),
+            .enumerate()
+            .map(|(i, s)| {
+                // loading or warming up now: the model it's loading, and
+                // what's left of its usual load (with the warm-up; a tenth
+                // of it at least while it goes over)
+                let busy = self.server_loading.get(&i).map(|(recipe, since)| {
+                    let load = self.load_times.get(&s.name, recipe).map_or(crate::forecast::LOAD_S, |t| t as f64);
+                    (recipe.clone(), (load - (self.now - since)).max(load / 10.0))
+                });
+                crate::forecast::SimServer {
+                    working: server_working(&s.state),
+                    recipe: busy.as_ref().map(|(r, _)| r.clone()).or_else(|| s.model.clone()),
+                    load_s: recipes
+                        .iter()
+                        .filter_map(|r| Some((r.to_string(), self.load_times.get(&s.name, r)? as f64)))
+                        .collect(),
+                    busy_s: busy.map_or(0.0, |(_, s)| s),
+                }
             })
             .collect()
     }

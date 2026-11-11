@@ -137,6 +137,21 @@ pub enum Event {
     Log { run: Id, line: String },
     /// A server loaded a model (asked to), in `took_s` seconds.
     ModelLoaded { server: ServerIdx, recipe: String, took_s: f32 },
+    /// What a server's warm-up is doing (`run`: the run it was made from;
+    /// none: the small one); `phase` None: it's over.
+    WarmUp { server: ServerIdx, phase: Option<WarmUpPhase>, run: Option<Id> },
+}
+
+/// How far a warm-up job is, as its server says.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WarmUpPhase {
+    /// Sent, not answered yet.
+    Sent,
+    /// Waiting in the server's queue (behind this many).
+    Queued(i64),
+    /// Generating: a lazy server reads the model's weights and encodes the
+    /// prompt (most of a warm-up's time), then samples its one step.
+    Working,
 }
 
 /// A server's last reported state, model, idleness, runs in flight and
@@ -159,6 +174,10 @@ enum Msg {
     Order(Order, Option<u64>),
     /// The preview mode sent with the jobs from now on.
     Preview(String),
+    /// A run's model files are being hashed (true) or hashed (false).
+    Hashing(Id, bool),
+    /// Skip on a server's warm-up.
+    SkipWarmUp(ServerIdx),
     Report(ServerIdx, Report),
     Shutdown,
 }
@@ -173,6 +192,9 @@ enum Cmd {
         round: u64,
     },
     WarmUp(Value),
+    /// Cancels the warm-up going on (skipped, or its run was stopped);
+    /// ignored after it.
+    StopWarmUp,
     Load(ModelKey),
     Submit {
         ticket: Ticket,
@@ -187,6 +209,8 @@ enum Cmd {
 
 enum Report {
     Probed(Result<ModelStatus, ApiError>),
+    /// Its warm-up job moved on (queued, generating).
+    WarmUpPhase(WarmUpPhase),
     /// What it can load, or why it couldn't say (`None`: not asked, it
     /// didn't answer its probe).
     Listed {
@@ -301,9 +325,15 @@ impl Engine {
             told_stuck: HashSet::new(),
             logs: HashMap::new(),
             load_started: vec![],
+            load_warming: vec![],
+            warm_run: vec![],
+            warm_stopped: vec![],
+            warm_small: vec![],
             named: vec![],
             body_logged: HashSet::new(),
             troubled: vec![],
+            hashing: HashSet::new(),
+            held: vec![],
             events: etx,
             notify,
         };
@@ -315,6 +345,25 @@ impl Engine {
     /// seeds not queued yet are added).
     pub fn queue_run(&self, run: &Id) {
         let _ = self.tx.send(Msg::Queue(run.clone()));
+    }
+
+    /// A queued run's model files are still being hashed: its images that
+    /// are done meanwhile are held, then written once [`Engine::hashed`]
+    /// says so (their recipes need the hashes).
+    pub fn hashing(&self, run: &Id) {
+        let _ = self.tx.send(Msg::Hashing(run.clone(), true));
+    }
+
+    /// Stops a server's warm-up going on: it's taken as done (the first
+    /// seed then reads the weights, and its time says so).
+    pub fn skip_warm_up(&self, server: ServerIdx) {
+        let _ = self.tx.send(Msg::SkipWarmUp(server));
+    }
+
+    /// A run's model files are hashed (in its `run.rsn`): its images held
+    /// are written.
+    pub fn hashed(&self, run: &Id) {
+        let _ = self.tx.send(Msg::Hashing(run.clone(), false));
     }
 
     /// Drops a run's pending seeds and cancels its in-flight jobs (with
@@ -399,6 +448,19 @@ struct Coordinator {
     logs: HashMap<Id, PathBuf>,
     /// When each server's latest load was asked for.
     load_started: Vec<Option<Instant>>,
+    /// A load answered, its warm-up still to come: its recipe, the load's
+    /// seconds and when it was asked for. A lazy server (sd-server) only
+    /// reads the weights with its first image, so the load's time said
+    /// ([`Event::ModelLoaded`]) is until its warm-up is done.
+    load_warming: Vec<Option<(String, f32, Instant)>>,
+    /// The run each server's warm-up going on was made from (none: the
+    /// small one), whether it was stopped (Stop on that run), and servers
+    /// whose warm-up from a run failed: their next is the small one (a
+    /// run's request the server refuses mustn't give the model up for
+    /// every run).
+    warm_run: Vec<Option<Id>>,
+    warm_stopped: Vec<Option<&'static str>>,
+    warm_small: Vec<bool>,
     /// Each server's own name for the model it was last asked to load,
     /// when it answered with the same files under another recipe and
     /// slots (a proxy: imgproxy says recipe "checkpoint", slot "model"):
@@ -408,8 +470,20 @@ struct Coordinator {
     body_logged: HashSet<Id>,
     /// Servers whose failing was said (once, until they answer again).
     troubled: Vec<bool>,
+    /// Runs whose model files are being hashed, and their images done
+    /// meanwhile (written once they're hashed, or when the engine stops).
+    hashing: HashSet<Id>,
+    held: Vec<Held>,
     events: Sender<Event>,
     notify: Option<Box<dyn Fn() + Send>>,
+}
+
+/// An image done before its run's model files were hashed.
+struct Held {
+    server: ServerIdx,
+    seed: crate::scheduler::SeedRef,
+    job: Job,
+    step_s: f32,
 }
 
 fn state_label(s: &ServerState) -> String {
@@ -429,22 +503,30 @@ impl Coordinator {
         self.waiting = vec![None; self.servers.len()];
         self.listed = vec![None; self.servers.len()];
         self.load_started = vec![None; self.servers.len()];
+        self.load_warming = vec![None; self.servers.len()];
+        self.warm_run = vec![None; self.servers.len()];
+        self.warm_stopped = vec![None; self.servers.len()];
+        self.warm_small = vec![false; self.servers.len()];
         self.named = vec![None; self.servers.len()];
         self.troubled = vec![false; self.servers.len()];
-        loop {
+        'run: loop {
             match rx.recv_timeout(Duration::from_millis(250)) {
-                Ok(Msg::Shutdown) | Err(RecvTimeoutError::Disconnected) => return,
+                Ok(Msg::Shutdown) | Err(RecvTimeoutError::Disconnected) => break,
                 Ok(msg) => self.handle(msg),
                 Err(RecvTimeoutError::Timeout) => {}
             }
             // Drain whatever else arrived before deciding.
             while let Ok(msg) = rx.try_recv() {
                 if matches!(msg, Msg::Shutdown) {
-                    return;
+                    break 'run;
                 }
                 self.handle(msg);
             }
             self.step();
+        }
+        // images held for hashes not done: written with what's known
+        for h in std::mem::take(&mut self.held) {
+            self.write_held(h);
         }
     }
 
@@ -601,7 +683,13 @@ impl Coordinator {
         let now = Instant::now();
         match action {
             Action::Probe { server } => self.send(server, Cmd::Probe { round: self.list_round }),
-            Action::WarmUp { server } if self.opts.warm_up => self.send(server, Cmd::WarmUp(request::warmup_body())),
+            Action::WarmUp { server } if self.opts.warm_up => {
+                let (body, run) = self.warm_up_body(server);
+                self.warm_run[server] = run.clone();
+                self.warm_stopped[server] = None;
+                self.emit(Event::WarmUp { server, phase: Some(WarmUpPhase::Sent), run });
+                self.send(server, Cmd::WarmUp(body))
+            }
             Action::WarmUp { server } => {
                 self.sched.warmed(server, true, now);
             }
@@ -641,6 +729,36 @@ impl Coordinator {
         }
     }
 
+    /// The warm-up after a load: the first queued run of the model loaded,
+    /// one step and no previews, so its text encoding (prompt, size and
+    /// references) is in the server's conditioning cache when its seeds
+    /// come (with a text encoder streamed through the GPU that pass alone
+    /// takes minutes); none queued: a small throwaway image.
+    fn warm_up_body(&self, server: ServerIdx) -> (Value, Option<Id>) {
+        let small = (request::warmup_body(), None);
+        let Some(model) = self.sched.model_of(server) else { return small };
+        if self.warm_small[server] {
+            return small;
+        }
+        let run = self.sched.runs().filter_map(|id| self.runs.get(id)).find(|r| {
+            let key = ModelKey::from(&r.model);
+            key == *model || key.same_files(model)
+        });
+        let Some(run) = run else { return small };
+        match request::img_gen_body(&self.lib(), run, 0, &self.opts.generation) {
+            Ok(body) => (request::as_warm_up(body), Some(run.id.clone())),
+            Err(_) => small,
+        }
+    }
+
+    /// Cancels a server's warm-up going on (once), said as `why`.
+    fn stop_warm_up(&mut self, server: ServerIdx, why: &'static str) {
+        if self.warm_stopped[server].is_none() {
+            self.warm_stopped[server] = Some(why);
+            self.send(server, Cmd::StopWarmUp);
+        }
+    }
+
     fn send(&mut self, server: ServerIdx, cmd: Cmd) {
         let _ = self.workers[server].send(cmd);
     }
@@ -654,7 +772,35 @@ impl Coordinator {
             }
             Msg::Order(order, random) => (self.sched.order, self.sched.random) = (order, random),
             Msg::Preview(mode) => self.opts.generation.preview = mode,
+            Msg::SkipWarmUp(server) => {
+                if server < self.servers.len() && self.sched.server_state(server) == &ServerState::WarmingUp {
+                    self.stop_warm_up(server, "warm-up skipped");
+                }
+            }
+            Msg::Hashing(run, true) => {
+                self.hashing.insert(run);
+            }
+            Msg::Hashing(run, false) => {
+                self.hashing.remove(&run);
+                // the run as saved now, with its hashes
+                let saved = self.runs.contains_key(&run).then(|| self.lib().find_run(&run).ok()).flatten();
+                if let Some((_, r)) = saved {
+                    self.runs.insert(run.clone(), r);
+                }
+                let (now, later) = std::mem::take(&mut self.held).into_iter().partition(|h| h.seed.run == run);
+                self.held = later;
+                for h in now {
+                    self.write_held(h);
+                }
+                self.check_done(&run);
+            }
             Msg::Cancel(run, how) => {
+                // a warm-up made from it isn't waited for (it can take minutes)
+                for server in 0..self.servers.len() {
+                    if self.warm_run[server].as_ref() == Some(&run) {
+                        self.stop_warm_up(server, "warm-up stopped (its run was stopped)");
+                    }
+                }
                 let (dropped, in_flight) = self.sched.cancel_run(&run);
                 let mut seeds: Vec<u64> = dropped.iter().map(|(_, s)| *s).collect();
                 let kept = in_flight.iter().filter(|(_, t)| self.generating.contains(t)).count();
@@ -740,12 +886,25 @@ impl Coordinator {
                     self.log_ticket(ticket, s, &format!("queued on the server as job {id}"))
                 }
                 Report::Warmed(r) => {
+                    let from_run = self.warm_run[s].take().is_some();
+                    let stopped = self.warm_stopped[s].take();
+                    self.emit(Event::WarmUp { server: s, phase: None, run: None });
+                    // a run's that failed: the small one next (its run's seeds fail on their own)
+                    self.warm_small[s] = from_run && r.is_err();
                     if let Some(m) = self.sched.model_of(s) {
                         let text = match &r {
+                            Ok(()) if stopped.is_some() => stopped.unwrap_or_default().to_string(),
                             Ok(()) => "warm-up image done".to_string(),
                             Err(e) => format!("warm-up image failed: {e}"),
                         };
                         self.log_model(m, Some(s), &text);
+                    }
+                    // a stopped one's time isn't the load's
+                    let timing = self.load_warming[s].take().filter(|_| stopped.is_none());
+                    if let Some((recipe, load_s, started)) = timing {
+                        // with the warm-up when it was done (the weights read then)
+                        let took_s = if r.is_ok() { started.elapsed().as_secs_f32() } else { load_s };
+                        self.emit(Event::ModelLoaded { server: s, recipe, took_s });
                     }
                     if let Err(e) = &r {
                         self.emit(Event::Problem(format!("{}: warm-up failed: {e}", self.servers[s].name)));
@@ -759,6 +918,10 @@ impl Coordinator {
                         )));
                     }
                 }
+                Report::WarmUpPhase(phase) => {
+                    let run = self.warm_run[s].clone();
+                    self.emit(Event::WarmUp { server: s, phase: Some(phase), run });
+                }
                 Report::Waiting(w) => self.waiting[s] = w,
                 Report::ShortOfRam(figures) => self.emit(Event::Problem(format!(
                     "{}: loading without enough free RAM after {} s: {figures}",
@@ -771,7 +934,8 @@ impl Coordinator {
                         ServerState::Loading { target } => target.clone(),
                         _ => return,
                     };
-                    let took = self.load_started[s].take().map_or(0.0, |t| t.elapsed().as_secs_f32());
+                    let started = self.load_started[s].take();
+                    let took = started.map_or(0.0, |t| t.elapsed().as_secs_f32());
                     let text = match &r {
                         Ok(st) if st.loaded().as_ref() == Some(&target) => format!("loaded in {took:.1} s"),
                         Ok(st) if st.holds(&target) => format!(
@@ -790,7 +954,16 @@ impl Coordinator {
                             // its own names for the files asked, kept to read its status by
                             self.named[s] = st.loaded().filter(|k| *k != target).map(|k| (k, target.clone()));
                             self.answered(s);
-                            self.emit(Event::ModelLoaded { server: s, recipe: target.recipe.clone(), took_s: took });
+                            match started {
+                                Some(t) if self.opts.warm_up => {
+                                    self.load_warming[s] = Some((target.recipe.clone(), took, t));
+                                }
+                                _ => self.emit(Event::ModelLoaded {
+                                    server: s,
+                                    recipe: target.recipe.clone(),
+                                    took_s: took,
+                                }),
+                            }
                             LoadResult::Ok
                         }
                         Ok(st) => {
@@ -942,11 +1115,15 @@ impl Coordinator {
     fn fail_seed(&mut self, ticket: Ticket, error: &str) {
         let Some(seed) = self.sched.finished(ticket, Outcome::Dropped) else { return };
         self.log(&seed.run, None, &format!("seed {} failed: {error}", seed.seed));
+        self.record_failed(&seed, error);
+        self.check_done(&seed.run);
+    }
+
+    fn record_failed(&mut self, seed: &crate::scheduler::SeedRef, error: &str) {
         if let Err(e) = self.lib().record_failure(&seed.run, seed.rev, seed.seed, error) {
             self.emit(Event::Problem(format!("recording failed seed: {e}")));
         }
         self.emit(Event::SeedFailed { run: seed.run.clone(), rev: seed.rev, seed: seed.seed, error: error.into() });
-        self.check_done(&seed.run);
     }
 
     fn finished(&mut self, s: ServerIdx, ticket: Ticket, job: Job, step_s: f32) {
@@ -967,33 +1144,62 @@ impl Coordinator {
         }
         let Some((_, seed)) = self.sched.ticket(ticket) else { return };
         let seed = seed.clone();
-        let Some(run) = self.runs.get(&seed.run) else { return };
-        let written = job.image().map_err(|e| e.to_string()).and_then(|png| {
-            let p = Provenance {
-                device: self.servers[s].device.clone(),
-                elapsed_s: job.elapsed_s().unwrap_or(0.0) as f32,
-                queued_s: job.started.map_or(0.0, |t| (t - job.created).max(0) as f32 / 1000.0),
-                step_s,
-                sdcpp: self.servers[s].client.software().unwrap_or_else(|| self.opts.sdcpp.clone()),
-            };
-            let recipe = request::recipe(run, seed.seed, &p);
-            self.lib().write_output(&seed.run, seed.rev, seed.seed, &png, &recipe).map_err(|e| e.to_string())
-        });
-        match written {
-            Ok((image, link)) => {
-                let elapsed_s = job.elapsed_s().unwrap_or(0.0) as f32;
-                self.log_ticket(ticket, s, &format!("done in {elapsed_s:.1} s"));
+        if !self.runs.contains_key(&seed.run) {
+            return;
+        }
+        if self.hashing.contains(&seed.run) {
+            self.log_ticket(ticket, s, "done; written once its model files are hashed");
+            self.sched.finished(ticket, Outcome::Done);
+            self.held.push(Held { server: s, seed, job, step_s });
+            return;
+        }
+        match self.write(s, &seed, &job, step_s) {
+            Ok(()) => {
+                self.log_ticket(ticket, s, &format!("done in {:.1} s", job.elapsed_s().unwrap_or(0.0)));
                 self.sched.finished(ticket, Outcome::Done);
-                let (run, rev, seed_n) = (seed.run.clone(), seed.rev, seed.seed);
-                self.emit(Event::Output { run, rev, seed: seed_n, image, link, server: s, elapsed_s, step_s });
                 self.check_done(&seed.run);
             }
             Err(e) => self.fail_seed(ticket, &format!("storing the result: {e}")),
         }
     }
 
+    /// Writes a finished job's image to the library (its recipe from the
+    /// run as queued) and says so.
+    fn write(&mut self, s: ServerIdx, seed: &crate::scheduler::SeedRef, job: &Job, step_s: f32) -> Result<(), String> {
+        let Some(run) = self.runs.get(&seed.run) else { return Err(format!("run {} is not loaded", seed.run)) };
+        let png = job.image().map_err(|e| e.to_string())?;
+        let p = Provenance {
+            device: self.servers[s].device.clone(),
+            elapsed_s: job.elapsed_s().unwrap_or(0.0) as f32,
+            queued_s: job.started.map_or(0.0, |t| (t - job.created).max(0) as f32 / 1000.0),
+            step_s,
+            sdcpp: self.servers[s].client.software().unwrap_or_else(|| self.opts.sdcpp.clone()),
+        };
+        let recipe = request::recipe(run, seed.seed, &p);
+        let (image, link) =
+            self.lib().write_output(&seed.run, seed.rev, seed.seed, &png, &recipe).map_err(|e| e.to_string())?;
+        let elapsed_s = p.elapsed_s;
+        let (run, rev, seed_n) = (seed.run.clone(), seed.rev, seed.seed);
+        self.emit(Event::Output { run, rev, seed: seed_n, image, link, server: s, elapsed_s, step_s });
+        Ok(())
+    }
+
+    /// A held image written (its seed is done in the scheduler already; a
+    /// failure is the seed's).
+    fn write_held(&mut self, h: Held) {
+        match self.write(h.server, &h.seed, &h.job, h.step_s) {
+            Ok(()) => self.log(&h.seed.run, Some(h.server), &format!("seed {}: written", h.seed.seed)),
+            Err(e) => {
+                let error = format!("storing the result: {e}");
+                self.log(&h.seed.run, Some(h.server), &format!("seed {} failed: {error}", h.seed.seed));
+                self.record_failed(&h.seed, &error);
+            }
+        }
+    }
+
     fn check_done(&mut self, run: &Id) {
-        if self.runs.contains_key(run) && self.sched.run_counts(run).is_none() {
+        let holding = self.held.iter().any(|h| h.seed.run == *run);
+        if self.runs.contains_key(run) && self.sched.run_counts(run).is_none() && !holding {
             self.log(run, None, "nothing left to generate");
             self.runs.remove(run);
             self.logs.remove(run);
@@ -1166,10 +1372,13 @@ fn worker(
                 Some(r) => report(Report::Loaded(r)),
                 None => false,
             },
-            Some(Cmd::WarmUp(body)) => match warm_up(&client, &body, poll, warm_up_limit, &cmds, &mut pending) {
+            Some(Cmd::WarmUp(body)) => match warm_up(&client, &body, poll, warm_up_limit, &cmds, &mut pending, &report)
+            {
                 Some(r) => report(Report::Warmed(r)),
                 None => false,
             },
+            // its warm-up ended before
+            Some(Cmd::StopWarmUp) => true,
             Some(Cmd::Submit { ticket, body }) => {
                 if let Some(p) = cancelled_early.iter().position(|t| *t == ticket) {
                     cancelled_early.remove(p);
@@ -1279,17 +1488,28 @@ fn warm_up(
     limit: Duration,
     cmds: &Receiver<Cmd>,
     pending: &mut VecDeque<Cmd>,
+    report: &impl Fn(Report) -> bool,
 ) -> Option<Result<(), ApiError>> {
-    let id = match client.img_gen(body) {
+    let body = if client.is_kobold() { body.clone() } else { crate::request::one_step_sigmas(body.clone()) };
+    let id = match client.img_gen(&body) {
         Ok(id) => id,
         Err(e) => return Some(Err(e)),
     };
     let since = Instant::now();
+    let mut said = WarmUpPhase::Sent;
     loop {
         let job = match client.job(&id) {
             Ok(job) => job,
             Err(e) => return Some(Err(e)),
         };
+        let phase = match job.status {
+            JobStatus::Queued => WarmUpPhase::Queued(job.queue_position),
+            _ => WarmUpPhase::Working,
+        };
+        if phase != said {
+            said = phase;
+            report(Report::WarmUpPhase(phase));
+        }
         match job.status {
             JobStatus::Completed => return Some(Ok(())),
             JobStatus::Failed | JobStatus::Cancelled => {
@@ -1302,6 +1522,11 @@ fn warm_up(
                 return Some(Err(ApiError::Transport(why)));
             }
             _ => match cmds.recv_timeout(poll) {
+                // its run stopped: the server needn't finish it (taken as done)
+                Ok(Cmd::StopWarmUp) => {
+                    let _ = client.cancel(&id);
+                    return Some(Ok(()));
+                }
                 Ok(c) => pending.push_back(c),
                 Err(RecvTimeoutError::Timeout) => {}
                 Err(RecvTimeoutError::Disconnected) => {

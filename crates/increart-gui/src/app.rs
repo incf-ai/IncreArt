@@ -359,7 +359,8 @@ fn server_statuses(ui: &mut egui::Ui, st: &AppState, out: &mut Vec<Msg>, compact
     let mut items: Vec<Item> = st
         .servers
         .iter()
-        .map(|s| {
+        .enumerate()
+        .map(|(i, s)| {
             let (dot, color) = match s.state.as_str() {
                 "ready" => ("●", GOOD),
                 st if st.contains("retrying") => ("●", BAD),
@@ -380,12 +381,22 @@ fn server_statuses(ui: &mut egui::Ui, st: &AppState, out: &mut Vec<Msg>, compact
                 }
                 None => "generates images".to_string(),
             };
+            let warm = crate::projects::warm_up_text(st, i)
+                .or_else(|| st.crash_of(&s.name).and_then(|c| c.text()))
+                .map(|w| format!("\n{w}"))
+                .unwrap_or_default();
             let tip = format!(
-                "{}: {}{model}\n{role}\n{busy} seeds generating · click for the server status",
+                "{}: {}{model}{warm}\n{role}\n{busy} seeds generating · click for the server status",
                 s.name, s.state
             );
             // the sd-server's latest log line only in the tooltip
-            let state = if s.state.starts_with("starting…") { "starting…".into() } else { s.state.clone() };
+            let state = match st.crash_of(&s.name) {
+                Some(c) if c.restarting => "crashed, starting again…".into(),
+                Some(_) => "crashed".into(),
+                None if s.state.starts_with("starting…") => "starting…".into(),
+                None => s.state.clone(),
+            };
+            let (dot, color) = if st.crash_of(&s.name).is_some() { ("●", BAD) } else { (dot, color) };
             Item { name, dot, state, color, tip, jobs: true }
         })
         .collect();
@@ -640,7 +651,7 @@ fn zoom_control(ui: &mut egui::Ui, st: &AppState, out: &mut Vec<Msg>) {
         let mut v = z;
         let r = ui
             .add(
-                egui::DragValue::new(&mut v)
+                crate::widgets::drag_value(&mut v)
                     .range(UI_ZOOM_MIN..=UI_ZOOM_MAX)
                     .suffix("%")
                     .speed(0.5)
@@ -1608,6 +1619,10 @@ fn pe_section(ui: &mut egui::Ui, st: &AppState, out: &mut Vec<Msg>) {
             increart_core::pe::STYLE_PROMPT => "System prompt: improving a sweep's whole prompt for a style",
             increart_core::pe::STYLE_PART => "System prompt: improving only a style's part of a sweep's prompt",
             increart_core::pe::REWRITE => "System prompt: rewriting a prompt or an idea",
+            increart_core::pe::REWRITE_H3 => "System prompt: rewriting a prompt for MiniMax-H3-Image",
+            increart_core::pe::DEVELOP => {
+                "System prompt: developing an idea in a conversation (the model's rewrite prompt goes after it)"
+            }
             increart_core::pe::DESCRIBE => "System prompt: describing an image",
             _ => job,
         };

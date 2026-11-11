@@ -1182,10 +1182,10 @@ fn size_edit(ui: &mut egui::Ui, size: &mut TextSize, cell_h: u32, now: u32, auto
         }
         match size {
             TextSize::Cell(pc) => {
-                ui.add(egui::DragValue::new(pc).range(0.5..=100.0).speed(0.1).suffix(" %"));
+                ui.add(crate::widgets::drag_value(pc).range(0.5..=100.0).speed(0.1).suffix(" %"));
             }
             TextSize::Px(n) => {
-                ui.add(egui::DragValue::new(n).range(6..=2000).suffix(" px"));
+                ui.add(crate::widgets::drag_value(n).range(6..=2000).suffix(" px"));
             }
             TextSize::Auto => {}
         }
@@ -1222,7 +1222,7 @@ fn settings(
     ui.horizontal(|ui| {
         let mut cols = l.cols;
         ui.label("columns");
-        if ui.add(egui::DragValue::new(&mut cols).range(1..=increart_gui_core::tile::MAX_COLS)).changed() {
+        if ui.add(crate::widgets::drag_value(&mut cols).range(1..=increart_gui_core::tile::MAX_COLS)).changed() {
             out.push(Msg::TileCols(cols));
         }
         if ui.button("Reflow").on_hover_text("pack the tiles in order, no holes").clicked() {
@@ -1231,7 +1231,7 @@ fn settings(
     });
     ui.horizontal(|ui| {
         ui.label("gap");
-        ui.add(egui::DragValue::new(&mut s.gap).range(0..=512).suffix(" px"));
+        ui.add(crate::widgets::drag_value(&mut s.gap).range(0..=512).suffix(" px"));
     });
     ui.horizontal(|ui| {
         ui.radio_value(&mut s.fill, false, "fit").on_hover_text("the whole image, letterboxed");
@@ -1257,7 +1257,7 @@ fn settings(
         ui.separator();
         ui.weak("custom");
         ui.spacing_mut().interact_size.x = 32.0;
-        ui.add(egui::DragValue::new(&mut s.scale).range(1..=100)).on_hover_text("drag, or double-click to type");
+        ui.add(crate::widgets::drag_value(&mut s.scale).range(1..=100)).on_hover_text("drag, or double-click to type");
         ui.weak("%");
     });
     let big = largest(st, l, root, tex);
@@ -1274,9 +1274,9 @@ fn settings(
         if let Some([w, h]) = &mut s.cell {
             let max = increart_gui_core::tile::MAX_CELL;
             ui.spacing_mut().interact_size.x = 44.0;
-            ui.add(egui::DragValue::new(w).range(16..=max).speed(4.0));
+            ui.add(crate::widgets::drag_value(w).range(16..=max).speed(4.0));
             ui.weak("×");
-            ui.add(egui::DragValue::new(h).range(16..=max).speed(4.0));
+            ui.add(crate::widgets::drag_value(h).range(16..=max).speed(4.0));
             ui.weak("px");
         }
     })
@@ -1336,9 +1336,9 @@ fn settings(
             ui.horizontal(|ui| {
                 let (mut w, mut h) = (t.w, t.h);
                 ui.label("spans");
-                let a = ui.add(egui::DragValue::new(&mut w).range(1..=l.cols));
+                let a = ui.add(crate::widgets::drag_value(&mut w).range(1..=l.cols));
                 ui.label("×");
-                let b = ui.add(egui::DragValue::new(&mut h).range(1..=16));
+                let b = ui.add(crate::widgets::drag_value(&mut h).range(1..=16));
                 if a.changed() || b.changed() {
                     out.push(Msg::TileSpan(i, w, h));
                 }
@@ -1361,9 +1361,9 @@ fn settings(
                     ui.horizontal(|ui| {
                         let (mut w, mut h) = (t.w, t.h);
                         ui.label("spans");
-                        let a = ui.add(egui::DragValue::new(&mut w).range(1..=l.cols));
+                        let a = ui.add(crate::widgets::drag_value(&mut w).range(1..=l.cols));
                         ui.label("×");
-                        let b = ui.add(egui::DragValue::new(&mut h).range(1..=16));
+                        let b = ui.add(crate::widgets::drag_value(&mut h).range(1..=16));
                         if a.changed() || b.changed() {
                             out.push(Msg::TileSpan(i, w, h));
                         }

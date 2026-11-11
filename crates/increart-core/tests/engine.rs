@@ -15,7 +15,7 @@ use increart_core::engine::{Endpoint, Engine, EngineOptions, Event, Stop};
 use increart_core::model::*;
 use increart_core::sdserver::Client;
 use increart_core::{Id, ImageRef, Library, NewIdea, NewRun, Original, Store, png};
-use serde_json::json;
+use serde_json::{Value, json};
 
 const FILES: &[(&str, &str)] = &[("diffusion_model", "diffusion_models/q.safetensors"), ("vae", "vae/v.safetensors")];
 
@@ -530,6 +530,77 @@ fn a_warm_up_that_never_ends_is_cancelled_and_counts_as_failed() {
     collect(&engine, run_done(&run));
 }
 
+/// Stop now on a run whose seed the warm-up was made from cancels the
+/// warm-up: the server needn't spend minutes on it.
+#[test]
+fn stopping_a_run_stops_the_warm_up_made_from_it() {
+    let s = setup();
+    let a = Fake::start(None);
+    a.with(|st| {
+        st.model_files = Some(FILES.iter().map(|(_, id)| id.to_string()).collect());
+        st.steps = 1_000_000;
+    });
+    let run = new_run(&s, "qwen-image-21", 2, false);
+    let engine = start(&s, &[&a]);
+    engine.queue_run(&run);
+    let warming =
+        || a.with(|st| st.log.iter().any(|(_, p, b)| p.ends_with("/img_gen") && b["embed_image_metadata"] == false));
+    wait_until(warming, "the warm-up from the run sent");
+    engine.cancel_run(&run, Stop::Now);
+    collect(&engine, run_done(&run));
+    wait_until(|| a.count("/cancel") == 1, "the warm-up job cancelled");
+    assert!(a.submissions().is_empty(), "no seed sent");
+}
+
+/// A warm-up says how far it is, and Skip ends it: the seeds go on.
+#[test]
+fn a_warm_up_says_its_phase_and_can_be_skipped() {
+    let s = setup();
+    let a = Fake::start(None);
+    a.with(|st| {
+        st.model_files = Some(FILES.iter().map(|(_, id)| id.to_string()).collect());
+        st.steps = 1_000_000;
+    });
+    let run = new_run(&s, "qwen-image-21", 2, false);
+    let engine = start(&s, &[&a]);
+    engine.queue_run(&run);
+    use increart_core::engine::WarmUpPhase;
+    collect(
+        &engine,
+        |e, _| matches!(e, Event::WarmUp { phase: Some(WarmUpPhase::Working), run: Some(r), .. } if *r == run),
+    );
+    a.with(|st| st.steps = 1);
+    engine.skip_warm_up(0);
+    let events = collect(&engine, run_done(&run));
+    assert!(events.iter().any(|e| matches!(e, Event::WarmUp { phase: None, .. })), "said over");
+    assert!(!events.iter().any(|e| matches!(e, Event::ModelLoaded { .. })), "a skipped one isn't a load's time");
+    assert_eq!(a.count("/cancel"), 1, "the warm-up job cancelled");
+    assert_eq!(outputs(&events).len(), 2);
+    assert!(log_of(&s, &run).iter().any(|l| l.ends_with("warm-up skipped")), "{:#?}", log_of(&s, &run));
+}
+
+/// A warm-up made from a run's seed that the server refuses: the next is
+/// the small one, so the run's own request can't give the model up for
+/// every run.
+#[test]
+fn a_refused_warm_up_from_a_run_is_tried_small() {
+    let s = setup();
+    let a = Fake::start(None);
+    a.with(|st| {
+        st.model_files = Some(FILES.iter().map(|(_, id)| id.to_string()).collect());
+        st.submit_errors.push_back((400, json!({ "error": { "code": "bad_request", "message": "no" } })));
+    });
+    let run = new_run(&s, "qwen-image-21", 2, false);
+    let engine = start(&s, &[&a]);
+    engine.queue_run(&run);
+    let events = collect(&engine, run_done(&run));
+    let gens: Vec<Value> =
+        a.with(|st| st.log.iter().filter(|(_, p, _)| p.ends_with("/img_gen")).map(|(_, _, b)| b.clone()).collect());
+    assert_eq!(gens[0]["embed_image_metadata"], false, "the run's first");
+    assert_eq!(gens[1]["prompt"], "warm-up", "then the small one");
+    assert_eq!(outputs(&events).len(), 2);
+}
+
 #[test]
 fn finish_and_stop_then_stop_now_ends_a_job_that_never_finishes() {
     let s = setup();
@@ -601,6 +672,68 @@ fn log_of(s: &Setup, run: &Id) -> Vec<String> {
     let lines = increart_core::engine::read_run_log(&increart_core::engine::run_log(&dir, run), 1000);
     // "2026-10-31 12:00:00.000 text"
     lines.iter().map(|l| l.splitn(3, ' ').nth(2).unwrap_or_default().to_string()).collect()
+}
+
+/// The warm-up after a load is the run's first seed at one step (its text
+/// encoding then in the server's conditioning cache), and the load's time
+/// said is until it's done.
+#[test]
+fn the_warm_up_after_a_load_primes_the_runs_conditioning() {
+    let s = setup();
+    let a = Fake::start(Some(("other-recipe", &[])));
+    let run = new_run(&s, "qwen-image-21", 2, false);
+    let engine = start(&s, &[&a]);
+    engine.queue_run(&run);
+    let events = collect(&engine, run_done(&run));
+    let warm: Vec<_> = a.with(|st| {
+        st.log
+            .iter()
+            .filter(|(_, p, b)| p.ends_with("/img_gen") && b["embed_image_metadata"] == false)
+            .map(|(_, _, b)| b.clone())
+            .collect()
+    });
+    // (the one after it started, of the model it had, is the small one)
+    assert_eq!(warm.len(), 1);
+    let seed = &a.submissions()[0];
+    for k in ["prompt", "width", "height", "ref_images"] {
+        assert_eq!(warm[0][k], seed[k], "{k}");
+    }
+    assert_eq!(warm[0]["sample_params"]["sample_steps"], 1);
+    assert_eq!(
+        warm[0]["sample_params"]["custom_sigmas"],
+        serde_json::json!([1.0, 0.0]),
+        "the recipe's schedule overridden"
+    );
+    let loaded: Vec<usize> =
+        events.iter().enumerate().filter(|(_, e)| matches!(e, Event::ModelLoaded { .. })).map(|(i, _)| i).collect();
+    assert_eq!(loaded.len(), 1, "said once");
+    let warmed =
+        events.iter().position(|e| matches!(e, Event::Log { line, .. } if line.contains("warm-up image done")));
+    assert!(warmed.is_some_and(|w| w < loaded[0]), "said after the warm-up");
+}
+
+/// A run whose model files are still being hashed: its images done
+/// meanwhile are held, and written (with the hashes) once they're in.
+#[test]
+fn images_wait_for_their_runs_model_hashes() {
+    let s = setup();
+    let a = Fake::start(LOADED);
+    let run = new_run_with(&s, 2, |r| r.model.files.values_mut().for_each(|f| f.sha256.clear()));
+    let engine = start(&s, &[&a]);
+    engine.hashing(&run);
+    engine.queue_run(&run);
+    let held = || log_of(&s, &run).iter().filter(|l| l.contains("written once its model files are hashed")).count();
+    wait_until(|| held() == 2, "both seeds held");
+    assert!(s.lib.lock().unwrap().pending_seeds(&run).unwrap().len() == 2, "nothing written yet");
+    let hashes = FILES.iter().map(|(_, id)| (id.to_string(), "ab".repeat(32))).collect();
+    s.lib.lock().unwrap().fill_model_hashes(&run, &hashes).unwrap();
+    engine.hashed(&run);
+    let events = collect(&engine, run_done(&run));
+    assert_eq!(outputs(&events).len(), 2);
+    let lib = s.lib.lock().unwrap();
+    let (_, image) = &outputs(&events)[0];
+    let recipe = lib.recipe(image).unwrap().unwrap();
+    assert!(recipe.model.files.values().all(|f| f.sha256 == "ab".repeat(32)), "{:?}", recipe.model);
 }
 
 #[test]

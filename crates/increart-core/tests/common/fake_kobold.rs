@@ -105,7 +105,7 @@ impl FakeKobold {
         self.with(|s| {
             s.log
                 .iter()
-                .filter(|(_, p, b)| p.contains("2img") && b["prompt"] != "warm-up")
+                .filter(|(_, p, b)| p.contains("2img") && b["prompt"] != "warm-up" && b["steps"] != 1)
                 .map(|(_, p, b)| (p.clone(), b.clone()))
                 .collect()
         })
