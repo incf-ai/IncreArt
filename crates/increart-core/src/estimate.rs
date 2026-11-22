@@ -84,7 +84,7 @@ pub const WHOLE: u64 = 2048 * 2048;
 /// so: a WebP (its decoder holds all of it), an interlaced PNG.
 pub fn read_rects(path: &Path, rects: &[Rect]) -> Result<Option<Vec<RgbaImage>>, String> {
     let err = |e: &dyn std::fmt::Display| format!("{}: {e}", path.display());
-    let (w, h) = image::image_dimensions(path).map_err(|e| err(&e))?;
+    let (w, h) = crate::vfs::image_dimensions(path).map_err(|e| err(&e))?;
     let crop = |img: &RgbaImage| {
         rects.iter().map(|&(x, y, rw, rh)| image::imageops::crop_imm(img, x, y, rw, rh).to_image()).collect()
     };
@@ -152,7 +152,7 @@ pub fn sample_files(paths: &[std::path::PathBuf]) -> Result<Sample, String> {
     let err = |p: &std::path::Path, e: &dyn std::fmt::Display| format!("{}: {e}", p.display());
     let (mut pixels, mut stored) = (0u64, 0u64);
     for p in paths {
-        let (w, h) = image::image_dimensions(p).map_err(|e| err(p, &e))?;
+        let (w, h) = crate::vfs::image_dimensions(p).map_err(|e| err(p, &e))?;
         pixels += w as u64 * h as u64;
         stored += crate::vfs::metadata(p).map_err(|e| err(p, &e))?.len();
     }
@@ -160,7 +160,7 @@ pub fn sample_files(paths: &[std::path::PathBuf]) -> Result<Sample, String> {
     let mut out = vec![];
     for i in 0..k {
         let p = &paths[i * paths.len() / k];
-        let (w, h) = image::image_dimensions(p).map_err(|e| err(p, &e))?;
+        let (w, h) = crate::vfs::image_dimensions(p).map_err(|e| err(p, &e))?;
         if let Some(parts) = read_rects(p, &patch_rects(w, h, PATCHES / k))? {
             out.extend(parts.into_iter().map(Arc::new));
         }

@@ -245,7 +245,7 @@ impl Textures {
         *self
             .dims
             .entry(image.clone())
-            .or_insert_with(|| image::image_dimensions(image.path(root)).ok().map(|(w, h)| [w, h]))
+            .or_insert_with(|| increart_core::vfs::image_dimensions(image.path(root)).ok().map(|(w, h)| [w, h]))
     }
 
     /// "W × H · aspect · N MP", or "" if the image can't be read.

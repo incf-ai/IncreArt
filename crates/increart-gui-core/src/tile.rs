@@ -670,7 +670,7 @@ pub fn sample(root: &Path, layout: &TileLayout, s: &TileSettings) -> Result<Samp
             (TileContent::Pasted(p), _) => Ok(Some(p.0.dimensions())),
             (_, Some(image)) => {
                 let path = image.path(root);
-                image::image_dimensions(&path).map(Some).map_err(|e| format!("{}: {e}", path.display()))
+                increart_core::vfs::image_dimensions(&path).map(Some).map_err(|e| format!("{}: {e}", path.display()))
             }
             _ => Ok(None),
         })

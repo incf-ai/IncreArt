@@ -1196,6 +1196,21 @@ pub fn open_image(path: impl AsRef<Path>) -> image::ImageResult<image::DynamicIm
     image::ImageReader::new(io::Cursor::new(bytes)).with_guessed_format().map_err(image::ImageError::IoError)?.decode()
 }
 
+/// An image file's size in pixels, from its header (`image::image_dimensions`,
+/// through the overlay).
+pub fn image_dimensions(path: impl AsRef<Path>) -> image::ImageResult<(u32, u32)> {
+    let path = path.as_ref();
+    if overlay(path).is_none() {
+        #[allow(clippy::disallowed_methods)]
+        return image::image_dimensions(path);
+    }
+    let bytes = read(path).map_err(image::ImageError::IoError)?;
+    image::ImageReader::new(io::Cursor::new(bytes))
+        .with_guessed_format()
+        .map_err(image::ImageError::IoError)?
+        .into_dimensions()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1238,6 +1253,20 @@ mod tests {
             OpenOptions::new().write(true).create_new(true).open(r.join("a/link.txt")).unwrap_err().kind(),
             io::ErrorKind::AlreadyExists
         );
+        unmount(&r);
+    }
+
+    /// An image only in RAM: its size and pixels read from there (a ref
+    /// image's "use size" had gone, its size unread, in an ephemeral session).
+    #[test]
+    fn an_image_in_the_overlay_is_read_from_ram() {
+        let r = root("image");
+        let _o = mount(&r, None, false).unwrap();
+        let mut png = Vec::new();
+        image::RgbImage::new(96, 64).write_to(&mut io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+        write(r.join("ref.png"), &png).unwrap();
+        assert_eq!(image_dimensions(r.join("ref.png")).unwrap(), (96, 64));
+        assert_eq!(open_image(r.join("ref.png")).unwrap().width(), 96);
         unmount(&r);
     }
 

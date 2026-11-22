@@ -3261,7 +3261,7 @@ fn crop_mark(st: &AppState, project: &str, output: Option<&increart_core::scan::
         (st.index.projects.iter().find(|p| p.name() == project), st.library.as_ref(), output)
     {
         use increart_core::model::{ImageEdits, Mark, Shape};
-        let (w, h) = image::image_dimensions(o.image.path(root)).unwrap_or((1024, 1024));
+        let (w, h) = increart_core::vfs::image_dimensions(o.image.path(root)).unwrap_or((1024, 1024));
         let (w, h) = (w as f32, h as f32);
         let red = increart_gui_core::MarkTools::default().color;
         let width = w.max(h) * increart_gui_core::MarkTools::default().width / 1000.0;

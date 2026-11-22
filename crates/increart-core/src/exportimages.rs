@@ -177,7 +177,7 @@ pub fn read_files(lib: &crate::Library, items: &mut [Item]) {
         let Some(img) = &it.image else { continue };
         it.stored = lib.format_of(img);
         if !it.fields.contains_key("width")
-            && let Ok((w, h)) = image::image_dimensions(lib.image_path(img))
+            && let Ok((w, h)) = crate::vfs::image_dimensions(lib.image_path(img))
         {
             it.fields.insert("width", w.to_string());
             it.fields.insert("height", h.to_string());
