@@ -1,6 +1,7 @@
 //! Thumbnails: `thumbs/{input,output}/<image-id>.webp`, a deletable cache
 //! (DESIGN.md, Caching). Lossless WebP with alpha.
 
+use crate::vfs::PathExt;
 use std::path::{Path, PathBuf};
 
 use crate::error::{Error, Result};
@@ -21,11 +22,11 @@ pub fn path(root: &Path, r: &ImageRef) -> PathBuf {
 /// The thumbnail of a store image, made first if missing.
 pub fn ensure(root: &Path, r: &ImageRef) -> Result<PathBuf> {
     let thumb = path(root, r);
-    if thumb.is_file() {
+    if thumb.vfs_is_file() {
         return Ok(thumb);
     }
     let src = r.path(root);
-    let img = image::open(&src).map_err(|e| Error::image(&src, e))?;
+    let img = crate::vfs::open_image(&src).map_err(|e| Error::image(&src, e))?;
     let small = img.thumbnail(SIZE, SIZE).to_rgba8();
     let mut out = Vec::new();
     image::codecs::webp::WebPEncoder::new_lossless(&mut out)

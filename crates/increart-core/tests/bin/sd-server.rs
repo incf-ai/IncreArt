@@ -2,6 +2,7 @@
 //! every request with `{"argv": [...]}`, its arguments; with `--exit`, says
 //! "bad device" and exits 3; with `--crash-after <ms>`, answers until then,
 //! says "generating" and a progress bar, and aborts (as a crash).
+#![allow(clippy::disallowed_methods)] // fixtures on disk: no overlay here
 
 use std::io::{BufRead, BufReader, Write};
 use std::net::TcpListener;

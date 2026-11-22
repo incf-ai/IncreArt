@@ -1,5 +1,6 @@
 //! The sd-server client against the fake server, and the launcher against a
 //! stand-in executable.
+#![allow(clippy::disallowed_methods)] // fixtures on disk: no overlay here
 
 mod common;
 

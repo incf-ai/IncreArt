@@ -2,6 +2,7 @@
 //! fails where it's broken, the report is written and zipped; with the
 //! `fake` feature, servers the suite starts itself, a taken port, and a
 //! failover.
+#![allow(clippy::disallowed_methods)] // fixtures on disk: no overlay here
 
 #[allow(dead_code)]
 #[path = "../../increart-core/tests/common/fake.rs"]

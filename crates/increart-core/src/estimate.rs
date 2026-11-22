@@ -89,13 +89,16 @@ pub fn read_rects(path: &Path, rects: &[Rect]) -> Result<Option<Vec<RgbaImage>>,
         rects.iter().map(|&(x, y, rw, rh)| image::imageops::crop_imm(img, x, y, rw, rh).to_image()).collect()
     };
     if w as u64 * h as u64 <= WHOLE {
-        return Ok(Some(crop(&image::open(path).map_err(|e| err(&e))?.into_rgba8())));
+        return Ok(Some(crop(&crate::vfs::open_image(path).map_err(|e| err(&e))?.into_rgba8())));
     }
-    let format = image::ImageReader::open(path).and_then(|r| r.with_guessed_format()).map_err(|e| err(&e))?;
+    let format = crate::vfs::read(path)
+        .map(|b| image::ImageReader::new(std::io::Cursor::new(b)))
+        .and_then(|r| r.with_guessed_format())
+        .map_err(|e| err(&e))?;
     if format.format() != Some(image::ImageFormat::Png) {
         return Ok(None);
     }
-    let file = std::fs::File::open(path).map_err(|e| err(&e))?;
+    let file = crate::vfs::File::open(path).map_err(|e| err(&e))?;
     let mut dec = png::Decoder::new(BufReader::new(file));
     dec.set_transformations(png::Transformations::normalize_to_color8());
     let mut reader = dec.read_info().map_err(|e| err(&e))?;
@@ -151,7 +154,7 @@ pub fn sample_files(paths: &[std::path::PathBuf]) -> Result<Sample, String> {
     for p in paths {
         let (w, h) = image::image_dimensions(p).map_err(|e| err(p, &e))?;
         pixels += w as u64 * h as u64;
-        stored += std::fs::metadata(p).map_err(|e| err(p, &e))?.len();
+        stored += crate::vfs::metadata(p).map_err(|e| err(p, &e))?.len();
     }
     let k = paths.len().min(FILES);
     let mut out = vec![];
@@ -246,7 +249,7 @@ mod tests {
             })
             .collect();
         let s = sample_files(&paths).unwrap();
-        let bytes: u64 = paths.iter().map(|p| std::fs::metadata(p).unwrap().len()).sum();
+        let bytes: u64 = paths.iter().map(|p| crate::vfs::metadata(p).unwrap().len()).sum();
         assert_eq!(s.stored, Some(bytes));
         assert_eq!(s.pixels, (0..6u64).map(|i| (400 + i * 10) * 300).sum::<u64>());
         assert_eq!(s.patches.len(), FILES, "four of the six, each small enough to take whole");
@@ -270,7 +273,7 @@ mod tests {
         assert_eq!(got[0].get_pixel(3, 4).0[3], 255);
         let webp = dir.path().join("big.webp");
         let px = crate::pixel::Pixels::from_image(&image::DynamicImage::ImageRgba8(img));
-        std::fs::write(&webp, crate::webp::encode(&px, &[]).unwrap()).unwrap();
+        crate::vfs::write(&webp, crate::webp::encode(&px, &[]).unwrap()).unwrap();
         assert_eq!(read_rects(&webp, &rects).unwrap(), None, "not without all of it");
         let s = sample_files(&[png.clone(), webp]).unwrap();
         assert_eq!(s.patches.len(), PATCHES / 2, "the WebP passed over");

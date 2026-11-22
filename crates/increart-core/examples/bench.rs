@@ -14,6 +14,7 @@
 //!
 //! The model and binary paths below default to the development machine's;
 //! each is overridden by the environment variable named beside it.
+#![allow(clippy::disallowed_methods)] // fixtures on disk: no overlay here
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -82,6 +83,16 @@ struct ImageCase {
     /// server (its GPU layers set by `args`).
     #[serde(default)]
     chat: bool,
+    /// Another model than Qwen-Image 2.1 (`models` then names all its
+    /// files), with its steps, CFG and prompt.
+    #[serde(default)]
+    recipe: Option<String>,
+    #[serde(default)]
+    steps: Option<u32>,
+    #[serde(default)]
+    cfg: Option<f32>,
+    #[serde(default)]
+    prompt: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -253,14 +264,15 @@ fn model_key() -> ModelKey {
 /// The body the app sends for one seed of a 1024² Qwen-Image 2.1 run with
 /// one reference (recipe "CFG 2, refs": euler, 20 steps, CFG 2), with the
 /// app's preview setting.
-fn body(reference: &[u8], seed: u64) -> Value {
+fn body(c: &ImageCase, reference: &[u8], seed: u64) -> Value {
+    let (steps, cfg) = (c.steps.unwrap_or(20), c.cfg.unwrap_or(2.0));
     img_gen_body_from(
-        PROMPT,
+        c.prompt.as_deref().unwrap_or(PROMPT),
         "",
         1024,
         1024,
         seed,
-        json!({ "sample_method": "euler", "sample_steps": 20, "guidance": { "txt_cfg": 2.0 } }),
+        json!({ "sample_method": "euler", "sample_steps": steps, "guidance": { "txt_cfg": cfg } }),
         &[reference.to_vec()],
         &GenOptions { preview: "proj".into(), preview_interval: 1 },
     )
@@ -419,6 +431,9 @@ fn main() {
                 result["image"] = json!({ "launch_s": launch_s, "software": proc.client.software() });
                 let t = Instant::now();
                 let mut key = model_key();
+                if let Some(r) = &c.recipe {
+                    key = ModelKey { recipe: r.clone(), models: Default::default() };
+                }
                 key.models.extend(c.models.clone());
                 match proc.client.load_model(&key) {
                     Ok(_) => result["image"]["load_s"] = json!(t.elapsed().as_secs_f64()),
@@ -463,7 +478,7 @@ fn main() {
     };
 
     if error.is_none()
-        && let Some(proc) = &image_proc
+        && let (Some(proc), Some(c)) = (&image_proc, &case.image)
     {
         phase(&mem, "generate");
         let t = Instant::now();
@@ -476,7 +491,7 @@ fn main() {
             let mut seed = 1;
             loop {
                 let save = out.join(format!("{}-{seed}.png", case.id));
-                let g = generate(&proc.client, &body(&reference, seed), Some(&save))?;
+                let g = generate(&proc.client, &body(c, &reference, seed), Some(&save))?;
                 eprintln!("{}: image {seed}: {:.1} s", case.id, g.wall_s);
                 if first.is_none() {
                     first = Some(g.wall_s);

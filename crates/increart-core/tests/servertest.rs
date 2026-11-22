@@ -1,4 +1,5 @@
 //! Test (a server the app connects to) against the fake sd-server.
+#![allow(clippy::disallowed_methods)] // fixtures on disk: no overlay here
 
 mod common;
 

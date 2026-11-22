@@ -4,6 +4,7 @@
 //! reads. A `stop` line on its stdin stops the run (cancelling its jobs on
 //! the servers), on Windows too.
 
+use crate::vfs::PathExt;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -171,7 +172,7 @@ pub fn binary() -> PathBuf {
 /// `increart-apitest` in `dir`'s `tools/`, or in `dir` itself.
 fn binary_in(dir: &Path) -> Option<PathBuf> {
     let name = binary_name();
-    [dir.join(TOOLS).join(&name), dir.join(&name)].into_iter().find(|p| p.is_file())
+    [dir.join(TOOLS).join(&name), dir.join(&name)].into_iter().find(|p| p.vfs_is_file())
 }
 
 fn binary_name() -> String {
@@ -413,11 +414,11 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         assert_eq!(binary_in(dir.path()), None);
         let beside = dir.path().join(binary_name());
-        std::fs::write(&beside, "").unwrap();
+        crate::vfs::write(&beside, "").unwrap();
         assert_eq!(binary_in(dir.path()), Some(beside));
-        std::fs::create_dir(dir.path().join(TOOLS)).unwrap();
+        crate::vfs::create_dir(dir.path().join(TOOLS)).unwrap();
         let tools = dir.path().join(TOOLS).join(binary_name());
-        std::fs::write(&tools, "").unwrap();
+        crate::vfs::write(&tools, "").unwrap();
         assert_eq!(binary_in(dir.path()), Some(tools));
     }
 

@@ -1,8 +1,9 @@
 //! RSN reading and writing in the library's style: 4-space indentation and
 //! `Option` values written bare (DESIGN.md, File format: RSN).
 
+use crate::vfs as fs;
+use crate::vfs::PathExt;
 use std::borrow::Cow;
-use std::fs;
 use std::path::Path;
 
 use serde::de::DeserializeOwned;
@@ -52,7 +53,7 @@ pub fn write<T: Serialize>(path: &Path, value: &T) -> Result<()> {
 /// when `path` exists already or there's no JSON (or it can't be read).
 pub fn convert_json<T: Serialize + DeserializeOwned>(path: &Path) {
     let old = path.with_extension("json");
-    if path.exists() || !old.is_file() {
+    if path.vfs_exists() || !old.vfs_is_file() {
         return;
     }
     let Some(value) = fs::read(&old).ok().and_then(|b| serde_json::from_slice::<T>(&b).ok()) else { return };

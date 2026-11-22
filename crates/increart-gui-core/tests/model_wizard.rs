@@ -1,5 +1,6 @@
 //! The **Models** window: folders found, presets picked, what's fetched
 //! where; Your models alongside.
+#![allow(clippy::disallowed_methods)] // fixtures on disk: no overlay here
 
 use increart_core::config::{Config, catalogue};
 use increart_core::modelsetup::FoundFolder;

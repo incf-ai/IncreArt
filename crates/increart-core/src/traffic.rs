@@ -9,9 +9,9 @@
 //! app runs [`tagged`] (its lines marked `[test <server>]`), and
 //! `increart-apitest` takes every line through [`set_sink`].
 
+use crate::vfs::{self as fs, File, OpenOptions};
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::fs::{self, File, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -67,6 +67,14 @@ struct Log {
 /// Where it's written (once; nothing is before: tests never call it).
 pub fn start(dir: &Path) {
     let _ = LOG.set(Mutex::new(Log { dir: dir.to_path_buf(), file: None }));
+}
+
+/// Opens the file again on the next line: the log folder became an
+/// overlay in RAM, or stopped being one (DESIGN.md, Ephemeral mode).
+pub fn reopen() {
+    if let Some(log) = LOG.get() {
+        log.lock().unwrap_or_else(|e| e.into_inner()).file = None;
+    }
 }
 
 /// Turns it on or off ([`ENV`] keeps it on).

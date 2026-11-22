@@ -69,7 +69,7 @@ fn hex(bytes: &[u8]) -> String {
 
 /// The SHA-256 of a file, in hex.
 pub fn file_sha256(path: &Path) -> std::io::Result<String> {
-    Ok(hex(&Sha256::digest(std::fs::read(path)?)))
+    Ok(hex(&Sha256::digest(crate::vfs::read(path)?)))
 }
 
 /// A run of a preset's basic cases.
@@ -225,6 +225,7 @@ pub fn mark_asked(path: &Path, fingerprint: &str) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::vfs::PathExt;
 
     fn preset(url: &str) -> ServerPreset {
         ServerPreset {
@@ -277,10 +278,10 @@ mod tests {
         let config = Config::default();
         let p = preset("http://10.0.0.2:7860");
         record(&path, stamp(&config, &p, Outcome::Fail)).unwrap();
-        let text = std::fs::read_to_string(&path).unwrap();
+        let text = crate::vfs::read_to_string(&path).unwrap();
         let edited = text.replace("outcome: fail", "outcome: pass");
         assert_ne!(edited, text);
-        std::fs::write(&path, edited).unwrap();
+        crate::vfs::write(&path, edited).unwrap();
         assert_eq!(Validations::load(&path).status(&config, &p), Status::Never);
     }
 
@@ -294,9 +295,9 @@ mod tests {
         s.zip = Some("/logs/apitest-1.zip".into());
         let old = Validations { stamps: vec![s], asked: vec!["f".into()] };
         let json = tmp.path().join("validated.json");
-        std::fs::write(&json, serde_json::to_vec_pretty(&old).unwrap()).unwrap();
+        crate::vfs::write(&json, serde_json::to_vec_pretty(&old).unwrap()).unwrap();
         assert_eq!(Validations::load(&path), old);
-        assert!(path.is_file() && !json.exists());
+        assert!(path.vfs_is_file() && !json.vfs_exists());
         assert!(matches!(Validations::load(&path).status(&config, &p), Status::Passed(_)));
     }
 

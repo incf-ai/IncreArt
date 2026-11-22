@@ -7,6 +7,7 @@
 //! A prompt names reference images as `<imageN>` and leaves blanks for the
 //! user as `{slot}` (e.g. `{scene}`).
 
+use crate::vfs::PathExt;
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 
@@ -61,16 +62,17 @@ impl PromptPresets {
     /// of Modify style are moved into the style tasks, and saved there.
     pub fn load_dir(dir: &Path) -> Result<(PromptPresets, Vec<String>)> {
         let old = dir.with_file_name("prompt-presets.rsn");
-        let fresh = !dir.exists();
-        std::fs::create_dir_all(dir).at(dir)?;
+        let fresh = !dir.vfs_exists();
+        crate::vfs::create_dir_all(dir).at(dir)?;
         write_defaults(dir)?;
-        if fresh && old.is_file() {
+        if fresh && old.vfs_is_file() {
             let list: PromptPresets = rsnfmt::read(&old)?;
             list.save_dir(dir)?;
-            std::fs::rename(&old, old.with_extension("rsn.old")).at(&old)?;
+            crate::vfs::rename(&old, old.with_extension("rsn.old")).at(&old)?;
         }
         let state_path = dir.join(STATE_FILE);
-        let mut state: UserState = if state_path.exists() { rsnfmt::read(&state_path)? } else { UserState::default() };
+        let mut state: UserState =
+            if state_path.vfs_exists() { rsnfmt::read(&state_path)? } else { UserState::default() };
         let mut user = vec![];
         let mut bad = vec![];
         for task_dir in fsutil::subdirs(dir)? {
@@ -111,8 +113,8 @@ impl PromptPresets {
         write_defaults(dir)?;
         let state_path = dir.join(STATE_FILE);
         if state == UserState::default() {
-            if state_path.exists() {
-                std::fs::remove_file(&state_path).at(&state_path)?;
+            if state_path.vfs_exists() {
+                crate::vfs::remove_file(&state_path).at(&state_path)?;
             }
         } else {
             rsnfmt::write(&state_path, &state)?;
@@ -127,7 +129,7 @@ impl PromptPresets {
             let mut path = folder.join(format!("{base}.rsn"));
             // a file that doesn't load isn't written over
             let mut n = 1;
-            while want.contains_key(&path) || (path.exists() && read_preset_file(&path).is_err()) {
+            while want.contains_key(&path) || (path.vfs_exists() && read_preset_file(&path).is_err()) {
                 n += 1;
                 path = folder.join(format!("{base} ({n}).rsn"));
             }
@@ -144,7 +146,7 @@ impl PromptPresets {
         for task_dir in fsutil::subdirs(dir)? {
             for (_, path) in task_files(&task_dir)? {
                 if !want.contains_key(&path) && read_preset_file(&path).is_ok() {
-                    std::fs::remove_file(&path).at(&path)?;
+                    crate::vfs::remove_file(&path).at(&path)?;
                 }
             }
         }
@@ -155,11 +157,11 @@ impl PromptPresets {
         }
         // folders left empty (deepest first)
         let mut dirs: Vec<_> =
-            fsutil::walk(dir)?.into_iter().filter(|p| p.is_dir() && !fsutil::is_symlink(p)).collect();
+            fsutil::walk(dir)?.into_iter().filter(|p| p.vfs_is_dir() && !fsutil::is_symlink(p)).collect();
         dirs.reverse();
         for d in dirs {
-            if std::fs::read_dir(&d).at(&d)?.next().is_none() {
-                std::fs::remove_dir(&d).at(&d)?;
+            if crate::vfs::read_dir(&d).at(&d)?.next().is_none() {
+                crate::vfs::remove_dir(&d).at(&d)?;
             }
         }
         Ok(())
@@ -234,6 +236,29 @@ pub struct Sweep {
     /// A model sweep's model presets, by name.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub models: Vec<String>,
+    /// A LoRA sweep's LoRA presets, by name ("": no LoRA).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub loras: Vec<String>,
+    /// A tag sweep's blank (`hair` for `{hair}`): each run has one of
+    /// `tag_values` there.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub tag_slot: String,
+    /// A tag sweep's values as typed, one a line.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub tag_values: String,
+    /// More axes after the first (Vary's): each run has one value of each.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub axes: Vec<SweepAxis>,
+    /// How the axes' values are put together into runs.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub combine: Combine,
+    /// Random: how many combinations.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub combine_k: usize,
+    /// Random, random per image: makes the pick repeatable (**Reroll**
+    /// changes it).
+    #[serde(skip_serializing_if = "is_zero")]
+    pub combine_seed: u64,
     /// An image sweep's images, in order: each run's `<image1>`.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub images: Vec<crate::model::ImageRef>,
@@ -253,6 +278,83 @@ pub struct Sweep {
     /// the one built from the template, the style and the values.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub style_prompts: Vec<StylePrompt>,
+}
+
+/// A sweep's axis after the first: what it varies and its values, kept as
+/// the first axis keeps them.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename = "SweepAxis", default)]
+pub struct SweepAxis {
+    pub vary: SweepVary,
+    /// A setting's values as typed ("8, 12, 20"), or the names ticked.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub values: String,
+    /// A tag axis's blank.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub tag_slot: String,
+    /// A tag axis's values, one a line.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub tag_values: String,
+    /// A model axis's model presets, by name.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub models: Vec<String>,
+    /// A LoRA axis's LoRA presets, by name ("": no LoRA).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub loras: Vec<String>,
+}
+
+impl SweepAxis {
+    /// The sweep settings this axis would be as the first one: its kind and
+    /// values over `sweep`.
+    pub fn as_first(&self, sweep: &Sweep) -> Sweep {
+        let mut s = sweep.clone();
+        s.vary = self.vary;
+        s.values = self.values.clone();
+        s.tag_slot = self.tag_slot.clone();
+        s.tag_values = self.tag_values.clone();
+        s.models = self.models.clone();
+        s.loras = self.loras.clone();
+        s.axes.clear();
+        s
+    }
+
+    /// Takes back its values from `s`, edited as a first axis.
+    pub fn take(&mut self, s: &Sweep) {
+        self.vary = s.vary;
+        self.values = s.values.clone();
+        self.tag_slot = s.tag_slot.clone();
+        self.tag_values = s.tag_values.clone();
+        self.models = s.models.clone();
+        self.loras = s.loras.clone();
+    }
+}
+
+/// How a sweep's axes are put together into runs.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Combine {
+    /// Every combination: A × B × C.
+    #[default]
+    Every,
+    /// The first value of each axis together, then the second, …
+    Paired,
+    /// `combine_k` combinations picked from every one.
+    Random,
+    /// Each seed its own combination, picked at random (a run of one seed
+    /// each).
+    PerImage,
+}
+
+impl Combine {
+    pub const EVERY: [Combine; 4] = [Combine::Every, Combine::Paired, Combine::Random, Combine::PerImage];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Combine::Every => "Every combination",
+            Combine::Paired => "Paired",
+            Combine::Random => "Random",
+            Combine::PerImage => "Random per image",
+        }
+    }
 }
 
 /// A style's prompt as prompt enhance or the user left it.
@@ -507,6 +609,8 @@ pub enum SweepVary {
     /// The prompt: a prompt preset per run.
     #[default]
     Style,
+    /// A blank of the prompt: one of its values per run.
+    Tag,
     Steps,
     Cfg,
     FlowShift,
@@ -516,6 +620,10 @@ pub enum SweepVary {
     Model,
     /// The image: `<image1>` (or the start image) of each run.
     Image,
+    /// LoRA presets, each over the run's model preset (or none).
+    Lora,
+    /// The weight of the LoRA axis's LoRAs (else the model preset's own).
+    LoraWeight,
     /// The sampler, by name (`default`: the model's).
     Sampler,
     /// The noise schedule, by name (`default`: the model's).
@@ -523,8 +631,24 @@ pub enum SweepVary {
 }
 
 impl SweepVary {
-    pub const EVERY: [SweepVary; 9] = [
+    /// Those an axis after the first can vary (styles and images only the
+    /// first).
+    pub const MORE: [SweepVary; 10] = [
+        SweepVary::Tag,
+        SweepVary::Model,
+        SweepVary::Lora,
+        SweepVary::LoraWeight,
+        SweepVary::Steps,
+        SweepVary::Cfg,
+        SweepVary::FlowShift,
+        SweepVary::Sampler,
+        SweepVary::Scheduler,
+        SweepVary::Strength,
+    ];
+
+    pub const EVERY: [SweepVary; 12] = [
         SweepVary::Style,
+        SweepVary::Tag,
         SweepVary::Steps,
         SweepVary::Cfg,
         SweepVary::FlowShift,
@@ -532,33 +656,42 @@ impl SweepVary {
         SweepVary::Scheduler,
         SweepVary::Strength,
         SweepVary::Model,
+        SweepVary::Lora,
+        SweepVary::LoraWeight,
         SweepVary::Image,
     ];
 
     pub fn name(self) -> &'static str {
         match self {
             SweepVary::Style => "Style",
+            SweepVary::Tag => "Tag",
             SweepVary::Steps => "Steps",
             SweepVary::Cfg => "CFG",
             SweepVary::FlowShift => "Flow shift",
             SweepVary::Strength => "Strength",
             SweepVary::Model => "Model",
             SweepVary::Image => "Image",
+            SweepVary::Lora => "LoRA",
+            SweepVary::LoraWeight => "LoRA weight",
             SweepVary::Sampler => "Sampler",
             SweepVary::Scheduler => "Scheduler",
         }
     }
 
-    /// The [`crate::model::SweepParam`] name (empty for Style).
+    /// The [`crate::model::SweepParam`] name (empty for Style; a tag
+    /// sweep's is its blank, `{hair}`).
     pub fn key(self) -> &'static str {
         match self {
             SweepVary::Style => "",
+            SweepVary::Tag => "tag",
             SweepVary::Steps => "steps",
             SweepVary::Cfg => "cfg",
             SweepVary::FlowShift => "flow_shift",
             SweepVary::Strength => "strength",
             SweepVary::Model => "model",
             SweepVary::Image => "image",
+            SweepVary::Lora => "lora",
+            SweepVary::LoraWeight => "lora_weight",
             SweepVary::Sampler => "sampler",
             SweepVary::Scheduler => "scheduler",
         }
@@ -616,6 +749,31 @@ pub struct PresetKey {
 impl Sweep {
     pub fn is_default(&self) -> bool {
         *self == Sweep::default()
+    }
+
+    /// A tag sweep's values: a line each, in order, without empty lines
+    /// or repeats.
+    pub fn tags(&self) -> Vec<String> {
+        let mut out: Vec<String> = vec![];
+        for v in self.tag_values.lines().map(str::trim).filter(|v| !v.is_empty()) {
+            if !out.iter().any(|o| o == v) {
+                out.push(v.to_string());
+            }
+        }
+        out
+    }
+
+    /// Adds `value` to a tag sweep's values, or takes it out when it is
+    /// one of them.
+    pub fn toggle_tag(&mut self, value: &str) {
+        let mut tags = self.tags();
+        match tags.iter().position(|t| t == value.trim()) {
+            Some(i) => {
+                tags.remove(i);
+            }
+            None => tags.push(value.trim().to_string()),
+        }
+        self.tag_values = tags.join("\n");
     }
 }
 
@@ -1007,7 +1165,7 @@ fn task_files(task_dir: &Path) -> Result<Vec<(String, PathBuf)>> {
     for p in fsutil::walk(task_dir)? {
         let Ok(rel) = p.strip_prefix(task_dir) else { continue };
         let depth = rel.components().count();
-        if p.extension().is_some_and(|e| e == "rsn") && !fsutil::hidden(&p) && depth <= 2 && p.is_file() {
+        if p.extension().is_some_and(|e| e == "rsn") && !fsutil::hidden(&p) && depth <= 2 && p.vfs_is_file() {
             // (none at the top: its parent is empty)
             let group = rel.parent().map(|g| g.to_string_lossy().into_owned()).unwrap_or_default();
             out.push((group, p));
@@ -1019,7 +1177,7 @@ fn task_files(task_dir: &Path) -> Result<Vec<(String, PathBuf)>> {
 /// Writes the built-in presets' copy if it isn't current.
 fn write_defaults(dir: &Path) -> Result<()> {
     let path = dir.join(DEFAULTS_FILE);
-    if std::fs::read_to_string(&path).ok().as_deref() != Some(DEFAULTS) {
+    if crate::vfs::read_to_string(&path).ok().as_deref() != Some(DEFAULTS) {
         fsutil::write_atomic(&path, DEFAULTS.as_bytes())?;
     }
     Ok(())
@@ -1176,8 +1334,8 @@ mod tests {
         let folder = PromptPresets::dir_beside(&dir.path().join("config.rsn"));
         let (p, bad) = PromptPresets::load_dir(&folder).unwrap();
         assert_eq!((p, bad.len()), (builtin(), 0));
-        assert_eq!(std::fs::read_to_string(folder.join(DEFAULTS_FILE)).unwrap(), DEFAULTS);
-        assert_eq!(std::fs::read_dir(&folder).unwrap().count(), 1, "only the defaults' copy");
+        assert_eq!(crate::vfs::read_to_string(folder.join(DEFAULTS_FILE)).unwrap(), DEFAULTS);
+        assert_eq!(crate::vfs::read_dir(&folder).unwrap().count(), 1, "only the defaults' copy");
 
         // a favourite, an edit, a deletion, a new preset, a new task
         let mut p = builtin();
@@ -1207,15 +1365,15 @@ mod tests {
         assert_eq!(modify[at("Mine: v1")].group, "3D & craft");
         assert_eq!(modify[at("Mine: v1") - 1].group, "3D & craft", "after its group's others");
         assert_eq!(back.tasks.last().unwrap().name, "Odd / task");
-        assert!(folder.join("Lazy Modify Style/3D & craft/Mine- v1.rsn").is_file());
-        assert!(folder.join("Lazy Modify Style/3D & craft/Claymation.rsn").is_file());
+        assert!(folder.join("Lazy Modify Style/3D & craft/Mine- v1.rsn").vfs_is_file());
+        assert!(folder.join("Lazy Modify Style/3D & craft/Claymation.rsn").vfs_is_file());
 
         // a file dropped in by hand: task and group from its folders; one
         // that doesn't load is reported and kept
         let drop = folder.join("Lazy Modify Style/Pasta/Fusilli.rsn");
-        std::fs::create_dir_all(drop.parent().unwrap()).unwrap();
-        std::fs::write(&drop, "PromptPreset { name: \"Fusilli\", prompt: \"twirls\" }\n").unwrap();
-        std::fs::write(folder.join("Lazy Modify Style/broken.rsn"), "nope").unwrap();
+        crate::vfs::create_dir_all(drop.parent().unwrap()).unwrap();
+        crate::vfs::write(&drop, "PromptPreset { name: \"Fusilli\", prompt: \"twirls\" }\n").unwrap();
+        crate::vfs::write(folder.join("Lazy Modify Style/broken.rsn"), "nope").unwrap();
         let (back, bad) = PromptPresets::load_dir(&folder).unwrap();
         assert_eq!(bad.len(), 1);
         let f = back.tasks[0].presets.iter().find(|x| x.name == "Fusilli").unwrap();
@@ -1224,18 +1382,18 @@ mod tests {
         // back to the defaults: only the copy and the broken file are left
         builtin().save_dir(&folder).unwrap();
         assert_eq!(PromptPresets::load_dir(&folder).unwrap().0, builtin());
-        assert!(folder.join("Lazy Modify Style/broken.rsn").is_file());
-        assert!(!folder.join(STATE_FILE).exists() && !folder.join("Lazy Modify Style/Pasta").exists());
+        assert!(folder.join("Lazy Modify Style/broken.rsn").vfs_is_file());
+        assert!(!folder.join(STATE_FILE).vfs_exists() && !folder.join("Lazy Modify Style/Pasta").vfs_exists());
     }
 
     #[test]
     fn modify_style_splits_into_the_style_tasks() {
         let dir = tempfile::tempdir().unwrap();
         let folder = PromptPresets::dir_beside(&dir.path().join("config.rsn"));
-        std::fs::create_dir_all(folder.join("Modify style/Mine")).unwrap();
+        crate::vfs::create_dir_all(folder.join("Modify style/Mine")).unwrap();
         let file = |name: &str, prompt: &str| {
             let text = format!("PromptPreset {{ name: \"{name}\", prompt: \"{prompt}\" }}\n");
-            std::fs::write(folder.join(format!("Modify style/Mine/{name}.rsn")), text).unwrap();
+            crate::vfs::write(folder.join(format!("Modify style/Mine/{name}.rsn")), text).unwrap();
         };
         file("Plain", "Convert <image1> into felt.");
         file("Slotted", "Transform <image1> into {material}.");
@@ -1261,8 +1419,8 @@ mod tests {
         assert!(!p.tasks[0].presets.iter().any(|x| x.name == "Voxel"));
 
         // saved where they now are, and loaded the same again
-        assert!(!folder.join(OLD_STYLE).exists());
-        assert!(folder.join("Effortful Modify Style/Mine/Slotted.rsn").is_file());
+        assert!(!folder.join(OLD_STYLE).vfs_exists());
+        assert!(folder.join("Effortful Modify Style/Mine/Slotted.rsn").vfs_is_file());
         assert_eq!(PromptPresets::load_dir(&folder).unwrap().0, p);
 
         let sw = Sweep {
@@ -1297,7 +1455,7 @@ mod tests {
         p.tasks.truncate(2);
         rsnfmt::write(&dir.path().join("prompt-presets.rsn"), &p).unwrap();
         assert_eq!(PromptPresets::load_dir(&folder).unwrap().0, p);
-        assert!(!dir.path().join("prompt-presets.rsn").exists());
-        assert!(dir.path().join("prompt-presets.rsn.old").is_file());
+        assert!(!dir.path().join("prompt-presets.rsn").vfs_exists());
+        assert!(dir.path().join("prompt-presets.rsn.old").vfs_is_file());
     }
 }

@@ -3,6 +3,7 @@
 
 use eframe::egui::{self, Align2, Color32, FontId, Key, Rect, RichText, Sense, Stroke, Vec2};
 use increart_core::config::{TextSize, TileFormat, TileSettings};
+use increart_core::vfs::PathExt;
 use increart_core::{ImageRef, Verdict};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -939,7 +940,8 @@ fn preview(
             }
         }
     }
-    let files: Vec<PathBuf> = dropped_files.iter().map(|f| f.path().to_path_buf()).filter(|p| p.is_file()).collect();
+    let files: Vec<PathBuf> =
+        dropped_files.iter().map(|f| f.path().to_path_buf()).filter(|p| p.vfs_is_file()).collect();
     if !files.is_empty() && pos.is_some() {
         add_files(st, files, under, out);
     }
@@ -1007,7 +1009,7 @@ fn paste(st: &AppState, at: TileAt, out: &mut Vec<Msg>) {
 }
 
 /// Paths in pasted text, one a line (`file://` URIs decoded).
-fn paths_in(text: &str) -> Vec<PathBuf> {
+pub fn paths_in(text: &str) -> Vec<PathBuf> {
     text.lines()
         .map(str::trim)
         .filter(|l| !l.is_empty() && !l.starts_with('#'))
@@ -1048,8 +1050,8 @@ fn files_tiles(st: &AppState, files: Vec<PathBuf>, out: &mut Vec<Msg>) -> Vec<Ti
         let images = st.images_at(&f);
         if !images.is_empty() {
             tiles.extend(images.into_iter().map(TileContent::Image));
-        } else if f.is_absolute() && f.is_file() {
-            match image::open(&f) {
+        } else if f.is_absolute() && f.vfs_is_file() {
+            match increart_core::vfs::open_image(&f) {
                 Ok(i) => tiles.push(TileContent::Pasted(TileImage(Arc::new(i.to_rgba8())))),
                 Err(e) => out.push(Msg::Problem(format!("{}: {e}", f.display()))),
             }

@@ -5,7 +5,8 @@
 //! version and system. Passwords in the logs are masked; no images, no
 //! library.
 
-use std::fs;
+use crate::vfs as fs;
+use crate::vfs::PathExt;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
@@ -84,7 +85,7 @@ fn write_zip(r: &Report, dest: &Path) -> std::io::Result<u64> {
     contents.push("model-directories.txt".into());
 
     // which presets were validated, each with the report that says how
-    match r.validations.as_deref().filter(|p| p.is_file()) {
+    match r.validations.as_deref().filter(|p| p.vfs_is_file()) {
         None => contents.push("validation: no server preset validated yet".into()),
         Some(path) => {
             let name = format!("validation/{}", crate::validation::FILE);
@@ -238,7 +239,7 @@ fn list_model_dirs(dirs: &[String]) -> String {
     for (i, d) in dirs.iter().enumerate() {
         let root = Path::new(d);
         out.push_str(&format!("\n{}. {d}\n", i + 1));
-        if !root.is_dir() {
+        if !root.vfs_is_dir() {
             out.push_str("   isn't there (or isn't a folder)\n");
             continue;
         }

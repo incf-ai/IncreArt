@@ -4,8 +4,9 @@
 //! pixels its `increart:pixels` names. Generated images whose output link
 //! is gone are problems; seeds still to generate are counted.
 
+use crate::vfs as fs;
+use crate::vfs::PathExt;
 use std::collections::BTreeSet;
-use std::fs;
 use std::path::Path;
 
 use crate::error::Result;
@@ -101,12 +102,12 @@ pub fn check(lib: &Library) -> Result<Report> {
         };
         if let Err(e) = fs::metadata(path) {
             r.problems.push(format!("{shown}: can't be read ({e})"));
-        } else if !lib.image_path(&to).is_file() {
+        } else if !lib.image_path(&to).vfs_is_file() {
             r.problems.push(format!("{shown}: its image {} is missing", to.id));
         }
     }
     for i in &named {
-        if !lib.image_path(i).is_file() {
+        if !lib.image_path(i).vfs_is_file() {
             r.problems.push(format!("{}: named in the library but missing", i.rel_path_as(lib.store_format())));
         }
     }

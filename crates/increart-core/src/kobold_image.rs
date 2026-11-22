@@ -17,6 +17,7 @@
 //!   the other's work to finish (a reload would end it). Asks go first, so
 //!   they wait at most one image.
 
+use crate::vfs::PathExt;
 use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{Shutdown, TcpStream, ToSocketAddrs};
@@ -202,7 +203,7 @@ pub fn int8_safetensors(path: &Path) -> bool {
     if path.extension().and_then(|e| e.to_str()) != Some("safetensors") {
         return false;
     }
-    let Ok(mut f) = std::fs::File::open(path) else { return false };
+    let Ok(mut f) = crate::vfs::File::open(path) else { return false };
     let mut len = [0u8; 8];
     if f.read_exact(&mut len).is_err() {
         return false;
@@ -240,7 +241,10 @@ impl LocalFiles {
         let int8 = ids
             .iter()
             .filter(|id| {
-                dirs.iter().map(|d| Path::new(d).join(id)).find(|p| p.exists()).is_some_and(|p| int8_safetensors(&p))
+                dirs.iter()
+                    .map(|d| Path::new(d).join(id))
+                    .find(|p| p.vfs_exists())
+                    .is_some_and(|p| int8_safetensors(&p))
             })
             .cloned()
             .collect();
@@ -265,12 +269,12 @@ impl LocalFiles {
 
 /// The files under `dir` as model file IDs, `depth` folders deep.
 fn model_ids(dir: &Path, prefix: &str, depth: u32, ids: &mut BTreeSet<String>) {
-    let Ok(rd) = std::fs::read_dir(dir) else { return };
+    let Ok(rd) = crate::vfs::read_dir(dir) else { return };
     for e in rd.flatten() {
         let Some(name) = e.file_name().to_str().map(str::to_string) else { continue };
         let id = format!("{prefix}{name}");
         match e.file_type() {
-            Ok(t) if t.is_dir() || (t.is_symlink() && e.path().is_dir()) => {
+            Ok(t) if t.is_dir() || (t.is_symlink() && e.path().vfs_is_dir()) => {
                 if depth > 0 {
                     model_ids(&e.path(), &format!("{id}/"), depth - 1, ids);
                 }
@@ -343,7 +347,7 @@ impl KoboldImage {
         };
         let size = |key: &ModelKey| {
             model_flags(key, &admin.model_dirs)
-                .map(|flags| flags.iter().filter_map(|(_, p)| std::fs::metadata(p).ok()).map(|m| m.len()).sum())
+                .map(|flags| flags.iter().filter_map(|(_, p)| crate::vfs::metadata(p).ok()).map(|m| m.len()).sum())
                 .unwrap_or(0u64)
         };
         let now = self.inner.loaded.lock_or_recover().as_ref().map_or(0, |(k, _)| size(k));
@@ -363,6 +367,18 @@ impl KoboldImage {
     /// admin, KoboldCpp restarts with it (blocks until it's back).
     pub fn load_model(&self, model: &ModelKey) -> ApiResult<ModelStatus> {
         self.inner.load(model)
+    }
+
+    /// [`Self::load_model`], except that one started elsewhere is taken
+    /// with the image model it runs, whatever its file is called.
+    pub fn load_model_anyway(&self, model: &ModelKey) -> ApiResult<ModelStatus> {
+        if self.inner.admin.is_some() {
+            return self.inner.load(model);
+        }
+        match self.inner.running()? {
+            Some(file) => self.inner.ready(model, file),
+            None => Err(ApiError::InvalidModelConfig("it runs no image model".into())),
+        }
     }
 
     /// Back to how it was launched (no image model).
@@ -607,7 +623,7 @@ impl Inner {
             )));
         };
         let name = export(admin, &flags).map_err(ApiError::ModelLoadFailed)?;
-        let log_len = admin.log.as_ref().and_then(|l| std::fs::metadata(l).ok()).map_or(0, |m| m.len());
+        let log_len = admin.log.as_ref().and_then(|l| crate::vfs::metadata(l).ok()).map_or(0, |m| m.len());
         self.reload(&name)?;
         match self.running()? {
             Some(file) if file_name(&file) == file_name(&wanted) => self.ready(key, file),
@@ -636,7 +652,7 @@ impl Inner {
             return self.status();
         }
         let name = export(admin, flags).map_err(ApiError::ModelLoadFailed)?;
-        let log_len = admin.log.as_ref().and_then(|l| std::fs::metadata(l).ok()).map_or(0, |m| m.len());
+        let log_len = admin.log.as_ref().and_then(|l| crate::vfs::metadata(l).ok()).map_or(0, |m| m.len());
         *self.loaded.lock_or_recover() = None;
         *self.image_settings.lock_or_recover() = Some(name.clone());
         self.take_turn(Side::Image, Some(&name)).map_err(ApiError::ModelLoadFailed)?;
@@ -766,7 +782,7 @@ fn model_flags(key: &ModelKey, dirs: &[String]) -> Result<Vec<(String, String)>,
         let path = if Path::new(id).is_absolute() {
             Some(PathBuf::from(id))
         } else {
-            dirs.iter().map(|d| Path::new(d).join(id)).find(|p| p.exists())
+            dirs.iter().map(|d| Path::new(d).join(id)).find(|p| p.vfs_exists())
         };
         let path = match path {
             Some(p) => p,
@@ -809,14 +825,14 @@ fn export(admin: &Admin, flags: &[(String, String)]) -> Result<String, String> {
     args.hash(&mut h);
     let name = format!("increart-{:016x}.kcpps", h.finish());
     let path = admin.dir.join(&name);
-    std::fs::create_dir_all(&admin.dir).map_err(|e| e.to_string())?;
-    let _ = std::fs::remove_file(&path);
+    crate::vfs::create_dir_all(&admin.dir).map_err(|e| e.to_string())?;
+    let _ = crate::vfs::remove_file(&path);
     let mut cmd = crate::kobold::command(&admin.binary)?;
     cmd.args(&args);
     let text = crate::process::command_text(&cmd);
     crate::process::background(&mut cmd, false).arg("--exportconfig").arg(&path);
     let out = cmd.output().map_err(|e| format!("can't run {}: {e}", admin.binary))?;
-    if !path.is_file() {
+    if !path.vfs_is_file() {
         let text = String::from_utf8_lossy(&out.stdout).to_string() + &String::from_utf8_lossy(&out.stderr);
         let tail: Vec<&str> = text.lines().rev().take(5).collect();
         return Err(format!(
@@ -828,7 +844,7 @@ fn export(admin: &Admin, flags: &[(String, String)]) -> Result<String, String> {
     if let Some(log) = &admin.log {
         use std::io::Write;
         let note = crate::process::log_note(&format!("reloading with {name}, the settings for: {text}"));
-        let _ = std::fs::OpenOptions::new().append(true).open(log).and_then(|mut f| f.write_all(note.as_bytes()));
+        let _ = crate::vfs::OpenOptions::new().append(true).open(log).and_then(|mut f| f.write_all(note.as_bytes()));
     }
     Ok(name)
 }
@@ -850,7 +866,7 @@ fn without_chat(args: &[String]) -> Vec<String> {
 /// The reason a load failed, from what the log gained since `from`.
 fn load_error(log: &Path, from: u64) -> Option<String> {
     use std::io::{Seek, SeekFrom};
-    let mut f = std::fs::File::open(log).ok()?;
+    let mut f = crate::vfs::File::open(log).ok()?;
     f.seek(SeekFrom::Start(from)).ok()?;
     let mut text = String::new();
     f.take(1 << 20).read_to_string(&mut text).ok()?;
@@ -1189,7 +1205,7 @@ mod tests {
             let p = dir.path().join(name);
             let mut b = (header.len() as u64).to_le_bytes().to_vec();
             b.extend(header.as_bytes());
-            std::fs::write(&p, b).unwrap();
+            crate::vfs::write(&p, b).unwrap();
             p
         };
         let int8 = write(
@@ -1210,10 +1226,10 @@ mod tests {
     #[test]
     fn model_folders_list_as_ids() {
         let dir = tempfile::tempdir().unwrap();
-        std::fs::create_dir_all(dir.path().join("koboldcpp/sub")).unwrap();
-        std::fs::write(dir.path().join("koboldcpp/q8.gguf"), "").unwrap();
-        std::fs::write(dir.path().join("koboldcpp/sub/vae.safetensors"), "").unwrap();
-        std::fs::write(dir.path().join("top.gguf"), "").unwrap();
+        crate::vfs::create_dir_all(dir.path().join("koboldcpp/sub")).unwrap();
+        crate::vfs::write(dir.path().join("koboldcpp/q8.gguf"), "").unwrap();
+        crate::vfs::write(dir.path().join("koboldcpp/sub/vae.safetensors"), "").unwrap();
+        crate::vfs::write(dir.path().join("top.gguf"), "").unwrap();
         let mut ids = BTreeSet::new();
         model_ids(dir.path(), "", 3, &mut ids);
         let want: BTreeSet<String> =
@@ -1224,10 +1240,10 @@ mod tests {
     #[test]
     fn model_files_as_flags() {
         let dir = tempfile::tempdir().unwrap();
-        std::fs::create_dir_all(dir.path().join("vae")).unwrap();
-        std::fs::write(dir.path().join("vae/v.safetensors"), "").unwrap();
-        std::fs::create_dir_all(dir.path().join("dm")).unwrap();
-        std::fs::write(dir.path().join("dm/d.gguf"), "").unwrap();
+        crate::vfs::create_dir_all(dir.path().join("vae")).unwrap();
+        crate::vfs::write(dir.path().join("vae/v.safetensors"), "").unwrap();
+        crate::vfs::create_dir_all(dir.path().join("dm")).unwrap();
+        crate::vfs::write(dir.path().join("dm/d.gguf"), "").unwrap();
         let dirs = vec!["/nowhere".to_string(), dir.path().to_string_lossy().into_owned()];
         let key = |m: &[(&str, &str)]| ModelKey {
             recipe: "r".into(),
@@ -1250,7 +1266,7 @@ mod tests {
         assert!(model_flags(&key(&[("vae", "vae/v.safetensors")]), &dirs).is_err());
         // sd.cpp's loader moves --sdllm (its t5xxl_path) and Clip-2 where
         // the model wants them
-        std::fs::write(dir.path().join("dm/t.gguf"), "").unwrap();
+        crate::vfs::write(dir.path().join("dm/t.gguf"), "").unwrap();
         let flags = model_flags(
             &key(&[("diffusion_model", "dm/d.gguf"), ("t5xxl", "dm/t.gguf"), ("llm_vision", "dm/t.gguf")]),
             &dirs,
@@ -1285,7 +1301,7 @@ mod tests {
     fn the_reason_a_load_failed_is_found_in_the_log() {
         let dir = tempfile::tempdir().unwrap();
         let log = dir.path().join("k.log");
-        std::fs::write(&log, "old error\nRestarting KoboldCpp...\nNamespace(error=1)\nUnable to determine GPU Memory\nload failed\nCannot find image model file: /x.safetensors\nAttempting to recover\n").unwrap();
+        crate::vfs::write(&log, "old error\nRestarting KoboldCpp...\nNamespace(error=1)\nUnable to determine GPU Memory\nload failed\nCannot find image model file: /x.safetensors\nAttempting to recover\n").unwrap();
         assert_eq!(load_error(&log, 10).as_deref(), Some("Cannot find image model file: /x.safetensors"));
     }
 }

@@ -34,7 +34,7 @@ impl Original {
             use chrono::SubsecRound;
             Timestamp::from(t).trunc_subsecs(0)
         };
-        let meta = std::fs::metadata(path).ok();
+        let meta = crate::vfs::metadata(path).ok();
         #[cfg_attr(not(unix), allow(unused_mut))]
         let mut o = Original {
             name: path.file_name().map(|n| n.to_string_lossy().into_owned()),
@@ -49,7 +49,7 @@ impl Original {
         };
         // the inode change time, permissions and owner exist on Unix only
         #[cfg(unix)]
-        if let Some(m) = &meta {
+        if let Some(m) = meta.as_ref().and_then(|m| m.disk()) {
             use std::os::unix::fs::MetadataExt;
             o.ctime = chrono::DateTime::from_timestamp(m.ctime(), 0);
             o.mode = Some(m.mode() & 0o7777);

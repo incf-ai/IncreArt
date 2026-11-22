@@ -10,6 +10,7 @@
 //! the `Session`, behind a lock: shutting down needs it while the worker
 //! may be busy for minutes (a scan, a large save).
 
+use increart_core::vfs::PathExt;
 use std::cell::Cell;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -26,7 +27,7 @@ use increart_core::sync::LockExt;
 use increart_core::{Id, IdeaLoc, ImageRef, Library, NewIdea, NewRun, Tree, Verdict, modelhash};
 
 use crate::state::{EntryKind, EstimateOf, FvEntry, GenerateForm, PickKind, ReviewUndo};
-use crate::update::{DraftSave, Effect, LibOp, Msg, OpOk, PeJob, TileTarget};
+use crate::update::{DraftSave, Effect, LibOp, Msg, OpOk, PasteTo, PeJob, TileTarget};
 
 /// The library and the image servers with the engine using them.
 #[derive(Default)]
@@ -608,7 +609,7 @@ impl Runtime {
                             settings.quality(settings.save_format),
                         )
                         .map_err(|e| format!("{}: {e}", path.display()))?;
-                        std::fs::write(path, bytes).map_err(|e| format!("{}: {e}", path.display()))?;
+                        increart_core::vfs::write(path, bytes).map_err(|e| format!("{}: {e}", path.display()))?;
                     }
                     Ok(crate::tile::TileImage(Arc::new(img)))
                 });
@@ -1043,14 +1044,14 @@ const IMAGE_EXTS: &[&str] = &["png", "jpg", "jpeg", "webp", "gif", "bmp", "tif",
 /// (rfd's fallback). Empty when cancelled.
 fn pick(kind: PickKind, start: Option<PathBuf>) -> Vec<PathBuf> {
     let mut d = rfd::FileDialog::new();
-    if let Some(s) = start.clone().filter(|s| s.is_dir()) {
+    if let Some(s) = start.clone().filter(|s| s.vfs_is_dir()) {
         d = d.set_directory(s);
     }
     match kind {
         // `start` is the library: beside it, named after it
         PickKind::LibraryArchiveOut(format) => {
             let lib = start.unwrap_or_default();
-            if let Some(dir) = lib.parent().filter(|p| p.is_dir()) {
+            if let Some(dir) = lib.parent().filter(|p| p.vfs_is_dir()) {
                 d = d.set_directory(dir);
             }
             let name = lib.file_name().map_or("library".into(), |n| n.to_string_lossy().into_owned());
@@ -1128,7 +1129,7 @@ fn pick(kind: PickKind, start: Option<PathBuf>) -> Vec<PathBuf> {
         PickKind::ExportFile => {
             use increart_core::config::TileFormat;
             let file = start.unwrap_or_default();
-            if let Some(dir) = file.parent().filter(|p| p.is_dir()) {
+            if let Some(dir) = file.parent().filter(|p| p.vfs_is_dir()) {
                 d = d.set_directory(dir);
             }
             let ext = file.extension().map_or("png".into(), |e| e.to_string_lossy().to_lowercase());
@@ -1380,7 +1381,7 @@ fn watch_start_log(
     done: &Arc<AtomicBool>,
 ) {
     let log = launcher::log_path(logs, server);
-    let start = std::fs::metadata(&log).map_or(0, |m| m.len());
+    let start = increart_core::vfs::metadata(&log).map_or(0, |m| m.len());
     let (tx, wake, done) = (tx.clone(), wake.clone(), done.clone());
     std::thread::spawn(move || {
         let mut last = None;
@@ -1396,11 +1397,66 @@ fn watch_start_log(
     });
 }
 
+/// An opened library made the session's, its opening logged (for a slow
+/// start); its root and index for [`Msg::LibraryOpened`].
+fn library_opened(ctx: &Ctx, lib: Library, t: std::time::Instant) -> Result<(PathBuf, increart_core::Index), String> {
+    let ix = lib.scan().map_err(err)?;
+    let root = lib.root().to_path_buf();
+    let outputs: usize = ix.projects.iter().map(|p| p.outputs.len()).sum();
+    let times = lib.open_times();
+    let upgrade = times.upgrade.map_or(Duration::ZERO, |(d, _)| d);
+    let upgraded = match times.upgrade {
+        Some((d, n)) => format!(", metadata upgrade {} ms: {n} images", d.as_millis()),
+        None => String::new(),
+    };
+    // an ephemeral library's log line names nothing of it
+    let name = match lib.ram_used() {
+        Some(_) => "(ephemeral)".to_string(),
+        None => root.display().to_string(),
+    };
+    increart_core::applog::line(
+        "info",
+        &format!(
+            "library {name} opened in {} ms (lock {} ms{upgraded}, scan {} ms: {} projects, {} folders, {} outputs)",
+            t.elapsed().as_millis(),
+            times.lock.as_millis(),
+            t.elapsed().saturating_sub(times.lock + upgrade).as_millis(),
+            ix.projects.len(),
+            ix.project_folders.len(),
+            outputs,
+        ),
+    );
+    ctx.session.lock_or_recover().library = Some(Arc::new(Mutex::new(lib)));
+    Ok((root, ix))
+}
+
+/// An ephemeral library's discarded output images deleted for good, and
+/// then every image nothing refers to: they free their RAM. How many.
+fn free_discarded(lib: &mut Library) -> increart_core::error::Result<usize> {
+    let ix = lib.scan()?;
+    let mut n = 0;
+    for p in &ix.projects {
+        for o in &p.discarded {
+            lib.delete_discarded_output(&o.path)?;
+            n += 1;
+        }
+    }
+    lib.clean_up()?;
+    Ok(n)
+}
+
+/// Why a file of an ephemeral session can't be opened in another app.
+pub const IN_RAM: &str = "It's in RAM (an ephemeral session): there's no file on disk for another app to open. \
+                          Export it to have one";
+
 /// Opens a folder (a file: its folder) in the file manager: `command` if
 /// set, else the desktop's (Explorer, Finder, or on Linux the first of
 /// xdg-open, gio, thunar, nautilus, dolphin, nemo, pcmanfm that works).
 fn show_in_file_manager(path: &Path, command: &str) -> Result<(), String> {
-    let dir = if path.is_dir() { path } else { path.parent().unwrap_or(path) };
+    if increart_core::vfs::in_ram(path) {
+        return Err(IN_RAM.into());
+    }
+    let dir = if path.vfs_is_dir() { path } else { path.parent().unwrap_or(path) };
     let managers: &[&[&str]] = if cfg!(any(windows, target_os = "macos")) {
         &[]
     } else {
@@ -1416,6 +1472,9 @@ fn show_in_file_manager(path: &Path, command: &str) -> Result<(), String> {
 /// TextEdit (`open -t`) on macOS (`.rsn` has no app of its own there), or
 /// on Linux the desktop's app for it or a known editor.
 fn open_in_editor(path: &Path, command: &str) -> Result<(), String> {
+    if increart_core::vfs::in_ram(path) {
+        return Err(IN_RAM.into());
+    }
     let (editors, first): (&[&[&str]], bool) = if cfg!(windows) {
         (&[&["notepad"]], true)
     } else if cfg!(target_os = "macos") {
@@ -1470,9 +1529,9 @@ fn open_with(target: &Path, command: &str, apps: &[&[&str]], apps_first: bool) -
 fn list_dir(root: &Path, rel: &Path) -> Vec<FvEntry> {
     use increart_core::link;
     let dir = root.join(rel);
-    let Ok(rd) = std::fs::read_dir(&dir) else { return vec![] };
+    let Ok(rd) = increart_core::vfs::read_dir(&dir) else { return vec![] };
     // Inside a project?
-    let in_project = rel.ancestors().any(|a| root.join(a).join("project.rsn").is_file());
+    let in_project = rel.ancestors().any(|a| root.join(a).join("project.rsn").vfs_is_file());
     // ideas link into the input store, everything else into the output store
     let store = store_of(rel);
     let mut out = vec![];
@@ -1481,18 +1540,18 @@ fn list_dir(root: &Path, rel: &Path) -> Vec<FvEntry> {
         let name = e.file_name().to_string_lossy().into_owned();
         // a project's discarded images are shown in Output library → Discarded
         if name.starts_with('.')
-            || (name == increart_core::scan::DISCARDED_OUTPUTS && dir.join("project.rsn").is_file())
+            || (name == increart_core::scan::DISCARDED_OUTPUTS && dir.join("project.rsn").vfs_is_file())
         {
             continue;
         }
-        let meta = std::fs::metadata(&path).ok();
+        let meta = increart_core::vfs::metadata(&path).ok();
         let modified = meta.as_ref().and_then(|m| m.modified().ok()).map(chrono::DateTime::<chrono::Utc>::from);
-        let (kind, size, info) = if path.is_dir() {
-            let n = std::fs::read_dir(&path).map(|r| r.count() as u64).unwrap_or(0);
-            if path.join("project.rsn").is_file() {
+        let (kind, size, info) = if path.vfs_is_dir() {
+            let n = increart_core::vfs::read_dir(&path).map(|r| r.count() as u64).unwrap_or(0);
+            if path.join("project.rsn").vfs_is_file() {
                 (EntryKind::Project, n, "project".to_string())
             } else if let Ok(id) = name.parse::<increart_core::Id>()
-                && path.join("idea.rsn").is_file()
+                && path.join("idea.rsn").vfs_is_file()
             {
                 let title = increart_core::rsnfmt::read::<increart_core::model::Idea>(&path.join("idea.rsn"))
                     .map(|i| i.title)
@@ -1503,7 +1562,7 @@ fn list_dir(root: &Path, rel: &Path) -> Vec<FvEntry> {
                     .map(|r| format!("run {}", r.label))
                     .unwrap_or_else(|_| "run".into());
                 (EntryKind::Run, n, label)
-            } else if name == "runs" && dir.join("project.rsn").is_file() {
+            } else if name == "runs" && dir.join("project.rsn").vfs_is_file() {
                 (EntryKind::Folder, n, "runs".to_string())
             } else if in_project {
                 (EntryKind::Folder, n, "review folder".to_string())
@@ -1513,7 +1572,7 @@ fn list_dir(root: &Path, rel: &Path) -> Vec<FvEntry> {
         } else if let Some(id) = increart_core::scan::idea_link_id(&path) {
             // an input collection's entry: the idea it names
             let idea = linked_idea_dir(root, &id);
-            let n = idea.as_ref().and_then(|d| std::fs::read_dir(d).ok()).map_or(0, |r| r.count() as u64);
+            let n = idea.as_ref().and_then(|d| increart_core::vfs::read_dir(d).ok()).map_or(0, |r| r.count() as u64);
             let title = idea
                 .and_then(|d| increart_core::rsnfmt::read::<increart_core::model::Idea>(&d.join("idea.rsn")).ok())
                 .map(|i| if i.title.is_empty() { "idea".to_string() } else { i.title })
@@ -1544,7 +1603,7 @@ fn linked_idea_dir(root: &Path, id: &increart_core::Id) -> Option<std::path::Pat
     [INPUT_LIBRARY, EDITED_IDEAS, DISCARDED_IDEAS, UNREVIEWED_IDEAS]
         .into_iter()
         .map(|d| root.join(d).join(id.as_str()))
-        .find(|d| d.join("idea.rsn").is_file())
+        .find(|d| d.join("idea.rsn").vfs_is_file())
 }
 
 /// Up to three images for a folder's icon: a project's cover first, then the
@@ -1558,7 +1617,7 @@ fn previews(dir: &Path, store: increart_core::Store) -> Vec<ImageRef> {
 }
 
 fn previews_from(dir: &Path, store: increart_core::Store, skip_bad: bool) -> Vec<ImageRef> {
-    let is_project = |d: &Path| d.join("project.rsn").is_file();
+    let is_project = |d: &Path| d.join("project.rsn").vfs_is_file();
     let parent = dir.parent().unwrap_or(dir);
     if parent.file_name().is_some_and(|f| f == "runs")
         && let Some(project) = parent.parent().filter(|p| is_project(p))
@@ -1594,7 +1653,7 @@ fn walk_images(
     let mut queue = std::collections::VecDeque::from([dir.to_path_buf()]);
     let mut seen = 0;
     while let Some(d) = queue.pop_front() {
-        let Ok(rd) = std::fs::read_dir(&d) else { continue };
+        let Ok(rd) = increart_core::vfs::read_dir(&d) else { continue };
         let mut names: Vec<_> = rd.flatten().map(|e| e.path()).collect();
         // ids start with the date, so newest first
         names.sort_by(|a, b| b.cmp(a));
@@ -1607,7 +1666,7 @@ fn walk_images(
             if name.starts_with('.') || (skip_bad && name == "bad") {
                 continue;
             }
-            if p.is_dir() {
+            if p.vfs_is_dir() {
                 queue.push_back(p);
             } else if StoreFormat::of_name(&name).is_some()
                 && keep(&name)
@@ -1645,37 +1704,52 @@ fn work_on(ctx: &Ctx, fx: Effect) -> Vec<Msg> {
                 let _ = ctx.tx.send(Msg::LibraryUpgrading(done, total));
                 (ctx.wake)();
             };
+            // an ephemeral library reading this one shares its lock: it goes first
+            let reading = ctx.library().and_then(|l| l.lock_or_recover().ram_lower());
+            if reading.is_some_and(|r| increart_core::link::absolute(&path).is_ok_and(|p| p == r)) {
+                ctx.session.lock_or_recover().library = None;
+            }
             let opened = if create { Library::create(&path, None) } else { Library::open_with(&path, &mut upgrading) };
+            if opened.is_ok() {
+                increart_core::ephemeral::logs_to_disk(&ctx.paths.logs());
+            }
             vec![Msg::LibraryOpened(opened.map_err(err).and_then(|mut lib| {
                 if let Some(d) = ctx.paths.disposal.get() {
                     lib.set_disposal(d.clone());
                 }
-                let ix = lib.scan().map_err(err)?;
-                let root = lib.root().to_path_buf();
-                // in the app's log, for a slow start
-                let outputs: usize = ix.projects.iter().map(|p| p.outputs.len()).sum();
-                let times = lib.open_times();
-                let upgrade = times.upgrade.map_or(Duration::ZERO, |(d, _)| d);
-                let upgraded = match times.upgrade {
-                    Some((d, n)) => format!(", metadata upgrade {} ms: {n} images", d.as_millis()),
-                    None => String::new(),
-                };
-                increart_core::applog::line(
-                    "info",
-                    &format!(
-                        "library {} opened in {} ms (lock {} ms{upgraded}, scan {} ms: {} projects, {} folders, {} outputs)",
-                        root.display(),
-                        t.elapsed().as_millis(),
-                        times.lock.as_millis(),
-                        t.elapsed().saturating_sub(times.lock + upgrade).as_millis(),
-                        ix.projects.len(),
-                        ix.project_folders.len(),
-                        outputs,
-                    ),
-                );
-                ctx.session.lock_or_recover().library = Some(Arc::new(Mutex::new(lib)));
-                Ok((root, ix))
+                library_opened(ctx, lib, t)
             }))]
+        }
+        Effect::OpenEphemeral { from, budget } => {
+            let t = std::time::Instant::now();
+            let swap = increart_core::ephemeral::prepare_pin(budget);
+            let pin = swap != increart_core::ephemeral::Swap::None;
+            if let Err(e) = increart_core::ephemeral::logs_to_ram(&ctx.paths.logs(), pin) {
+                return vec![Msg::LibraryOpened(Err(format!("keeping the logs in RAM: {e}")))];
+            }
+            // the library open now goes first: it may be the one read (its
+            // lock), or an ephemeral one (its RAM)
+            ctx.session.lock_or_recover().library = None;
+            let opened = Library::open_ephemeral(from.as_deref(), pin);
+            vec![
+                Msg::EphemeralSwap(swap),
+                Msg::LibraryOpened(opened.map_err(err).and_then(|lib| library_opened(ctx, lib, t))),
+            ]
+        }
+        Effect::CheckRam => match ctx.library().and_then(|l| l.lock_or_recover().ram_used()) {
+            Some(used) => vec![Msg::RamUsed(used)],
+            None => vec![],
+        },
+        Effect::FreeRam(budget) => {
+            let Some(lib) = ctx.library() else { return vec![] };
+            let mut l = lib.lock_or_recover();
+            let freed = l.free_ram(budget).map_err(err).map(|gone| (gone.len(), l.ram_used().unwrap_or(0)));
+            vec![Msg::RamFreed(freed)]
+        }
+        Effect::FreeDiscarded => {
+            let Some(lib) = ctx.library() else { return vec![] };
+            let mut l = lib.lock_or_recover();
+            vec![Msg::RamFreed(free_discarded(&mut l).map_err(err).map(|n| (n, l.ram_used().unwrap_or(0))))]
         }
         Effect::StoreInfo => {
             let Some(lib) = ctx.library() else { return vec![] };
@@ -2009,12 +2083,12 @@ fn download_models(
         at.file = i;
         send(&at);
         let dest = std::path::Path::new(dir).join(&f.file);
-        if dest.is_file() {
+        if dest.vfs_is_file() {
             at.reused.push((f.file.clone(), String::new()));
             continue;
         }
         let size = tiers::remote_size(&f.url);
-        if std::fs::symlink_metadata(&dest).is_err()
+        if increart_core::vfs::symlink_metadata(&dest).is_err()
             && let Some(src) = tiers::reusable(&f.url, search, || size)
             && tiers::link(&src, &dest).is_ok()
         {
@@ -2201,6 +2275,26 @@ fn verdict_of(link: &Path) -> Option<Verdict> {
     }
 }
 
+/// Dropped files as ideas of their own: .txt files as text, others as
+/// image ideas.
+fn import_files(lib: &mut Library, paths: Vec<PathBuf>) -> Result<(), String> {
+    for p in paths {
+        let is_text = p.extension().is_some_and(|e| e.eq_ignore_ascii_case("txt"));
+        let mut idea = NewIdea {
+            source: IdeaSource::DroppedFile { original_path: p.to_string_lossy().into() },
+            ..NewIdea::text("", "")
+        };
+        if is_text {
+            idea.text =
+                increart_core::vfs::read_to_string(&p).map_err(|e| format!("{}: {e}", p.display()))?.trim().into();
+        } else {
+            idea.images.push(lib.import_file(&p).map_err(err)?.image);
+        }
+        lib.new_idea(idea).map_err(err)?;
+    }
+    Ok(())
+}
+
 pub fn lib_op(lib: &mut Library, op: LibOp) -> Result<OpOk, String> {
     match op {
         // new_idea makes a new collection the idea is saved to
@@ -2209,21 +2303,37 @@ pub fn lib_op(lib: &mut Library, op: LibOp) -> Result<OpOk, String> {
             let id = lib.new_idea(n).map_err(err)?;
             new_project_from_ideas(lib, &[id], &folder, &name)
         }
-        LibOp::ImportFiles(paths) => {
-            for p in paths {
-                let is_text = p.extension().is_some_and(|e| e.eq_ignore_ascii_case("txt"));
-                let mut idea = NewIdea {
-                    source: IdeaSource::DroppedFile { original_path: p.to_string_lossy().into() },
-                    ..NewIdea::text("", "")
-                };
-                if is_text {
-                    idea.text = std::fs::read_to_string(&p).map_err(|e| format!("{}: {e}", p.display()))?.trim().into();
+        LibOp::ImportFiles(paths) => import_files(lib, paths).map(|_| OpOk::Done),
+        LibOp::ImportPasted { images, files, to } => {
+            let n = images.len() + files.len();
+            let mut ids = vec![];
+            for img in images {
+                let mut png = std::io::Cursor::new(vec![]);
+                img.0.write_to(&mut png, image::ImageFormat::Png).map_err(|e| e.to_string())?;
+                // no name: the import record says "(clipboard)"
+                let id = lib.import_bytes(png.get_ref(), &Default::default()).map_err(err)?.image;
+                if to == PasteTo::Inbox {
+                    lib.new_idea(NewIdea { source: IdeaSource::Clipboard, images: vec![id], ..NewIdea::text("", "") })
+                        .map_err(err)?;
                 } else {
-                    idea.images.push(lib.import_file(&p).map_err(err)?.image);
+                    ids.push(id);
                 }
-                lib.new_idea(idea).map_err(err)?;
             }
-            Ok(OpOk::Done)
+            match to {
+                PasteTo::Inbox => {
+                    import_files(lib, files)?;
+                    Ok(OpOk::PastedIdeas(n))
+                }
+                PasteTo::Draft | PasteTo::Edit(_) => {
+                    for p in &files {
+                        ids.push(lib.import_file(p).map_err(err)?.image);
+                    }
+                    Ok(match to {
+                        PasteTo::Edit(idea) => OpOk::ImportedForEdit(idea, ids),
+                        _ => OpOk::Imported(ids),
+                    })
+                }
+            }
         }
         LibOp::ImportImages(paths) => {
             let ids = paths.iter().map(|p| lib.import_file(p).map(|i| i.image)).collect::<Result<Vec<_>, _>>();
@@ -2262,18 +2372,20 @@ pub fn lib_op(lib: &mut Library, op: LibOp) -> Result<OpOk, String> {
             lib.move_node(Tree::Projects, &path, &to).map(|_| OpOk::Done).map_err(err)
         }
         LibOp::DeleteNode(tree, path) => lib.delete_node(tree, &path).map(|_| OpOk::Done).map_err(err),
-        LibOp::CreateSweep { project, runs, model_dirs, queued, .. } => {
+        LibOp::CreateSweep { project, runs, model_dirs, anyway, queued, .. } => {
             let name = runs.first().map(|(_, t, _)| t.name.clone()).unwrap_or_default();
             let mut ids = vec![];
             for (form, tag, preset) in runs {
                 let mut run = new_run(lib, &form, &preset, &model_dirs);
                 run.sweep = Some(tag);
+                run.queued_anyway = anyway;
                 ids.push(lib.create_run(&project, run).map_err(err)?);
             }
             Ok(OpOk::Sweep(ids, name, queued))
         }
-        LibOp::CreateRun { project, form, preset, model_dirs, queued, .. } => {
-            let run = new_run(lib, &form, &preset, &model_dirs);
+        LibOp::CreateRun { project, form, preset, model_dirs, anyway, queued, .. } => {
+            let mut run = new_run(lib, &form, &preset, &model_dirs);
+            run.queued_anyway = anyway;
             lib.create_run(&project, run).map(|id| OpOk::Run(id, queued)).map_err(err)
         }
         LibOp::PrepareProject { parent, name, copy_of, form, then } => {
@@ -2302,7 +2414,7 @@ pub fn lib_op(lib: &mut Library, op: LibOp) -> Result<OpOk, String> {
         LibOp::CopyProject(path, name) => lib.duplicate_project(&path, &name).map(OpOk::Duplicated).map_err(err),
         LibOp::EditedCopy { image, edits, title, to } => {
             let path = lib.image_path(&image);
-            let img = image::open(&path).map_err(|e| format!("{}: {e}", path.display()))?.to_rgba8();
+            let img = increart_core::vfs::open_image(&path).map_err(|e| format!("{}: {e}", path.display()))?.to_rgba8();
             let out = increart_core::markup::render(&img, &edits);
             let mut png = std::io::Cursor::new(vec![]);
             out.write_to(&mut png, image::ImageFormat::Png).map_err(|e| e.to_string())?;
@@ -2421,7 +2533,7 @@ pub fn lib_op(lib: &mut Library, op: LibOp) -> Result<OpOk, String> {
         LibOp::UndoReview(u) => {
             // discarded images back (one restored or deleted since is fine)
             for at in &u.discarded {
-                if lib.root().join(at).symlink_metadata().is_ok() {
+                if lib.root().join(at).vfs_symlink_metadata().is_ok() {
                     lib.restore_output_link(at).map_err(err)?;
                 }
             }
@@ -2438,7 +2550,7 @@ pub fn lib_op(lib: &mut Library, op: LibOp) -> Result<OpOk, String> {
             // a link removed since (by hand) is fine: it's gone either way
             for at in &u.collected {
                 if let Ok(rel) = at.strip_prefix("collections")
-                    && lib.root().join(at).symlink_metadata().is_ok()
+                    && lib.root().join(at).vfs_symlink_metadata().is_ok()
                 {
                     lib.delete_node(Tree::Collections, rel).map_err(err)?;
                 }
@@ -2485,7 +2597,7 @@ fn review_outputs(
 /// A project folder a dialog picked as new: made (in a folder that is
 /// there).
 fn make_folder(lib: &Library, folder: &Path) -> Result<(), String> {
-    if !lib.root().join("projects").join(folder).is_dir()
+    if !lib.root().join("projects").join(folder).vfs_is_dir()
         && let (Some(parent), Some(last)) = (folder.parent(), folder.file_name())
     {
         lib.create_folder(Tree::Projects, parent, Some(&last.to_string_lossy())).map_err(err)?;
@@ -2650,6 +2762,7 @@ fn new_run(lib: &Library, f: &GenerateForm, preset: &RecipePreset, model_dirs: &
         source_idea: f.source_idea.clone(),
         first_seed: f.first_seed,
         seeds: f.seeds,
+        queued_anyway: false,
     }
 }
 
@@ -2675,14 +2788,40 @@ mod tests {
     }
 
     #[test]
+    fn pasted_images_become_inbox_ideas_or_join_the_draft_or_edited_idea() {
+        use crate::tile::TileImage;
+        let dir = tempfile::tempdir().unwrap();
+        let mut lib = Library::create(dir.path(), None).unwrap();
+        let px = |v: u8| TileImage(Arc::new(image::RgbaImage::from_pixel(4, 3, image::Rgba([v, 0, 0, 255]))));
+        // a file named by the clipboard's text, beside the data
+        let file = dir.path().join("copied.png");
+        px(9).0.save(&file).unwrap();
+        let op = LibOp::ImportPasted { images: vec![px(1), px(2)], files: vec![file.clone()], to: PasteTo::Inbox };
+        assert_eq!(lib_op(&mut lib, op), Ok(OpOk::PastedIdeas(3)));
+        let ideas = lib.scan().unwrap().ideas;
+        assert_eq!(ideas.len(), 3);
+        assert!(ideas.iter().all(|e| e.loc == IdeaLoc::Unreviewed && e.idea.images.len() == 1));
+        assert_eq!(ideas.iter().filter(|e| e.idea.source == IdeaSource::Clipboard).count(), 2);
+        // the draft and the edited idea get the images, no new ideas
+        let op = LibOp::ImportPasted { images: vec![px(3)], files: vec![file], to: PasteTo::Draft };
+        let Ok(OpOk::Imported(ids)) = lib_op(&mut lib, op) else { panic!() };
+        assert_eq!(ids.len(), 2);
+        let idea = ideas[0].idea.id.clone();
+        let op = LibOp::ImportPasted { images: vec![px(4)], files: vec![], to: PasteTo::Edit(idea.clone()) };
+        let Ok(OpOk::ImportedForEdit(to, ids)) = lib_op(&mut lib, op) else { panic!() };
+        assert_eq!((to, ids.len()), (idea, 1));
+        assert_eq!(lib.scan().unwrap().ideas.len(), 3);
+    }
+
+    #[test]
     fn models_checked_then_fetched_with_overall_progress() {
         let base = serve(vec![("a.gguf", 1000), ("b.gguf", 2000), ("c.gguf", 3000), ("d.gguf", 500)]);
         let dir = tempfile::tempdir().unwrap();
         let other = tempfile::tempdir().unwrap();
         // a: there already; b: on disk elsewhere, same size (linked)
-        std::fs::create_dir_all(dir.path().join("koboldcpp")).unwrap();
-        std::fs::write(dir.path().join("koboldcpp/a.gguf"), [1u8; 10]).unwrap();
-        std::fs::write(other.path().join("b.gguf"), [7u8; 2000]).unwrap();
+        increart_core::vfs::create_dir_all(dir.path().join("koboldcpp")).unwrap();
+        increart_core::vfs::write(dir.path().join("koboldcpp/a.gguf"), [1u8; 10]).unwrap();
+        increart_core::vfs::write(other.path().join("b.gguf"), [7u8; 2000]).unwrap();
         let files: Vec<_> = ["a", "b", "c", "d"]
             .map(|n| increart_core::tiers::Download {
                 url: format!("{base}/{n}.gguf"),
@@ -2703,8 +2842,8 @@ mod tests {
         assert_eq!(last.reused.len(), 2);
         assert_eq!(last.reused[0], ("koboldcpp/a.gguf".to_string(), String::new()));
         assert!(last.reused[1].1.ends_with("b.gguf"));
-        assert_eq!(std::fs::read(dir.path().join("koboldcpp/b.gguf")).unwrap().len(), 2000, "linked");
-        assert_eq!(std::fs::metadata(dir.path().join("koboldcpp/d.gguf")).unwrap().len(), 500);
+        assert_eq!(increart_core::vfs::read(dir.path().join("koboldcpp/b.gguf")).unwrap().len(), 2000, "linked");
+        assert_eq!(increart_core::vfs::metadata(dir.path().join("koboldcpp/d.gguf")).unwrap().len(), 500);
         // the last file starts after the bytes before it
         assert!(said.iter().any(|w| w.file == 3 && w.all_done == 3000), "{said:?}");
     }

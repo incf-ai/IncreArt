@@ -850,7 +850,7 @@ pub fn open(server: &PeServer, log_dir: &Path, wait: Duration, cancel: &AtomicBo
 /// transparent one is shown over a checkerboard (models read the colour
 /// of fully transparent pixels as if it were there).
 pub fn image_for_request(path: &Path, max: u32) -> Result<Vec<u8>, String> {
-    let img = image::open(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let img = crate::vfs::open_image(path).map_err(|e| format!("{}: {e}", path.display()))?;
     let img = if img.width() > max || img.height() > max { img.thumbnail(max, max) } else { img };
     let img = if img.color().has_alpha() { on_checkerboard(&img.to_rgba8()).into() } else { img };
     let mut buf = Cursor::new(vec![]);

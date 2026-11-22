@@ -1,6 +1,7 @@
 //! The user's `config.rsn` (DESIGN.md, Config file).
 
-use std::fs;
+use crate::vfs as fs;
+use crate::vfs::PathExt;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -45,6 +46,10 @@ pub struct Config {
         skip_serializing_if = "Vec::is_empty"
     )]
     pub recipes: Vec<RecipePreset>,
+    /// LoRA presets: named LoRAs (one, or several stacked) a sweep's LoRA
+    /// axis puts over each run's model preset (DESIGN.md, Sweep axes).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub lora_presets: Vec<LoraPreset>,
     /// Named server setups, chosen in the startup dialog.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub server_presets: Vec<ServerPreset>,
@@ -360,6 +365,24 @@ pub struct PresetLora {
     pub trigger: String,
 }
 
+/// A LoRA preset: a name and its LoRAs, each at its weight with its
+/// trigger words (several: a stack).
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename = "LoraPreset", default)]
+pub struct LoraPreset {
+    pub name: String,
+    pub loras: Vec<PresetLora>,
+}
+
+impl LoraPreset {
+    /// Its LoRAs' files, " + " between ("pixel.safetensors + ink.safetensors").
+    pub fn files(&self) -> String {
+        let names: Vec<&str> =
+            self.loras.iter().map(|l| l.file.rsplit(['/', '\\']).next().unwrap_or(&l.file)).collect();
+        names.join(" + ")
+    }
+}
+
 fn one() -> f32 {
     1.0
 }
@@ -467,12 +490,13 @@ pub fn lora_dirs(model_dirs: &[String]) -> Vec<PathBuf> {
     model_dirs
         .iter()
         .flat_map(|d| {
-            let mut found: Vec<PathBuf> = std::fs::read_dir(d)
+            let mut found: Vec<PathBuf> = crate::vfs::read_dir(d)
                 .into_iter()
                 .flatten()
                 .flatten()
                 .filter(|e| {
-                    e.path().is_dir() && LORA_DIRS.contains(&e.file_name().to_string_lossy().to_lowercase().as_str())
+                    e.path().vfs_is_dir()
+                        && LORA_DIRS.contains(&e.file_name().to_string_lossy().to_lowercase().as_str())
                 })
                 .map(|e| e.path())
                 .collect();
@@ -803,7 +827,7 @@ pub fn full_binary(b: &str) -> String {
     let t = b.trim();
     let full = full_path(t);
     let named = t.starts_with('~') || t.contains(['/', '\\']);
-    if named && (!t.contains(char::is_whitespace) || Path::new(&full).exists()) { full } else { b.to_string() }
+    if named && (!t.contains(char::is_whitespace) || Path::new(&full).vfs_exists()) { full } else { b.to_string() }
 }
 
 /// A model file as a model preset names it: its path inside the model
@@ -833,12 +857,42 @@ pub fn model_file_id(file: &Path, model_dirs: &[String]) -> std::result::Result<
 
 /// Where a model preset's file is on disk: its path in the first model
 /// folder that has it (a full path as it is).
+/// The LoRA files in the model directories' `loras/` (or `Lora/`), at
+/// most one folder down, as IDs (`loras/x.safetensors`), sorted, each once.
+pub fn lora_files(model_dirs: &[String]) -> Vec<String> {
+    const EXT: [&str; 4] = ["safetensors", "gguf", "ckpt", "pt"];
+    let mut out = vec![];
+    let lora =
+        |p: &Path| p.extension().and_then(|e| e.to_str()).is_some_and(|e| EXT.contains(&e.to_lowercase().as_str()));
+    for d in model_dirs.iter().filter(|d| !d.trim().is_empty()) {
+        for folder in ["loras", "Lora"] {
+            let Ok(entries) = crate::vfs::read_dir(Path::new(d).join(folder)) else { continue };
+            for e in entries.flatten() {
+                let p = e.path();
+                let name = e.file_name().to_string_lossy().to_string();
+                if p.vfs_is_dir() {
+                    for f in crate::vfs::read_dir(&p).into_iter().flatten().flatten() {
+                        if lora(&f.path()) && f.path().vfs_is_file() {
+                            out.push(format!("{folder}/{name}/{}", f.file_name().to_string_lossy()));
+                        }
+                    }
+                } else if lora(&p) {
+                    out.push(format!("{folder}/{name}"));
+                }
+            }
+        }
+    }
+    out.sort();
+    out.dedup();
+    out
+}
+
 pub fn model_file_on_disk(id: &str, model_dirs: &[String]) -> Option<PathBuf> {
     // a file: an empty ID would be the folder itself
     if Path::new(id).is_absolute() {
-        return Some(PathBuf::from(id)).filter(|p| p.is_file());
+        return Some(PathBuf::from(id)).filter(|p| p.vfs_is_file());
     }
-    model_dirs.iter().map(|d| Path::new(d).join(id)).find(|p| p.is_file())
+    model_dirs.iter().map(|d| Path::new(d).join(id)).find(|p| p.vfs_is_file())
 }
 
 /// Sets `s` to `f(s)`, noting the change in `said`.
@@ -1297,7 +1351,7 @@ impl Config {
     /// into the presets are saved so at once, the file as it was kept
     /// beside it (`config.rsn.before-chat-presets`).
     pub fn load(path: &Path) -> Result<(Config, Vec<String>)> {
-        let mut config: Config = if path.exists() { rsnfmt::read(path)? } else { Config::default() };
+        let mut config: Config = if path.vfs_exists() { rsnfmt::read(path)? } else { Config::default() };
         let moving = !config.pe.servers.is_empty();
         let mut warnings = config.normalize();
         if moving {
@@ -1543,7 +1597,7 @@ pub fn bundled_example_library() -> Option<PathBuf> {
 
 fn example_library_in(dir: &Path) -> Option<PathBuf> {
     let lib = dir.join(EXAMPLE_LIBRARY);
-    lib.join("library.rsn").is_file().then_some(lib)
+    lib.join("library.rsn").vfs_is_file().then_some(lib)
 }
 
 /// Copies a config that failed to load to the first free
@@ -1554,7 +1608,7 @@ fn keep_unreadable(path: &Path) -> std::io::Result<PathBuf> {
         let mut name = path.as_os_str().to_owned();
         name.push(if n == 1 { ".unreadable".to_string() } else { format!(".unreadable-{n}") });
         let kept = PathBuf::from(name);
-        if !kept.exists() {
+        if !kept.vfs_exists() {
             fs::copy(path, &kept)?;
             return Ok(kept);
         }
@@ -2102,8 +2156,8 @@ mod tests {
         assert!(outside.contains("isn't in a model directory"), "{outside}");
         assert!(model_file_id(&file, &[]).unwrap_err().contains("No model directory"));
         // on disk: the first folder that has it
-        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
-        std::fs::write(&file, b"").unwrap();
+        crate::vfs::create_dir_all(file.parent().unwrap()).unwrap();
+        crate::vfs::write(&file, b"").unwrap();
         assert_eq!(model_file_on_disk("vae/v.safetensors", &dirs), Some(file.clone()));
         assert_eq!(model_file_on_disk("vae/none.safetensors", &dirs), None);
         assert_eq!(model_file_on_disk("", &dirs), None, "not the folder");
@@ -2128,11 +2182,11 @@ mod tests {
         assert_eq!(lora_request_path("x.gguf"), "x.gguf");
         // on disk as it's spelt, `loras` first
         assert_eq!(lora_dir(&dirs[0]), None);
-        std::fs::create_dir_all(models.join("Lora")).unwrap();
+        crate::vfs::create_dir_all(models.join("Lora")).unwrap();
         assert_eq!(lora_dir(&dirs[0]), Some(models.join("Lora")));
-        std::fs::create_dir_all(models.join("loras")).unwrap();
+        crate::vfs::create_dir_all(models.join("loras")).unwrap();
         assert_eq!(lora_dir(&dirs[0]), Some(models.join("loras")));
-        std::fs::create_dir_all(dir.path().join("more/loras")).unwrap();
+        crate::vfs::create_dir_all(dir.path().join("more/loras")).unwrap();
         let all = [models.join("loras"), models.join("Lora"), dir.path().join("more/loras")];
         assert_eq!(lora_dirs(&dirs), all, "every folder's, in order");
     }
@@ -2319,7 +2373,7 @@ mod tests {
         assert!(w.is_empty());
         assert_eq!(c.resolutions, builtin_resolutions());
         c.save(&path).unwrap();
-        let text = std::fs::read_to_string(&path).unwrap();
+        let text = crate::vfs::read_to_string(&path).unwrap();
         assert!(text.starts_with("Config {\n    resolutions: [\n        Resolution {"), "{text}");
         assert_eq!(Config::load(&path).unwrap().0, c);
     }

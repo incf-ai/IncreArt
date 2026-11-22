@@ -19,7 +19,12 @@
 		"CLAUDE_CODE_AUTO_COMPACT_WINDOW": "300000",
 		"PULSE_SERVER": "unix:/run/pulse/native",
 		"HF_HOME": "/mnt/storage/huggingface",
-		"CCACHE_DIR": "/mnt/storage/sdcpp/.ccache"
+		// Scratch on the host SSD (/mnt/ssd/builds/increart; /mnt/ssd/builds is mounted below):
+		// clean-builds.sh empties these, which only costs a slower next build.
+		// sd.cpp's build-*/ dirs stay on /mnt/storage/sdcpp because sd-server
+		// runs from there.
+		"CCACHE_DIR": "/mnt/ssd/builds/increart/ccache",
+		"TMPDIR": "/mnt/ssd/builds/increart/tmp"
 	},
 	"runArgs": [
 		"--name=devcontainer-increart-qwenimage21",
@@ -43,6 +48,10 @@
 		// Existing ComfyUI model tree; sd-server reads it directly via --model-dir.
 		"source=/mnt/storage/comfy-new/ComfyUI/models,target=/mnt/storage/comfy-new/ComfyUI/models,type=bind,readonly",
 		"source=/mnt/storage/huggingface,target=/mnt/storage/huggingface,type=bind",
+		// Build dirs on the host's SSD, one per project under a shared 250 GB project
+		// quota: /workspace/target is a symlink to increart/target. The whole folder,
+		// so clean-builds.sh there can free space; see its README.md.
+		"source=/mnt/ssd/builds,target=/mnt/ssd/builds,type=bind",
 		// IncreArt image library.
 		"source=/mnt/storage/home/Documents/increart_library,target=/mnt/storage/increart_library,type=bind",
 		"source=increart-claude-config,target=/home/vscode/.claude-config,type=volume",

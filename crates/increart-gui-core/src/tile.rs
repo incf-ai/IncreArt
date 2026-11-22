@@ -622,7 +622,9 @@ pub fn compose(root: &Path, layout: &TileLayout, s: &TileSettings) -> Result<Rgb
             }
             let Some(image) = t.image() else { return Ok(None) };
             let path = image.path(root);
-            image::open(&path).map(|i| Some(i.to_rgba8())).map_err(|e| format!("{}: {e}", path.display()))
+            increart_core::vfs::open_image(&path)
+                .map(|i| Some(i.to_rgba8()))
+                .map_err(|e| format!("{}: {e}", path.display()))
         })
         .collect::<Result<Vec<_>, _>>()?;
     compose_images(layout, &images, s)

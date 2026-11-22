@@ -2,6 +2,7 @@
 //! written without the core): every file parses,
 //! re-serializes byte for byte, and the scan matches what the generator
 //! wrote.
+#![allow(clippy::disallowed_methods)] // fixtures on disk: no overlay here
 
 mod common;
 

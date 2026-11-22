@@ -627,6 +627,16 @@ impl Client {
         s
     }
 
+    /// [`Self::load_model`] for a run queued anyway: a KoboldCpp started
+    /// elsewhere is taken with the image model it runs, whatever its file
+    /// is called (an sd-server's answer is taken by the engine).
+    pub fn load_model_anyway(&self, model: &ModelKey) -> ApiResult<ModelStatus> {
+        match &self.kobold {
+            Some(k) => k.load_model_anyway(model),
+            None => self.load_model(model),
+        }
+    }
+
     /// Loads a model; blocks until the load has finished.
     pub fn load_model(&self, model: &ModelKey) -> ApiResult<ModelStatus> {
         if let Some(k) = &self.kobold {

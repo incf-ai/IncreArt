@@ -11,7 +11,8 @@
 //! first read or added to, the old file kept beside it as
 //! `*.jsonl.before-rsnl`.
 
-use std::fs::{self, OpenOptions};
+use crate::vfs::PathExt;
+use crate::vfs::{self as fs, OpenOptions};
 use std::io::Write;
 use std::path::Path;
 
@@ -136,7 +137,7 @@ fn line(path: &Path, e: &HistoryEntry) -> Result<String> {
 /// `*.jsonl.before-rsnl`. Nothing when `path` exists already.
 fn convert_jsonl(path: &Path) {
     let old = path.with_extension("jsonl");
-    if path.exists() || !old.is_file() {
+    if path.vfs_exists() || !old.vfs_is_file() {
         return;
     }
     let Ok(text) = fs::read_to_string(&old) else { return };
@@ -261,8 +262,8 @@ mod tests {
         let want: Vec<HistoryEntry> = [queued, text].map(|l| serde_json::from_str(l).unwrap()).into();
 
         assert_eq!(read(&p), want);
-        assert!(!old.exists());
-        assert!(d.path().join("prompt-history.jsonl.before-rsnl").is_file());
+        assert!(!old.vfs_exists());
+        assert!(d.path().join("prompt-history.jsonl.before-rsnl").vfs_is_file());
         let lines = fs::read_to_string(&p).unwrap();
         assert_eq!(lines.lines().count(), 2, "{lines}");
         assert_eq!(lines.matches("a fox").count(), 1, "the prompt only in the form: {lines}");

@@ -5,6 +5,7 @@
 //! unchanged. The choices made last are kept in `export.rsn` in the app's
 //! state folder.
 
+use crate::vfs::PathExt;
 use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 
@@ -208,7 +209,7 @@ pub fn export(
         }
         items.iter().map(|it| it.image.as_ref().map(|img| l.image_path(img))).collect()
     };
-    let planned = plan(&items, template, prefs, |p| dest.join(p).exists());
+    let planned = plan(&items, template, prefs, |p| dest.join(p).vfs_exists());
     let skipped = planned.iter().filter(|p| p.skip).count();
     let jobs: Vec<Job> = planned
         .into_iter()
@@ -558,7 +559,7 @@ pub fn write(
     prefs: &Prefs,
     mut progress: impl FnMut(usize, usize) -> bool,
 ) -> Result<Summary, String> {
-    std::fs::create_dir_all(dest).map_err(|e| format!("{}: {e}", dest.display()))?;
+    crate::vfs::create_dir_all(dest).map_err(|e| format!("{}: {e}", dest.display()))?;
     let mut s = Summary::default();
     let keep = prefs.keep_metadata && prefs.metadata_possible();
     for (i, job) in jobs.iter().enumerate() {
@@ -569,12 +570,12 @@ pub fn write(
         let parent = |rel: &Path| -> Result<PathBuf, String> {
             let to = dest.join(rel);
             if let Some(dir) = to.parent() {
-                std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+                crate::vfs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
             }
             Ok(to)
         };
         if let (Some(from), Some(rel)) = (&job.from, &job.image) {
-            let r = std::fs::read(from)
+            let r = crate::vfs::read(from)
                 .map_err(|e| format!("{}: {e}", from.display()))
                 .and_then(|b| {
                     let quality = prefs.format.map_or(100, |f| prefs.quality(f));
@@ -582,7 +583,7 @@ pub fn write(
                 })
                 .and_then(|b| {
                     let to = parent(rel)?;
-                    std::fs::write(&to, b).map_err(|e| format!("{}: {e}", to.display()))
+                    crate::vfs::write(&to, b).map_err(|e| format!("{}: {e}", to.display()))
                 });
             match r {
                 Ok(()) => s.images += 1,
@@ -593,7 +594,8 @@ pub fn write(
             }
         }
         if let Some((rel, text)) = &job.text {
-            match parent(rel).and_then(|to| std::fs::write(&to, text).map_err(|e| format!("{}: {e}", to.display()))) {
+            match parent(rel).and_then(|to| crate::vfs::write(&to, text).map_err(|e| format!("{}: {e}", to.display())))
+            {
                 Ok(()) => s.texts += 1,
                 Err(e) => s.failed.push(e),
             }
@@ -763,7 +765,7 @@ mod tests {
         let px = crate::pixel::Pixels { width: 2, height: 2, channels: 3, data: vec![9; 12] };
         let (_, png) = crate::container::encode(StoreFormat::Png, &px, &[]).unwrap();
         let src = dir.path().join("src.png");
-        std::fs::write(&src, &png).unwrap();
+        crate::vfs::write(&src, &png).unwrap();
         let dest = dir.path().join("out");
         let jobs = [
             Job { from: Some(src), image: Some("a/b.png".into()), text: Some(("a/b.txt".into(), "hi\n".into())) },
@@ -776,8 +778,8 @@ mod tests {
         })
         .unwrap();
         assert_eq!((s.images, s.texts, s.failed.len(), s.stopped), (1, 1, 1, false));
-        assert_eq!(std::fs::read(dest.join("a/b.png")).unwrap(), png);
-        assert_eq!(std::fs::read_to_string(dest.join("a/b.txt")).unwrap(), "hi\n");
+        assert_eq!(crate::vfs::read(dest.join("a/b.png")).unwrap(), png);
+        assert_eq!(crate::vfs::read_to_string(dest.join("a/b.txt")).unwrap(), "hi\n");
         assert_eq!(seen.last(), Some(&(2, 2)));
 
         let s = write(&dest, &jobs, &Prefs::default(), |_, _| false).unwrap();
@@ -798,14 +800,14 @@ mod tests {
         prefs.save(&p).unwrap();
         assert_eq!(Prefs::load(&p), prefs);
         // a field no longer there (one_name) is ignored, the rest kept
-        let old = std::fs::read_to_string(&p).unwrap().replacen("dest:", "one_name: true,\n    dest:", 1);
+        let old = crate::vfs::read_to_string(&p).unwrap().replacen("dest:", "one_name: true,\n    dest:", 1);
         assert!(old.contains("one_name"));
-        std::fs::write(&p, &old).unwrap();
+        crate::vfs::write(&p, &old).unwrap();
         assert_eq!(Prefs::load(&p), prefs);
         // lossy WebP's own format, from before: WebP
         let lossy = old.replace("Avif", "WebpLossy");
         assert!(lossy.contains("WebpLossy"));
-        std::fs::write(&p, lossy).unwrap();
+        crate::vfs::write(&p, lossy).unwrap();
         assert_eq!(Prefs::load(&p).format, Some(TileFormat::Webp));
         assert_eq!(Prefs::load(&dir.path().join("none.rsn")), Prefs::default());
         assert!(!Prefs { format: Some(TileFormat::Jpeg), ..Prefs::default() }.metadata_possible());

@@ -3,6 +3,7 @@
 //! the binary. Starts it as an image server with admin on, asks for a model
 //! that isn't there (KoboldCpp restarts, fails, recovers, and says why), and
 //! checks stopping it stops all of its processes.
+#![allow(clippy::disallowed_methods)] // fixtures on disk: no overlay here
 
 use std::time::Duration;
 

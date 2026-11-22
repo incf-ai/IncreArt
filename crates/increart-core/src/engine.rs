@@ -35,7 +35,7 @@ pub fn run_log(project_dir: &Path, run: &Id) -> PathBuf {
 
 /// The last `max` lines of a generation log (none without one).
 pub fn read_run_log(path: &Path, max: usize) -> Vec<String> {
-    let text = std::fs::read_to_string(path).unwrap_or_default();
+    let text = crate::vfs::read_to_string(path).unwrap_or_default();
     let lines: Vec<&str> = text.lines().collect();
     lines[lines.len().saturating_sub(max)..].iter().map(|l| l.to_string()).collect()
 }
@@ -195,7 +195,12 @@ enum Cmd {
     /// Cancels the warm-up going on (skipped, or its run was stopped);
     /// ignored after it.
     StopWarmUp,
-    Load(ModelKey),
+    /// The model, and whether its runs were queued anyway (what the
+    /// server has after it is taken).
+    Load(ModelKey, bool),
+    /// Drops the load waiting for free RAM: no queued run needs its model
+    /// any more; ignored once the load has begun.
+    StopLoad,
     Submit {
         ticket: Ticket,
         body: Value,
@@ -262,9 +267,12 @@ enum Report {
     /// A load waits (for another server's load, or for free RAM): shown as
     /// its state until `None`.
     Waiting(Option<String>),
-    /// A load went ahead after [`RAM_WAIT`] without the RAM it wanted free
-    /// (the figures).
+    /// A load has waited [`RAM_WAIT`] for the RAM it wants free and goes on
+    /// waiting (the figures), said once per load.
     ShortOfRam(String),
+    /// The load was dropped while it waited ([`Cmd::StopLoad`]): the server
+    /// has what it had.
+    LoadStopped,
 }
 
 pub struct Engine {
@@ -545,7 +553,7 @@ impl Coordinator {
             None => format!("{at} {text}"),
         };
         if let Some(path) = self.logs.get(run) {
-            let _ = std::fs::OpenOptions::new()
+            let _ = crate::vfs::OpenOptions::new()
                 .create(true)
                 .append(true)
                 .open(path)
@@ -703,7 +711,8 @@ impl Coordinator {
                 }
                 self.log_model(&model, Some(server), &text);
                 self.load_started[server] = Some(now);
-                self.send(server, Cmd::Load(model))
+                let anyway = self.sched.is_forced(&model);
+                self.send(server, Cmd::Load(model, anyway))
             }
             Action::Submit { server, ticket, seed } => {
                 let body = match self.runs.get(&seed.run) {
@@ -802,6 +811,14 @@ impl Coordinator {
                     }
                 }
                 let (dropped, in_flight) = self.sched.cancel_run(&run);
+                // a load waiting for RAM for no run left is dropped (it may wait for good)
+                for server in 0..self.servers.len() {
+                    if let ServerState::Loading { target } = self.sched.server_state(server)
+                        && !self.sched.wants(target)
+                    {
+                        self.send(server, Cmd::StopLoad);
+                    }
+                }
                 let mut seeds: Vec<u64> = dropped.iter().map(|(_, s)| *s).collect();
                 let kept = in_flight.iter().filter(|(_, t)| self.generating.contains(t)).count();
                 self.log(
@@ -924,10 +941,23 @@ impl Coordinator {
                 }
                 Report::Waiting(w) => self.waiting[s] = w,
                 Report::ShortOfRam(figures) => self.emit(Event::Problem(format!(
-                    "{}: loading without enough free RAM after {} s: {figures}",
-                    self.servers[s].name,
-                    RAM_WAIT.as_secs()
+                    "{}: its load waits for free RAM: {figures}. Loading without it had run the machine out of \
+                     memory; to load anyway, untick Server settings' Wait for free RAM before loading a model",
+                    self.servers[s].name
                 ))),
+                Report::LoadStopped => {
+                    self.waiting[s] = None;
+                    self.load_started[s] = None;
+                    if let ServerState::Loading { target } = self.sched.server_state(s) {
+                        let target = target.clone();
+                        self.log_model(
+                            &target,
+                            Some(s),
+                            "load dropped while it waited for RAM: no queued run needs it",
+                        );
+                    }
+                    self.sched.load_stopped(s);
+                }
                 Report::Loaded(r) => {
                     self.waiting[s] = None;
                     let target = match self.sched.server_state(s) {
@@ -936,10 +966,17 @@ impl Coordinator {
                     };
                     let started = self.load_started[s].take();
                     let took = started.map_or(0.0, |t| t.elapsed().as_secs_f32());
+                    // queued anyway: whatever model it has is taken
+                    let anyway = self.sched.is_forced(&target);
+                    let holds = |st: &ModelStatus| st.holds(&target) || (anyway && st.loaded().is_some());
                     let text = match &r {
                         Ok(st) if st.loaded().as_ref() == Some(&target) => format!("loaded in {took:.1} s"),
                         Ok(st) if st.holds(&target) => format!(
                             "loaded in {took:.1} s (it calls it {})",
+                            st.loaded().map_or(String::new(), |m| model_text(&m))
+                        ),
+                        Ok(st) if holds(st) => format!(
+                            "loaded in {took:.1} s, with {} (queued anyway: taken as it is)",
                             st.loaded().map_or(String::new(), |m| model_text(&m))
                         ),
                         Ok(st) => format!(
@@ -950,7 +987,7 @@ impl Coordinator {
                     };
                     self.log_model(&target, Some(s), &text);
                     let result = match r {
-                        Ok(st) if st.holds(&target) => {
+                        Ok(st) if holds(&st) => {
                             // its own names for the files asked, kept to read its status by
                             self.named[s] = st.loaded().filter(|k| *k != target).map(|k| (k, target.clone()));
                             self.answered(s);
@@ -1094,6 +1131,9 @@ impl Coordinator {
         }
         // a sweep's runs go together (sweep labels are unique per project)
         let group = run.sweep.as_ref().map(|t| format!("{}/{}", project.display(), t.name));
+        if run.queued_anyway {
+            self.sched.force(model.clone());
+        }
         self.runs.insert(run_id.clone(), run);
         self.sched.set_pending(run_id, model, fresh);
         if partly_done {
@@ -1261,22 +1301,31 @@ static LOCAL_LOADS: Mutex<()> = Mutex::new(());
 /// The RAM a load leaves free for everything else (GiB).
 const RAM_HEADROOM_GIB: f64 = 8.0;
 
-/// How long a load waits for free RAM before it goes ahead anyway.
+/// How long a load waits for free RAM before the wait is said in the
+/// messages (it goes on waiting).
 const RAM_WAIT: Duration = Duration::from_secs(2);
 
 /// Loads `model`. On this machine: after any other server's load, and once
-/// the RAM it pins is free with [`RAM_HEADROOM_GIB`] to spare, or
-/// [`RAM_WAIT`] has passed (said in a [`Report::ShortOfRam`]); not at all
-/// with `skip_ram_check`. Waiting for RAM doesn't hold up the other
-/// servers' loads. `None`: the engine has gone.
+/// the RAM it pins is free with [`RAM_HEADROOM_GIB`] to spare, however long
+/// that takes (said in a [`Report::ShortOfRam`] after [`RAM_WAIT`]), or once
+/// `skip_ram_check` is set, which may come while it waits. Pinned weights
+/// can't be swapped or reclaimed: loading them short of RAM had the kernel
+/// kill the desktop, and amdgpu kept the killed servers' buffers until a
+/// reboot. Waiting for RAM doesn't hold up the other servers' loads; a
+/// [`Cmd::StopLoad`] ends it, and other commands coming meanwhile wait in
+/// `pending`. `None`: the engine has gone.
 fn load(
     client: &Client,
     model: &ModelKey,
+    anyway: bool,
     skip_ram_check: &AtomicBool,
+    cmds: &Receiver<Cmd>,
+    pending: &mut VecDeque<Cmd>,
     report: &impl Fn(Report) -> bool,
-) -> Option<Result<ModelStatus, ApiError>> {
+) -> Option<Report> {
+    let load = || Report::Loaded(if anyway { client.load_model_anyway(model) } else { client.load_model(model) });
     if !client.is_local() {
-        return Some(client.load_model(model));
+        return Some(load());
     }
     const GIB: f64 = (1u64 << 30) as f64;
     let mut shown: Option<String> = None;
@@ -1284,6 +1333,7 @@ fn load(
         shown.replace(text.clone()).as_ref() == Some(&text) || report(Report::Waiting(Some(text)))
     };
     let since = Instant::now();
+    let mut told = false;
     let _one = loop {
         let one = match LOCAL_LOADS.try_lock() {
             Ok(g) => g,
@@ -1302,9 +1352,9 @@ fn load(
         if let Some(total) = crate::tiers::total_ram_gib()
             && need + RAM_HEADROOM_GIB > total
         {
-            return Some(Err(ApiError::ModelLoadFailed(format!(
+            return Some(Report::Loaded(Err(ApiError::ModelLoadFailed(format!(
                 "it needs {need:.0} GiB of RAM for its offloaded weights; this machine has {total:.0} GiB"
-            ))));
+            )))));
         }
         let free = match crate::tiers::available_ram_gib() {
             Some(free) if free < need + RAM_HEADROOM_GIB => free,
@@ -1314,20 +1364,28 @@ fn load(
             "{free:.1} of {:.1} GiB free ({need:.1} GiB to load + {RAM_HEADROOM_GIB:.0} to spare)",
             need + RAM_HEADROOM_GIB
         );
-        if since.elapsed() >= RAM_WAIT {
-            if !report(Report::ShortOfRam(figures)) {
+        drop(one);
+        if !told && since.elapsed() >= RAM_WAIT {
+            told = true;
+            if !report(Report::ShortOfRam(figures.clone())) {
                 return None;
             }
-            break one;
         }
-        drop(one);
         if !show(&mut shown, format!("waiting for RAM: {figures}")) {
             return None;
         }
-        std::thread::sleep(Duration::from_millis(500));
+        match cmds.recv_timeout(Duration::from_millis(500)) {
+            Ok(Cmd::StopLoad) => {
+                report(Report::Waiting(None));
+                return Some(Report::LoadStopped);
+            }
+            Ok(c) => pending.push_back(c),
+            Err(RecvTimeoutError::Timeout) => {}
+            Err(RecvTimeoutError::Disconnected) => return None,
+        }
     };
     report(Report::Waiting(None));
-    Some(client.load_model(model))
+    Some(load())
 }
 
 fn worker(
@@ -1342,7 +1400,7 @@ fn worker(
     let report = |r: Report| reports.send(Msg::Report(server, r)).is_ok();
     let mut jobs: Vec<Polled> = vec![];
     let mut cancelled_early: Vec<Ticket> = vec![];
-    // commands that came during a warm-up
+    // commands that came during a warm-up or a wait for RAM
     let mut pending: VecDeque<Cmd> = VecDeque::new();
     // when one of its jobs last moved (a status or step seen new), and
     // whether the quiet since was said
@@ -1368,10 +1426,14 @@ fn worker(
                 report(Report::Listed { round, loadable }) && report(Report::Probed(status))
             }
             Some(Cmd::List { round }) => report(Report::Listed { round, loadable: Some(client.loadable()) }),
-            Some(Cmd::Load(model)) => match load(&client, &model, &skip_ram_check, &report) {
-                Some(r) => report(Report::Loaded(r)),
-                None => false,
-            },
+            Some(Cmd::Load(model, anyway)) => {
+                match load(&client, &model, anyway, &skip_ram_check, &cmds, &mut pending, &report) {
+                    Some(r) => report(r),
+                    None => false,
+                }
+            }
+            // its load began before (or ended)
+            Some(Cmd::StopLoad) => true,
             Some(Cmd::WarmUp(body)) => match warm_up(&client, &body, poll, warm_up_limit, &cmds, &mut pending, &report)
             {
                 Some(r) => report(Report::Warmed(r)),

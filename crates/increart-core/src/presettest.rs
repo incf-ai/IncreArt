@@ -269,7 +269,7 @@ pub fn tried(p: &RecipePreset, server: &str, out: Outcome, dir: Option<&Path>) -
         (Some(png), Some(dir)) => {
             let safe = |s: &str| s.chars().map(|c| if c.is_alphanumeric() { c } else { '-' }).collect::<String>();
             let path = dir.join(format!("{}--{}--{}.png", safe(&p.name), safe(server), fingerprint(p)));
-            std::fs::create_dir_all(dir).and_then(|_| std::fs::write(&path, png)).ok().map(|_| path)
+            crate::vfs::create_dir_all(dir).and_then(|_| crate::vfs::write(&path, png)).ok().map(|_| path)
         }
         _ => None,
     };

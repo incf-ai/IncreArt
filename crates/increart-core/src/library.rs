@@ -1,8 +1,9 @@
 //! An open library: `library.lock` held, IDs allocated from memory, and every
 //! operation that changes the library on disk.
 
+use crate::vfs::PathExt;
+use crate::vfs::{self as fs, File, OpenOptions};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
-use std::fs::{self, File, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
@@ -55,6 +56,8 @@ pub enum HistoryKey {
 pub enum Disposal {
     SystemTrash,
     Directory(PathBuf),
+    /// Deleted for good (an ephemeral library: nothing of it goes to disk).
+    Remove,
 }
 
 /// The three folder trees (DESIGN.md, Project folders, Input collections,
@@ -131,6 +134,8 @@ pub struct NewRun {
     pub first_seed: u64,
     pub seeds: u64,
     pub sweep: Option<crate::model::SweepTag>,
+    /// [`Run::queued_anyway`].
+    pub queued_anyway: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -153,6 +158,22 @@ pub struct Library {
     disposal: Disposal,
     problems: Vec<String>,
     opened: OpenTimes,
+    /// An ephemeral library's overlay, unmounted when the library goes.
+    ram: Option<RamMount>,
+}
+
+/// An ephemeral library's mount (DESIGN.md, Ephemeral mode), and the shared
+/// lock it holds on the library on disk it reads (no instance can change
+/// that library meanwhile).
+struct RamMount {
+    root: PathBuf,
+    _lower_lock: Option<std::fs::File>,
+}
+
+impl Drop for RamMount {
+    fn drop(&mut self) {
+        crate::vfs::unmount(&self.root);
+    }
 }
 
 /// How long [`Library::open`] spent where, for the app's log.
@@ -176,7 +197,7 @@ impl Library {
     /// Creates a new library in `root` (missing or empty), choosing the link
     /// mode by probing unless `link_mode` is given, and opens it.
     pub fn create(root: &Path, link_mode: Option<LinkMode>) -> Result<Library> {
-        if root.exists() && fs::read_dir(root).at(root)?.next().is_some() {
+        if root.vfs_exists() && fs::read_dir(root).at(root)?.next().is_some() {
             return Err(Error::Refused(format!("{} is not empty", root.display())));
         }
         let root = link::absolute(root)?;
@@ -212,7 +233,7 @@ impl Library {
     pub fn open_with(root: &Path, upgrading: &mut dyn FnMut(usize, usize)) -> Result<Library> {
         let root = link::absolute(root)?;
         let meta_path = root.join(LIBRARY_FILE);
-        if !meta_path.exists() {
+        if !meta_path.vfs_exists() {
             return Err(Error::NotALibrary(root));
         }
         let meta: LibraryMeta = rsnfmt::read(&meta_path)?;
@@ -268,6 +289,7 @@ impl Library {
             disposal: Disposal::SystemTrash,
             problems: Vec::new(),
             opened: OpenTimes { lock: locked, upgrade: None },
+            ram: None,
         };
         lib.upgrade_input_folders()?;
         let ix = lib.scan()?;
@@ -401,7 +423,7 @@ impl Library {
     pub fn check_usage(&mut self, check: &UsageCheck, r: &ImageRef) {
         let derived = check.used.get(r).copied().unwrap_or_default();
         let path = self.image_path(r);
-        if !path.exists() {
+        if !path.vfs_exists() {
             return; // removed since the check began
         }
         let res = container::find_header_chunk(&path, png::KEY_USAGE).and_then(|found| match stored_usage(&found) {
@@ -697,6 +719,11 @@ impl Library {
 
     fn dispose(&self, path: &Path) -> Result<()> {
         match &self.disposal {
+            Disposal::Remove => match fs::symlink_metadata(path).at(path)?.is_dir() {
+                true => fs::remove_dir_all(path).at(path),
+                false => fs::remove_file(path).at(path),
+            },
+            #[allow(clippy::disallowed_methods)] // an ephemeral library's disposal is Remove
             Disposal::SystemTrash => trash::delete(path)
                 .map_err(|e| Error::Io { path: path.to_path_buf(), source: std::io::Error::other(e.to_string()) }),
             Disposal::Directory(dir) => {
@@ -1022,7 +1049,7 @@ impl Library {
             self.require_image(&ImageRef::input(img.clone()))?;
         }
         let base = self.root.join(new.loc.dir());
-        if !base.is_dir() {
+        if !base.vfs_is_dir() {
             return Err(Error::NotFound(format!("folder {}", self.rel(&base).display())));
         }
         let collection =
@@ -1055,7 +1082,7 @@ impl Library {
     }
 
     fn require_image(&self, r: &ImageRef) -> Result<()> {
-        if self.image_path(r).is_file() {
+        if self.image_path(r).vfs_is_file() {
             Ok(())
         } else {
             Err(Error::NotFound(format!("{:?} image {}", r.store, r.id)))
@@ -1093,18 +1120,18 @@ impl Library {
     pub fn find_idea(&self, id: &Id) -> Result<(IdeaLoc, PathBuf)> {
         for loc in [IdeaLoc::Unreviewed, IdeaLoc::Discarded, IdeaLoc::Edited] {
             let dir = self.root.join(loc.dir()).join(id.as_str());
-            if dir.join(IDEA_FILE).is_file() {
+            if dir.join(IDEA_FILE).vfs_is_file() {
                 return Ok((loc, dir));
             }
         }
         let lib = self.root.join(INPUT_LIBRARY);
         let dir = lib.join(id.as_str());
-        if dir.join(IDEA_FILE).is_file() {
+        if dir.join(IDEA_FILE).vfs_is_file() {
             return Ok((IdeaLoc::Library, dir));
         }
         // still in a folder (a library from before collections)
         for p in fsutil::walk(&lib)? {
-            if p.file_name().is_some_and(|n| n == id.as_str()) && p.join(IDEA_FILE).is_file() {
+            if p.file_name().is_some_and(|n| n == id.as_str()) && p.join(IDEA_FILE).vfs_is_file() {
                 return Ok((IdeaLoc::Library, p));
             }
         }
@@ -1137,7 +1164,7 @@ impl Library {
     pub fn move_idea(&self, id: &Id, to: &IdeaLoc) -> Result<PathBuf> {
         let (loc, dir) = self.find_idea(id)?;
         let target = self.root.join(to.dir());
-        if !target.is_dir() {
+        if !target.vfs_is_dir() {
             return Err(Error::NotFound(format!("folder {}", to.dir().display())));
         }
         let dest = target.join(id.as_str());
@@ -1193,11 +1220,11 @@ impl Library {
             let name = c.as_os_str().to_string_lossy();
             validate_name(&name)?;
             dir.push(c);
-            if i == 0 && !dir.is_dir() {
+            if i == 0 && !dir.vfs_is_dir() {
                 reserved(Tree::InputCollections, Path::new(""), &name)?;
             }
         }
-        if !dir.is_dir() {
+        if !dir.vfs_is_dir() {
             fs::create_dir_all(&dir).at(&dir)?;
         }
         Ok(())
@@ -1389,7 +1416,7 @@ impl Library {
     fn node(&self, tree: Tree, abs: &Path) -> Result<Node> {
         let meta = fs::symlink_metadata(abs).map_err(|_| Error::NotFound(self.rel(abs).display().to_string()))?;
         Ok(match tree {
-            Tree::Projects if abs.join(PROJECT_FILE).is_file() => Node::Leaf,
+            Tree::Projects if abs.join(PROJECT_FILE).vfs_is_file() => Node::Leaf,
             Tree::InputCollections | Tree::Collections if !meta.is_dir() => Node::Leaf,
             _ if meta.is_dir() => Node::Folder,
             _ => return Err(Error::Refused(format!("{} is not a folder", self.rel(abs).display()))),
@@ -1467,7 +1494,7 @@ impl Library {
         }
         reserved(tree, new_parent, &path.name()?.to_string_lossy())?;
         // an idea's entry is its id: one there already, this one just goes
-        if tree == Tree::InputCollections && fsutil::exists(&dest_dir.join(path.name()?)) && !abs.is_dir() {
+        if tree == Tree::InputCollections && fsutil::exists(&dest_dir.join(path.name()?)) && !abs.vfs_is_dir() {
             fs::remove_file(&abs).at(&abs)?;
             return Ok(new_parent.join(path.name()?));
         }
@@ -1517,7 +1544,7 @@ impl Library {
                 fs::create_dir(dest_dir.join(&name)).at(dest_dir.join(&name))?;
                 for child in fs::read_dir(&abs).at(&abs)? {
                     let child = child.at(&abs)?.path();
-                    if fsutil::hidden(&child) || (tree == Tree::Projects && !child.is_dir()) {
+                    if fsutil::hidden(&child) || (tree == Tree::Projects && !child.vfs_is_dir()) {
                         continue;
                     }
                     let child_rel = path.join(child.name()?);
@@ -1571,7 +1598,7 @@ impl Library {
             fs::create_dir_all(&dir).at(&dir)?;
             rsnfmt::write(&dir.join(RUN_FILE), &run)?;
         }
-        if from.join(DRAFT_FILE).is_file() {
+        if from.join(DRAFT_FILE).vfs_is_file() {
             fs::copy(from.join(DRAFT_FILE), to.join(DRAFT_FILE)).at(to.join(DRAFT_FILE))?;
         }
         Ok(())
@@ -1597,7 +1624,7 @@ impl Library {
             (Tree::Projects, _) => {
                 let mut projects = vec![abs.clone()];
                 if kind == Node::Folder {
-                    projects = fsutil::walk(&abs)?.into_iter().filter(|d| d.join(PROJECT_FILE).is_file()).collect();
+                    projects = fsutil::walk(&abs)?.into_iter().filter(|d| d.join(PROJECT_FILE).vfs_is_file()).collect();
                 }
                 for p in &projects {
                     self.discard_project(p)?;
@@ -1685,7 +1712,7 @@ impl Library {
     fn find_discarded_project(&self, id: &Id) -> Result<PathBuf> {
         for p in fsutil::subdirs(&self.root.join(DISCARDED_PROJECTS))? {
             let file = p.join(PROJECT_FILE);
-            if file.is_file() && rsnfmt::read::<Project>(&file).is_ok_and(|pr| &pr.id == id) {
+            if file.vfs_is_file() && rsnfmt::read::<Project>(&file).is_ok_and(|pr| &pr.id == id) {
                 return Ok(p);
             }
         }
@@ -1702,12 +1729,12 @@ impl Library {
         let name = name.unwrap_or_else(|| dir.file_name().unwrap_or_default().to_string_lossy().into_owned());
         let from = note.map(|n| n.from).unwrap_or_default();
         let projects = self.root.join(PROJECTS);
-        let parent = if projects.join(&from).is_dir() { from } else { PathBuf::new() };
+        let parent = if projects.join(&from).vfs_is_dir() { from } else { PathBuf::new() };
         let name = free_name_in(&projects.join(&parent), &name)?;
         let to = projects.join(&parent).join(&name);
         link::move_with_links(&self.root, &dir, &to)?;
         let note = to.join(DISCARDED_FILE);
-        if note.exists() {
+        if note.vfs_exists() {
             fs::remove_file(&note).at(&note)?;
         }
         Ok(parent.join(name))
@@ -1724,7 +1751,7 @@ impl Library {
     pub fn find_project(&self, id: &Id) -> Result<PathBuf> {
         for p in fsutil::walk(&self.root.join(PROJECTS))? {
             let file = p.join(PROJECT_FILE);
-            if file.is_file() && rsnfmt::read::<Project>(&file).is_ok_and(|pr| &pr.id == id) {
+            if file.vfs_is_file() && rsnfmt::read::<Project>(&file).is_ok_and(|pr| &pr.id == id) {
                 return Ok(p);
             }
         }
@@ -1821,6 +1848,7 @@ impl Library {
             sweep: new.sweep,
             timings: vec![],
             deleted: vec![],
+            queued_anyway: new.queued_anyway,
         };
         let run_dir = dir.join("runs").join(id.as_str());
         fs::create_dir_all(&run_dir).at(&run_dir)?;
@@ -1835,7 +1863,7 @@ impl Library {
     pub fn find_run(&self, id: &Id) -> Result<(PathBuf, Run)> {
         for p in fsutil::walk(&self.root.join(PROJECTS))? {
             let file = p.join("runs").join(id.as_str()).join(RUN_FILE);
-            if p.join(PROJECT_FILE).is_file() && file.is_file() {
+            if p.join(PROJECT_FILE).vfs_is_file() && file.vfs_is_file() {
                 return Ok((p, rsnfmt::read(&file)?));
             }
         }
@@ -2020,7 +2048,8 @@ impl Library {
             return Ok(link_path.to_path_buf());
         }
         let not_found = || Error::NotFound(link_path.display().to_string());
-        let project = abs.ancestors().skip(1).take(3).find(|d| d.join(PROJECT_FILE).is_file()).ok_or_else(not_found)?;
+        let project =
+            abs.ancestors().skip(1).take(3).find(|d| d.join(PROJECT_FILE).vfs_is_file()).ok_or_else(not_found)?;
         let name = abs.name()?;
         std::iter::once(None)
             .chain(Verdict::ALL.map(Some))
@@ -2040,7 +2069,7 @@ impl Library {
             .ancestors()
             .skip(1)
             .take(3)
-            .find(|d| d.join(PROJECT_FILE).is_file())
+            .find(|d| d.join(PROJECT_FILE).vfs_is_file())
             .ok_or_else(|| Error::Refused(format!("{} is not an output link", link_path.display())))?
             .to_path_buf();
         let to = project.join(Verdict::output_dir(verdict)).join(abs.name()?);
@@ -2092,7 +2121,7 @@ impl Library {
     /// (not to be generated again, and not missing).
     pub fn delete_output_link(&self, link_path: &Path) -> Result<PathBuf> {
         let abs = self.root.join(link_path);
-        let project = abs.ancestors().skip(1).take(3).find(|d| d.join(PROJECT_FILE).is_file());
+        let project = abs.ancestors().skip(1).take(3).find(|d| d.join(PROJECT_FILE).vfs_is_file());
         let Some(project) = project.filter(|_| fsutil::exists(&abs)) else {
             return Err(Error::Refused(format!("{} is not an output link", link_path.display())));
         };
@@ -2134,7 +2163,7 @@ impl Library {
     /// A discarded output link's project directory and the link (absolute).
     fn discarded_output(&self, link_path: &Path) -> Result<(PathBuf, PathBuf)> {
         let abs = self.root.join(link_path);
-        let project = abs.ancestors().skip(1).take(4).find(|d| d.join(PROJECT_FILE).is_file());
+        let project = abs.ancestors().skip(1).take(4).find(|d| d.join(PROJECT_FILE).vfs_is_file());
         match project {
             Some(p) if fsutil::exists(&abs) && abs.starts_with(p.join(DISCARDED_OUTPUTS)) => Ok((p.to_path_buf(), abs)),
             _ => Err(Error::Refused(format!("{} is not a discarded output link", link_path.display()))),
@@ -2236,7 +2265,7 @@ impl Library {
     fn upgrade_input_folders(&mut self) -> Result<usize> {
         fn find(dir: &Path, rel: &Path, folders: &mut Vec<PathBuf>, ideas: &mut Vec<(PathBuf, PathBuf)>) -> Result<()> {
             for d in fsutil::subdirs(dir)? {
-                if d.join(IDEA_FILE).is_file() {
+                if d.join(IDEA_FILE).vfs_is_file() {
                     if !rel.as_os_str().is_empty() {
                         ideas.push((rel.to_path_buf(), d));
                     }
@@ -2436,7 +2465,7 @@ impl Library {
         let new = self.root.join(c.image.rel_path_as(c.to));
         fsutil::write_atomic(&new, &bytes)?;
         if let Ok(t) = fs::metadata(&old).and_then(|m| m.modified()) {
-            let _ = File::options().write(true).open(&new).and_then(|f| f.set_modified(t));
+            let _ = OpenOptions::new().write(true).open(&new).and_then(|f| f.set_modified(t));
         }
         for rel in links {
             let at = self.root.join(rel);
@@ -2499,7 +2528,7 @@ impl Library {
         ];
         for (dir, store) in dirs {
             for p in fsutil::walk(&self.root.join(dir))? {
-                if p.starts_with(self.root.join(INBOX_DROP)) || p.is_dir() && !fsutil::is_symlink(&p) {
+                if p.starts_with(self.root.join(INBOX_DROP)) || p.vfs_is_dir() && !fsutil::is_symlink(&p) {
                     continue;
                 }
                 if let Ok(Some(r)) = link::read_ref(&p, store) {
@@ -2567,6 +2596,135 @@ impl Library {
     }
 }
 
+// ------------------------------------------------------------------ ephemeral
+
+/// Where ephemeral libraries are mounted: a path nothing can be written at
+/// on disk, so a write that went round the overlay fails instead of leaving
+/// a file behind.
+fn ram_base() -> PathBuf {
+    if cfg!(windows) {
+        PathBuf::from(r"\\increart-ram.invalid\ram")
+    } else if cfg!(target_os = "linux") {
+        PathBuf::from("/proc/increart-ram")
+    } else if cfg!(target_os = "macos") {
+        PathBuf::from("/dev/increart-ram")
+    } else {
+        PathBuf::from("/increart-ram")
+    }
+}
+
+static RAM_MOUNTS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+impl Library {
+    /// Opens an ephemeral library (DESIGN.md, Ephemeral mode): `from`, a
+    /// library on disk read and never written (taking a shared lock on it),
+    /// or a new empty one; either wholly in RAM from here on, gone when the
+    /// library is dropped. `pin`: ask the OS to keep it out of swap.
+    pub fn open_ephemeral(from: Option<&Path>, pin: bool) -> Result<Library> {
+        let n = RAM_MOUNTS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let name = from.and_then(|p| p.file_name()).map_or("Ephemeral library".into(), |n| n.to_os_string());
+        let root = ram_base().join(format!("{}-{n}", std::process::id())).join(name);
+        let lower = from.map(link::absolute).transpose()?;
+        let lower_lock = match &lower {
+            Some(l) => {
+                if !l.join(LIBRARY_FILE).vfs_is_file() {
+                    return Err(Error::NotALibrary(l.clone()));
+                }
+                lower_lock(l)?
+            }
+            None => None,
+        };
+        crate::vfs::mount(&root, lower.as_deref(), pin).at(&root)?;
+        let ram = RamMount { root: root.clone(), _lower_lock: lower_lock };
+        let opened = match &lower {
+            Some(_) => Library::open(&root),
+            None => Library::create(&root, Some(LinkMode::Symlink)),
+        };
+        let mut lib = opened?;
+        lib.ram = Some(ram);
+        lib.disposal = Disposal::Remove;
+        Ok(lib)
+    }
+
+    /// An ephemeral library's: the library on disk it reads, if any.
+    pub fn ram_lower(&self) -> Option<PathBuf> {
+        crate::vfs::overlay(&self.root).and_then(|o| o.lower().map(Path::to_path_buf))
+    }
+
+    /// An ephemeral library's bytes in RAM.
+    pub fn ram_used(&self) -> Option<u64> {
+        crate::vfs::overlay(&self.root).map(|o| o.used())
+    }
+
+    /// Deletes the oldest output images held in RAM (their links, their
+    /// thumbnails; their seeds recorded as deleted) until the library holds
+    /// at most `budget` bytes, or none are left. Returns them.
+    pub fn free_ram(&mut self, budget: u64) -> Result<Vec<ImageRef>> {
+        let Some(o) = crate::vfs::overlay(&self.root) else { return Ok(vec![]) };
+        if o.used() <= budget {
+            return Ok(vec![]);
+        }
+        let mut links: HashMap<Id, Vec<PathBuf>> = HashMap::new();
+        for dir in [PROJECTS, DISCARDED_PROJECTS, COLLECTIONS] {
+            for p in fsutil::walk(&self.root.join(dir))? {
+                if StoreFormat::of_path(&p).is_none() {
+                    continue;
+                }
+                if let Ok(Some(r)) = link::read_ref(&p, Store::Output) {
+                    links.entry(r.id).or_default().push(p);
+                }
+            }
+        }
+        let mut gone = Vec::new();
+        // IDs begin with their time: the oldest first
+        for id in self.store_ids(Store::Output)? {
+            if o.used() <= budget {
+                break;
+            }
+            let r = ImageRef { id, store: Store::Output };
+            let path = self.image_path(&r);
+            if crate::vfs::ram_held(&path) == 0 {
+                continue; // on disk: holds no RAM
+            }
+            for l in links.remove(&r.id).unwrap_or_default() {
+                self.mark_deleted(&l, true)?;
+                fs::remove_file(&l).at(&l)?;
+            }
+            fs::remove_file(&path).at(&path)?;
+            let _ = fs::remove_file(crate::thumbs::path(&self.root, &r));
+            self.index_of(r.store).retain(|_, i| i != &r.id);
+            self.pixels.transparent.remove(&r);
+            self.pixels.uuids.retain(|_, u| u != &r);
+            gone.push(r);
+        }
+        if !gone.is_empty() {
+            self.save_pixel_index()?;
+        }
+        Ok(gone)
+    }
+}
+
+/// A shared lock on a library on disk read by an ephemeral one: refused
+/// while an instance has it open, and keeping instances from opening it
+/// meanwhile. None when it has no lock file (not made: nothing is written).
+fn lower_lock(lower: &Path) -> Result<Option<std::fs::File>> {
+    let path = lower.join(LOCK_FILE);
+    #[allow(clippy::disallowed_methods)] // the library on disk, opened to read
+    let f = match std::fs::File::open(&path) {
+        Ok(f) => f,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(e).at(&path),
+    };
+    for _ in 0..10 {
+        match f.try_lock_shared() {
+            Ok(()) => return Ok(Some(f)),
+            Err(fs::TryLockError::WouldBlock) => std::thread::sleep(std::time::Duration::from_millis(20)),
+            Err(fs::TryLockError::Error(e)) => return Err(e).at(&path),
+        }
+    }
+    Err(Error::Locked(lower.to_path_buf()))
+}
+
 /// The images a usage check goes through ([`Library::usage_check`]).
 pub struct UsageCheck {
     root: PathBuf,
@@ -2581,7 +2739,7 @@ impl UsageCheck {
     /// need a write (which `check_usage` reads again first).
     pub fn covers(&self, r: &ImageRef) -> bool {
         let path = r.path(&self.root);
-        if !path.exists() {
+        if !path.vfs_exists() {
             return true;
         }
         let derived = self.used.get(r).copied().unwrap_or_default();

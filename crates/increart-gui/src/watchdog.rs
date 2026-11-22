@@ -81,7 +81,7 @@ pub fn start(ctx: &eframe::egui::Context) {
 #[cfg(target_os = "linux")]
 fn gui_thread_state() -> String {
     let task = format!("/proc/self/task/{}", std::process::id());
-    let read = |f: &str| std::fs::read_to_string(format!("{task}/{f}")).ok().map(|s| s.trim().to_string());
+    let read = |f: &str| increart_core::vfs::read_to_string(format!("{task}/{f}")).ok().map(|s| s.trim().to_string());
     // (stat: "pid (name) S ...": the state after the name's closing paren)
     let state =
         read("stat").and_then(|s| s.rsplit_once(')').and_then(|(_, r)| r.split_whitespace().next().map(String::from)));

@@ -1,4 +1,5 @@
-/target/
+/target
+/target.old/
 /tmp/
 /local/
 /.Trash-*/
@@ -10,3 +11,5 @@ __pycache__/
 /example-library/library.lock
 # Claude Code worktrees
 /.claude/worktrees/
+# scratch notes
+*.ignore

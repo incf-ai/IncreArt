@@ -6,9 +6,10 @@ use increart_core::config::{self, ServerConfig};
 use increart_core::kobold::{KoboldChat, KoboldRun, KoboldServer};
 use increart_core::pe::PeDevice;
 use increart_core::tiers::{self, Gpu, Layout};
+use increart_core::vfs::PathExt;
 use increart_gui_core::{
-    AppState, Confirm, Editing, KoboldWizard, LibraryDialog, LibraryWizard, Msg, PeFile, PickKind, ServerDialog,
-    ServerProgress, Without, WizardDownload, WizardGpu,
+    AppState, Confirm, Editing, EphemeralForm, KoboldWizard, LibraryDialog, LibraryWizard, Msg, PeFile, PickKind,
+    ServerDialog, ServerProgress, Without, WizardDownload, WizardGpu,
 };
 
 use crate::widgets::{ACCENT, ACCENT_MUTED, BAD, GOOD, NEUTRAL, dialog_buttons, dialog_footer, ic, ph, short_name};
@@ -162,6 +163,12 @@ pub fn library(
                             let first = found_libraries(recent).into_iter().next().map(|(_, p)| p).unwrap_or_default();
                             msg = Some(Msg::LibraryWizard(Some((LibraryWizard::Open, first))));
                         }
+                        let eph = ui.button(ic(ph::LOCK, "Ephemeral session…")).on_hover_text(EPHEMERAL_HOVER);
+                        if eph.clicked() {
+                            let last = recent.iter().find(|p| back.is_none_or(|b| b != std::path::Path::new(p)));
+                            let form = EphemeralForm::new(last.map(String::as_str), tiers::total_ram_gib());
+                            msg = Some(Msg::EphemeralForm(Some(form)));
+                        }
                         let unpack = egui::Button::new(ic(ph::PACKAGE, "Unpack archive…"));
                         let unpack = ui.add_enabled(archiving.is_none(), unpack);
                         if unpack.on_hover_text(crate::app::UNPACK_ARCHIVE_HOVER).clicked() {
@@ -225,6 +232,119 @@ pub fn library(
     }
 }
 
+const EPHEMERAL_HOVER: &str = "Work with nothing saved: a library in RAM, read from one on disk (never \
+     written) or new and empty. Nothing reaches the disk unless you export it.";
+
+/// **Ephemeral session…** (DESIGN.md, Ephemeral mode): the library to read
+/// or a new one, the RAM it may fill and what happens when it's full.
+pub fn ephemeral_window(ctx: &egui::Context, st: &AppState, out: &mut Vec<Msg>) {
+    use increart_gui_core::WhenFull;
+    let Some(f) = &st.ephemeral_form else { return };
+    let busy = matches!(&st.phase, increart_gui_core::Phase::Library(d) if d.busy);
+    let mut f = f.clone();
+    let before = f.clone();
+    let mut start = false;
+    let m = egui::Modal::new(egui::Id::unique("ephemeral_form")).show(ctx, |ui| {
+        ui.set_width(560.0);
+        ui.heading(ic(ph::LOCK, "Ephemeral session"));
+        ui.label(
+            "Work with nothing saved: the session's library is held in RAM, and nothing of it reaches the \
+             disk unless you export it. Leaving the session or quitting deletes it.",
+        );
+        ui.add_space(8.0);
+        ui.add_enabled_ui(!busy, |ui| {
+            ui.label(RichText::new("Start from").strong());
+            if ui.radio(!f.new_library, "A library on disk: read, never written").clicked() {
+                f.new_library = false;
+            }
+            ui.add_enabled_ui(!f.new_library, |ui| {
+                ui.horizontal(|ui| {
+                    ui.add_space(24.0);
+                    egui::ComboBox::from_id_salt("ephemeral_from")
+                        .width(440.0)
+                        .selected_text(if f.from.is_empty() { "Choose a library" } else { f.from.as_str() })
+                        .show_ui(ui, |ui| {
+                            for p in &st.config.recent_libraries {
+                                ui.selectable_value(&mut f.from, p.clone(), p);
+                            }
+                        });
+                });
+                ui.horizontal(|ui| {
+                    ui.add_space(24.0);
+                    ui.weak("Its ideas, projects and images are there to use; new inputs, outputs and every change stay in RAM.");
+                });
+            });
+            if ui.radio(f.new_library, "A new empty library, wholly in RAM").clicked() {
+                f.new_library = true;
+            }
+            ui.add_space(8.0);
+            ui.label(RichText::new("RAM").strong());
+            ui.horizontal(|ui| {
+                ui.label("It may fill");
+                ui.add(egui::DragValue::new(&mut f.budget_gib).range(0.25..=1024.0).speed(0.25).suffix(" GiB"));
+                if let Some(r) = f.ram_gib {
+                    ui.weak(format!("of this machine's {r:.0} GiB"));
+                }
+            });
+            ui.label("When it's full:");
+            ui.horizontal(|ui| {
+                ui.add_space(24.0);
+                if ui.radio(f.when_full == WhenFull::DeleteOldest, "delete the oldest images, reviewed or not").clicked() {
+                    f.when_full = WhenFull::DeleteOldest;
+                }
+            });
+            ui.horizontal(|ui| {
+                ui.add_space(24.0);
+                if ui.radio(f.when_full == WhenFull::Halt, "stop generating until I delete images").clicked() {
+                    f.when_full = WhenFull::Halt;
+                }
+            });
+            ui.add_space(4.0);
+            let swap = match increart_core::ephemeral::swap_on() {
+                Some(false) => "This machine has no swap, so the OS won't write the session to disk.",
+                _ => "IncreArt asks the OS to keep the session out of swap, and says if it can't.",
+            };
+            ui.weak(swap);
+            ui.weak(
+                "The logs are kept in RAM too; the recent libraries and load timings aren't updated. Opening \
+                 images in other apps and the file manager isn't available: export instead.",
+            );
+            ui.add(egui::Label::new(RichText::new(crate::app::EPHEMERAL_NOT_COVERED).weak().small()).wrap());
+        });
+        if !st.servers.is_empty() {
+            ui.colored_label(
+                NEUTRAL,
+                "The servers running now were started before the session: their logs stay on disk. Restart them \
+                 (Servers) for theirs to stay in RAM.",
+            );
+        }
+        if let Some(e) = &f.error {
+            ui.colored_label(BAD, e);
+        }
+        ui.add_space(8.0);
+        let problem = f.problem();
+        dialog_buttons(ui, |ui| {
+            let go = ui.add_enabled(!busy && problem.is_none(), egui::Button::new(RichText::new(ic(ph::LOCK, "Start the session")).strong()));
+            let go = match &problem {
+                Some(p) => go.on_disabled_hover_text(p),
+                None => go,
+            };
+            start = go.clicked();
+            if ui.add_enabled(!busy, egui::Button::new("Cancel")).clicked() {
+                out.push(Msg::EphemeralForm(None));
+            }
+        });
+    });
+    if f != before {
+        out.push(Msg::EphemeralForm(Some(f)));
+    }
+    if start {
+        out.push(Msg::StartEphemeral);
+    } else if m.should_close() && !busy {
+        out.push(Msg::EphemeralForm(None));
+    }
+}
+
 /// Where a new library could go: `~/IncreArt`, and `IncreArt` in the
 /// current folder when that is somewhere else.
 pub fn suggested_libraries() -> Vec<(&'static str, String)> {
@@ -260,10 +380,10 @@ pub enum FolderState {
 
 pub fn folder_state(path: &str) -> FolderState {
     let path = std::path::Path::new(path.trim());
-    if path.join("library.rsn").exists() {
+    if path.join("library.rsn").vfs_exists() {
         return FolderState::Library;
     }
-    match std::fs::read_dir(path).map(|mut r| r.next().is_none()) {
+    match increart_core::vfs::read_dir(path).map(|mut r| r.next().is_none()) {
         Err(_) => FolderState::Missing,
         Ok(true) => FolderState::Empty,
         Ok(false) => FolderState::Other,
@@ -438,9 +558,9 @@ fn path_kind(pick: PickKind) -> PathKind {
 fn show_button(ui: &mut egui::Ui, path: &str, kind: PathKind, out: &mut Vec<Msg>) {
     let p = std::path::Path::new(path);
     // (a bare binary name or a command line: no folder)
-    let named = p.is_absolute() && (kind != PathKind::Binary || p.exists());
+    let named = p.is_absolute() && (kind != PathKind::Binary || p.vfs_exists());
     let dir = if kind == PathKind::Folder || kind == PathKind::NewFolder { Some(p) } else { p.parent() };
-    let there = named && dir.is_some_and(|d| d.is_dir());
+    let there = named && dir.is_some_and(|d| d.vfs_is_dir());
     let tip = if there {
         if dir == Some(p) { "Open the folder in the file manager" } else { "Show its folder in the file manager" }
     } else if kind == PathKind::NewFolder {
@@ -469,8 +589,21 @@ pub(crate) fn path_edit(
     ui.vertical(|ui| {
         let r = ui
             .horizontal(|ui| {
-                let r =
-                    ui.add(egui::TextEdit::singleline(s).desired_width(ui.available_width() - 68.0).hint_text(hint));
+                // room for the two icon buttons after it, as wide as they'll be:
+                // a fixed guess too small widened the row past its parent, and a
+                // modal or grid holding it with it
+                let button = |ui: &egui::Ui, icon: &str| {
+                    let text = egui::WidgetText::from(icon).into_galley(
+                        ui,
+                        Some(egui::TextWrapMode::Extend),
+                        f32::INFINITY,
+                        egui::TextStyle::Button,
+                    );
+                    text.size().x + 2.0 * ui.spacing().button_padding.x
+                };
+                let buttons = button(ui, ph::FOLDER_OPEN) + button(ui, ph::ARROW_SQUARE_OUT);
+                let width = ui.available_width() - buttons - 2.0 * ui.spacing().item_spacing.x;
+                let r = ui.add(egui::TextEdit::singleline(s).desired_width(width.max(60.0)).hint_text(hint));
                 if ui.button(ph::FOLDER_OPEN).on_hover_text("Browse…").clicked() {
                     out.push(Msg::Pick(pick));
                 }
@@ -486,7 +619,7 @@ pub(crate) fn path_edit(
             if f != s.trim() {
                 ui.weak(format!("→ {f}"));
             }
-        } else if !f.is_empty() && kind != PathKind::Binary && !std::path::Path::new(&f).exists() {
+        } else if !f.is_empty() && kind != PathKind::Binary && !std::path::Path::new(&f).vfs_exists() {
             match kind {
                 PathKind::NewFolder => ui.weak("A new folder, made when the models download."),
                 PathKind::Folder => ui.colored_label(BAD, "No such folder"),
@@ -1262,7 +1395,8 @@ fn settings(ui: &mut egui::Ui, st: &AppState, d: &ServerDialog, out: &mut Vec<Ms
     if ui
         .checkbox(&mut check, "Wait for free RAM before loading a model")
         .on_hover_text(
-            "A KoboldCpp that offloads its weights (--sdoffloadcpu) waits up to 2 s for them to fit in free RAM with 8 GiB to spare",
+            "A KoboldCpp that offloads its weights (--sdoffloadcpu) loads once they fit in free RAM with 8 GiB to spare, \
+             however long that takes: loading them short of RAM ran the machine out of memory. Unticked, it loads at once",
         )
         .changed()
     {
@@ -1315,6 +1449,15 @@ fn kobold_binary_field(ui: &mut egui::Ui, st: &AppState, d: &ServerDialog, out: 
                 ui.spinner();
                 ui.weak("--version…");
             }
+        }
+        let version_known = d.kobold_version.as_ref().is_some_and(|(binary, _)| *binary == fallback);
+        if version_known
+            && ui
+                .small_button(ic(ph::ARROWS_CLOCKWISE, "Check again"))
+                .on_hover_text("run --version again: after making the binary executable, or replacing it")
+                .clicked()
+        {
+            out.push(Msg::RecheckKoboldVersion);
         }
     });
 }
@@ -1739,11 +1882,17 @@ fn server_wizard(ctx: &egui::Context, st: &AppState, d: &ServerDialog, out: &mut
             }
             if !remote {
                 ui.indent("local_kind", |ui| {
-                    if ui
-                        .radio(d.kobold.is_some(), "KoboldCpp, Qwen-Image set up for your GPUs (recommended)")
-                        .clicked()
-                    {
-                        out.push(Msg::WizardKobold(true));
+                    let family = d.kobold.as_ref().map(|k| k.family);
+                    for f in tiers::Family::ALL {
+                        let text = match f {
+                            tiers::Family::MinimaxH3 => {
+                                "KoboldCpp, MiniMax-H3-Image set up for your GPUs (recommended; 12 GB or more)"
+                            }
+                            tiers::Family::QwenImage => "KoboldCpp, Qwen-Image 2.1 set up for your GPUs (8 GB or more)",
+                        };
+                        if ui.radio(family == Some(f), text).clicked() {
+                            out.push(Msg::WizardFamily(f));
+                        }
                     }
                     if ui.radio(d.kobold.is_none(), "sd-server, with your own models").clicked() {
                         out.push(Msg::WizardKobold(false));
@@ -1884,10 +2033,19 @@ fn kobold_wizard(
     let mut new = k.clone();
     let busy = k.downloading.is_some();
     let plan = k.plan();
-    // (scrolls when taller than the window; the progress and buttons stay)
-    let room = ui.ctx().content_rect().height() - 260.0;
-    egui::ScrollArea::vertical().max_height(room.max(200.0)).auto_shrink([false, true]).show(ui, |ui| {
-        ui.label("IncreArt starts KoboldCpp with Qwen-Image 2.1 and prompt enhance, set up for each GPU's memory.");
+    // (scrolls when taller than the window; the progress and buttons stay):
+    // its room is the window's less what's above it (the heading and the
+    // choices) and below it (the progress, the buttons; measured last frame,
+    // as the progress grows while downloading) and the modal's frame
+    let above = ui.cursor().top() - ui.min_rect().top();
+    let below_id = egui::Id::unique("kobold_wizard_below");
+    let below: f32 = ui.ctx().data(|m| m.get_temp(below_id)).unwrap_or(160.0);
+    let room = ui.ctx().content_rect().height() - above - below - 64.0;
+    egui::ScrollArea::vertical().max_height(room.max(120.0)).auto_shrink([false, true]).show(ui, |ui| {
+        ui.label(format!(
+            "IncreArt starts KoboldCpp with {} and prompt enhance, set up for each GPU's memory.",
+            k.family.label()
+        ));
         ui.add_space(8.0);
         ui.add_enabled_ui(!busy, |ui| {
             ui.label(RichText::new("1. KoboldCpp").strong());
@@ -1900,9 +2058,15 @@ fn kobold_wizard(
             ui.horizontal(|ui| {
                 ui.add_space(LABEL_W + 8.0);
                 match version {
-                    Some(Ok(v)) => {
-                        ui.colored_label(GOOD, ic(ph::CHECK, &format!("KoboldCpp {v}")));
-                    }
+                    Some(Ok(v)) => match tiers::kobold_too_old(k.family, v) {
+                        Some(why) => {
+                            let text = format!("{why} Get it from github.com/LostRuins/koboldcpp/releases.");
+                            ui.add(egui::Label::new(RichText::new(ic(ph::WARNING, &text)).color(BAD)).wrap());
+                        }
+                        None => {
+                            ui.colored_label(GOOD, ic(ph::CHECK, &format!("KoboldCpp {v}")));
+                        }
+                    },
                     Some(Err(e)) => {
                         ui.add(egui::Label::new(RichText::new(e).color(BAD)).wrap());
                     }
@@ -1911,13 +2075,19 @@ fn kobold_wizard(
                         ui.weak("--version…");
                     }
                 }
+                let version_known = version.is_some();
+                if version_known && ui.small_button(ic(ph::ARROWS_CLOCKWISE, "Check again")).on_hover_text(
+                    "run --version again: after making the binary executable, or replacing it",
+                ).clicked() {
+                    out.push(Msg::RecheckKoboldVersion);
+                }
             });
             if matches!(version, Some(Err(_))) {
                 ui.horizontal(|ui| {
                     ui.add_space(LABEL_W + 8.0);
                     // (wrapped: a line this long would widen the dialog)
-                    let text = "Download KoboldCpp from github.com/LostRuins/koboldcpp/releases and pick it with Browse…, \
-                                or Save anyway and set it later in Server settings.";
+                    let text = "Download KoboldCpp from github.com/LostRuins/koboldcpp/releases and pick it with Browse… (or make it executable and \
+                                Check again), or Save anyway and set it later in Server settings.";
                     ui.add(egui::Label::new(RichText::new(text).weak()).wrap());
                 });
             }
@@ -1929,9 +2099,12 @@ fn kobold_wizard(
             let to = std::path::Path::new(&dir).join(tiers::MODEL_SUBDIR);
             let mut found: Vec<&str> = model_dirs.iter().map(String::as_str).filter(|d| *d != dir).collect();
             found.push("Hugging Face's cache");
+            let size = match k.family {
+                tiers::Family::MinimaxH3 => "about 34 GB for 12–16 GB cards, 44 GB for bigger ones",
+                tiers::Family::QwenImage => "about 10 GB for 8–12 GB cards, 13 GB for bigger ones",
+            };
             ui.weak(format!(
-                "{} (about 10 GB for 8–12 GB cards, 13 GB for bigger ones). \
-                 Files already in {} are linked, not downloaded again.",
+                "{} ({size}). Files already in {} are linked, not downloaded again.",
                 if dir.is_empty() { "Choose where the models go".into() } else { format!("They go in {}", to.display()) },
                 found.join(", ")
             ));
@@ -1980,7 +2153,7 @@ fn kobold_wizard(
                                 ui.label(format!("{} GB", tiers::show_gb(w.gpu.vram_gib)));
                             }
                             let card = cards.iter().find(|c| c.gpu == w.gpu.number);
-                            gpu_preset(ui, w, k.choose, card);
+                            gpu_preset(ui, w, k.family, k.choose, card);
                             match card {
                                 Some(c) if w.on => ui.label(c.role.describe()),
                                 _ if w.on => ui.label(""),
@@ -2069,6 +2242,7 @@ fn kobold_wizard(
             ui.colored_label(BAD, e);
         }
     });
+    let scrolled_to = ui.cursor().top();
     if let Some((p, at)) = &k.downloading {
         ui.add_space(6.0);
         download_progress(ui, &p.downloads, at);
@@ -2085,12 +2259,19 @@ fn kobold_wizard(
                 }
                 return;
             }
-            let found = matches!(version, Some(Ok(_)));
+            let too_old = match version {
+                Some(Ok(v)) => tiers::kobold_too_old(k.family, v),
+                _ => None,
+            };
+            let found = matches!(version, Some(Ok(_))) && too_old.is_none();
             let finish =
                 egui::Button::new(RichText::new(ic(ph::DOWNLOAD_SIMPLE, "Download, save as preset and open")).strong());
             let why = match version {
-                None => "Checking KoboldCpp (--version)…",
-                _ => "KoboldCpp isn't found: pick it under 1. KoboldCpp, or Save anyway",
+                None => "Checking KoboldCpp (--version)…".to_string(),
+                Some(Ok(_)) => {
+                    format!("{} Pick a newer one under 1. KoboldCpp, or Save anyway", too_old.unwrap_or_default())
+                }
+                _ => "KoboldCpp isn't found: pick it under 1. KoboldCpp, or Save anyway".into(),
             };
             if ui.add_enabled(plan.is_ok() && found, finish).on_disabled_hover_text(why).clicked() {
                 out.push(Msg::FinishKoboldWizard);
@@ -2104,7 +2285,8 @@ fn kobold_wizard(
             {
                 out.push(Msg::SaveKoboldWizardLater);
             }
-            if matches!(version, Some(Err(_)))
+            if !found
+            && version.is_some()
             && ui
                 .add_enabled(plan.is_ok(), egui::Button::new("Save anyway"))
                 .on_hover_text("Download the models and save the preset without opening it; set KoboldCpp later in Server settings")
@@ -2114,6 +2296,11 @@ fn kobold_wizard(
         }
         },
     );
+    let below_now = ui.cursor().top() - scrolled_to;
+    if (below_now - below).abs() > 0.5 {
+        ui.ctx().data_mut(|m| m.insert_temp(below_id, below_now));
+        ui.ctx().request_repaint();
+    }
     if cancel {
         out.push(Msg::ServerWizard(false));
     }
@@ -2138,7 +2325,7 @@ fn wizard_files(ui: &mut egui::Ui, p: &tiers::Plan, dir: &str, out: &mut Vec<Msg
             }
         });
         let to = std::path::Path::new(dir).join(tiers::MODEL_SUBDIR);
-        let there = to.is_dir();
+        let there = to.vfs_is_dir();
         let tip = if there { "Open it in the file manager" } else { "Not made yet: it is when the models download" };
         let b = ui.add_enabled(there, egui::Button::new(ic(ph::ARROW_SQUARE_OUT, "Open the model directory")).small());
         if b.on_hover_text(tip).on_disabled_hover_text(tip).clicked() {
@@ -2201,11 +2388,15 @@ pub fn download_progress(ui: &mut egui::Ui, downloads: &[tiers::Download], at: &
         };
         ui.weak(format!("File {} of {}: {file} ({size})", at.file + 1, downloads.len()));
     }
-    for (file, from) in &at.reused {
-        let file = file.trim_start_matches(&format!("{}/", tiers::MODEL_SUBDIR));
-        let text = if from.is_empty() { format!("{file}: there already") } else { format!("{file}: linked to {from}") };
-        ui.weak(ic(ph::LINK, &text));
-    }
+    // (a few lines at most: a long list scrolls, not growing the dialog)
+    egui::ScrollArea::vertical().id_salt("download_reused").max_height(60.0).show(ui, |ui| {
+        for (file, from) in &at.reused {
+            let file = file.trim_start_matches(&format!("{}/", tiers::MODEL_SUBDIR));
+            let text =
+                if from.is_empty() { format!("{file}: there already") } else { format!("{file}: linked to {from}") };
+            ui.add(egui::Label::new(RichText::new(ic(ph::LINK, &text)).weak()).truncate());
+        }
+    });
 }
 
 /// `s` seconds as "40 s", "5 min" or "1 h 20 min".
@@ -2220,8 +2411,9 @@ fn show_secs(s: f64) -> String {
 
 /// A ticked GPU's preset: by its memory, or (choosing) a menu of them;
 /// prompt enhance's own card takes none.
-fn gpu_preset(ui: &mut egui::Ui, w: &mut WizardGpu, choose: bool, card: Option<&tiers::Card>) {
-    let auto = tiers::tier_for(w.gpu.vram_gib);
+fn gpu_preset(ui: &mut egui::Ui, w: &mut WizardGpu, family: tiers::Family, choose: bool, card: Option<&tiers::Card>) {
+    let auto = tiers::tier_for(family, w.gpu.vram_gib);
+    let least = tiers::tiers(family).first().map_or(0, |t| t.gb);
     if !w.on {
         ui.label("");
     } else if card.is_some_and(|c| c.role == tiers::Role::PeOnly) {
@@ -2234,14 +2426,14 @@ fn gpu_preset(ui: &mut egui::Ui, w: &mut WizardGpu, choose: bool, card: Option<&
         let shown = w.preset.map(|gb| format!("{gb} GB")).unwrap_or(by_memory.clone());
         egui::ComboBox::from_id_salt(("wizard_preset", w.gpu.number)).selected_text(shown).show_ui(ui, |ui| {
             ui.selectable_value(&mut w.preset, None, by_memory);
-            for t in tiers::tiers() {
+            for t in tiers::tiers(family) {
                 ui.selectable_value(&mut w.preset, Some(t.gb), format!("{} GB", t.gb));
             }
         });
     } else {
         match auto {
             Some(t) => ui.weak(format!("{} GB preset", t.gb)),
-            None => ui.colored_label(NEUTRAL, "under 8 GB: too small"),
+            None => ui.colored_label(NEUTRAL, format!("under {least} GB: too small")),
         };
     }
 }
@@ -2263,12 +2455,18 @@ fn presets_table(ui: &mut egui::Ui, k: &mut KoboldWizard, plan: Option<&tiers::P
         .map(|p| p.cards.iter().filter(|c| c.role == tiers::Role::PeOnly).map(|c| c.gpu).collect())
         .unwrap_or_default();
     let mut clicked = None;
-    egui::Grid::new("wizard_presets").num_columns(9).spacing([14.0, 3.0]).show(ui, |ui| {
-        for h in ["", "Model", "Encoder", "VRAM cap", "PE", "Per image", "Peak VRAM", "Pinned RAM", ""] {
-            ui.weak(h);
+    egui::Grid::new("wizard_presets").num_columns(10).spacing([14.0, 3.0]).show(ui, |ui| {
+        for h in ["", "Model", "Encoder", "VAE", "VRAM cap", "PE", "Per image", "Peak VRAM", "System RAM", ""] {
+            let r = ui.weak(h);
+            if h == "System RAM" {
+                r.on_hover_text(
+                    "The system RAM its weights take beside the GPU: offloaded ones pinned, a text encoder or VAE \
+                     on the CPU in ordinary RAM; KoboldCpp itself takes about 1.5 GiB more",
+                );
+            }
         }
         ui.end_row();
-        for t in tiers::tiers() {
+        for t in tiers::tiers(k.family) {
             let gpus: Vec<String> = plan
                 .map(|p| p.cards.iter().filter(|c| c.preset == Some(t.gb)).map(|c| format!("GPU {}", c.gpu)).collect())
                 .unwrap_or_default();
@@ -2289,11 +2487,12 @@ fn presets_table(ui: &mut egui::Ui, k: &mut KoboldWizard, plan: Option<&tiers::P
             };
             cell(ui, t.quant().to_string());
             cell(ui, if t.clip_on_gpu { "GPU" } else { "CPU" }.into());
+            cell(ui, if t.vae_on_gpu { "GPU" } else { "CPU" }.into());
             cell(ui, if t.vram_limit_mb > 0 { format!("{} GiB", t.vram_limit_mb / 1024) } else { "none".into() });
             cell(ui, if t.swap { "swaps" } else { "stays loaded" }.into());
             cell(ui, format!("{} s", t.per_image_s));
             cell(ui, format!("{:.1} GiB", t.peak_vram_gib));
-            cell(ui, format!("~{} GiB", t.pinned_ram_gib));
+            cell(ui, format!("~{:.0} GiB", t.ram_gib_used));
             if on {
                 ui.label(RichText::new(format!("◀ {}", gpus.join(", "))).color(ACCENT).strong());
             } else {
@@ -2302,7 +2501,11 @@ fn presets_table(ui: &mut egui::Ui, k: &mut KoboldWizard, plan: Option<&tiers::P
             ui.end_row();
         }
     });
-    ui.weak("Timings and memory measured on a Radeon AI PRO R9700 with KoboldCpp 1.123 (docs/vram-tiers.md).");
+    let measured = match k.family {
+        tiers::Family::MinimaxH3 => "KoboldCpp 1.125, a 1024² edit with one reference at 6 steps",
+        tiers::Family::QwenImage => "KoboldCpp 1.123, a 1024² edit with one reference at 20 steps",
+    };
+    ui.weak(format!("Timings and memory measured on a Radeon AI PRO R9700 with {measured} (docs/vram-tiers.md)."));
     if let (Some(gb), Some(Ok(list))) = (clicked, &mut k.gpus) {
         for w in list.iter_mut().filter(|w| w.on && !pe_only.contains(&w.gpu.number)) {
             w.preset = Some(gb);
@@ -2409,6 +2612,44 @@ fn editor(ui: &mut egui::Ui, st: &AppState, d: &ServerDialog, editing: Editing, 
         out.push(Msg::SetPresetName(name));
     }
     ui.add_space(6.0);
+    // the servers scroll when taller than the window; the heading, name and
+    // buttons stay: the room is the window's less what's above (the heading,
+    // the name) and below (the buttons, measured last frame) and the modal's
+    // frame
+    let above = ui.cursor().top() - ui.min_rect().top();
+    let below_id = egui::Id::unique("preset_editor_below");
+    let below: f32 = ui.ctx().data(|m| m.get_temp(below_id)).unwrap_or(48.0);
+    let room = ui.ctx().content_rect().height() - above - below - 64.0;
+    egui::ScrollArea::vertical().max_height(room.max(120.0)).auto_shrink([false, true]).show(ui, |ui| {
+        editor_servers(ui, st, d, out);
+    });
+    let scrolled_to = ui.cursor().top();
+    ui.add_space(8.0);
+    let has_servers = !d.draft.servers.is_empty();
+    dialog_buttons(ui, |ui| {
+        let open = egui::Button::new(RichText::new(ic(ph::PLAY, "Save and open")).strong());
+        if ui.add_enabled(has_servers, open).clicked() {
+            out.push(Msg::SaveAndOpen);
+        }
+        if ui.button(ic(ph::FLOPPY_DISK, "Save")).clicked() {
+            out.push(Msg::SavePreset);
+        }
+        if ui.add_enabled(has_servers, egui::Button::new("Open without saving")).clicked() {
+            out.push(Msg::OpenDraft);
+        }
+        if ui.button("Cancel   Esc").clicked() {
+            out.push(Msg::CancelEdit);
+        }
+    });
+    let below_now = ui.cursor().top() - scrolled_to;
+    if (below_now - below).abs() > 0.5 {
+        ui.ctx().data_mut(|m| m.insert_temp(below_id, below_now));
+        ui.ctx().request_repaint();
+    }
+}
+
+/// The editor's servers, what each does and what to add: what scrolls.
+fn editor_servers(ui: &mut egui::Ui, st: &AppState, d: &ServerDialog, out: &mut Vec<Msg>) {
     if d.draft.servers.is_empty() {
         ui.weak(
             "Add its servers below. Local: KoboldCpp (images, and prompt enhance too) or sd-server, and a chat \
@@ -2570,23 +2811,6 @@ fn editor(ui: &mut egui::Ui, st: &AppState, d: &ServerDialog, editing: Editing, 
             "sd-server ports default to 1234, 1235, …; device names as `--list-devices` prints them.",
         );
     }
-    ui.add_space(8.0);
-    let has_servers = !d.draft.servers.is_empty();
-    dialog_buttons(ui, |ui| {
-        let open = egui::Button::new(RichText::new(ic(ph::PLAY, "Save and open")).strong());
-        if ui.add_enabled(has_servers, open).clicked() {
-            out.push(Msg::SaveAndOpen);
-        }
-        if ui.button(ic(ph::FLOPPY_DISK, "Save")).clicked() {
-            out.push(Msg::SavePreset);
-        }
-        if ui.add_enabled(has_servers, egui::Button::new("Open without saving")).clicked() {
-            out.push(Msg::OpenDraft);
-        }
-        if ui.button("Cancel   Esc").clicked() {
-            out.push(Msg::CancelEdit);
-        }
-    });
 }
 
 /// What each server of a preset is used for: images, prompt enhance's

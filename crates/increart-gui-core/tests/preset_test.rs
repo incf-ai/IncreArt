@@ -1,5 +1,6 @@
 //! Model presets' **Test** against the in-process fake sd-server, through
 //! the reducer and the real runtime.
+#![allow(clippy::disallowed_methods)] // fixtures on disk: no overlay here
 
 #[allow(dead_code)]
 #[path = "../../increart-core/tests/common/fake.rs"]

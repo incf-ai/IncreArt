@@ -9,6 +9,7 @@
 //! logs) is zipped to hand on.
 //!
 //! The protocol the app's window reads is [`increart_core::apitest`].
+#![allow(clippy::disallowed_methods)] // fixtures on disk: no overlay here
 
 mod catalogue;
 mod chat;

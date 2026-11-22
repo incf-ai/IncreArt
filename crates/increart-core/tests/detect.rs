@@ -1,4 +1,5 @@
 //! What a server at a URL is, asked as the setup wizard asks.
+#![allow(clippy::disallowed_methods)] // fixtures on disk: no overlay here
 
 mod common;
 

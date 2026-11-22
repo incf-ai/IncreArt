@@ -2,6 +2,7 @@
 //! Image stores, Filesystem layout). Struct names are the names written in
 //! the files (`Idea { … }`, `Run { … }`).
 
+use crate::vfs::PathExt;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
@@ -104,11 +105,11 @@ impl ImageRef {
     /// hold both); the PNG name when there is neither.
     pub fn path(&self, root: &Path) -> PathBuf {
         let png = root.join(self.rel_path_as(StoreFormat::Png));
-        if png.exists() {
+        if png.vfs_exists() {
             return png;
         }
         let webp = root.join(self.rel_path_as(StoreFormat::Webp));
-        if webp.exists() { webp } else { png }
+        if webp.vfs_exists() { webp } else { png }
     }
 
     /// [`path`](Self::path) relative to the library root, with `/`.
@@ -365,6 +366,12 @@ pub struct Run {
     /// Seeds whose output link was deleted: generated, and not missing.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub deleted: Vec<Seeds>,
+    /// Queued past the warning that no open server can run its model
+    /// (Queue anyway): servers are tried whatever files they list, and the
+    /// model one has after the load is taken, by whatever name it calls it
+    /// (DESIGN.md, Queue anyway).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub queued_anyway: bool,
 }
 
 /// One generated image's timing, recorded when it is stored.
@@ -404,11 +411,25 @@ pub struct SweepTag {
     /// The style's prompt was prompt enhance's (perhaps edited after).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub enhanced: bool,
+    /// Its values of the sweep's axes after the first, in order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub more: Vec<SweepParam>,
 }
 
 impl SweepTag {
-    /// Its row on the contact sheet: the style, or the setting ("cfg 3").
+    /// Its row on the contact sheet: the style, or the setting ("cfg 3"),
+    /// then its other axes' values ("red · cfg 3").
     pub fn row(&self) -> String {
+        let mut row = self.first();
+        for p in &self.more {
+            row.push_str(" · ");
+            row.push_str(&p.label());
+        }
+        row
+    }
+
+    /// Its first axis's value: the style, or the setting.
+    pub fn first(&self) -> String {
         self.param.as_ref().map_or_else(|| self.preset.clone(), SweepParam::label)
     }
 }
@@ -435,7 +456,18 @@ impl SweepParam {
         }
     }
 
-    /// "20 steps", "cfg 3", "shift 3.1", "strength 0.6", or the model.
+    /// A tag sweep's: the blank its value fills (`hair` of `{hair}`).
+    pub fn tag(&self) -> Option<&str> {
+        self.name.strip_prefix('{')?.strip_suffix('}')
+    }
+
+    /// A tag sweep's param: `value` in the blank `slot`.
+    pub fn of_tag(slot: &str, value: &str) -> SweepParam {
+        SweepParam { name: format!("{{{slot}}}"), value: value.into() }
+    }
+
+    /// "20 steps", "cfg 3", "shift 3.1", "strength 0.6", or the model, the
+    /// image's name or the tag's value.
     pub fn label(&self) -> String {
         let v = &self.value;
         match self.name.as_str() {
@@ -443,6 +475,8 @@ impl SweepParam {
             "cfg" => format!("cfg {v}"),
             "flow_shift" => format!("shift {v}"),
             "strength" => format!("strength {v}"),
+            "lora" if v.is_empty() => "no LoRA".into(),
+            "lora_weight" => format!("LoRA × {v}"),
             _ => v.clone(),
         }
     }
@@ -739,6 +773,10 @@ pub struct GenerateDraft {
     /// The model preset's name (`config.rsn` recipes).
     #[serde(default)]
     pub preset: String,
+    /// `preset` is only the default, not chosen: opened again, the form
+    /// moves it to a model the open servers can run.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub preset_auto: bool,
     pub steps: u32,
     pub cfg: f32,
     #[serde(default, serialize_with = "bare", skip_serializing_if = "Option::is_none")]

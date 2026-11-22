@@ -189,6 +189,68 @@ to the open one (the engine restarts if it was stopped). There the open
 library is tagged "open now" (and can't be removed from the list) and the main
 button names the last used other one.
 
+### Ephemeral mode
+
+For privacy: nothing of a session reaches the disk unless exported, inputs
+included. The library screen's **Ephemeral session…** opens a form:
+
+- **Start from**: **A library on disk** (a recent library or a folder) is
+  read and never written: every change (outputs, ideas, imports, outputs
+  sent to the input library, drafts, history, renames, deletions) is in RAM
+  only. **A new empty library** is wholly in RAM.
+- **RAM** it may fill, in GiB: a quarter of the RAM by default (1–16 GiB), at
+  least 0.25 and at most 90% of the RAM.
+- **When it's full**: **delete the oldest images, reviewed or not** (the
+  default) or **stop generating until I delete images**.
+
+**Storage** is an overlay file system inside the app (`vfs`, on every
+platform: Windows has no RAM disk of its own). It's mounted at a path where
+no write can land: `/proc/increart-ram/<pid>-<n>/<name>` on Linux,
+`/dev/increart-ram/…` on macOS, `\\increart-ram.invalid\ram\…` on Windows.
+Reads fall through to the library on disk; folders are listed from it
+lazily, and a copy, rename or hard link of a file still on disk holds no
+RAM. Every write goes to RAM. All of the library's file access goes through
+`vfs`, with paths outside a mount going to `std::fs`; clippy's
+`disallowed-methods` (clippy.toml) rejects `std::fs`, `Path::exists` and
+the like, `image::open` and `trash::delete` in the app crates so none
+bypasses it. The session holds a shared lock on the disk library's
+`library.lock`: no instance opens it meanwhile, though a second ephemeral
+session can.
+
+**The budget** counts the overlay's bytes (the session's own files, thumbnails
+included). After each output it's measured; over the budget, the oldest
+output-store images held in RAM are deleted with their links, thumbnails and
+pixel-index entries, recorded as deleted in their runs (so not generated
+again), and a message says how many went. If nothing more can go, or
+stopping is the choice, the engine stops with an error message, and starts
+again once there is room (a larger budget, **Delete discarded images for
+good**).
+
+**The library menu** in a session shows a lock, the name and "in RAM N%",
+the budget and when-full choices (changeable), the swap state, **Delete
+discarded images for good**, the archive exports (the way to disk with
+**Export**), **Leave the session…**, and what isn't covered. Leaving, quitting or
+switching libraries always asks first ("Leave and delete"), and the overlay
+is dropped.
+
+**Outside the library**: the log folder becomes an overlay over itself (the
+app log, the traffic log and the logs of servers the app starts, piped
+through the app) and is put back on leaving. The recent-libraries list,
+the library watcher and load timings aren't updated. Nothing goes to the
+system trash (deletion removes). **Show in the file manager**, **Open in
+editor** say the file is in RAM (nothing is dragged out of the app). Notifications are
+in-app only and name nothing outside.
+
+**Swap**: the overlay's memory is locked (mlock / VirtualLock; the memlock
+limit is raised to the hard limit, the working set on Windows to the
+budget). The form and the menu say whether it's pinned, limited (and to
+what), or that swap is off, and warn when it couldn't be.
+
+**Not covered**, said in the form and the menu: a server keeps prompts in
+memory (its conditioning cache) until restarted, servers the app didn't
+start keep their own logs, and a machine that hibernates writes its RAM to
+disk. The form warns when servers are already running.
+
 ### Startup: servers
 
 When the app starts (after the library is opened) a modal dialog asks for
@@ -257,7 +319,14 @@ asks among them):
   named `koboldcpp`, `sd-server`, `chat` (" 2" when taken). **Save as
   preset and open** names the preset after the hosts ("Servers at
   192.168.2.136, box"; localhost left out, else "Running server(s)").
-  The first way, **KoboldCpp, Qwen-Image set up for your GPUs (recommended)**: the
+  The first way, KoboldCpp set up for your GPUs, comes in two models
+  (`tiers::Family`): **MiniMax-H3-Image (recommended; 12 GB or more)**, the
+  default, which needs KoboldCpp 1.125 or later (an older binary is said
+  in red beside its version and **Download, save as preset and open** is
+  greyed until a newer one is picked; **Save anyway** still saves), and
+  **Qwen-Image 2.1 (8 GB or more)**. Picking one from the sd-server page
+  opens the KoboldCpp page; switching model puts every GPU's preset back to
+  Auto (the sizes differ). Then the
   KoboldCpp binary and a model directory, then the GPUs **through** a GPU
   runtime (Vulkan, CUDA or ROCm; CUDA when `nvidia-smi` runs, else Vulkan;
   on a Mac only Metal)
@@ -271,9 +340,13 @@ asks among them):
   GPU by hand**, its memory typed in). Each ticked GPU takes the biggest
   of the shipped VRAM presets ([vram-tiers.md](vram-tiers.md),
   `crates/increart-core/kcppt/`, read by `tiers.rs`) it holds at 90% (a
-  "32 GB" card reports 29.9–31.9 GiB); under 8 GB it can't be used. The
-  **Presets** table lists them all with their measured speed, peak VRAM
-  and pinned RAM, the ones in use highlighted and tagged with their GPUs;
+  "32 GB" card reports 29.9–31.9 GiB); under the model's smallest (8 GB
+  for Qwen-Image, 12 for MiniMax-H3) it can't be used. The
+  **Presets** table lists the model's presets with where the text encoder
+  and VAE run, their measured speed, peak VRAM and **System RAM** (what
+  the weights take beside the GPU, pinned when offloaded, ordinary RAM
+  for a part run on the CPU; KoboldCpp's own ~1.5 GiB on top), the ones
+  in use highlighted and tagged with their GPUs;
   below the plan, a line per GPU says why ("23.98 GB is at least 90% of
   24 GB (21.6); the 32 GB preset needs 28.8 GB") and the RAM the pinned
   weights need against what's available. **Choose presets myself** gives
@@ -308,7 +381,8 @@ asks among them):
   Hugging Face's cache (`$HF_HOME`, else `~/.cache/huggingface`, five
   folders down, not `blobs`/`xet`), the same size as Hugging Face's HEAD
   says, linked instead; a progress bar and **Cancel download**), adds
-  the folder to the model folders, adds a recipe preset ("Qwen-Image 2.1
+  the folder to the model folders, adds a recipe preset ("MiniMax-H3-Image
+  GGUF Q8_0", recipe `minimax-h3-image`, 6 steps, CFG 1; "Qwen-Image 2.1
   GGUF Q8_0 (CFG 2, refs)", 20 steps, CFG 2), and saves and opens the
   server preset ("KoboldCpp Vulkan1", with " (2)" when taken). The
   binary is checked first (`--version`, when the wizard opens, the field is
@@ -1821,18 +1895,24 @@ its details window, and for every run at once in the Jobs header:
   `127.0.0.1` load models one after another (a server waiting shows
   "waiting for another server's load"). A KoboldCpp that offloads its
   weights (`--sdoffloadcpu`) pins about its files' size in RAM, less the
-  model it drops; its load waits up to 2 s for that much RAM plus 8 GiB to
-  be free ("waiting for RAM: 20.6 of 21.0 GiB free (13.0 GiB to load + 8
-  to spare)"), then loads anyway and says so in the messages ("loading
-  without enough free RAM after 2 s: …"; RAM held outside the app, e.g.
-  by increbot, may never come free), without holding up the other
-  servers' loads meanwhile, and fails at once if the machine hasn't that
+  model it drops; its load waits for that much RAM plus 8 GiB to be free
+  ("waiting for RAM: 20.6 of 21.0 GiB free (13.0 GiB to load + 8 to
+  spare)"), however long that takes, and says so once in the messages
+  after 2 s ("kcpp-gpu1: its load waits for free RAM: …", naming the
+  checkbox below), without holding up the other servers' loads meanwhile.
+  It had loaded anyway after 2 s: two KoboldCpps with MiniMax-H3-Image
+  (`--sdoffloadcpu --sdvramlimit 12288`, about 45 GiB pinned each) ran the
+  machine out of memory, the kernel killed the desktop, and amdgpu kept
+  the killed servers' GTT buffers (about 70 GB) until a reboot. A stopped
+  run whose model a load is waiting for drops that load (`Cmd::StopLoad`,
+  ignored once the load has begun; the server keeps what it had), and the
+  worker queues other commands while it waits. It fails at once if the machine hasn't that
   much at all (RAM from `/proc/meminfo` on Linux,
   `GlobalMemoryStatusEx` on Windows, `hw.memsize` and `vm_stat`'s free,
   inactive and speculative pages on macOS). Two loads at once, with pinned weights,
   had starved the desktop (no swap; increbot shares the RAM). Server
   settings' **Wait for free RAM before loading a model** unticked skips
-  the wait and the message. Remote servers load freely.
+  the wait and the message, also for a load already waiting. Remote servers load freely.
 - **Warm-up**: after launch or load, each server runs one throwaway job so
   lazy weight loading doesn't land on the first real seed. After a load
   it's the first queued run of that model's seed at one step, no
@@ -2322,12 +2402,28 @@ and its tooltip says how many more are generating.
   files of that name says which is meant isn't known. A started KoboldCpp doesn't count the `.safetensors`
   with int8 (`I8`) weights in its folders, sd-server's `int8_convrot`
   files: it can't load them, and falls back to a full-size buffer (31 GB
-  pinned for Qwen-Image's). Queueing a preset no open server runs (a draft
+  pinned for Qwen-Image's). A form whose model nobody chose (a new
+  project's, a draft saved with the default: `GenerateForm::preset_auto`,
+  kept in `draft.rsn`) moves to the first preset the open servers run,
+  with its settings, whenever servers say what they load or the form is
+  made again (`AppState::fit_generate_preset`; on an H3-only server a new
+  project had offered Qwen-Image 2.1); a model picked, or named by a run or
+  a draft that chose it, stays. Queueing a preset no open server runs (a draft
   from before, or a model sweep) asks first, OK/Cancel: "No open server
   can run this model preset", each server's reason, **Queue anyway** or
   Cancel; when a preset of the same sd-server recipe runs (the same model,
   e.g. KoboldCpp's GGUFs for sd-server's int8 files) it's offered first:
-  **Use <preset> and queue**. A draft, a run's settings or a restored form
+  **Use <preset> and queue**. **Queue anyway** (Queue anyway): the run is
+  saved `queued_anyway`, and the engine sends it whatever the servers
+  list. A server is still left out only where loading it failed, and one
+  that lists the files is still preferred (`Scheduler::force`). The model
+  a server has after the load is taken, whatever it calls it: a KoboldCpp
+  started elsewhere makes the run with the image model it runs
+  (`Client::load_model_anyway`), and an sd-server or proxy answering the
+  load with other files is taken as loaded, its log saying "queued anyway:
+  taken as it is". Without it, a model whose files no server lists only
+  waits ("no server can load …"): users with a KoboldCpp started by hand
+  whose file is named otherwise than the preset's had no way through. A draft, a run's settings or a restored form
   whose preset no open server runs moves to such a twin by itself, keeping
   its steps and CFG, with a message (projects made elsewhere, like the
   example library's, name presets from another setup). Otherwise, if the
@@ -2430,7 +2526,8 @@ and its tooltip says how many more are generating.
   seed saying why. The run and each image's recipe record them (ID,
   SHA-256, weight); the image details and run info show them.
 - Generate's **Mode**: **Single prompt** | **Sweep**, and the sweep box's
-  **Vary**: **Style** (a prompt preset per run, below), a setting (see
+  **Vary**: **Style** (a prompt preset per run, below), **Tag** (see *Tag
+  sweeps*), a setting (see
   *Setting sweeps*) or **Image** (see *Image sweeps*). In a style sweep the prompt is a **template**: `{preset}` marks where each preset's prompt goes
   ("cute robot mascot sticker, {preset}"); a template without it is replaced
   by the preset's prompt (a note says so).
@@ -2663,6 +2760,95 @@ the form has it, the same seeds in each.
   setting · seed** caption ("cfg 3 · seed 5") the tiled image is a labelled
   comparison chart; **settings** captions any image with its run's
   "20 steps · cfg 3 · shift 3.1 · strength 0.6".
+
+**Tag sweeps.** Vary **Tag**: a run per value of a blank of the prompt,
+the same seeds in each ("a fox with {fur} fur": red, silver, long, braided).
+
+- **Blank**: one of the prompt's blanks, the first until one is chosen.
+  **Values**: a line each (a comma is part of a value), in order, empty
+  lines and repeats dropped. The blank's shared value isn't used; the
+  prompt's other blanks must be filled, and `{preset}` is refused.
+- **Suggest** (✨) and **Suggest…** ask prompt enhance for the blank's
+  values as for any blank (the same chips, kept in the draft); a chip's
+  click puts its value in the values or takes it out, and **Add all N**
+  adds those not in yet.
+- Runs are labelled `r05 · silver` and tagged with the blank and value
+  (`param: SweepParam { name: "{fur}", value: "silver" }`); the value is
+  the contact sheet's row. **New sweep from their K rows…** gives the
+  blank and those values back; without the history's checkpoint, the
+  first run's prompt has its value put back as the blank when it appears
+  there once.
+
+**Sweep axes.** Vary is the sweep's first axis; **Add axis** (under it)
+adds more, each a run's value too: a tag (another blank), a model preset,
+a LoRA preset, a LoRA weight, steps, CFG, flow shift, sampler, scheduler or strength. Styles and images
+are only ever the first axis; one kind is varied once (a tag axis a blank
+once), and an axis's blank needs no value in the blanks tables.
+
+- Each axis has its kind (a menu), its values as the first axis's are
+  edited, and ×. A new one starts around the form's own (its model, a
+  blank no other axis varies).
+- **Put together**:
+  - **Every combination**: A × B × C, the first axis slowest;
+  - **Paired**: the first value of each axis together, then the second
+    (each axis as many values, else Queue says so);
+  - **Random**: K of every combination, kept in grid order;
+  - **Random per image**: each seed its own combination (a run of one
+    seed each, the form's seeds in order).
+  Random and per image are repeatable (`combine_seed` in the draft;
+  **Reroll** picks again), and work with the first axis alone too.
+- A model axis's preset brings its steps, CFG, sampler, scheduler and flow
+  shift, and the other axes' values go over them (a model axis with a
+  steps axis: each model at those steps).
+- The summary under the axes reads "K runs × N seeds = X images ≈ time"
+  (per image: "X images, each its own combination") with the first rows;
+  Queue asks first from 100 images, as for every sweep.
+- Runs are labelled `r05 · red · cfg 4` and tagged with the first axis as
+  before and the others in order (`more: [SweepParam { name: "cfg",
+  value: "4" }]`); a run's row on the contact sheet is all of them.
+- The contact sheet of a sweep of several axes has **By value** above it:
+  each axis a line, each value with its good / neutral / bad / unreviewed
+  counts over the rows shown, whatever the other axes were.
+- **Pivot** (the sheet's toolbar, on a sweep of several axes): **Rows** and
+  **Columns** each an axis (choosing the other's swaps them), every other
+  axis's value with ◀ ▶, and **Seed**: one of the sweep's seeds, or
+  **first made** (each combination's first image, whatever its seed: a
+  random-per-image sweep's own). A cell is that combination's image, `…`
+  still to come or `–` none; hover, Ctrl/Shift+click picks, double-click
+  and the right-click menu are the sheet's. Leaving the sweep turns it
+  off.
+- **New sweep from their K rows…** gives each axis the values of the rows
+  picked (Paired falls back to Every combination when they no longer pair
+  up).
+
+**LoRA sweeps.** Vary (or an axis of) **LoRA**: a run per LoRA preset,
+each over the run's model preset, and **no LoRA** (the model preset as it
+is); **LoRA weight**: a run per weight (−4–4; starting 0.4, 0.6, 0.8, 1,
+1.2) of the LoRA axis's LoRAs, else the model preset's own. A model axis
+beside them compares LoRAs on several models, each at its own settings,
+as LoRAs often need.
+
+- **LoRA presets** (config `lora_presets`, `LoraPreset { name, loras }`):
+  a name and one LoRA or several stacked, each a file, a weight and its
+  trigger words, as a model preset's LoRAs are. Edited in **LoRA
+  presets…** (beside the LoRA axis's ticks): the list (New, duplicate,
+  delete), the selected one's name and LoRA rows (the file typed or picked
+  from the LoRA files in the model directories' `loras/` or `Lora/`, one
+  folder down, listed when the window opens; a file picked takes the
+  trigger words a model preset's LoRA of it has, when its own are empty),
+  **+ LoRA** to stack another; **Save** (refused, with why, for a name
+  empty or used twice or a preset with no file) or **Close** (drops the
+  changes). A renamed preset stays ticked in the open sweep.
+- The axis ticks **no LoRA** and each preset (its files on hover), kept in
+  the list's order; one ticked but since renamed or deleted shows in red
+  to untick. A run's value is the preset's name (`param: SweepParam {
+  name: "lora", value: "pixel art" }`, "" for none; `lora_weight` with the
+  weight), its row "pixel art · LoRA × 0.6".
+- When queued, each run's model preset gets its LoRA presets' LoRAs after
+  its own (a preset gone by then refuses Queue, naming it) and the weight
+  on them, so the run's record has every LoRA it was made with, and their
+  trigger words go before the prompt as a model preset's do. No reload: a
+  LoRA is sent per request.
 
 **Image sweeps.** Vary **Image**: a run per image, the same prompt and
 seeds in each, the image `<image1>` (or the start image) of its run. For
@@ -3658,7 +3844,15 @@ the keys and mouse buttons go through that view's own history instead.
 - **Idea inbox**: tabs **New idea** · **Grid** · **Folder** · **Import** ·
   **Discarded**. (PE rewrites have no tab; see Prompt rewriting.) Files dragged from the desktop onto any Idea
   inbox tab are imported as new ideas (images re-encoded as usual, text files
-  become the idea's text); the window shows a drop highlight while dragging. Opening the Idea inbox shows **New idea** when there are no
+  become the idea's text); the window shows a drop highlight while dragging.
+  Pasted images (Ctrl+V, or **Paste** in the tab bar) are images too: on
+  **Grid** and **Import** each becomes a new idea (source Clipboard; image
+  files named by the clipboard's text, as a file manager copies them, are
+  imported as if dropped), on **New idea** they join the draft's images
+  (**Paste image** beside Add images…), and with **Edit idea** open they
+  join that idea's images (its own **Paste image**). Image data is taken
+  even while a text field has the keyboard; file paths only when none has.
+  The Folder tab keeps its own Ctrl+V (paste files). Opening the Idea inbox shows **New idea** when there are no
   ideas to review, **Grid** otherwise. Shows the count of unreviewed ideas as a
   badge on the top-level tab.
   - **Grid** (input review): idea cards (title, first images, text, variant
@@ -4698,6 +4892,16 @@ Server configurations (2026-10-28, [benchmark-servers.html](benchmark-servers.ht
   ~9 tokens/s, 6–80 s per answer.
 - PE and image editing on one card overflow its 32 GiB: images +41% and PE
   down to ~3 tokens/s while both work. Keep PE on the other card.
+
+MiniMax-H3-Image presets for KoboldCpp 1.125 (2026-11-22,
+[vram-tiers.md](vram-tiers.md)): KoboldCpp's official 12 GB template runs
+the 32B text encoder and the VAE on the CPU (208 s an image, 192–564 s as
+the CPU is shared) and peaks at 13.6 GiB on a 1 MP edit with a reference,
+over a 12 GB card. Offloading the weights with the encoder on the GPU
+under an 8 GiB cap: 57 s (Q4_K_S) or 65 s (Q8_0) at 8.3–8.6 GiB, with
+29 or 39 GiB of pinned RAM. A 12 GiB cap or none saves only 2–4 s. Loading
+reads all of it (29–39 GiB) from disk, which is what a swap back from
+prompt enhance costs: minutes on a hard disk.
 
 KoboldCpp presets by VRAM (2026-10-29, [vram-tiers.md](vram-tiers.md)):
 image editing and PE in one KoboldCpp on one card of 8–32 GB. The image

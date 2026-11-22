@@ -1,5 +1,6 @@
 //! Building libraries entirely through the core API, then checking them with
 //! the independent verifier (tests/common/verify.rs) and a rescan.
+#![allow(clippy::disallowed_methods)] // fixtures on disk: no overlay here
 
 mod common;
 
@@ -103,6 +104,7 @@ fn new_run(refs: Vec<ImageRef>, mode: Mode, seeds: u64) -> NewRun {
         source_idea: None,
         first_seed: 0,
         seeds,
+        queued_anyway: false,
     }
 }
 
@@ -904,6 +906,7 @@ fn drafts_are_saved_copied_and_protect_their_images() {
         width: 1344,
         height: 896,
         preset: "Qwen-Image 2.1".into(),
+        preset_auto: false,
         steps: 20,
         cfg: 2.0,
         flow_shift: None,

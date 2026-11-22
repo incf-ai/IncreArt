@@ -98,9 +98,14 @@ cargo build --release -p increart-gui
 
 ### Requirements
 
-- A GPU with at least 8 GB of VRAM; more VRAM is faster
+- A GPU with at least 12 GB of VRAM for MiniMax-H3-Image (the setup
+  wizard's default, KoboldCpp 1.125 or later), or 8 GB for Qwen-Image 2.1
   (see [VRAM tiers](docs/vram-tiers.md)).
-- The Qwen-Image 2.1 model files: 10–13 GiB for KoboldCpp, 16 GiB for
+- Free system RAM for the weights KoboldCpp keeps there: about 29 GiB
+  (12 GB GPU) or 39 GiB (16 GB and up) for MiniMax-H3-Image, 10–13.5 GiB
+  for Qwen-Image 2.1, plus ~1.5 GiB for KoboldCpp itself.
+- The model files: MiniMax-H3-Image 34–44 GiB for KoboldCpp (prompt
+  enhance included); Qwen-Image 2.1 10–13 GiB for KoboldCpp, 16 GiB for
   sd-server ([models guide](docs/setup/02-models.md)).
   IncreArt doesn't include or redistribute model weights; they carry their
   own licences.

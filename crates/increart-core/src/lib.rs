@@ -19,6 +19,7 @@ pub mod config;
 pub mod container;
 pub mod detect;
 pub mod engine;
+pub mod ephemeral;
 pub mod error;
 pub mod estimate;
 pub mod export;
@@ -57,6 +58,7 @@ pub mod thumbs;
 pub mod tiers;
 pub mod traffic;
 pub mod validation;
+pub mod vfs;
 pub mod webp;
 
 pub use error::{Error, Result};

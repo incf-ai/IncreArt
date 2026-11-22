@@ -2,8 +2,8 @@
 //! weights are identified by the hash of the file bytes). Hashing a 9 GB
 //! file takes a while, so results are cached by path, size and mtime.
 
+use crate::vfs::File;
 use std::collections::BTreeMap;
-use std::fs::File;
 use std::io::Read;
 use std::path::Path;
 use std::time::UNIX_EPOCH;
@@ -39,7 +39,7 @@ pub fn sha256_cached(cache: &Path, file: &Path) -> Result<String> {
 /// `file`'s hash when it's in `cache` (and still its size and time),
 /// without reading the file.
 pub fn cached(cache: &Path, file: &Path) -> Option<String> {
-    let meta = std::fs::metadata(file).ok()?;
+    let meta = crate::vfs::metadata(file).ok()?;
     let mtime = meta.modified().ok().and_then(|t| t.duration_since(UNIX_EPOCH).ok()).map_or(0, |d| d.as_secs());
     let c: Cache = rsnfmt::read(cache).unwrap_or_default();
     c.files.get(&*file.to_string_lossy()).filter(|e| e.size == meta.len() && e.mtime == mtime).map(|e| e.sha256.clone())
@@ -47,7 +47,7 @@ pub fn cached(cache: &Path, file: &Path) -> Option<String> {
 
 /// Whether `file`'s hash is in `cache` (and still its size and time).
 pub fn is_cached(cache: &Path, file: &Path) -> bool {
-    let Ok(meta) = std::fs::metadata(file) else { return false };
+    let Ok(meta) = crate::vfs::metadata(file) else { return false };
     let mtime = meta.modified().ok().and_then(|t| t.duration_since(UNIX_EPOCH).ok()).map_or(0, |d| d.as_secs());
     let c: Cache = rsnfmt::read(cache).unwrap_or_default();
     c.files.get(&*file.to_string_lossy()).is_some_and(|e| e.size == meta.len() && e.mtime == mtime)
@@ -56,7 +56,7 @@ pub fn is_cached(cache: &Path, file: &Path) -> bool {
 /// [`sha256_cached`], telling `progress` (bytes read, size) as it reads;
 /// it returns false to stop (an `Interrupted` error, nothing cached).
 pub fn sha256_cached_progress(cache: &Path, file: &Path, mut progress: impl FnMut(u64, u64) -> bool) -> Result<String> {
-    let meta = std::fs::metadata(file).at(file)?;
+    let meta = crate::vfs::metadata(file).at(file)?;
     let size = meta.len();
     let mtime = meta.modified().ok().and_then(|t| t.duration_since(UNIX_EPOCH).ok()).map_or(0, |d| d.as_secs());
     let key = file.to_string_lossy().into_owned();
@@ -97,14 +97,14 @@ mod tests {
     fn cached_until_the_file_changes() {
         let dir = tempfile::tempdir().unwrap();
         let (cache, f) = (dir.path().join("hashes.rsn"), dir.path().join("w.bin"));
-        std::fs::write(&f, b"abc").unwrap();
+        crate::vfs::write(&f, b"abc").unwrap();
         let abc = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
         assert_eq!(sha256_cached(&cache, &f).unwrap(), abc);
         // a stale cache entry with matching size/mtime is trusted
-        let text = std::fs::read_to_string(&cache).unwrap().replace(abc, "cached");
-        std::fs::write(&cache, text).unwrap();
+        let text = crate::vfs::read_to_string(&cache).unwrap().replace(abc, "cached");
+        crate::vfs::write(&cache, text).unwrap();
         assert_eq!(sha256_cached(&cache, &f).unwrap(), "cached");
-        std::fs::write(&f, b"abcd").unwrap();
+        crate::vfs::write(&f, b"abcd").unwrap();
         assert_ne!(sha256_cached(&cache, &f).unwrap(), "cached");
     }
 
@@ -112,7 +112,7 @@ mod tests {
     fn stopped_hashing_caches_nothing() {
         let dir = tempfile::tempdir().unwrap();
         let (cache, f) = (dir.path().join("hashes.rsn"), dir.path().join("w.bin"));
-        std::fs::write(&f, b"abc").unwrap();
+        crate::vfs::write(&f, b"abc").unwrap();
         assert!(sha256_cached_progress(&cache, &f, |_, _| false).is_err());
         assert!(!is_cached(&cache, &f));
         assert!(sha256_cached_progress(&cache, &f, |_, _| true).is_ok());

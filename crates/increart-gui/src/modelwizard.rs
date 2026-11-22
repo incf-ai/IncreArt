@@ -441,15 +441,20 @@ fn size_menu(ui: &mut egui::Ui, w: &mut ModelWizard, p: &RecipePreset, dirs: &[S
         return;
     }
     let recommended = w.recommended_size(p);
+    let vram = w.largest_vram_gib();
     let mut picked = p.size.clone();
     egui::ComboBox::from_id_salt(("model_size", &p.name))
         .selected_text(&p.size)
         .width(70.0)
         .show_ui(ui, |ui| {
-            ui.set_min_width(330.0);
+            ui.set_min_width(400.0);
             for s in p.each_size() {
                 let needs = PresetNeeds::of(&s, dirs, &w.sizes, w.index.as_deref());
-                let gpu = needs.gpu_bytes().map_or("…".to_string(), |b| format!("GPU {}", gb(b)));
+                let mut gpu = needs.gpu_bytes().map_or("…".to_string(), |b| format!("GPU {}", gb(b)));
+                match needs.ram_bytes(vram) {
+                    Some(0) | None => {}
+                    Some(b) => gpu += &format!(" + RAM {}", gb(b)),
+                }
                 let mut marks = String::new();
                 if recommended.as_deref() == Some(s.size.as_str()) {
                     marks.push_str(" · recommended");
@@ -487,8 +492,9 @@ fn gpu_tip(needs: &PresetNeeds) -> String {
     let reserve = gb(increart_gui_core::GPU_RESERVE);
     format!(
         "GPU memory: {} at most at once: its diffusion model ({}) and {reserve} working memory, the text encoder \
-         and VAE ({}) run from RAM when they don't fit beside it (sd-server does this itself).\nAll of it on the \
-         GPU: {} (a new prompt a little faster).\nFiles: {}.",
+         and VAE ({}) run from system RAM when they don't fit beside it (sd-server does this itself; \
+         \"+ RAM\" says how much beside your largest GPU).\nAll of it on the GPU: {} (a new prompt a little \
+         faster).\nFiles: {}.",
         gb(gpu),
         gb(diffusion),
         gb(files - diffusion),

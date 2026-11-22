@@ -156,6 +156,8 @@ pub struct Scheduler {
     runs: Vec<RunQueue>,
     /// Models given up on everywhere (failed warm-ups).
     broken: HashSet<ModelKey>,
+    /// Models of runs queued anyway ([`Self::force`]).
+    forced: HashSet<ModelKey>,
     /// Warm-ups failed in a row, by model (a server that crashes on it
     /// would otherwise be restarted and reloaded forever).
     warm_failures: HashMap<ModelKey, u32>,
@@ -184,6 +186,7 @@ impl Scheduler {
                 .collect(),
             runs: vec![],
             broken: HashSet::new(),
+            forced: HashSet::new(),
             warm_failures: HashMap::new(),
             next_ticket: 1,
             max_in_flight: 2,
@@ -233,8 +236,27 @@ impl Scheduler {
     }
 
     /// Why server `s` can't take `model`, if it can't: loading it failed
-    /// there, or its model list lacks a file.
+    /// there, or its model list lacks a file. A model queued anyway
+    /// ([`Self::force`]) that no server's list has goes to any server it
+    /// didn't fail to load on.
     pub fn why_not(&self, s: ServerIdx, model: &ModelKey) -> Option<String> {
+        let why = self.why_not_listed(s, model);
+        if why.is_some()
+            && self.forced.contains(model)
+            && !self.servers[s].failed.contains_key(model)
+            && (0..self.servers.len()).all(|i| self.why_not_listed(i, model).is_some())
+        {
+            return None;
+        }
+        why
+    }
+
+    /// Whether `model` was queued anyway ([`Self::force`]).
+    pub fn is_forced(&self, model: &ModelKey) -> bool {
+        self.forced.contains(model)
+    }
+
+    fn why_not_listed(&self, s: ServerIdx, model: &ModelKey) -> Option<String> {
         let srv = &self.servers[s];
         if srv.loaded.as_ref() == Some(model) {
             return None;
@@ -368,6 +390,12 @@ impl Scheduler {
         (dropped, in_flight)
     }
 
+    /// Has `model` sent to servers whatever their model lists say (a run
+    /// queued anyway: [`crate::model::Run::queued_anyway`]).
+    pub fn force(&mut self, model: ModelKey) {
+        self.forced.insert(model);
+    }
+
     /// Lets runs needing a model that failed to load try again.
     pub fn retry_model(&mut self, model: &ModelKey) {
         self.broken.remove(model);
@@ -442,6 +470,18 @@ impl Scheduler {
                 self.back_off(s, now);
             }
         }
+    }
+
+    /// A load dropped before it began: the server has what it had.
+    pub fn load_stopped(&mut self, s: ServerIdx) {
+        if matches!(self.servers[s].state, ServerState::Loading { .. }) {
+            self.servers[s].state = ServerState::Ready;
+        }
+    }
+
+    /// Whether a queued run has work for `model`.
+    pub fn wants(&self, model: &ModelKey) -> bool {
+        self.demand().contains(model)
     }
 
     /// A submitted seed ended. Unknown tickets (abandoned by a back-off) are
@@ -1004,6 +1044,23 @@ mod tests {
     }
 
     #[test]
+    fn a_load_dropped_for_a_stopped_run_leaves_the_server_as_it_was() {
+        let (mut s, now) = up(&[None]);
+        s.add_seeds(&run(0), model("a"), seeds(4));
+        assert_eq!(s.poll(now), [Action::Load { server: 0, model: model("a") }]);
+        assert!(s.wants(&model("a")));
+        s.cancel_run(&run(0));
+        assert!(!s.wants(&model("a")));
+        s.load_stopped(0);
+        assert_eq!(s.server_state(0), &ServerState::Ready);
+        assert_eq!(s.model_of(0), None);
+        assert!(s.poll(now).is_empty());
+        // queued again, it loads again
+        s.add_seeds(&run(1), model("a"), seeds(2));
+        assert_eq!(s.poll(now), [Action::Load { server: 0, model: model("a") }]);
+    }
+
+    #[test]
     fn a_helper_waits_for_the_first_load() {
         let (mut s, now) = up(&[None, None]);
         s.add_seeds(&run(0), model("a"), seeds(4));
@@ -1191,6 +1248,37 @@ mod tests {
         // a server that gets the file takes it
         s.set_loadable(1, Some(Loadable::files(["krea.safetensors".to_string()])));
         assert_eq!(s.poll(now), [Action::Load { server: 1, model: m }]);
+    }
+
+    #[test]
+    fn a_model_queued_anyway_goes_to_a_server_whatever_it_lists() {
+        // a KoboldCpp started elsewhere running another file, an sd-server without it
+        let (mut s, now) = up(&[None, None]);
+        s.set_loadable(0, Some(Loadable::Only(Some("/m/MiniMax-H3-Q4.gguf".into()))));
+        s.set_loadable(1, Some(Loadable::files(["other.gguf".to_string()])));
+        let m = with_file("h3", "diffusion_models/minimax_h3_image_pruned-Q4_K_S.gguf");
+        s.force(m.clone());
+        s.add_seeds(&run(0), m.clone(), seeds(1));
+        assert_eq!(s.poll(now), [Action::Load { server: 0, model: m.clone() }]);
+        assert!(s.stuck_runs().is_empty());
+        // one it failed to load on is still left out
+        s.loaded(0, LoadResult::Broken { still_loaded: None, why: "it runs no image model".into() }, now);
+        assert_eq!(s.why_not(0, &m).as_deref(), Some("it runs no image model"));
+        assert_eq!(s.poll(now), [Action::Load { server: 1, model: m.clone() }]);
+        s.loaded(1, LoadResult::Broken { still_loaded: None, why: "no".into() }, now);
+        assert_eq!(s.stuck_runs(), [&run(0)]);
+    }
+
+    #[test]
+    fn a_model_queued_anyway_still_prefers_a_server_listing_its_files() {
+        let (mut s, now) = up(&[None, None]);
+        s.set_loadable(0, Some(Loadable::files(["other.gguf".to_string()])));
+        s.set_loadable(1, Some(Loadable::files(["krea.safetensors".to_string()])));
+        let m = with_file("krea", "krea.safetensors");
+        s.force(m.clone());
+        s.add_seeds(&run(0), m.clone(), seeds(1));
+        assert_eq!(s.poll(now), [Action::Load { server: 1, model: m.clone() }]);
+        assert_eq!(s.why_not(0, &m).as_deref(), Some("it doesn't have krea.safetensors"));
     }
 
     #[test]

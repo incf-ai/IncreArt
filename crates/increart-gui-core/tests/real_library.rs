@@ -10,6 +10,7 @@
 //! Each Save writes one hidden edited copy (`input/edited/`), as in the app.
 //! Drafts, history and settings aren't written. The engine starts as it
 //! does once servers are up, but with none: nothing is generated.
+#![allow(clippy::disallowed_methods)] // fixtures on disk: no overlay here
 
 use std::time::{Duration, Instant};
 

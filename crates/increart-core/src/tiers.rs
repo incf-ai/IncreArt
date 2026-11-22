@@ -1,8 +1,10 @@
-//! KoboldCpp presets by VRAM (docs/vram-tiers.md): the shipped `.kcppt`
-//! templates (`kcppt/`, from the `tier_kcppt` example) are the
-//! settings; the setup wizard picks one per GPU by its memory, plans the
-//! servers and recipe from them, and downloads their model files.
+//! KoboldCpp presets by VRAM (docs/vram-tiers.md), for each image model the
+//! wizard sets up (a [`Family`]): the shipped `.kcppt` templates (`kcppt/`,
+//! from the `tier_kcppt` example) are the settings; the setup wizard picks
+//! one per GPU by its memory, plans the servers and recipe from them, and
+//! downloads their model files.
 
+use crate::vfs::PathExt;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -14,19 +16,65 @@ use crate::config::{RecipePreset, ServerConfig};
 use crate::kobold::{KoboldChat, KoboldRun, KoboldServer};
 use crate::pe::{GpuRuntime, PeDevice, PeRun, PeServer, PeStart};
 
-/// (card size in GB, template file name, its text).
-const TEMPLATES: [(u32, &str, &str); 5] = [
-    (8, "Qwen-Image-2.1-8GB.kcppt", include_str!("../kcppt/Qwen-Image-2.1-8GB.kcppt")),
-    (12, "Qwen-Image-2.1-12GB.kcppt", include_str!("../kcppt/Qwen-Image-2.1-12GB.kcppt")),
-    (16, "Qwen-Image-2.1-16GB.kcppt", include_str!("../kcppt/Qwen-Image-2.1-16GB.kcppt")),
-    (24, "Qwen-Image-2.1-24GB.kcppt", include_str!("../kcppt/Qwen-Image-2.1-24GB.kcppt")),
-    (32, "Qwen-Image-2.1-32GB.kcppt", include_str!("../kcppt/Qwen-Image-2.1-32GB.kcppt")),
+/// The image model a set of presets is for.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Family {
+    /// MiniMax-H3-Image (KoboldCpp 1.125 or later): the wizard's default.
+    #[default]
+    MinimaxH3,
+    QwenImage,
+}
+
+impl Family {
+    pub const ALL: [Family; 2] = [Family::MinimaxH3, Family::QwenImage];
+
+    /// "MiniMax-H3-Image".
+    pub fn label(self) -> &'static str {
+        match self {
+            Family::MinimaxH3 => "MiniMax-H3-Image",
+            Family::QwenImage => "Qwen-Image 2.1",
+        }
+    }
+
+    /// The KoboldCpp it needs, at least (`--version`).
+    pub fn min_kobold(self) -> Option<(u32, u32)> {
+        match self {
+            Family::MinimaxH3 => Some((1, 125)),
+            Family::QwenImage => None,
+        }
+    }
+}
+
+/// (model, card size in GB, template file name, its text).
+const TEMPLATES: [(Family, u32, &str, &str); 9] = [
+    (Family::MinimaxH3, 12, "MiniMax-H3-Image-12GB.kcppt", include_str!("../kcppt/MiniMax-H3-Image-12GB.kcppt")),
+    (Family::MinimaxH3, 16, "MiniMax-H3-Image-16GB.kcppt", include_str!("../kcppt/MiniMax-H3-Image-16GB.kcppt")),
+    (Family::MinimaxH3, 24, "MiniMax-H3-Image-24GB.kcppt", include_str!("../kcppt/MiniMax-H3-Image-24GB.kcppt")),
+    (Family::MinimaxH3, 32, "MiniMax-H3-Image-32GB.kcppt", include_str!("../kcppt/MiniMax-H3-Image-32GB.kcppt")),
+    (Family::QwenImage, 8, "Qwen-Image-2.1-8GB.kcppt", include_str!("../kcppt/Qwen-Image-2.1-8GB.kcppt")),
+    (Family::QwenImage, 12, "Qwen-Image-2.1-12GB.kcppt", include_str!("../kcppt/Qwen-Image-2.1-12GB.kcppt")),
+    (Family::QwenImage, 16, "Qwen-Image-2.1-16GB.kcppt", include_str!("../kcppt/Qwen-Image-2.1-16GB.kcppt")),
+    (Family::QwenImage, 24, "Qwen-Image-2.1-24GB.kcppt", include_str!("../kcppt/Qwen-Image-2.1-24GB.kcppt")),
+    (Family::QwenImage, 32, "Qwen-Image-2.1-32GB.kcppt", include_str!("../kcppt/Qwen-Image-2.1-32GB.kcppt")),
 ];
 
-/// docs/vram-tiers.md's measurements per card size: seconds per image,
-/// peak VRAM and pinned RAM (GiB).
-const MEASURED: [(u32, u32, f64, f64); 5] =
-    [(8, 364, 6.3, 12.0), (12, 208, 8.7, 10.0), (16, 210, 12.3, 13.5), (24, 215, 18.1, 13.5), (32, 209, 22.7, 13.5)];
+/// docs/vram-tiers.md's measurements per model and card size: seconds per
+/// image, peak VRAM and the system RAM its weights take, pinned or not
+/// (GiB, KoboldCpp's own [`SERVER_RAM_GIB`] aside).
+const MEASURED: [(Family, u32, u32, f64, f64); 9] = [
+    (Family::MinimaxH3, 12, 57, 8.3, 29.0),
+    (Family::MinimaxH3, 16, 65, 8.6, 39.0),
+    (Family::MinimaxH3, 24, 65, H3_24_PEAK, 39.0),
+    (Family::MinimaxH3, 32, 63, H3_32_PEAK, 39.0),
+    (Family::QwenImage, 8, 364, 6.3, 12.0),
+    (Family::QwenImage, 12, 208, 8.7, 10.0),
+    (Family::QwenImage, 16, 210, 12.3, 13.5),
+    (Family::QwenImage, 24, 215, 18.1, 13.5),
+    (Family::QwenImage, 32, 209, 22.7, 13.5),
+];
+// Measured with prompt enhance resident (see docs/vram-tiers.md).
+const H3_24_PEAK: f64 = 15.6;
+const H3_32_PEAK: f64 = 19.4;
 
 /// KoboldCpp's own RAM per server, beyond the pinned weights (GiB).
 const SERVER_RAM_GIB: f64 = 1.5;
@@ -40,6 +88,7 @@ const FIRST_PORT: u16 = 5001;
 /// One tier: a template's settings.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Tier {
+    pub family: Family,
     /// The card size it's for, in GB.
     pub gb: u32,
     pub file_name: &'static str,
@@ -53,16 +102,19 @@ pub struct Tier {
     pub mmproj_url: String,
     /// The text encoder on the GPU (else the CPU).
     pub clip_on_gpu: bool,
+    /// The VAE on the GPU (else the CPU).
+    pub vae_on_gpu: bool,
     /// `sdvramlimit` in MB (0: none).
     pub vram_limit_mb: u32,
     pub context: u32,
     /// The chat model and the image model take turns.
     pub swap: bool,
     /// Measured (docs/vram-tiers.md): seconds per image, the card's peak
-    /// VRAM rise and the pinned RAM, in GiB.
+    /// VRAM rise and the system RAM the weights take (offloaded ones
+    /// pinned, ones run on the CPU not), in GiB.
     pub per_image_s: u32,
     pub peak_vram_gib: f64,
-    pub pinned_ram_gib: f64,
+    pub ram_gib_used: f64,
     offload: bool,
     flash_attention: bool,
     tiled_vae: u32,
@@ -70,12 +122,13 @@ pub struct Tier {
 
 /// `None` if the template isn't JSON or the tier wasn't measured (neither
 /// happens: `the_templates_as_tiers` reads every one).
-fn parse(gb: u32, file_name: &'static str, text: &'static str) -> Option<Tier> {
+fn parse(family: Family, gb: u32, file_name: &'static str, text: &'static str) -> Option<Tier> {
     let v: Value = serde_json::from_str(text).ok()?;
     let s = |k: &str| v[k].as_str().unwrap_or_default().to_string();
     let n = |k: &str| v[k].as_i64().unwrap_or(0);
-    let (_, per_image_s, peak_vram_gib, pinned_ram_gib) = *MEASURED.iter().find(|m| m.0 == gb)?;
+    let (.., per_image_s, peak_vram_gib, ram_gib_used) = *MEASURED.iter().find(|m| m.0 == family && m.1 == gb)?;
     Some(Tier {
+        family,
         gb,
         file_name,
         text,
@@ -86,32 +139,34 @@ fn parse(gb: u32, file_name: &'static str, text: &'static str) -> Option<Tier> {
         chat_url: s("model_param"),
         mmproj_url: s("mmproj"),
         clip_on_gpu: n("sdclipdevice") != -2,
+        vae_on_gpu: n("sdvaedevice") != -2,
         vram_limit_mb: n("sdvramlimit").max(0) as u32,
         context: n("contextsize").max(0) as u32,
         swap: v["autoswapmode"].as_bool().unwrap_or(false),
         per_image_s,
         peak_vram_gib,
-        pinned_ram_gib,
+        ram_gib_used,
         offload: v["sdoffloadcpu"].as_bool().unwrap_or(false),
         flash_attention: v["sdflashattention"].as_bool().unwrap_or(false),
         tiled_vae: n("sdtiledvae").max(0) as u32,
     })
 }
 
-/// Every tier, smallest card first.
-pub fn tiers() -> Vec<Tier> {
-    TEMPLATES.iter().filter_map(|(gb, f, t)| parse(*gb, f, t)).collect()
+/// A model's tiers, smallest card first.
+pub fn tiers(family: Family) -> Vec<Tier> {
+    TEMPLATES.iter().filter(|t| t.0 == family).filter_map(|(m, gb, f, t)| parse(*m, *gb, f, t)).collect()
 }
 
-/// The biggest tier a card with `vram_gib` takes (cards report a little
-/// under their size: a "32 GB" one 29.9–31.9 GiB); None under 8 GB.
-pub fn tier_for(vram_gib: f64) -> Option<Tier> {
-    tiers().into_iter().rev().find(|t| vram_gib >= needs_gib(t.gb))
+/// The biggest tier of a model a card with `vram_gib` takes (cards report
+/// a little under their size: a "32 GB" one 29.9–31.9 GiB); None under
+/// its smallest (8 GB for Qwen-Image, 12 for MiniMax-H3).
+pub fn tier_for(family: Family, vram_gib: f64) -> Option<Tier> {
+    tiers(family).into_iter().rev().find(|t| vram_gib >= needs_gib(t.gb))
 }
 
-/// The tier for a card size (8, 12, …).
-pub fn tier(gb: u32) -> Option<Tier> {
-    tiers().into_iter().find(|t| t.gb == gb)
+/// A model's tier for a card size (8, 12, …).
+pub fn tier(family: Family, gb: u32) -> Option<Tier> {
+    tiers(family).into_iter().find(|t| t.gb == gb)
 }
 
 /// A card takes a tier from this much memory: 90% of its size.
@@ -138,7 +193,7 @@ pub fn total_ram_gib() -> Option<f64> {
 /// (total, available): `/proc/meminfo`'s `MemTotal` and `MemAvailable`.
 #[cfg(target_os = "linux")]
 fn ram_gib() -> Option<(f64, f64)> {
-    let text = std::fs::read_to_string("/proc/meminfo").ok()?;
+    let text = crate::vfs::read_to_string("/proc/meminfo").ok()?;
     let kb = |key: &str| -> Option<f64> {
         text.lines().find_map(|l| l.strip_prefix(key))?.split_whitespace().next()?.parse().ok()
     };
@@ -217,7 +272,7 @@ impl Tier {
         if self.tiled_vae > 0 {
             v.extend(["--sdtiledvae".into(), self.tiled_vae.to_string()]);
         }
-        v.extend(["--sdvaedevice".into(), "main".into()]);
+        v.extend(["--sdvaedevice".into(), if self.vae_on_gpu { "main" } else { "CPU" }.into()]);
         v.extend(["--sdclipdevice".into(), if self.clip_on_gpu { "main" } else { "CPU" }.into()]);
         if self.vram_limit_mb > 0 {
             v.extend(["--sdvramlimit".into(), self.vram_limit_mb.to_string()]);
@@ -227,12 +282,19 @@ impl Tier {
 
     /// One line for the wizard: "Q8_0, prompt enhance alongside".
     pub fn describe(&self, with_chat: bool) -> String {
-        let mut parts = vec![format!("Qwen-Image {}", self.quant())];
+        let name = match self.family {
+            Family::MinimaxH3 => "MiniMax-H3",
+            Family::QwenImage => "Qwen-Image",
+        };
+        let mut parts = vec![format!("{name} {}", self.quant())];
         if self.vram_limit_mb > 0 {
             parts.push(format!("capped at {} GB", self.vram_limit_mb / 1024));
         }
-        if !self.clip_on_gpu {
-            parts.push("text encoder on the CPU".into());
+        match (self.clip_on_gpu, self.vae_on_gpu) {
+            (false, false) => parts.push("text encoder and VAE on the CPU".into()),
+            (false, true) => parts.push("text encoder on the CPU".into()),
+            (true, false) => parts.push("VAE on the CPU".into()),
+            (true, true) => {}
         }
         if with_chat {
             parts.push(if self.swap { "prompt enhance swapped in" } else { "prompt enhance alongside" }.into());
@@ -457,7 +519,7 @@ impl Plan {
     }
 }
 
-/// Plans the servers for the GPUs ticked (`gpus`: each with the memory to
+/// Plans the servers for `family`'s model on the GPUs ticked (`gpus`: each with the memory to
 /// plan for, and the tier the user chose, by card size; None: the biggest
 /// it holds): an image server per card as its tier says, prompt enhance
 /// beside (or swapped with) the image model on the biggest card, or on
@@ -466,7 +528,9 @@ impl Plan {
 /// One quantization for all, the smallest tier's. `models_dir`: the folder
 /// the files go in (absolute); `ram_gib`: the RAM available, for the
 /// pinned weights.
+#[allow(clippy::too_many_arguments)]
 pub fn plan(
+    family: Family,
     gpus: &[(Gpu, Option<u32>)],
     layout: Layout,
     pe_gpus: &[u32],
@@ -502,17 +566,23 @@ pub fn plan(
     let mut cards: Vec<(Gpu, Tier)> = vec![];
     for (g, chosen) in &gpus {
         let with_chat = pe_with.contains(&g.number);
-        let auto = tier_for(g.vram_gib);
-        let mut t = match chosen.and_then(tier) {
+        let auto = tier_for(family, g.vram_gib);
+        let mut t = match chosen.and_then(|gb| tier(family, gb)) {
             Some(t) => t,
             None => auto.clone().ok_or_else(|| {
-                format!("GPU {} ({:.0} GB) has less than the 8 GB the smallest preset needs", g.number, g.vram_gib)
+                let least = tiers(family).first().map_or(0, |t| t.gb);
+                format!(
+                    "GPU {} ({:.0} GB) has less than the {least} GB {}'s smallest preset needs",
+                    g.number,
+                    g.vram_gib,
+                    family.label()
+                )
             })?,
         };
         if runtime == GpuRuntime::Metal {
             // the GPU's memory is the RAM: offloading only copies the weights
             t.offload = false;
-            t.pinned_ram_gib = 0.0;
+            t.ram_gib_used = 0.0;
         }
         notes.push(Note::Plan(format!("GPU {} ({} GB preset): {}", g.number, t.gb, t.describe(with_chat))));
         notes.push(Note::Why(why(g, &t, auto.as_ref(), chosen.is_some(), with_chat)));
@@ -599,15 +669,15 @@ pub fn plan(
             quant_tier.quant()
         )));
     }
-    let ram = cards.iter().map(|(_, t)| t.pinned_ram_gib).sum::<f64>() + SERVER_RAM_GIB * servers.len() as f64;
+    let ram = cards.iter().map(|(_, t)| t.ram_gib_used).sum::<f64>() + SERVER_RAM_GIB * servers.len() as f64;
     notes.extend((runtime != GpuRuntime::Metal).then(|| match ram_gib {
         Some(free) if ram > free => Note::Warn(format!(
-            "Needs about {ram:.0} GiB of RAM for the offloaded weights; {free:.0} GiB is available now."
+            "Needs about {ram:.0} GiB of system RAM for the weights kept there and KoboldCpp; {free:.0} GiB is available now."
         )),
         Some(free) => Note::Why(format!(
-            "Needs about {ram:.0} GiB of RAM for the offloaded weights; {free:.0} GiB is available now."
+            "Needs about {ram:.0} GiB of system RAM for the weights kept there and KoboldCpp; {free:.0} GiB is available now."
         )),
-        None => Note::Why(format!("Needs about {ram:.0} GiB of RAM for the offloaded weights.")),
+        None => Note::Why(format!("Needs about {ram:.0} GiB of system RAM for the weights kept there and KoboldCpp.")),
     }));
     let files = [
         ("diffusion_model", &quant_tier.image_url),
@@ -615,18 +685,29 @@ pub fn plan(
         ("clip_l", &first.clip_url),
         ("vae", &first.vae_url),
     ];
-    let recipe = RecipePreset {
-        name: format!("Qwen-Image 2.1 GGUF {} (CFG 2, refs)", quant_tier.quant()),
-        recipe: "qwen-image-21".into(),
-        files: files.iter().map(|(slot, url)| (slot.to_string(), local(url))).collect(),
-        steps: 20,
-        cfg: 2.0,
-        ..Default::default()
+    let files = files.iter().filter(|(_, url)| !url.is_empty()).map(|(slot, url)| (slot.to_string(), local(url)));
+    let recipe = match family {
+        Family::QwenImage => RecipePreset {
+            name: format!("Qwen-Image 2.1 GGUF {} (CFG 2, refs)", quant_tier.quant()),
+            recipe: "qwen-image-21".into(),
+            files: files.collect(),
+            steps: 20,
+            cfg: 2.0,
+            ..Default::default()
+        },
+        Family::MinimaxH3 => RecipePreset {
+            name: format!("MiniMax-H3-Image GGUF {}", quant_tier.quant()),
+            recipe: crate::request::MINIMAX_H3_IMAGE[0].into(),
+            files: files.collect(),
+            steps: 6,
+            cfg: 1.0,
+            ..Default::default()
+        },
     };
     let mut downloads: Vec<Download> = vec![];
     let urls =
         [&quant_tier.image_url, &first.llm_url, &first.clip_url, &first.vae_url, &first.chat_url, &first.mmproj_url];
-    for url in urls {
+    for url in urls.into_iter().filter(|u| !u.is_empty()) {
         if !downloads.iter().any(|d| d.url == *url) {
             downloads.push(Download { url: url.clone(), file: local(url) });
         }
@@ -678,7 +759,7 @@ fn why(g: &Gpu, t: &Tier, auto: Option<&Tier>, chosen: bool, with_chat: bool) ->
     let n = g.number;
     match auto {
         Some(a) if !chosen || a.gb == t.gb => {
-            let bigger = tiers().into_iter().find(|b| b.gb > a.gb);
+            let bigger = tiers(t.family).into_iter().find(|b| b.gb > a.gb);
             let next = match bigger {
                 Some(b) => format!("; the {} GB preset needs {:.1} GB", b.gb, needs_gib(b.gb)),
                 None => ", the biggest preset".into(),
@@ -709,16 +790,27 @@ fn why(g: &Gpu, t: &Tier, auto: Option<&Tier>, chosen: bool, with_chat: bool) ->
 /// The chat model and its projector the wizard downloads, if they're in
 /// one of `model_dirs` (under `koboldcpp/`).
 pub fn chat_files(model_dirs: &[String]) -> Option<(String, String)> {
-    let t = tiers().into_iter().next()?;
+    let t = tiers(Family::QwenImage).into_iter().next()?;
     model_dirs.iter().find_map(|d| {
         let at = |url: &str| Path::new(d).join(MODEL_SUBDIR).join(file_of(url));
         let (model, mmproj) = (at(&t.chat_url), at(&t.mmproj_url));
-        (model.exists() && mmproj.exists())
+        (model.vfs_exists() && mmproj.vfs_exists())
             .then(|| (model.to_string_lossy().into_owned(), mmproj.to_string_lossy().into_owned()))
     })
 }
 
 /// Where model files may already be: the model folders, and Hugging
+/// Why KoboldCpp `version` (its `--version`: "1.125.1") can't run
+/// `family`'s model, if it can't: older than the first that has it.
+pub fn kobold_too_old(family: Family, version: &str) -> Option<String> {
+    let (major, minor) = family.min_kobold()?;
+    let mut parts = version.trim().split(['.', '-', ' ']).map(|p| p.parse::<u32>().ok());
+    let have = (parts.next().flatten()?, parts.next().flatten().unwrap_or(0));
+    (have < (major, minor)).then(|| {
+        format!("{} needs KoboldCpp {major}.{minor} or later; this one is {}.", family.label(), version.trim())
+    })
+}
+
 /// Face's (`$HF_HOME`, else `~/.cache/huggingface`).
 pub fn search_dirs(model_dirs: &[String]) -> Vec<PathBuf> {
     let mut dirs: Vec<PathBuf> = model_dirs.iter().filter(|d| !d.trim().is_empty()).map(PathBuf::from).collect();
@@ -733,13 +825,13 @@ pub fn search_dirs(model_dirs: &[String]) -> Vec<PathBuf> {
 /// `hub/models--…/snapshots/…/` is four); folder links not followed.
 pub fn find_named(name: &str, dirs: &[PathBuf]) -> Vec<PathBuf> {
     fn walk(dir: &Path, name: &str, depth: u32, out: &mut Vec<PathBuf>) {
-        let Ok(list) = std::fs::read_dir(dir) else { return };
+        let Ok(list) = crate::vfs::read_dir(dir) else { return };
         for e in list.flatten() {
             let Ok(kind) = e.file_type() else { continue };
             let p = e.path();
             if kind.is_dir() && depth > 0 && !matches!(e.file_name().to_str(), Some("blobs" | "xet" | ".git")) {
                 walk(&p, name, depth - 1, out);
-            } else if !kind.is_dir() && e.file_name() == name && p.is_file() {
+            } else if !kind.is_dir() && e.file_name() == name && p.vfs_is_file() {
                 out.push(p);
             }
         }
@@ -767,19 +859,19 @@ pub fn reusable(url: &str, dirs: &[PathBuf], size: impl FnOnce() -> Option<u64>)
         return None;
     }
     let size = size();
-    found.into_iter().find(|p| size.is_none_or(|s| std::fs::metadata(p).is_ok_and(|m| m.len() == s)))
+    found.into_iter().find(|p| size.is_none_or(|s| crate::vfs::metadata(p).is_ok_and(|m| m.len() == s)))
 }
 
 /// `dest` made a link to `src` (its real path).
 pub fn link(src: &Path, dest: &Path) -> Result<(), String> {
-    let src = src.canonicalize().map_err(|e| format!("{}: {e}", src.display()))?;
+    let src = src.vfs_canonicalize().map_err(|e| format!("{}: {e}", src.display()))?;
     if let Some(dir) = dest.parent() {
-        std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+        crate::vfs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     }
     #[cfg(unix)]
-    let r = std::os::unix::fs::symlink(&src, dest);
+    let r = crate::vfs::symlink(&src, dest);
     #[cfg(windows)]
-    let r = std::os::windows::fs::symlink_file(&src, dest).or_else(|_| std::fs::hard_link(&src, dest));
+    let r = std::os::windows::fs::symlink_file(&src, dest).or_else(|_| crate::vfs::hard_link(&src, dest));
     r.map_err(|e| format!("{}: {e}", dest.display()))
 }
 
@@ -795,11 +887,11 @@ pub fn download(
     cancel: &AtomicBool,
     mut progress: impl FnMut(u64, Option<u64>),
 ) -> Result<(), String> {
-    if dest.is_file() {
+    if dest.vfs_is_file() {
         return Ok(());
     }
     if let Some(dir) = dest.parent() {
-        std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+        crate::vfs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     }
     let stall = crate::config::timeouts().download();
     let agent: ureq::Agent = ureq::Agent::config_builder()
@@ -809,7 +901,7 @@ pub fn download(
         .build()
         .into();
     let part = PathBuf::from(format!("{}.part", dest.display()));
-    let had = std::fs::metadata(&part).map_or(0, |m| m.len());
+    let had = crate::vfs::metadata(&part).map_or(0, |m| m.len());
     let mut rq = agent.get(url);
     if had > 0 {
         rq = rq.header("Range", format!("bytes={had}-"));
@@ -821,13 +913,13 @@ pub fn download(
     // carried on (206), or from the start (200: no ranges here)
     let (mut out, mut done, total) = match status {
         206 if had > 0 => {
-            let out = std::fs::OpenOptions::new().append(true).open(&part);
+            let out = crate::vfs::OpenOptions::new().append(true).open(&part);
             (out.map_err(|e| format!("{}: {e}", part.display()))?, had, length.map(|n| n + had))
         }
-        200..=299 => (std::fs::File::create(&part).map_err(|e| format!("{}: {e}", part.display()))?, 0, length),
+        200..=299 => (crate::vfs::File::create(&part).map_err(|e| format!("{}: {e}", part.display()))?, 0, length),
         // the .part is all of it already
         416 if had > 0 => {
-            return std::fs::rename(&part, dest).map_err(|e| format!("{}: {e}", dest.display()));
+            return crate::vfs::rename(&part, dest).map_err(|e| format!("{}: {e}", dest.display()));
         }
         _ => return Err(format!("{url}: HTTP {status}")),
     };
@@ -855,7 +947,7 @@ pub fn download(
         return Err(format!("{url}: got {done} of {t} bytes"));
     }
     out.sync_all().map_err(|e| e.to_string())?;
-    std::fs::rename(&part, dest).map_err(|e| format!("{}: {e}", dest.display()))
+    crate::vfs::rename(&part, dest).map_err(|e| format!("{}: {e}", dest.display()))
 }
 
 #[cfg(test)]
@@ -864,7 +956,7 @@ mod tests {
 
     #[test]
     fn the_templates_as_tiers() {
-        let t = tiers();
+        let t = tiers(Family::QwenImage);
         assert_eq!(t.iter().map(|t| t.gb).collect::<Vec<_>>(), [8, 12, 16, 24, 32]);
         let small = &t[0];
         assert_eq!((small.quant(), small.clip_on_gpu, small.vram_limit_mb, small.swap), ("Q4_K", false, 4096, true));
@@ -879,9 +971,72 @@ mod tests {
         assert!(t.iter().all(|t| serde_json::from_str::<Value>(t.text).unwrap()["launch"] == false));
     }
 
+    /// Settings the 12 GB tier changes from the official template's
+    /// (docs/vram-tiers.md says why).
+    const H3_12_CHANGED: &[&str] = &["sdclipdevice", "sdvaedevice", "sdoffloadcpu", "sdflashattention", "sdvramlimit"];
+
+    #[test]
+    fn minimax_h3s_templates_the_official_12_gb_one_and_bigger() {
+        let t = tiers(Family::MinimaxH3);
+        assert_eq!(t.iter().map(|t| t.gb).collect::<Vec<_>>(), [12, 16, 24, 32]);
+        // KoboldCpp's own Minimax-H3-Image.kcppt, with prompt enhance
+        let official: Value = serde_json::from_str(include_str!("../kcppt/official/Minimax-H3-Image.kcppt")).unwrap();
+        let twelve: Value = serde_json::from_str(t[0].text).unwrap();
+        let pe = ["model_param", "mmproj", "jinja", "gpulayers", "contextsize", "admin", "routermode", "autoswapmode"];
+        for (k, v) in official.as_object().unwrap() {
+            if !pe.contains(&k.as_str()) && !H3_12_CHANGED.contains(&k.as_str()) {
+                assert_eq!(&twelve[k], v, "{k}");
+            }
+        }
+        assert!(t.iter().all(|t| t.llm_url.ends_with("qwen3vl_32b_minimax_h3-Q4_K_M.gguf") && t.clip_url.is_empty()));
+        assert!(t.iter().all(|t| t.chat_url.ends_with("Qwen3VL-8B-Instruct-Q4_K_M.gguf") && t.chat_url != t.llm_url));
+        assert!(t.iter().all(|t| serde_json::from_str::<Value>(t.text).unwrap()["launch"] == false));
+        assert!(t.iter().all(|t| t.per_image_s > 0 && t.peak_vram_gib > 0.0), "measured");
+        let gb = |v: f64| tier_for(Family::MinimaxH3, v).map(|t| t.gb);
+        assert_eq!([gb(31.86), gb(23.9), gb(15.9), gb(11.9), gb(10.0)], [Some(32), Some(24), Some(16), Some(12), None]);
+    }
+
+    #[test]
+    fn minimax_h3_needs_koboldcpp_1_125() {
+        assert!(kobold_too_old(Family::MinimaxH3, "1.124.2").unwrap().contains("1.125 or later"));
+        assert_eq!(kobold_too_old(Family::MinimaxH3, "1.125.1"), None);
+        assert_eq!(kobold_too_old(Family::MinimaxH3, "2.0"), None);
+        assert_eq!(kobold_too_old(Family::QwenImage, "1.100"), None);
+        // a version it can't read isn't refused
+        assert_eq!(kobold_too_old(Family::MinimaxH3, "unknown"), None);
+    }
+
+    #[test]
+    fn a_minimax_h3_plan_downloads_its_three_files_and_the_chat_model() {
+        let gpus = [(gpu(1, 11.9), None)];
+        let p =
+            plan(Family::MinimaxH3, &gpus, Layout::ImagePerCard, &[], GpuRuntime::Vulkan, "k", Path::new("/m"), None)
+                .unwrap();
+        assert_eq!(p.recipe.name, "MiniMax-H3-Image GGUF Q4_K_S");
+        assert_eq!(p.recipe.files["diffusion_model"], "koboldcpp/minimax_h3_image_pruned-Q4_K_S.gguf");
+        assert!(!p.recipe.files.contains_key("clip_l"));
+        let files: Vec<&str> = p.downloads.iter().map(|d| d.file.as_str()).collect();
+        assert_eq!(
+            files,
+            [
+                "koboldcpp/minimax_h3_image_pruned-Q4_K_S.gguf",
+                "koboldcpp/qwen3vl_32b_minimax_h3-Q4_K_M.gguf",
+                "koboldcpp/minimax_h3_image_vae_fp16.safetensors",
+                "koboldcpp/Qwen3VL-8B-Instruct-Q4_K_M.gguf",
+                "koboldcpp/mmproj-Qwen3VL-8B-Instruct-Q8_0.gguf"
+            ]
+        );
+        let [ServerConfig::Kobold(k)] = &p.servers[..] else { panic!("{:?}", p.servers) };
+        assert!(k.chat.is_some() && k.swap, "prompt enhance swapped in");
+        let small = [(gpu(1, 7.98), None)];
+        let e =
+            plan(Family::MinimaxH3, &small, Layout::ImagePerCard, &[], GpuRuntime::Vulkan, "k", Path::new("/m"), None);
+        assert!(e.unwrap_err().contains("12 GB MiniMax-H3-Image's smallest preset needs"));
+    }
+
     #[test]
     fn a_card_takes_the_biggest_tier_it_holds() {
-        let gb = |v: f64| tier_for(v).map(|t| t.gb);
+        let gb = |v: f64| tier_for(Family::QwenImage, v).map(|t| t.gb);
         assert_eq!(
             [gb(31.86), gb(29.86), gb(23.9), gb(15.9), gb(11.9), gb(7.98), gb(6.0)],
             [Some(32), Some(32), Some(24), Some(16), Some(12), Some(8), None]
@@ -923,7 +1078,7 @@ mod tests {
     /// Each card's preset by its memory.
     fn plan_auto(gpus: &[Gpu], layout: Layout) -> Result<Plan, String> {
         let gpus: Vec<_> = gpus.iter().map(|g| (g.clone(), None)).collect();
-        plan(&gpus, layout, &[], GpuRuntime::Vulkan, "kcpp", Path::new("/m"), None)
+        plan(Family::QwenImage, &gpus, layout, &[], GpuRuntime::Vulkan, "kcpp", Path::new("/m"), None)
     }
 
     fn notes(p: &Plan) -> String {
@@ -983,7 +1138,9 @@ mod tests {
     #[test]
     fn two_equal_cards_two_images_and_prompt_enhance_where_asked() {
         let gpus = [(gpu(1, 31.86), None), (gpu(2, 31.86), None)];
-        let at = |layout, pe: &[u32]| plan(&gpus, layout, pe, GpuRuntime::Vulkan, "k", Path::new("/m"), None).unwrap();
+        let at = |layout, pe: &[u32]| {
+            plan(Family::QwenImage, &gpus, layout, pe, GpuRuntime::Vulkan, "k", Path::new("/m"), None).unwrap()
+        };
         let both = at(Layout::ImagePerCard, &[]);
         assert_eq!(both.summary, "2 images at a time; prompt enhance always loaded on GPU 1.");
         assert_eq!(both.cards[0].role, Role::ImagesAndPe { swap: false });
@@ -1001,8 +1158,16 @@ mod tests {
         assert_eq!(both_pe.summary, "2 images at a time; prompt enhance always loaded on GPU 1 and GPU 2.");
         let chats = both_pe.servers.iter().filter(|s| matches!(s, ServerConfig::Kobold(k) if k.chat.is_some()));
         assert_eq!(chats.count(), 2);
-        let rocm =
-            plan(&gpus, Layout::ImagePerCard, &[], GpuRuntime::Rocm, "/k/koboldcpp-nocuda", Path::new("/m"), None);
+        let rocm = plan(
+            Family::QwenImage,
+            &gpus,
+            Layout::ImagePerCard,
+            &[],
+            GpuRuntime::Rocm,
+            "/k/koboldcpp-nocuda",
+            Path::new("/m"),
+            None,
+        );
         let rocm = rocm.unwrap();
         assert!(notes(&rocm).contains("Vulkan only"), "{}", notes(&rocm));
         let devices: Vec<String> = rocm
@@ -1015,19 +1180,30 @@ mod tests {
             .collect();
         assert_eq!(devices, ["ROCm1", "ROCm2"]);
         assert!(
-            plan(&gpus, Layout::PeOwnCard, &[1, 2], GpuRuntime::Vulkan, "k", Path::new("/m"), None)
+            plan(Family::QwenImage, &gpus, Layout::PeOwnCard, &[1, 2], GpuRuntime::Vulkan, "k", Path::new("/m"), None)
                 .unwrap_err()
                 .contains("Leave a GPU")
         );
         // three cards, two of them prompt enhance only
         let three = [(gpu(1, 31.9), None), (gpu(2, 15.9), None), (gpu(3, 15.9), None)];
-        let own = plan(&three, Layout::PeOwnCard, &[2, 3], GpuRuntime::Vulkan, "k", Path::new("/m"), None).unwrap();
+        let own =
+            plan(Family::QwenImage, &three, Layout::PeOwnCard, &[2, 3], GpuRuntime::Vulkan, "k", Path::new("/m"), None)
+                .unwrap();
         assert_eq!(own.summary, "1 image at a time; prompt enhance always loaded on GPU 2 and GPU 3.");
         let ports: Vec<_> = own.servers.iter().map(|s| s.base_url()).collect();
         assert_eq!(ports, ["http://127.0.0.1:5001", "http://127.0.0.1:5002", "http://127.0.0.1:5003"]);
         // a swapping one beside one that isn't: warned it's left out
-        let mixed =
-            plan(&three, Layout::ImagePerCard, &[1, 2], GpuRuntime::Vulkan, "k", Path::new("/m"), None).unwrap();
+        let mixed = plan(
+            Family::QwenImage,
+            &three,
+            Layout::ImagePerCard,
+            &[1, 2],
+            GpuRuntime::Vulkan,
+            "k",
+            Path::new("/m"),
+            None,
+        )
+        .unwrap();
         assert!(
             notes(&mixed).contains("GPU 2: its preset swaps, so prompt enhance leaves it out"),
             "{}",
@@ -1035,9 +1211,17 @@ mod tests {
         );
         assert_eq!(mixed.summary, "3 images at a time; prompt enhance always loaded on GPU 1.");
         // a swapping tier says so
-        let small =
-            plan(&[(gpu(1, 11.9), None)], Layout::PeOwnCard, &[9], GpuRuntime::Vulkan, "k", Path::new("/m"), None)
-                .unwrap();
+        let small = plan(
+            Family::QwenImage,
+            &[(gpu(1, 11.9), None)],
+            Layout::PeOwnCard,
+            &[9],
+            GpuRuntime::Vulkan,
+            "k",
+            Path::new("/m"),
+            None,
+        )
+        .unwrap();
         assert_eq!(small.summary, "1 image at a time; prompt enhance swaps with images on GPU 1.");
     }
 
@@ -1051,13 +1235,21 @@ mod tests {
         assert_eq!(parse_vm_stat(text), Some(4.0));
         assert_eq!(apple_gpu(32.0).vram_gib.round(), 21.0);
         assert_eq!(apple_gpu(64.0).vram_gib, 48.0);
-        let mac =
-            plan(&[(apple_gpu(64.0), None)], Layout::ImagePerCard, &[], GpuRuntime::Metal, "k", Path::new("/m"), None)
-                .unwrap();
+        let mac = plan(
+            Family::QwenImage,
+            &[(apple_gpu(64.0), None)],
+            Layout::ImagePerCard,
+            &[],
+            GpuRuntime::Metal,
+            "k",
+            Path::new("/m"),
+            None,
+        )
+        .unwrap();
         let ServerConfig::Kobold(k) = &mac.servers[0] else { panic!() };
         let KoboldRun::Start { args, .. } = &k.run else { panic!() };
         assert!(!args.contains(&"--sdoffloadcpu".to_string()), "{args:?}");
-        assert!(!notes(&mac).contains("offloaded weights"), "{}", notes(&mac));
+        assert!(!notes(&mac).contains("system RAM"), "{}", notes(&mac));
     }
 
     #[test]
@@ -1070,7 +1262,16 @@ mod tests {
         assert!(top.contains("the biggest preset"), "{top}");
 
         let chose = |vram, gb, ram| {
-            plan(&[(gpu(1, vram), Some(gb))], Layout::PeOwnCard, &[], GpuRuntime::Vulkan, "k", Path::new("/m"), ram)
+            plan(
+                Family::QwenImage,
+                &[(gpu(1, vram), Some(gb))],
+                Layout::PeOwnCard,
+                &[],
+                GpuRuntime::Vulkan,
+                "k",
+                Path::new("/m"),
+                ram,
+            )
         };
         // smaller: said, and that prompt enhance now swaps
         let small = chose(23.98, 16, Some(100.0)).unwrap();
@@ -1084,8 +1285,8 @@ mod tests {
         let tiny = chose(6.0, 8, None).unwrap();
         assert!(notes(&tiny).contains("under every preset") && notes(&tiny).contains("Warn("));
         // the pinned weights against the RAM
-        assert!(notes(&chose(31.9, 32, Some(100.0)).unwrap()).contains("Why(\"Needs about 15 GiB of RAM"));
-        assert!(notes(&chose(31.9, 32, Some(8.0)).unwrap()).contains("Warn(\"Needs about 15 GiB of RAM"));
+        assert!(notes(&chose(31.9, 32, Some(100.0)).unwrap()).contains("Why(\"Needs about 15 GiB of system RAM"));
+        assert!(notes(&chose(31.9, 32, Some(8.0)).unwrap()).contains("Warn(\"Needs about 15 GiB of system RAM"));
     }
 
     #[test]
@@ -1101,10 +1302,10 @@ mod tests {
         let dest = dir.path().join("koboldcpp/f.gguf");
         let mut seen = vec![];
         download(&url, &dest, &AtomicBool::new(false), |d, t| seen.push((d, t))).unwrap();
-        assert_eq!(std::fs::metadata(&dest).unwrap().len(), 3 << 20);
+        assert_eq!(crate::vfs::metadata(&dest).unwrap().len(), 3 << 20);
         // (tiny_http sends it chunked: no length)
         assert_eq!(seen.last().map(|s| s.0), Some(3 << 20));
-        assert!(!dir.path().join("koboldcpp/f.gguf.part").exists());
+        assert!(!dir.path().join("koboldcpp/f.gguf.part").vfs_exists());
         // there already: not fetched again (the server is gone)
         download(&url, &dest, &AtomicBool::new(false), |_, _| panic!("fetched")).unwrap();
     }
@@ -1134,26 +1335,26 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let dest = dir.path().join("f.gguf");
         let part = dir.path().join("f.gguf.part");
-        std::fs::write(&part, &whole[..1 << 20]).unwrap();
+        crate::vfs::write(&part, &whole[..1 << 20]).unwrap();
         let mut seen = vec![];
         download(&url, &dest, &AtomicBool::new(false), |d, _| seen.push(d)).unwrap();
         assert_eq!(seen.first(), Some(&(1 << 20)), "from where it stopped");
-        assert!(std::fs::read(&dest).unwrap() == whole && !part.exists());
+        assert!(crate::vfs::read(&dest).unwrap() == whole && !part.vfs_exists());
         // no ranges: from the start, not appended
-        std::fs::remove_file(&dest).unwrap();
-        std::fs::write(&part, &whole[..1 << 20]).unwrap();
+        crate::vfs::remove_file(&dest).unwrap();
+        crate::vfs::write(&part, &whole[..1 << 20]).unwrap();
         download(&url, &dest, &AtomicBool::new(false), |_, _| {}).unwrap();
-        assert!(std::fs::read(&dest).unwrap() == whole);
+        assert!(crate::vfs::read(&dest).unwrap() == whole);
     }
 
     #[test]
     fn files_already_downloaded_are_found_by_name_and_size() {
         let t = tempfile::tempdir().unwrap();
         let snap = t.path().join("hf/hub/models--Qwen--X/snapshots/abc");
-        std::fs::create_dir_all(&snap).unwrap();
-        std::fs::write(snap.join("m.gguf"), [0u8; 10]).unwrap();
-        std::fs::create_dir_all(t.path().join("hf/hub/models--Qwen--X/blobs")).unwrap();
-        std::fs::write(t.path().join("hf/hub/models--Qwen--X/blobs/m.gguf"), [0u8; 10]).unwrap();
+        crate::vfs::create_dir_all(&snap).unwrap();
+        crate::vfs::write(snap.join("m.gguf"), [0u8; 10]).unwrap();
+        crate::vfs::create_dir_all(t.path().join("hf/hub/models--Qwen--X/blobs")).unwrap();
+        crate::vfs::write(t.path().join("hf/hub/models--Qwen--X/blobs/m.gguf"), [0u8; 10]).unwrap();
         let dirs = [t.path().join("models"), t.path().join("hf")];
         let url = "https://h/x/resolve/main/m.gguf";
         assert_eq!(reusable(url, &dirs, || Some(10)), Some(snap.join("m.gguf")), "not the blobs");
@@ -1162,6 +1363,6 @@ mod tests {
         assert_eq!(reusable("https://h/other.gguf", &dirs, || panic!("asked")), None);
         let dest = t.path().join("models/koboldcpp/m.gguf");
         link(&snap.join("m.gguf"), &dest).unwrap();
-        assert_eq!(std::fs::metadata(&dest).unwrap().len(), 10);
+        assert_eq!(crate::vfs::metadata(&dest).unwrap().len(), 10);
     }
 }

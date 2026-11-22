@@ -1,6 +1,7 @@
 //! Notifications (DESIGN.md, Notifications): the settings, the built-in
 //! sounds, made as WAV files, and the configurable command that plays them.
 
+use crate::vfs::PathExt;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -223,11 +224,11 @@ pub fn built_in_file(sound: &Sound, volume: f32) -> std::io::Result<PathBuf> {
     let pct = (volume.clamp(0.0, 1.0) * 100.0).round() as u32;
     let dir = std::env::temp_dir().join("increart-sounds");
     let path = dir.join(format!("{}-{pct}.wav", sound.name().replace(' ', "-")));
-    if !path.is_file() {
-        std::fs::create_dir_all(&dir)?;
+    if !path.vfs_is_file() {
+        crate::vfs::create_dir_all(&dir)?;
         let tmp = path.with_extension("tmp");
-        std::fs::write(&tmp, wav(&samples(sound, pct as f32 / 100.0)))?;
-        std::fs::rename(&tmp, &path)?;
+        crate::vfs::write(&tmp, wav(&samples(sound, pct as f32 / 100.0)))?;
+        crate::vfs::rename(&tmp, &path)?;
     }
     Ok(path)
 }
@@ -323,6 +324,6 @@ mod tests {
             assert_eq!(w.len(), 44 + full.len() * 2);
         }
         let path = built_in_file(&Sound::Chime, 0.3).unwrap();
-        assert!(path.ends_with("chime-30.wav") && path.is_file());
+        assert!(path.ends_with("chime-30.wav") && path.vfs_is_file());
     }
 }

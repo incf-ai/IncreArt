@@ -1,7 +1,8 @@
 //! Small filesystem helpers.
 
-use std::fs;
 use std::io::Write;
+
+use crate::vfs as fs;
 use std::path::{Path, PathBuf};
 
 use crate::error::{IoContext, PathParts, Result};
@@ -21,6 +22,15 @@ pub fn sync(f: &fs::File) -> std::io::Result<()> {
 
 /// Reads `buf.len()` bytes at `at` (the file's position may move).
 pub fn read_exact_at(f: &fs::File, buf: &mut [u8], at: u64) -> std::io::Result<()> {
+    f.read_exact_at(buf, at)
+}
+
+/// Writes all of `buf` at `at` (the file's position may move).
+pub fn write_all_at(f: &fs::File, buf: &[u8], at: u64) -> std::io::Result<()> {
+    f.write_all_at(buf, at)
+}
+
+pub(crate) fn read_exact_at_disk(f: &std::fs::File, buf: &mut [u8], at: u64) -> std::io::Result<()> {
     #[cfg(unix)]
     {
         std::os::unix::fs::FileExt::read_exact_at(f, buf, at)
@@ -38,8 +48,7 @@ pub fn read_exact_at(f: &fs::File, buf: &mut [u8], at: u64) -> std::io::Result<(
     }
 }
 
-/// Writes all of `buf` at `at` (the file's position may move).
-pub fn write_all_at(f: &fs::File, buf: &[u8], at: u64) -> std::io::Result<()> {
+pub(crate) fn write_all_at_disk(f: &std::fs::File, buf: &[u8], at: u64) -> std::io::Result<()> {
     #[cfg(unix)]
     {
         std::os::unix::fs::FileExt::write_all_at(f, buf, at)
@@ -174,10 +183,10 @@ mod tests {
     fn writes_through_symlinks() {
         let d = tempfile::tempdir().unwrap();
         let (target, link) = (d.path().join("real.rsn"), d.path().join("link.rsn"));
-        std::fs::write(&target, "old").unwrap();
-        std::os::unix::fs::symlink(&target, &link).unwrap();
+        crate::vfs::write(&target, "old").unwrap();
+        crate::vfs::symlink(&target, &link).unwrap();
         super::write_atomic(&link, b"new").unwrap();
         assert!(super::is_symlink(&link));
-        assert_eq!(std::fs::read_to_string(&target).unwrap(), "new");
+        assert_eq!(crate::vfs::read_to_string(&target).unwrap(), "new");
     }
 }

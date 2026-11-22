@@ -506,6 +506,7 @@ mod tests {
             sweep: None,
             timings: vec![],
             deleted: vec![],
+            queued_anyway: false,
         }
     }
 }

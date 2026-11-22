@@ -4,6 +4,7 @@
 //! index is scanned again; files in the drop folder are imported once they
 //! have stopped growing.
 
+use increart_core::vfs::PathExt;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -79,7 +80,7 @@ fn watch_all<W: Watcher + Send + 'static>(
     let mut w = w.map_err(|e| e.to_string())?;
     for dir in WATCHED {
         let d = root.join(dir);
-        if d.is_dir() {
+        if d.vfs_is_dir() {
             w.watch(&d, RecursiveMode::Recursive).map_err(|e| e.to_string())?;
         }
     }
@@ -106,7 +107,7 @@ impl Watcher for NoWatcher {
 
 /// The files waiting in the drop folder, with their sizes.
 fn drop_sizes(root: &Path) -> BTreeMap<PathBuf, u64> {
-    let Ok(rd) = std::fs::read_dir(root.join(DROP)) else { return BTreeMap::new() };
+    let Ok(rd) = increart_core::vfs::read_dir(root.join(DROP)) else { return BTreeMap::new() };
     rd.flatten()
         .filter(|e| e.file_type().is_ok_and(|t| t.is_file()) && !e.file_name().to_string_lossy().starts_with('.'))
         .map(|e| (e.path(), e.metadata().map_or(0, |m| m.len())))
@@ -125,7 +126,7 @@ fn run(root: &Path, rx: &Receiver<PathBuf>, stop: &Receiver<()>, tx: &Sender<Msg
     let mut drop_seen: Option<(Instant, BTreeMap<PathBuf, u64>)> = None;
     // events may name the root's real path rather than the one opened (macOS
     // reports /private/var for /var; a library opened through a symlink)
-    let real = root.canonicalize().ok();
+    let real = root.vfs_canonicalize().ok();
     loop {
         if !matches!(stop.try_recv(), Err(mpsc::TryRecvError::Empty)) {
             return; // the watch was dropped
@@ -183,15 +184,15 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let real = tmp.path().join("real");
         for d in WATCHED {
-            std::fs::create_dir_all(real.join(d)).unwrap();
+            increart_core::vfs::create_dir_all(real.join(d)).unwrap();
         }
-        std::fs::create_dir_all(real.join(DROP)).unwrap();
+        increart_core::vfs::create_dir_all(real.join(DROP)).unwrap();
         let link = tmp.path().join("link");
-        std::os::unix::fs::symlink(&real, &link).unwrap();
+        increart_core::vfs::symlink(&real, &link).unwrap();
         let (tx, rx) = mpsc::channel();
         let _watch = start(link, tx, Arc::new(|| {}));
         std::thread::sleep(Duration::from_millis(300)); // the watch is set up
-        std::fs::write(real.join(DROP).join("photo.png"), b"not really").unwrap();
+        increart_core::vfs::write(real.join(DROP).join("photo.png"), b"not really").unwrap();
         let until = Instant::now() + Duration::from_secs(20);
         let mut changed = false;
         while let Some(left) = until.checked_duration_since(Instant::now()) {

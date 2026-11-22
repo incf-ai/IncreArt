@@ -1,5 +1,6 @@
 //! The engine against fake sd-servers and a real library: runs end to end,
 //! model switching, failures, cancel, back-off and purged jobs.
+#![allow(clippy::disallowed_methods)] // fixtures on disk: no overlay here
 
 mod common;
 
@@ -84,6 +85,7 @@ fn the_run(s: &Setup, recipe: &str, seeds: u64, alpha: bool) -> NewRun {
         source_idea: None,
         first_seed: 0,
         seeds,
+        queued_anyway: false,
     }
 }
 
@@ -426,6 +428,24 @@ fn a_load_answered_with_another_model_says_both() {
     assert!(said.contains(r#"slot "diffusion_model" holds "q" instead of "diffusion_models/q.safetensors""#), "{said}");
     assert!(said.contains(r#""diffusion_model":"diffusion_models/q.safetensors""#), "{said}");
     assert!(said.contains(r#"it answered {"models":{"diffusion_model":"q"}"#), "{said}");
+}
+
+#[test]
+fn a_run_queued_anyway_takes_the_model_a_load_answers_with() {
+    let s = setup();
+    let a = Fake::start(None);
+    // a server (or proxy) that has its own model loaded, whatever is asked
+    a.with(|st| {
+        st.loaded = Some(("qwen-image-21".into(), [("diffusion_model".to_string(), "q".to_string())].into()));
+        st.load_answer = Some(json!({"state": "ready", "recipe": "qwen-image-21", "models": {"diffusion_model": "q"}}))
+    });
+    let run = new_run_with(&s, 2, |r| r.queued_anyway = true);
+    let engine = start(&s, &[&a]);
+    engine.queue_run(&run);
+    let events = collect(&engine, run_done(&run));
+    assert_eq!(outputs(&events).len(), 2, "{events:#?}");
+    assert_eq!(problems(&events, "isn't what was asked"), 0, "{events:#?}");
+    assert_eq!(a.count("/models/load"), 1, "loaded once");
 }
 
 #[test]
@@ -1235,6 +1255,19 @@ fn koboldcpp_without_admin_keeps_its_model() {
     assert!(p.contains("it runs other.safetensors and can't switch"), "{p}");
     engine.cancel_run(&run, Stop::Now);
     collect(&engine, run_done(&run));
+}
+
+#[test]
+fn koboldcpp_without_admin_makes_a_run_queued_anyway_with_its_model() {
+    let s = setup();
+    let k = FakeKobold::start("/models/other.safetensors");
+    let run = new_run_with(&s, 2, |r| r.queued_anyway = true);
+    let engine = kobold_engine(&s, &k, None);
+    engine.queue_run(&run);
+    let events = collect(&engine, run_done(&run));
+    assert_eq!(outputs(&events).len(), 2, "{events:?}");
+    assert!(!events.iter().any(|e| matches!(e, Event::Problem(_))), "{events:?}");
+    assert_eq!(k.count("reload_config"), 0, "nothing to switch");
 }
 
 #[test]

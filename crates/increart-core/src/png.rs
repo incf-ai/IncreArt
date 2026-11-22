@@ -1,7 +1,7 @@
 //! PNG chunk-level reading and writing: the `increart:*` text chunks and
 //! `eXIf`, added or replaced without re-encoding the pixels.
 
-use std::fs::File;
+use crate::vfs::File;
 use std::io::{BufReader, Read};
 use std::path::Path;
 
@@ -269,7 +269,7 @@ pub fn find_header_chunk(path: &Path, key: &str) -> Result<Option<(u64, Chunk, b
 /// Writes `chunk` over the chunk starting at `at`, which has the same length:
 /// its type, data and CRC in one write, then a sync. The file keeps its size.
 pub fn patch_chunk(path: &Path, at: u64, chunk: &Chunk) -> Result<()> {
-    let f = std::fs::OpenOptions::new().read(true).write(true).open(path).at(path)?;
+    let f = crate::vfs::OpenOptions::new().read(true).write(true).open(path).at(path)?;
     let mut len = [0; 4];
     crate::fsutil::read_exact_at(&f, &mut len, at).at(path)?;
     if u32::from_be_bytes(len) as usize != chunk.data.len() {

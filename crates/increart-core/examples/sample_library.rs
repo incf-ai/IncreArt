@@ -3,6 +3,7 @@
 //!
 //!     cargo run -p increart-core --example sample_library [out_dir]       # default: tmp/sample-library
 //!     cargo run -p increart-core --example sample_library -- --verify [dir]
+#![allow(clippy::disallowed_methods)] // fixtures on disk: no overlay here
 
 #[path = "../tests/common/sample.rs"]
 mod sample;

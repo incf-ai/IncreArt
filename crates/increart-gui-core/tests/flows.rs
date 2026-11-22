@@ -1,5 +1,6 @@
 //! GUI flows driven through the reducer, with the real runtime and a real
 //! library on disk (no window, no servers).
+#![allow(clippy::disallowed_methods)] // fixtures on disk: no overlay here
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -1309,6 +1310,7 @@ impl Library_ {
                 source_idea: None,
                 first_seed: 0,
                 seeds: 2,
+                queued_anyway: false,
             };
             let id = lib.create_run(project, run).unwrap();
             write_pngs(lib, &id, &[0, 1]);
@@ -1972,6 +1974,8 @@ fn kobold_wizard_plans_by_vram_downloads_then_opens() {
     s.config.programs.model_dirs = vec![];
     update(&mut s, Msg::ServerWizard(true));
     update(&mut s, Msg::WizardGpus(Ok(vec![gpu(0, 94.2, true), gpu(1, 29.9, false), gpu(2, 11.9, false)]), Some(64.0)));
+    // (Qwen-Image here; MiniMax-H3, the default: kobold_wizard_sets_up_minimax_h3_by_default)
+    update(&mut s, Msg::WizardFamily(increart_core::tiers::Family::QwenImage));
     let mut k = *dialog(&s).kobold.clone().unwrap();
     let ticks: Vec<bool> = k.gpus.as_ref().unwrap().as_ref().unwrap().iter().map(|g| g.on).collect();
     assert_eq!(ticks, [false, true, true], "not the integrated one");
@@ -2089,6 +2093,11 @@ fn kobold_wizard_plans_by_vram_downloads_then_opens() {
     // KoboldCpp not found: Save anyway downloads and saves, doesn't open
     update(&mut s, Msg::KoboldVersion("koboldcpp".into(), Err("koboldcpp not found".into())));
     assert!(update(&mut s, Msg::CheckWizardBinary).is_empty(), "asked already");
+    // Check again: asked anew (a binary made executable since), the old answer gone
+    let mut again = s.clone();
+    let fx = update(&mut again, Msg::RecheckKoboldVersion);
+    assert!(matches!(&fx[..], [Effect::KoboldVersion(b)] if b == "koboldcpp"), "{fx:?}");
+    assert!(dialog(&again).kobold_version.is_none());
     let mut anyway = s.clone();
     update(&mut anyway, Msg::SaveKoboldWizard);
     let fx = update(&mut anyway, Msg::WizardDownloaded(Ok(())));
@@ -2127,6 +2136,45 @@ fn kobold_wizard_plans_by_vram_downloads_then_opens() {
     assert_eq!(preset.name, "KoboldCpp Vulkan1 + KoboldCpp Vulkan2", "{:?}", s.config.server_presets);
     let chat = s.pe.server.clone().expect("prompt enhance in the first one");
     assert_eq!(chat.base_url(), "http://127.0.0.1:5001");
+}
+
+#[test]
+fn kobold_wizard_sets_up_minimax_h3_by_default() {
+    use increart_core::tiers::{Family, Gpu};
+    let gpu = |number, vram_gib| Gpu { number, name: format!("gpu{number}"), vram_gib, integrated: false };
+    let mut s = dialog_state(vec![], None);
+    s.config.programs.model_dirs = vec![];
+    update(&mut s, Msg::ServerWizard(true));
+    // from the sd-server page: picking a model opens the KoboldCpp page
+    update(&mut s, Msg::WizardKobold(false));
+    assert!(dialog(&s).kobold.is_none());
+    let fx = update(&mut s, Msg::WizardFamily(Family::MinimaxH3));
+    assert!(fx.contains(&Effect::DetectGpus(GpuRuntime::Vulkan)), "{fx:?}");
+    update(&mut s, Msg::WizardGpus(Ok(vec![gpu(1, 11.9)]), Some(64.0)));
+    let k = dialog(&s).kobold.clone().unwrap();
+    assert_eq!(k.family, Family::MinimaxH3);
+    let p = k.plan().unwrap();
+    assert_eq!((p.recipe.recipe.as_str(), p.recipe.steps, p.recipe.cfg), ("minimax-h3-image", 6, 1.0));
+    assert_eq!(p.recipe.files.keys().collect::<Vec<_>>(), ["diffusion_model", "llm", "vae"]);
+    assert_eq!(p.cards[0].preset, Some(12));
+    // the image model, its text encoder and VAE, the chat model and its projector
+    assert_eq!(p.downloads.len(), 5, "{:?}", p.downloads);
+    // a preset chosen is another model's after switching: by memory again
+    let mut chose = (*k).clone();
+    chose.choose = true;
+    chose.gpus.as_mut().unwrap().as_mut().unwrap()[0].preset = Some(16);
+    update(&mut s, Msg::EditKoboldWizard(chose));
+    update(&mut s, Msg::WizardFamily(Family::QwenImage));
+    let q = dialog(&s).kobold.clone().unwrap();
+    assert_eq!((q.family, q.gpus.as_ref().unwrap().as_ref().unwrap()[0].preset), (Family::QwenImage, None));
+    assert_eq!(q.plan().unwrap().recipe.recipe, "qwen-image-21");
+    // an 8 GB card takes Qwen-Image only
+    update(&mut s, Msg::WizardFamily(Family::MinimaxH3));
+    let mut small = (*dialog(&s).kobold.clone().unwrap()).clone();
+    small.gpus.as_mut().unwrap().as_mut().unwrap()[0].gpu.vram_gib = 7.98;
+    assert!(small.plan().unwrap_err().contains("12 GB"), "{:?}", small.plan());
+    small.family = Family::QwenImage;
+    assert_eq!(small.plan().unwrap().cards[0].preset, Some(8));
 }
 
 #[test]
@@ -5109,6 +5157,366 @@ fn queue_pressed_twice_before_the_save_lands_saves_once() {
 }
 
 #[test]
+fn tag_sweeps_make_a_run_per_value_of_a_blank() {
+    use increart_core::prompts::SweepVary;
+    let mut h = Harness::new();
+    h.send(Msg::NewProject(PathBuf::new()));
+    h.send(Msg::CommitRename);
+    h.settle();
+    let label = h.state.generate.label.clone();
+
+    // a value a line, in order, without repeats; a comma is part of a value
+    let mut f = h.state.generate.clone();
+    f.prompt = "a fox with {fur} fur, {where}".into();
+    f.sweep.on = true;
+    f.sweep.vary = SweepVary::Tag;
+    f.sweep.tag_slot = "fur".into();
+    f.sweep.tag_values = "red\n  silver \n\nred\nlong, braided".into();
+    // the blank's shared value isn't used; the other blank's is
+    f.sweep.slots.insert("fur".into(), "blue".into());
+    f.sweep.slots.insert("where".into(), "in snow".into());
+    f.seeds = 2;
+    h.send(Msg::Generate(f.clone()));
+    let (runs, _) = update::sweep_runs(&h.state).unwrap();
+    let got: Vec<_> = runs.iter().map(|(f, t)| (f.label.clone(), f.prompt.clone(), t.row())).collect();
+    let row = |v: &str| (format!("{label} · {v}"), format!("a fox with {v} fur, in snow"), v.to_string());
+    assert_eq!(got, [row("red"), row("silver"), row("long, braided")]);
+    assert_eq!(runs[0].1.param.as_ref().unwrap().tag(), Some("fur"));
+
+    // what's wrong is said
+    let recipes = h.state.config.recipes.clone();
+    let err = |f: &increart_gui_core::GenerateForm| update::param_runs(f, &recipes).unwrap_err();
+    let mut bad = f.clone();
+    bad.sweep.tag_values = " \n".into();
+    assert!(err(&bad).contains("Type the values for {fur}"));
+    bad = f.clone();
+    bad.sweep.slots.remove("where");
+    assert!(err(&bad).contains("Fill in {where}"), "{}", err(&bad));
+    bad = f.clone();
+    bad.sweep.tag_slot = "tail".into();
+    assert!(err(&bad).contains("no {tail} any more"));
+    bad.prompt = "a fox".into();
+    assert!(err(&bad).contains("write one, e.g. {hair}"));
+
+    // a suggestion's chip puts its value in, or takes it out
+    let mut s = f.sweep.clone();
+    s.toggle_tag("silver");
+    s.toggle_tag("white");
+    assert_eq!(s.tags(), ["red", "long, braided", "white"]);
+
+    // queued: a run each, tagged with its blank and value; the sheet's rows
+    h.send(Msg::QueueGenerate);
+    h.settle();
+    let p = h.state.project_entry().unwrap();
+    assert_eq!(p.runs.len(), 3, "{:?}", h.errors());
+    let mut runs: Vec<_> = p.runs.clone();
+    runs.sort_by(|a, b| a.id.cmp(&b.id));
+    assert_eq!(runs[1].prompt, "a fox with silver fur, in snow");
+    let project = p.project.id.clone();
+    let seeds: Vec<u64> = runs[0].all_seeds().map(|(_, s)| s).collect();
+    for r in &runs {
+        Library_::steal(&h.root).write_seeds(&r.id, &seeds);
+    }
+    h.rt.run(Effect::Rescan);
+    h.settle();
+    h.send(Msg::Tab(Tab::Review));
+    h.send(Msg::ReviewSweep(project, label.clone()));
+    let sh = h.state.sheet().unwrap();
+    let rows: Vec<_> = sh.rows.iter().map(|r| r.run.sweep.as_ref().unwrap().row()).collect();
+    assert_eq!(rows, ["red", "silver", "long, braided"]);
+
+    // a new sweep from two of its rows: the form it was queued with, the
+    // blank and those values
+    let picked: Vec<_> = h
+        .state
+        .project_entry()
+        .unwrap()
+        .outputs
+        .iter()
+        .filter(|o| o.name.run == runs[0].id || o.name.run == runs[2].id)
+        .map(|o| o.image.clone())
+        .collect();
+    h.send(Msg::PickSet(picked));
+    h.send(Msg::SheetNewSweep);
+    h.settle();
+    let g = &h.state.generate;
+    assert_eq!(g.sweep.vary, SweepVary::Tag, "{:?}", h.errors());
+    assert_eq!(g.prompt, "a fox with {fur} fur, {where}");
+    assert_eq!(g.sweep.tag_slot, "fur");
+    assert_eq!(g.sweep.tags(), ["red", "long, braided"]);
+}
+
+#[test]
+fn sweep_axes_combine_every_paired_random_or_per_image() {
+    use increart_core::prompts::{Combine, SweepAxis, SweepVary};
+    let mut h = Harness::new();
+    h.send(Msg::NewProject(PathBuf::new()));
+    h.send(Msg::CommitRename);
+    h.settle();
+    let label = h.state.generate.label.clone();
+    let mut other = h.state.config.recipes[0].clone();
+    other.name = "Other".into();
+    other.cfg = 7.0;
+    other.steps = 30;
+    h.state.config.recipes.push(other);
+    let recipes = h.state.config.recipes.clone();
+
+    // a tag first, then CFG: every combination, the first axis slowest
+    let mut f = h.state.generate.clone();
+    f.prompt = "a fox with {fur} fur".into();
+    f.sweep.on = true;
+    f.sweep.vary = SweepVary::Tag;
+    f.sweep.tag_slot = "fur".into();
+    f.sweep.tag_values = "red\nsilver".into();
+    f.sweep.axes = vec![SweepAxis { vary: SweepVary::Cfg, values: "4, 2".into(), ..Default::default() }];
+    f.seeds = 3;
+    f.steps = 12;
+    h.send(Msg::Generate(f.clone()));
+    let runs = |h: &Harness| update::sweep_runs(&h.state).map(|(r, _)| r);
+    let got: Vec<_> = runs(&h).unwrap().iter().map(|(f, t)| (t.row(), f.prompt.clone(), f.cfg)).collect();
+    let row = |fur: &str, cfg: f32| (format!("{fur} · cfg {cfg}"), format!("a fox with {fur} fur"), cfg);
+    assert_eq!(got, [row("red", 2.0), row("red", 4.0), row("silver", 2.0), row("silver", 4.0)]);
+    assert_eq!(runs(&h).unwrap()[3].0.label, format!("{label} · silver · cfg 4"));
+
+    // a tag axis after a style or setting: its blank needs no shared value
+    let mut g = f.clone();
+    g.prompt = "a {animal} with {fur} fur".into();
+    g.sweep.slots.insert("animal".into(), "fox".into());
+    g.sweep.vary = SweepVary::Steps;
+    g.sweep.values = "8, 16".into();
+    g.sweep.axes = vec![SweepAxis {
+        vary: SweepVary::Tag,
+        tag_slot: "fur".into(),
+        tag_values: "red\nblue".into(),
+        ..Default::default()
+    }];
+    h.send(Msg::Generate(g.clone()));
+    let got: Vec<_> = runs(&h).unwrap().iter().map(|(f, _)| (f.steps, f.prompt.clone())).collect();
+    assert_eq!(got[1], (8, "a fox with blue fur".to_string()));
+    assert_eq!(got.len(), 4);
+
+    // a model axis takes its preset's settings, but not the first axis's
+    let mut m = g.clone();
+    m.prompt = "a fox".into();
+    m.sweep.axes = vec![SweepAxis {
+        vary: SweepVary::Model,
+        models: recipes.iter().take(2).map(|r| r.name.clone()).collect(),
+        ..Default::default()
+    }];
+    h.send(Msg::Generate(m.clone()));
+    let got = runs(&h).unwrap();
+    assert_eq!(got.len(), 4);
+    assert_eq!((got[1].0.preset, got[1].0.steps, got[1].0.cfg), (1, 8, recipes[1].cfg));
+    assert_eq!(got[1].1.more[0].value, recipes[1].name);
+
+    // paired: as many values each, else said
+    let mut p = f.clone();
+    p.sweep.combine = Combine::Paired;
+    h.send(Msg::Generate(p.clone()));
+    let got: Vec<_> = runs(&h).unwrap().iter().map(|(_, t)| t.row()).collect();
+    assert_eq!(got, ["red · cfg 2", "silver · cfg 4"]);
+    p.sweep.axes[0].values = "1, 2, 3".into();
+    h.send(Msg::Generate(p.clone()));
+    assert!(runs(&h).unwrap_err().contains("as many values each"));
+
+    // random: K of every combination, the same each time for one seed
+    let mut r = f.clone();
+    r.sweep.combine = Combine::Random;
+    r.sweep.combine_k = 3;
+    r.sweep.combine_seed = 5;
+    h.send(Msg::Generate(r.clone()));
+    let a: Vec<_> = runs(&h).unwrap().iter().map(|(_, t)| t.row()).collect();
+    assert_eq!(a.len(), 3);
+    assert_eq!(a, runs(&h).unwrap().iter().map(|(_, t)| t.row()).collect::<Vec<_>>());
+    r.sweep.combine_k = 99;
+    h.send(Msg::Generate(r.clone()));
+    assert_eq!(runs(&h).unwrap().len(), 4, "no more than there are");
+
+    // random per image: a run of one seed each, the seeds in order
+    let mut e = f.clone();
+    e.sweep.combine = Combine::PerImage;
+    e.first_seed = 40;
+    e.seeds = 5;
+    h.send(Msg::Generate(e.clone()));
+    let got = runs(&h).unwrap();
+    assert_eq!(
+        got.iter().map(|(f, _)| (f.first_seed, f.seeds)).collect::<Vec<_>>(),
+        [(40, 1), (41, 1), (42, 1), (43, 1), (44, 1)]
+    );
+
+    // what's wrong is said
+    let mut bad = f.clone();
+    bad.sweep.axes.push(SweepAxis { vary: SweepVary::Cfg, values: "3".into(), ..Default::default() });
+    h.send(Msg::Generate(bad.clone()));
+    assert!(runs(&h).unwrap_err().contains("Two axes vary CFG"));
+    bad.sweep.axes[1] =
+        SweepAxis { vary: SweepVary::Tag, tag_slot: "fur".into(), tag_values: "x".into(), ..Default::default() };
+    h.send(Msg::Generate(bad.clone()));
+    assert!(runs(&h).unwrap_err().contains("Two axes vary {fur}"));
+    bad.sweep.axes[1] = SweepAxis { vary: SweepVary::Style, ..Default::default() };
+    h.send(Msg::Generate(bad.clone()));
+    assert!(runs(&h).unwrap_err().contains("only be the first axis"));
+    bad.sweep.axes[1] = SweepAxis { vary: SweepVary::Steps, values: "x".into(), ..Default::default() };
+    h.send(Msg::Generate(bad.clone()));
+    assert!(runs(&h).unwrap_err().starts_with("Axis 3:"));
+
+    // queued: each run has its axes' values; the sheet a row each
+    h.send(Msg::Generate(f.clone()));
+    h.send(Msg::QueueGenerate);
+    h.settle();
+    let pe = h.state.project_entry().unwrap();
+    assert_eq!(pe.runs.len(), 4, "{:?}", h.errors());
+    let mut saved: Vec<_> = pe.runs.clone();
+    saved.sort_by(|a, b| a.id.cmp(&b.id));
+    assert_eq!(
+        saved[1].sweep.as_ref().unwrap().more,
+        [increart_core::model::SweepParam { name: "cfg".into(), value: "4".into() }]
+    );
+    assert_eq!(saved[1].sample.cfg, 4.0);
+    let project = pe.project.id.clone();
+    let seeds: Vec<u64> = saved[0].all_seeds().map(|(_, s)| s).collect();
+    for r in &saved {
+        Library_::steal(&h.root).write_seeds(&r.id, &seeds);
+    }
+    h.rt.run(Effect::Rescan);
+    h.settle();
+    h.send(Msg::Tab(Tab::Review));
+    h.send(Msg::ReviewSweep(project, label.clone()));
+    let rows: Vec<_> = h.state.sheet().unwrap().rows.iter().map(|r| r.run.sweep.as_ref().unwrap().row()).collect();
+    assert_eq!(rows, ["red · cfg 2", "red · cfg 4", "silver · cfg 2", "silver · cfg 4"]);
+    // each value's images, whatever the other axis was
+    let n = seeds.len();
+    let by = h.state.sheet().unwrap().by_value();
+    let names: Vec<_> = by.iter().map(|a| a.name.as_str()).collect();
+    assert_eq!(names, ["{fur}", "cfg"]);
+    assert_eq!(by[0].values, [("red".to_string(), [0, 0, 0, 2 * n]), ("silver".to_string(), [0, 0, 0, 2 * n])]);
+    assert_eq!(by[1].values[1], ("cfg 4".to_string(), [0, 0, 0, 2 * n]));
+    // the pivot: CFG down, the fur across, at the second seed
+    use increart_gui_core::PivotSel;
+    assert!(h.state.pivot().is_none(), "flat until asked");
+    h.send(Msg::SheetPivot(Some(PivotSel { rows: 1, cols: 1, fixed: vec![], seed: Some(1) })));
+    let pv = h.state.pivot().unwrap();
+    assert_eq!((pv.sel.rows, pv.sel.cols), (1, 0), "rows and columns aren't one axis");
+    assert_eq!(pv.axes[1].1, ["cfg 2", "cfg 4"]);
+    assert_eq!((pv.cells.len(), pv.cells[0].len()), (2, 2));
+    match &pv.cells[0][1] {
+        SheetCell::Image(o) => assert_eq!((&o.name.run, o.name.seed), (&saved[2].id, seeds[1])),
+        c => panic!("{c:?}"),
+    }
+    h.send(Msg::SheetPivot(Some(PivotSel { rows: 0, cols: 1, fixed: vec![], seed: None })));
+    match &h.state.pivot().unwrap().cells[1][1] {
+        SheetCell::Image(o) => assert_eq!((&o.name.run, o.name.seed), (&saved[3].id, seeds[0])),
+        c => panic!("{c:?}"),
+    }
+
+    // a new sweep from two rows: each axis with the values picked
+    let picked: Vec<_> = h
+        .state
+        .project_entry()
+        .unwrap()
+        .outputs
+        .iter()
+        .filter(|o| o.name.run == saved[0].id || o.name.run == saved[1].id)
+        .map(|o| o.image.clone())
+        .collect();
+    h.send(Msg::PickSet(picked));
+    h.send(Msg::SheetNewSweep);
+    h.settle();
+    let s = &h.state.generate.sweep;
+    assert_eq!((s.vary, s.tags()), (SweepVary::Tag, vec!["red".to_string()]), "{:?}", h.errors());
+    assert_eq!(s.axes.len(), 1);
+    assert_eq!((s.axes[0].vary, s.axes[0].values.as_str()), (SweepVary::Cfg, "2, 4"));
+}
+
+#[test]
+fn lora_presets_and_their_axes() {
+    use increart_core::config::{LoraPreset, PresetLora};
+    use increart_core::prompts::{SweepAxis, SweepVary};
+    let mut h = Harness::new();
+    h.send(Msg::NewProject(PathBuf::new()));
+    h.send(Msg::CommitRename);
+    h.settle();
+    let lora = |file: &str, trigger: &str| PresetLora { file: file.into(), weight: 1.0, trigger: trigger.into() };
+    h.state.config.lora_presets = vec![
+        LoraPreset { name: "pixel".into(), loras: vec![lora("loras/pixel.safetensors", "pixel art")] },
+        LoraPreset {
+            name: "ink + grain".into(),
+            loras: vec![lora("loras/ink.safetensors", ""), lora("loras/grain.safetensors", "")],
+        },
+    ];
+
+    // LoRA presets first ("": none), then their weight
+    let mut f = h.state.generate.clone();
+    f.prompt = "a fox".into();
+    f.sweep.on = true;
+    f.sweep.vary = SweepVary::Lora;
+    f.sweep.loras = vec!["".into(), "pixel".into(), "ink + grain".into()];
+    f.sweep.axes = vec![SweepAxis { vary: SweepVary::LoraWeight, values: "1, 0.5".into(), ..Default::default() }];
+    f.seeds = 1;
+    h.send(Msg::Generate(f.clone()));
+    let (runs, _) = update::sweep_runs(&h.state).unwrap();
+    let rows: Vec<_> = runs.iter().map(|(_, t)| t.row()).collect();
+    assert_eq!(rows[0], "no LoRA · LoRA × 0.5");
+    assert_eq!(rows[5], "ink + grain · LoRA × 1");
+    // queued: the presets' LoRAs over the model preset's, at the weight
+    let base = h.state.config.recipes[0].clone();
+    let with = |i: usize| update::with_loras(&runs[i].0, base.clone(), &h.state.config.lora_presets).unwrap();
+    assert_eq!(with(0).loras, base.loras, "no LoRA: the model preset as it is");
+    let ink = with(4).loras;
+    assert_eq!(
+        ink.iter().map(|l| (l.file.as_str(), l.weight)).collect::<Vec<_>>(),
+        [("loras/ink.safetensors", 0.5), ("loras/grain.safetensors", 0.5)]
+    );
+    // a LoRA preset gone is said when queued
+    let mut gone = runs[2].0.clone();
+    gone.sweep_loras = vec!["watercolour".into()];
+    assert!(update::with_loras(&gone, base.clone(), &[]).unwrap_err().contains("“watercolour”"));
+
+    h.send(Msg::QueueGenerate);
+    h.settle();
+    let p = h.state.project_entry().unwrap();
+    assert_eq!(p.runs.len(), 6, "{:?}", h.errors());
+    let pixel = p.runs.iter().find(|r| r.sweep.as_ref().is_some_and(|t| t.row() == "pixel · LoRA × 1")).unwrap();
+    assert_eq!(
+        pixel.model.loras.iter().map(|l| (l.id.as_str(), l.weight)).collect::<Vec<_>>(),
+        [("loras/pixel.safetensors", 1.0)]
+    );
+    assert!(pixel.prompt.contains("pixel art"), "its trigger words: {}", pixel.prompt);
+
+    // the editor: what Save refuses; a rename keeps the sweep's tick
+    h.send(Msg::LoraEditorOpen);
+    let mut e = h.state.lora_editor.clone().unwrap();
+    assert_eq!(e.list.len(), 2);
+    e.list[1].name = "pixel".into();
+    assert!(e.problem().unwrap().contains("Two LoRA presets"));
+    e.list[1].name = "ink".into();
+    e.list[1].loras.clear();
+    assert!(e.problem().unwrap().contains("no LoRA file"));
+    e.list[1].loras = vec![lora("loras/ink.safetensors", "")];
+    h.send(Msg::LoraEditor(Some(e)));
+    h.send(Msg::LoraEditorSave);
+    assert!(h.state.lora_editor.is_none());
+    assert_eq!(h.state.config.lora_presets[1].name, "ink");
+    assert_eq!(h.state.generate.sweep.loras, ["", "pixel", "ink"]);
+
+    // the LoRA files in the model directories, one folder down
+    let dir = h.root.join("models");
+    std::fs::create_dir_all(dir.join("loras/styles")).unwrap();
+    for f in ["loras/b.safetensors", "loras/styles/a.gguf", "loras/notes.txt"] {
+        std::fs::write(dir.join(f), b"x").unwrap();
+    }
+    let files = increart_core::config::lora_files(&[dir.to_string_lossy().to_string()]);
+    assert_eq!(files, ["loras/b.safetensors", "loras/styles/a.gguf"]);
+    // a model preset's trigger words for a file
+    let mut recipes = h.state.config.recipes.clone();
+    recipes[0].loras = vec![lora("loras/b.safetensors", "bee style")];
+    assert_eq!(
+        increart_gui_core::LoraEditor::trigger_for("loras/b.safetensors", &recipes).as_deref(),
+        Some("bee style")
+    );
+}
+
+#[test]
 fn setting_sweeps_vary_cfg_steps_or_the_model() {
     use increart_core::prompts::SweepVary;
     let mut h = Harness::new();
@@ -7409,6 +7817,63 @@ fn generate_offers_the_model_presets_the_servers_can_run() {
 }
 
 #[test]
+fn generate_defaults_to_a_model_the_servers_can_run() {
+    use increart_core::config::RecipePreset;
+    use increart_core::sdserver::Loadable;
+    let preset = |name: &str, recipe: &str, model: &str, steps| RecipePreset {
+        name: name.into(),
+        recipe: recipe.into(),
+        files: [("diffusion_model".to_string(), model.to_string())].into(),
+        steps,
+        cfg: 1.0,
+        loras: vec![],
+        ..Default::default()
+    };
+    let config = Config {
+        recipes: vec![
+            preset("Qwen-Image 2.1", "qwen-image-21", "qwen.gguf", 20),
+            preset("MiniMax-H3-Image", "minimax-h3", "h3.safetensors", 6),
+        ],
+        ..Default::default()
+    };
+    let mut s = AppState::new(config, None);
+    s.servers = vec![ServerStatus {
+        config: None,
+        name: "gpu0".into(),
+        device: String::new(),
+        state: "ready".into(),
+        model: None,
+        idle_since: None,
+        worked: false,
+    }];
+    // only H3 on the server: the default moves to it, its settings with it
+    update(&mut s, Msg::ServerModels(vec![("gpu0".into(), Loadable::files(["h3.safetensors".to_string()]))]));
+    assert_eq!((s.generate.preset, s.generate.steps), (1, 6));
+
+    // a form made afresh after the servers said (a project opened) too
+    s.generate = GenerateForm::new(&s.config);
+    assert_eq!(s.generate.preset, 0);
+    update(&mut s, Msg::Tick(1.0));
+    assert_eq!((s.generate.preset, s.generate.steps), (1, 6));
+
+    // and one from a draft saved with the default, which says it was one
+    let mut d = GenerateForm::new(&s.config).to_draft(&s.config);
+    assert_eq!((d.preset.as_str(), d.preset_auto), ("Qwen-Image 2.1", true));
+    s.generate = GenerateForm::from_draft(&d, &s.config);
+    update(&mut s, Msg::Tick(2.0));
+    assert_eq!(s.generate.preset, 1);
+
+    // a model chosen stays, though no server runs it: in the form, or a draft
+    update(&mut s, Msg::SelectRecipe(0));
+    update(&mut s, Msg::Tick(3.0));
+    assert_eq!(s.generate.preset, 0);
+    d.preset_auto = false;
+    s.generate = GenerateForm::from_draft(&d, &s.config);
+    update(&mut s, Msg::Tick(4.0));
+    assert_eq!(s.generate.preset, 0);
+}
+
+#[test]
 fn a_model_preset_file_picked_is_named_inside_its_models_folder() {
     let dir = tempfile::tempdir().unwrap();
     let models = dir.path().join("models");
@@ -7588,7 +8053,7 @@ fn queueing_a_preset_no_server_runs_asks_first() {
     let c = h.state.confirm.clone().expect("asks");
     assert!(c.text.contains("Int8:\n  kcpp: int8.safetensors is in sd-server's int8 format"), "{}", c.text);
     assert_eq!(c.verb, "Queue anyway");
-    assert_eq!(*c.then, Msg::QueueModelChecked);
+    assert_eq!(*c.then, Msg::QueueAnyway);
     // the fix offered: that model on a preset the server runs
     let (name, then) = c.fix.clone().unwrap();
     assert_eq!((name.as_str(), *then), ("Use Q8 and queue", Msg::QueueWithPreset(1)));
@@ -7607,6 +8072,26 @@ fn queueing_a_preset_no_server_runs_asks_first() {
     h.state.generate.preset = 1;
     update(&mut h.state, Msg::QueueGenerate);
     assert!(h.state.confirm.is_none());
+
+    // Queue anyway: the run is saved as queued anyway (the engine sends it
+    // whatever the servers list); a plain Queue after it isn't
+    h.state.confirm = None;
+    h.send(Msg::NewProject(PathBuf::new()));
+    h.send(Msg::CommitRename);
+    h.settle();
+    h.state.messages.clear();
+    h.state.generate.preset = 0;
+    h.state.generate.prompt = "a fox".into();
+    h.send(Msg::QueueGenerate);
+    let then = *h.state.confirm.take().expect("asks").then;
+    h.send(then);
+    h.settle();
+    h.state.generate.preset = 1;
+    h.send(Msg::QueueGenerate);
+    h.settle();
+    assert!(h.errors().is_empty(), "{:?}", h.errors());
+    let anyway: Vec<bool> = h.state.project_entry().unwrap().runs.iter().map(|r| r.queued_anyway).collect();
+    assert_eq!(anyway, [true, false]);
 }
 
 /// Opening a library whose generated images have lost their links (an unzip
@@ -7645,6 +8130,7 @@ fn opening_a_library_with_lost_output_links_warns() {
         source_idea: None,
         first_seed: 0,
         seeds: 1,
+        queued_anyway: false,
     };
     let run = lib.create_run(&project, run).unwrap();
     let (_, def) = lib.find_run(&run).unwrap();
@@ -9187,4 +9673,125 @@ fn a_crashed_server_is_started_again() {
     // half an hour on, crashes before don't count
     s.now += 31.0 * 60.0;
     assert_eq!(crash(&mut s).len(), 1);
+}
+
+/// Every file below `dir` with its bytes (symlinks: their targets).
+fn disk_snapshot(dir: &Path) -> std::collections::BTreeMap<PathBuf, Vec<u8>> {
+    let mut out = std::collections::BTreeMap::new();
+    for p in increart_core::fsutil::walk(dir).unwrap() {
+        let m = std::fs::symlink_metadata(&p).unwrap();
+        let bytes = if m.file_type().is_symlink() {
+            std::fs::read_link(&p).unwrap().into_os_string().into_encoded_bytes()
+        } else if m.is_file() {
+            std::fs::read(&p).unwrap()
+        } else {
+            vec![]
+        };
+        out.insert(p.strip_prefix(dir).unwrap().to_path_buf(), bytes);
+    }
+    out
+}
+
+#[test]
+fn an_ephemeral_session_reads_a_library_and_saves_nothing() {
+    let mut h = Harness::new();
+    h.send(Msg::Draft(IdeaDraft { title: "On disk".into(), text: "kept".into(), ..Default::default() }));
+    h.send(Msg::AddIdea(AddIdea::Inbox));
+    h.settle();
+    let disk = h.root.clone();
+    let logs = h._tmp.path().join("logs");
+    let before = disk_snapshot(&disk);
+    let recent = h.state.config.recent_libraries.clone();
+
+    // from the library screen: the form, then Start
+    h.send(Msg::OtherLibrary(None));
+    let mut form = EphemeralForm::new(Some(disk.to_str().unwrap()), Some(32.0));
+    assert!(!form.new_library && form.budget_gib == 8.0, "a quarter of the RAM: {form:?}");
+    form.budget_gib = 40.0;
+    h.send(Msg::EphemeralForm(Some(form.clone())));
+    h.send(Msg::StartEphemeral);
+    assert!(h.state.ephemeral_form.as_ref().unwrap().error.as_deref().unwrap().contains("32 GiB"));
+    form.budget_gib = 2.0;
+    h.send(Msg::EphemeralForm(Some(form)));
+    h.send(Msg::StartEphemeral);
+    h.settle();
+    assert_eq!(h.state.phase, Phase::Main, "{:?}", h.errors());
+    let e = h.state.ephemeral.clone().expect("in an ephemeral session");
+    assert_eq!((e.from.as_deref(), e.budget), (Some(disk.as_path()), 2 << 30));
+    let root = h.state.library.clone().unwrap();
+    assert!(increart_core::vfs::in_ram(&root) && root != disk);
+    assert!(increart_core::vfs::in_ram(&logs), "the logs in RAM");
+    assert_eq!(h.state.index.ideas.len(), 1, "the library's ideas are there");
+    assert_eq!(h.state.config.recent_libraries, recent, "not in the recent list");
+
+    // work in it: an idea, a project
+    h.send(Msg::Draft(IdeaDraft { title: "Private".into(), text: "secret".into(), ..Default::default() }));
+    h.send(Msg::AddIdea(AddIdea::Inbox));
+    h.settle();
+    h.send(Msg::NewProject(PathBuf::new()));
+    h.send(Msg::CommitRename);
+    h.settle();
+    assert_eq!(h.state.index.ideas.len(), 2);
+    assert!(!h.state.index.projects.is_empty());
+    assert!(h.errors().is_empty(), "{:?}", h.errors());
+    assert_eq!(disk_snapshot(&disk), before, "nothing written to the library on disk");
+    // another app can't be given a file of it
+    h.send(Msg::ShowInFileManager(root.clone()));
+    h.settle();
+    assert!(h.errors().iter().any(|e| e.contains("in RAM")), "{:?}", h.errors());
+    h.state.messages.clear();
+
+    // leaving asks first, then everything goes
+    h.send(Msg::SwitchLibrary(disk.to_string_lossy().into()));
+    assert!(h.state.confirm.is_some(), "asked first");
+    h.send(Msg::ConfirmYes);
+    h.settle();
+    assert_eq!(h.state.phase, Phase::Main, "{:?}", h.errors());
+    assert_eq!(h.state.ephemeral, None);
+    assert_eq!(h.state.library.as_deref(), Some(disk.as_path()));
+    assert_eq!(h.state.index.ideas.len(), 1, "the session's idea is gone");
+    assert!(!increart_core::vfs::in_ram(&root) && !increart_core::vfs::in_ram(&logs));
+    assert_eq!(disk_snapshot(&disk).len(), before.len());
+}
+
+#[test]
+fn a_new_ephemeral_library_and_its_ram_budget() {
+    let mut h = Harness::new();
+    h.send(Msg::OtherLibrary(None));
+    let mut form = EphemeralForm::new(None, None);
+    assert!(form.new_library && form.budget_gib == 4.0);
+    form.when_full = WhenFull::DeleteOldest;
+    h.send(Msg::EphemeralForm(Some(form)));
+    h.send(Msg::StartEphemeral);
+    h.settle();
+    assert_eq!(h.state.phase, Phase::Main, "{:?}", h.errors());
+    assert!(h.state.index.ideas.is_empty() && h.state.index.projects.is_empty(), "empty");
+    assert!(h.state.ephemeral.as_ref().is_some_and(|e| e.from.is_none()));
+
+    // over the budget: the oldest images go, then generating stops when
+    // nothing more can
+    let s = &mut h.state;
+    s.ephemeral.as_mut().unwrap().budget = 100;
+    s.engine_running = true;
+    assert_eq!(update(s, Msg::RamUsed(50)), []);
+    assert_eq!(update(s, Msg::RamUsed(150)), [Effect::FreeRam(100)]);
+    let fx = update(s, Msg::RamFreed(Ok((3, 120))));
+    assert!(fx.contains(&Effect::Rescan) && fx.contains(&Effect::StopEngine), "{fx:?}");
+    let e = s.ephemeral.clone().unwrap();
+    assert!(e.halted && e.freed == 3 && !s.engine_running);
+    assert!(s.messages.iter().any(|m| m.text.contains("Deleted 3 image(s)")));
+    assert!(s.messages.iter().any(|m| m.error && m.text.contains("Generating stopped")));
+    assert_eq!(update(s, Msg::RamUsed(130)), [Effect::FreeRam(100)], "tried again after the next image");
+    update(s, Msg::RamUsed(90));
+    assert!(!s.ephemeral.as_ref().unwrap().halted, "room again");
+    // the option: stop at once
+    update(s, Msg::EphemeralWhenFull(WhenFull::Halt));
+    assert!(update(s, Msg::RamUsed(150)).is_empty());
+    assert!(s.ephemeral.as_ref().unwrap().halted);
+    assert_eq!(update(s, Msg::EphemeralBudget(1.0)), [Effect::CheckRam]);
+    assert_eq!(s.ephemeral.as_ref().unwrap().budget, 1 << 30);
+    // the real measure: well within a GiB
+    h.send(Msg::FreeDiscarded);
+    h.settle();
+    assert!(!h.state.ephemeral.as_ref().unwrap().halted, "{:?}", h.errors());
 }

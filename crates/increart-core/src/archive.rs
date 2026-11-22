@@ -9,7 +9,8 @@
 //! the library picks one when it's first opened and makes its links that
 //! kind (see [`link::replace_stand_ins`]).
 
-use std::fs::{self, File};
+use crate::vfs::PathExt;
+use crate::vfs::{self as fs, File};
 use std::io::{self, Read, Write};
 use std::path::{Component, Path, PathBuf};
 
@@ -96,7 +97,7 @@ fn plan(root: &Path) -> Result<Vec<(String, Item, u64)>> {
         let is_image = StoreFormat::of_name(&parts[parts.len() - 1]).is_some();
         let store = if first == "input" { Store::Input } else { Store::Output };
         let to = if is_image { link::read_ref(&p, store).ok().flatten() } else { None };
-        let target = to.map(|r| r.path(root)).filter(|t| t.is_file());
+        let target = to.map(|r| r.path(root)).filter(|t| t.vfs_is_file());
         match target {
             Some(t) => {
                 let up = "../".repeat(parts.len() - 1);
@@ -105,7 +106,7 @@ fn plan(root: &Path) -> Result<Vec<(String, Item, u64)>> {
                 links.push((name, Item::Link(format!("{up}{store_dir}/{file}")), 0));
             }
             // a broken symlink: left out (the check reports it at home)
-            None if meta.file_type().is_symlink() && !p.exists() => {}
+            None if meta.file_type().is_symlink() && !p.vfs_exists() => {}
             None => records.push((name, Item::File(p), meta.len())),
         }
     }
@@ -303,7 +304,7 @@ pub fn unpack(archive: &Path, into: &Path, progress: Progress) -> Result<PathBuf
     let file = File::open(archive).at(archive)?;
     let total = file.metadata().at(archive)?.len();
     let staging = into.join(format!(".increart-unpack-{}", std::process::id()));
-    if staging.exists() {
+    if staging.vfs_exists() {
         fs::remove_dir_all(&staging).at(&staging)?;
     }
     fs::create_dir_all(&staging).at(&staging)?;
@@ -318,7 +319,7 @@ pub fn unpack(archive: &Path, into: &Path, progress: Progress) -> Result<PathBuf
             e => e,
         })?;
         // the library: the archive's one folder, or the archive itself
-        let (lib, name) = if staging.join("library.rsn").is_file() {
+        let (lib, name) = if staging.join("library.rsn").vfs_is_file() {
             let stem = archive.file_name().unwrap_or_default().to_string_lossy();
             let stem =
                 [".tar.gz", ".tgz", ".zip"].iter().find_map(|e| stem.strip_suffix(e)).unwrap_or(&stem).to_string();
@@ -326,7 +327,7 @@ pub fn unpack(archive: &Path, into: &Path, progress: Progress) -> Result<PathBuf
         } else {
             let dirs: Vec<PathBuf> = fs::read_dir(&staging).at(&staging)?.flatten().map(|e| e.path()).collect();
             match dirs.as_slice() {
-                [d] if d.join("library.rsn").is_file() => {
+                [d] if d.join("library.rsn").vfs_is_file() => {
                     (d.clone(), d.file_name().unwrap_or_default().to_string_lossy().into_owned())
                 }
                 _ => return Err(Error::Refused(format!("{}: not an IncreArt library", archive.display()))),
@@ -347,7 +348,7 @@ pub fn unpack(archive: &Path, into: &Path, progress: Progress) -> Result<PathBuf
         }
         Ok(dest)
     })();
-    if staging.exists() {
+    if staging.vfs_exists() {
         let _ = fs::remove_dir_all(&staging);
     }
     r

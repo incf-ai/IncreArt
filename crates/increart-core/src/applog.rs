@@ -3,7 +3,7 @@
 //! the Messages list shows, and a panic's. Nothing is written until
 //! [`start`] (tests never call it).
 
-use std::fs::{self, File, OpenOptions};
+use crate::vfs::{self as fs, File, OpenOptions};
 use std::io::Write;
 use std::path::Path;
 use std::sync::{Mutex, OnceLock};
@@ -15,6 +15,7 @@ pub const PREVIOUS: &str = "increart-previous.log";
 const ROTATE: u64 = 2 << 20;
 
 static LOG: OnceLock<Mutex<File>> = OnceLock::new();
+static DIR: OnceLock<std::path::PathBuf> = OnceLock::new();
 static ABOUT: OnceLock<String> = OnceLock::new();
 
 /// Opens `dir`/[`FILE`] to add to (the old one moved to [`PREVIOUS`] once
@@ -22,6 +23,7 @@ static ABOUT: OnceLock<String> = OnceLock::new();
 /// the config used). Once only; a log that can't be opened is no log.
 pub fn start(dir: &Path, about: &str) {
     let _ = ABOUT.set(about.to_string());
+    let _ = DIR.set(dir.to_path_buf());
     let path = dir.join(FILE);
     if fs::metadata(&path).is_ok_and(|m| m.len() > ROTATE) {
         let _ = fs::rename(&path, dir.join(PREVIOUS));
@@ -30,6 +32,17 @@ pub fn start(dir: &Path, about: &str) {
     if let Ok(mut f) = file {
         let _ = f.write_all(crate::process::log_note(&format!("started, {}", about.replace('\n', "; "))).as_bytes());
         let _ = LOG.set(Mutex::new(f));
+    }
+}
+
+/// Opens the log again (where it is now: the log folder became an overlay
+/// in RAM, or stopped being one; DESIGN.md, Ephemeral mode).
+pub fn reopen() {
+    let (Some(log), Some(dir)) = (LOG.get(), DIR.get()) else { return };
+    if let Ok(f) =
+        fs::create_dir_all(dir).and_then(|_| OpenOptions::new().create(true).append(true).open(dir.join(FILE)))
+    {
+        *log.lock().unwrap_or_else(|e| e.into_inner()) = f;
     }
 }
 

@@ -1020,6 +1020,14 @@ fn sheet(ui: &mut egui::Ui, st: &AppState, root: &Path, tex: &mut Textures, out:
             {
                 out.push(Msg::SheetRows(mode.next()));
             }
+            if !sh.by_value().is_empty() {
+                let on = st.sheet_pivot.is_some();
+                let tip = "Pivot: one axis as rows, another as columns, the rest and the seed chosen above";
+                if ui.selectable_label(on, ic(ph::TABLE, "Pivot")).on_hover_text(tip).clicked() {
+                    let p = increart_gui_core::PivotSel { rows: 0, cols: 1, ..Default::default() };
+                    out.push(Msg::SheetPivot((!on).then_some(p)));
+                }
+            }
             if !seed_heads && let Some(s) = sh.seeds.first() {
                 ui.separator();
                 ui.weak(format!("seed {s}"));
@@ -1050,6 +1058,11 @@ fn sheet(ui: &mut egui::Ui, st: &AppState, root: &Path, tex: &mut Textures, out:
                 }
             });
         });
+        axis_counts(ui, &sh);
+        if let Some(pv) = st.pivot() {
+            pivot_view(ui, st, root, tex, &pv, size, out);
+            return;
+        }
         if sh.rows.is_empty() && sh.hidden > 0 {
             ui.add_space(12.0);
             ui.weak(format!("No style's name has “{}”.", st.sheet_filter.trim()));
@@ -1123,6 +1136,40 @@ const SHEET_HEAD: f32 = 170.0;
 const SHEET_CAPTION_MIN: f32 = 110.0;
 
 /// A sheet row's (good, bad, unreviewed) images.
+/// A sweep of several axes: each axis a line, each of its values with its
+/// verdict counts over the rows shown (DESIGN.md, Sweep axes).
+fn axis_counts(ui: &mut egui::Ui, sh: &increart_gui_core::Sheet) {
+    use crate::widgets::{GOOD, NEUTRAL};
+    let axes = sh.by_value();
+    if axes.is_empty() {
+        return;
+    }
+    egui::CollapsingHeader::new("By value")
+        .id_salt("sheet_by_value")
+        .default_open(true)
+        .show(ui, |ui| {
+            for a in &axes {
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(RichText::new(&a.name).strong());
+                    for (label, [g, n, b, u]) in &a.values {
+                        ui.separator();
+                        ui.label(label);
+                        for (count, colour, what) in [(g, GOOD, "good"), (n, NEUTRAL, "neutral"), (b, BAD, "bad")] {
+                            if *count > 0 {
+                                ui.colored_label(colour, count.to_string()).on_hover_text(what);
+                            }
+                        }
+                        if *u > 0 {
+                            ui.weak(format!("{u}?")).on_hover_text("unreviewed");
+                        }
+                    }
+                });
+            }
+        })
+        .header_response
+        .on_hover_text("each value's images over the rows shown, whatever the other axes were");
+}
+
 fn sheet_counts(row: &increart_gui_core::SheetRow) -> [usize; 3] {
     let mut n = [0; 3];
     for c in &row.cells {
@@ -1290,19 +1337,7 @@ fn sheet_row(
                 if resp.double_clicked() {
                     out.push(Msg::Preview(Some(o.image.clone())));
                 }
-                resp.context_menu(|ui| {
-                    crate::tiles::menu(ui, st, &o.image, out);
-                    for (label, v, col) in VERDICTS {
-                        if ui.button(RichText::new(label).color(col)).clicked() {
-                            out.push(Msg::ReviewLink(o.path.clone(), Some(v)));
-                            ui.close();
-                        }
-                    }
-                    collect_button(ui, st, &o.image, out);
-                    tag_button(ui, st, &o.image, out);
-                    ui.separator();
-                    use_menu(ui, st, root, &o.image, out);
-                });
+                resp.context_menu(|ui| cell_menu(ui, st, root, o, out));
             }
             SheetCell::Pending | SheetCell::Empty => {
                 let (text, tip) = match cell {
@@ -1319,6 +1354,124 @@ fn sheet_row(
             }
         }
     }
+}
+
+/// A sheet cell's right-click menu: the image's, rate it, collect, tag, use.
+fn cell_menu(ui: &mut egui::Ui, st: &AppState, root: &Path, o: &OutputLink, out: &mut Vec<Msg>) {
+    crate::tiles::menu(ui, st, &o.image, out);
+    for (label, v, col) in VERDICTS {
+        if ui.button(RichText::new(label).color(col)).clicked() {
+            out.push(Msg::ReviewLink(o.path.clone(), Some(v)));
+            ui.close();
+        }
+    }
+    collect_button(ui, st, &o.image, out);
+    tag_button(ui, st, &o.image, out);
+    ui.separator();
+    use_menu(ui, st, root, &o.image, out);
+}
+
+/// The pivot: which axes are rows and columns, the other axes' values and
+/// the seed, then the table (DESIGN.md, Sweep axes).
+fn pivot_view(
+    ui: &mut egui::Ui,
+    st: &AppState,
+    root: &Path,
+    tex: &mut Textures,
+    pv: &increart_gui_core::Pivot,
+    size: f32,
+    out: &mut Vec<Msg>,
+) {
+    use increart_gui_core::SheetCell;
+    let mut sel = pv.sel.clone();
+    let names: Vec<&str> = pv.axes.iter().map(|(n, _)| n.as_str()).collect();
+    ui.horizontal_wrapped(|ui| {
+        let (rows, cols) = (sel.rows, sel.cols);
+        for (label, at) in [("Rows", &mut sel.rows), ("Columns", &mut sel.cols)] {
+            ui.label(label);
+            egui::ComboBox::from_id_salt(("pivot", label)).selected_text(names[*at]).show_ui(ui, |ui| {
+                for (i, n) in names.iter().enumerate() {
+                    ui.selectable_value(at, i, *n);
+                }
+            });
+        }
+        // choosing the other one's axis swaps them
+        if sel.rows == sel.cols {
+            if sel.rows != rows {
+                sel.cols = rows;
+            } else {
+                sel.rows = cols;
+            }
+        }
+        for (i, (name, values)) in pv.axes.iter().enumerate() {
+            if i == sel.rows || i == sel.cols {
+                continue;
+            }
+            ui.separator();
+            ui.label(name);
+            let at = &mut sel.fixed[i];
+            if ui.add_enabled(*at > 0, egui::Button::new(ph::CARET_LEFT).small()).clicked() {
+                *at -= 1;
+            }
+            egui::ComboBox::from_id_salt(("pivot_fixed", i)).selected_text(&values[*at]).show_ui(ui, |ui| {
+                for (j, v) in values.iter().enumerate() {
+                    ui.selectable_value(at, j, v);
+                }
+            });
+            if ui.add_enabled(*at + 1 < values.len(), egui::Button::new(ph::CARET_RIGHT).small()).clicked() {
+                *at += 1;
+            }
+        }
+        ui.separator();
+        ui.label("Seed");
+        let shown = sel.seed.map_or("first made".to_string(), |s| pv.seeds[s].to_string());
+        egui::ComboBox::from_id_salt("pivot_seed").selected_text(shown).show_ui(ui, |ui| {
+            ui.selectable_value(&mut sel.seed, None, "first made")
+                .on_hover_text("each combination's first image, whatever its seed (random per image: its own)");
+            for (i, s) in pv.seeds.iter().enumerate() {
+                ui.selectable_value(&mut sel.seed, Some(i), s.to_string());
+            }
+        });
+    });
+    if sel != pv.sel {
+        out.push(Msg::SheetPivot(Some(sel.clone())));
+    }
+    let (rows, cols) = (&pv.axes[pv.sel.rows].1, &pv.axes[pv.sel.cols].1);
+    ScrollArea::both().auto_shrink([false, false]).show(ui, |ui| {
+        egui::Grid::new("pivot").spacing(Vec2::splat(SHEET_GAP)).show(ui, |ui| {
+            ui.label("");
+            for c in cols {
+                ui.add_sized([size, 18.0], egui::Label::new(RichText::new(c).strong()).truncate());
+            }
+            ui.end_row();
+            for (r, line) in pv.cells.iter().enumerate() {
+                ui.add(egui::Label::new(RichText::new(&rows[r]).strong()).wrap());
+                for cell in line {
+                    match cell {
+                        SheetCell::Image(o) => {
+                            let t = tex.thumb(root, &o.image);
+                            let picked = st.picked.contains(&o.image);
+                            let resp = thumb(ui, t.as_ref(), size, picked, o.verdict.map(|v| verdict_color(Some(v))))
+                                .on_hover_text(describe(st, o));
+                            crate::tiles::mark(ui, st, resp.rect, &o.image);
+                            crate::tiles::click(ui, st, &resp, &o.image, out);
+                            if resp.double_clicked() {
+                                out.push(Msg::Preview(Some(o.image.clone())));
+                            }
+                            resp.context_menu(|ui| cell_menu(ui, st, root, o, out));
+                        }
+                        SheetCell::Pending => {
+                            empty_cell(ui, size, false, "…").on_hover_text("still to be generated");
+                        }
+                        SheetCell::Empty => {
+                            empty_cell(ui, size, false, "–").on_hover_text("no image of this combination at this seed");
+                        }
+                    }
+                }
+                ui.end_row();
+            }
+        });
+    });
 }
 
 /// The contact sheet's cell size: a slider; also Ctrl+scroll over the sheet.

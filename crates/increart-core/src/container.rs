@@ -2,7 +2,7 @@
 //! stores): their metadata (PNG text chunks and `eXIf`) read and replaced
 //! without re-encoding the pixels, and pixels encoded as either.
 
-use std::fs::File;
+use crate::vfs::File;
 use std::io::Read;
 use std::path::Path;
 

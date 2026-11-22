@@ -1,5 +1,6 @@
 //! Projects: the tree, Grid (one tile per project), Generate and Jobs.
 
+use increart_core::vfs::PathExt;
 use std::path::{Path, PathBuf};
 
 use eframe::egui::{self, ComboBox, Panel, RichText, ScrollArea};
@@ -2347,7 +2348,7 @@ fn file_texture(ctx: &egui::Context, path: &Path) -> Option<egui::TextureHandle>
     if let Some(t) = ctx.data(|d| d.get_temp::<Option<egui::TextureHandle>>(id)) {
         return t;
     }
-    let t = image::open(path).ok().map(|i| {
+    let t = increart_core::vfs::open_image(path).ok().map(|i| {
         let i = i.to_rgba8();
         let ci = egui::ColorImage::from_rgba_unmultiplied([i.width() as usize, i.height() as usize], &i);
         ctx.load_texture(path.display().to_string(), ci, egui::TextureOptions::LINEAR)
@@ -3019,13 +3020,18 @@ fn queue_strip(ui: &mut egui::Ui, st: &AppState, f: &increart_gui_core::Generate
         },
         |ui| {
             let label = match &runs {
+                Some(r) if f.sweep.combine == increart_core::prompts::Combine::PerImage => {
+                    let n = r.as_ref().map_or(0, |(r, _)| r.len());
+                    format!("Queue sweep: {n} images, each its own combination")
+                }
                 Some(r) => {
                     let n = r.as_ref().map_or(0, |(r, _)| r.len());
                     format!("Queue sweep: {n} runs × {} seed(s)", f.seeds)
                 }
                 None => format!("Queue {} seed(s)", f.seeds),
             };
-            let queue = ui.button(RichText::new(ic(ph::PLAY, &label)).strong()).clicked();
+            let text = RichText::new(ic(ph::PLAY, &label)).strong().color(crate::widgets::ACCENT);
+            let queue = ui.button(text).clicked();
             let (per, basis) = st.image_s_for(&increart_gui_core::forecast::Shape::of_form(f, &st.config.recipes));
             ui.weak(format!("≈ {} per image", fmt_secs(per as f32))).on_hover_text(basis.text());
             queue
@@ -3435,7 +3441,7 @@ pub fn server_list(ui: &mut egui::Ui, st: &AppState, out: &mut Vec<Msg>) {
 /// A server's log in the log viewer, when the app started it (only those
 /// have a log).
 pub fn log_button(ui: &mut egui::Ui, file: String, out: &mut Vec<Msg>) {
-    if !increart_gui_core::runtime::log_dir().join(&file).is_file() {
+    if !increart_gui_core::runtime::log_dir().join(&file).vfs_is_file() {
         ui.label("");
         return;
     }

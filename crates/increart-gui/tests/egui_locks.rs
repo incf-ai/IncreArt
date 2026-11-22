@@ -4,6 +4,7 @@
 //! on itself. Release builds hang for good (debug builds panic after 10 s).
 //! This reads the sources for such closures that name `ctx`, `ui`, `context`
 //! or `painter`.
+#![allow(clippy::disallowed_methods)] // fixtures on disk: no overlay here
 
 use std::path::{Path, PathBuf};
 

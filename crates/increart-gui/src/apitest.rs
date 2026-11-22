@@ -659,7 +659,7 @@ fn basic_footer(ui: &mut egui::Ui, t: &ApiTest, out: &mut Vec<Msg>) {
                     .clicked()
                     && let Some(r) = &report
                 {
-                    match std::fs::read_to_string(r.join("report.md")) {
+                    match increart_core::vfs::read_to_string(r.join("report.md")) {
                         Ok(text) => ui.ctx().copy_text(text),
                         Err(e) => ui.ctx().copy_text(format!("{}: {e}", r.join("report.md").display())),
                     }
@@ -798,7 +798,7 @@ fn footer(ui: &mut egui::Ui, st: &AppState, t: &ApiTest, out: &mut Vec<Msg>) {
             if copy.clicked()
                 && let Some(r) = &report
             {
-                match std::fs::read_to_string(r.join("report.md")) {
+                match increart_core::vfs::read_to_string(r.join("report.md")) {
                     Ok(text) => ui.ctx().copy_text(text),
                     Err(e) => ui.ctx().copy_text(format!("{}: {e}", r.join("report.md").display())),
                 }

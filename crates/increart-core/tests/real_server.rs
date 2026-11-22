@@ -2,6 +2,7 @@
 //! `INCREART_SDSERVER_URL` is set (e.g. `http://127.0.0.1:1234`). With
 //! `INCREART_SDSERVER_GENERATE=1` it also runs one small job with whatever
 //! model is loaded.
+#![allow(clippy::disallowed_methods)] // fixtures on disk: no overlay here
 
 use std::time::{Duration, Instant};
 

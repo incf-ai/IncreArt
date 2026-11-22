@@ -23,6 +23,7 @@
 //! and `INCREART_IT_KOBOLDCPP_GPU` (KoboldCpp's Vulkan number, default 1)
 //! must be different GPUs. `INCREART_IT_OUT`, if set, gets the images and
 //! the servers' logs afterwards, failed or not.
+#![allow(clippy::disallowed_methods)] // fixtures on disk: no overlay here
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::net::{SocketAddr, TcpStream};

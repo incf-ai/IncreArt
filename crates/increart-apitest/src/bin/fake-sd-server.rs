@@ -3,6 +3,7 @@
 //! sd-server arguments ignored), it answers `/sdcpp/v1/...` until killed.
 //! `--fake-files a,b` is its model list (none: 404), `--fake-steps n` the
 //! polls a job takes, `--fake-serial` one job at a time.
+#![allow(clippy::disallowed_methods)] // fixtures on disk: no overlay here
 
 #[allow(dead_code)]
 #[path = "../../../increart-core/tests/common/fake.rs"]

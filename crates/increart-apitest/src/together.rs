@@ -345,6 +345,7 @@ fn engine_run(cx: &mut Ctx, stop_one: bool) -> Verdict {
             source_idea: None,
             first_seed: 100,
             seeds,
+            queued_anyway: false,
         };
         let id = lib.create_run(&project, run)?;
         Ok((lib, id))

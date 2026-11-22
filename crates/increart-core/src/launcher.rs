@@ -1,7 +1,7 @@
 //! Starting sd-server processes, or attaching to ones already running
 //! (DESIGN.md, Backend).
 
-use std::fs::{self, OpenOptions};
+use crate::vfs::{self as fs, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -515,6 +515,7 @@ pub fn match_device<'a>(listed: &'a [String], wanted: &str) -> Option<&'a str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::vfs::PathExt;
 
     #[test]
     fn why_a_server_connected_to_didnt_open() {
@@ -661,7 +662,7 @@ mod tests {
             line.ends_with(&format!(" --nomodel --admin --admindir {} --adminpassword ***", dir.display())),
             "{line}"
         );
-        assert!(!dir.exists(), "only shown, nothing made");
+        assert!(!dir.vfs_exists(), "only shown, nothing made");
         let empty = crate::kobold::KoboldServer {
             run: crate::kobold::KoboldRun::Start {
                 binary: " ".into(),

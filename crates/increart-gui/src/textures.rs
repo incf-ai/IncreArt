@@ -271,11 +271,11 @@ impl Drop for Textures {
 
 fn load(root: &std::path::Path, key: &Key) -> Result<ColorImage, String> {
     let img = if key.full {
-        let img = image::open(key.image.path(root)).map_err(|e| e.to_string())?;
+        let img = increart_core::vfs::open_image(key.image.path(root)).map_err(|e| e.to_string())?;
         if img.width().max(img.height()) > FULL { img.thumbnail(FULL, FULL) } else { img }
     } else {
         let path = thumbs::ensure(root, &key.image).map_err(|e| e.to_string())?;
-        image::open(path).map_err(|e| e.to_string())?
+        increart_core::vfs::open_image(path).map_err(|e| e.to_string())?
     };
     let rgba = img.to_rgba8();
     Ok(ColorImage::from_rgba_unmultiplied([rgba.width() as usize, rgba.height() as usize], rgba.as_raw()))
@@ -329,7 +329,7 @@ mod tests {
     fn a_failed_load_is_tried_again_quickly_then_now_and_then() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
-        std::fs::create_dir_all(root.join("output_images")).unwrap();
+        increart_core::vfs::create_dir_all(root.join("output_images")).unwrap();
         let ctx = egui::Context::default();
         let mut tex = textures(&ctx);
         // waits no slow runner sleeps through: the test ends them itself
@@ -370,7 +370,7 @@ mod tests {
     fn a_load_not_back_in_time_is_asked_for_again() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
-        std::fs::create_dir_all(root.join("output_images")).unwrap();
+        increart_core::vfs::create_dir_all(root.join("output_images")).unwrap();
         let ctx = egui::Context::default();
         let mut tex = textures(&ctx);
         // the loaders gone: nothing comes back

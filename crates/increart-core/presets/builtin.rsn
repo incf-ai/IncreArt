@@ -308,6 +308,18 @@
                     "text_encoders/qwen3vl_32b_minimax_h3-Q2_K_M.gguf": "https://huggingface.co/leejet/MiniMax-H3-GGUF/resolve/main/qwen3vl_32b_minimax_h3-Q2_K_M.gguf"
                 },
                 note: "The text encoder in Q2_K (leejet's GGUF): images a little different from Int8's, text still clean; 15 s for a 1024² image."
+            },
+            Size {
+                name: "12 GB: Q4_K_S, Q4 encoder",
+                files: {
+                    "diffusion_model": "diffusion_models/minimax_h3_image_pruned-Q4_K_S.gguf",
+                    "llm": "text_encoders/qwen3vl_32b_minimax_h3-Q4_K_M.gguf"
+                },
+                downloads: {
+                    "diffusion_models/minimax_h3_image_pruned-Q4_K_S.gguf": "https://huggingface.co/unsloth/MiniMax-H3-Image-GGUF/resolve/main/minimax_h3_image_pruned-Q4_K_S.gguf",
+                    "text_encoders/qwen3vl_32b_minimax_h3-Q4_K_M.gguf": "https://huggingface.co/leejet/MiniMax-H3-GGUF/resolve/main/qwen3vl_32b_minimax_h3-Q4_K_M.gguf"
+                },
+                note: "For a 12 GB card: the same Q4_K_S model as KoboldCpp's 12 GB preset, the weights kept in system RAM (about 30 GiB). Give the sd-server `--max-vram 8 --vae-tiling` in its arguments: on an R9700 a 1024² edit then took 34 s at 11.7 GiB of VRAM (13 GiB without them). The GPU column counts the whole model, so it shows ✗ on a 12 GB card."
             }
         ]
     },

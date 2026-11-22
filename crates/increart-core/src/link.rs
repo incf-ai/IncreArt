@@ -1,7 +1,7 @@
 //! Links from folders into the image stores (DESIGN.md, Links): relative
 //! symlinks, else hard links, else copies, fixed per library.
 
-use std::fs;
+use crate::vfs as fs;
 use std::io;
 use std::path::{Component, Path, PathBuf};
 
@@ -12,14 +12,8 @@ use crate::model::StoreFormat;
 use crate::model::{ImageRef, LinkMode, Store};
 use crate::png;
 
-#[cfg(unix)]
 pub fn symlink(target: &Path, at: &Path) -> io::Result<()> {
-    std::os::unix::fs::symlink(target, at)
-}
-
-#[cfg(windows)]
-pub fn symlink(target: &Path, at: &Path) -> io::Result<()> {
-    std::os::windows::fs::symlink_file(target, at)
+    fs::symlink(target, at)
 }
 
 /// Picks the library's link mode by trying each kind in `dir` (inside the

@@ -8,7 +8,7 @@
 //! count, so an opaque RGBA image decodes as RGBA again (the pixel hash
 //! counts channels). Decoders skip the unknown `PNGt` chunks.
 
-use std::fs::File;
+use crate::vfs::File;
 use std::io::{BufReader, Read};
 use std::path::Path;
 
@@ -286,7 +286,7 @@ pub fn find_header_chunk(path: &Path, key: &str) -> Result<Option<(u64, Chunk, b
 /// Writes `chunk` over the `PNGt` chunk starting at `at`, which has the same
 /// length, in one write, then a sync. The file keeps its size.
 pub fn patch_chunk(path: &Path, at: u64, chunk: &Chunk) -> Result<()> {
-    let f = std::fs::OpenOptions::new().read(true).write(true).open(path).at(path)?;
+    let f = crate::vfs::OpenOptions::new().read(true).write(true).open(path).at(path)?;
     let mut head = [0; 8];
     crate::fsutil::read_exact_at(&f, &mut head, at).at(path)?;
     let bytes = wrap(chunk);
@@ -342,20 +342,20 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("a.webp");
         let usage = UsageCounts { refs: 1, starts: 0 };
-        std::fs::write(&path, encode(&rgba(true), &[Chunk::text(KEY_ID, "x"), usage.chunk()]).unwrap()).unwrap();
+        crate::vfs::write(&path, encode(&rgba(true), &[Chunk::text(KEY_ID, "x"), usage.chunk()]).unwrap()).unwrap();
         assert_eq!(header_texts(&path).unwrap()[0], (KEY_ID.into(), "x".into()));
         let (at, c, ok) = find_header_chunk(&path, KEY_USAGE).unwrap().unwrap();
         assert!(ok && c == usage.chunk());
         let more = UsageCounts { refs: 2, starts: 7 };
-        let len = std::fs::metadata(&path).unwrap().len();
+        let len = crate::vfs::metadata(&path).unwrap().len();
         patch_chunk(&path, at, &more.chunk()).unwrap();
-        assert_eq!(std::fs::metadata(&path).unwrap().len(), len);
+        assert_eq!(crate::vfs::metadata(&path).unwrap().len(), len);
         let (_, c, ok) = find_header_chunk(&path, KEY_USAGE).unwrap().unwrap();
         assert!(ok && c == more.chunk());
         // a torn write shows as a bad CRC
-        let mut bytes = std::fs::read(&path).unwrap();
+        let mut bytes = crate::vfs::read(&path).unwrap();
         bytes[at as usize + 8 + 4 + KEY_USAGE.len() + 6] ^= 1;
-        std::fs::write(&path, &bytes).unwrap();
+        crate::vfs::write(&path, &bytes).unwrap();
         assert!(!find_header_chunk(&path, KEY_USAGE).unwrap().unwrap().2);
         assert!(read_chunks(&bytes).is_err());
     }

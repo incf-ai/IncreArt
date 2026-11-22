@@ -60,7 +60,7 @@ impl Cache {
     fn refresh(&mut self, dir: &Path, file: Option<&str>) {
         if self.listed.is_none_or(|t| t.elapsed() > Duration::from_secs(2)) {
             self.listed = Some(Instant::now());
-            self.files = std::fs::read_dir(dir)
+            self.files = increart_core::vfs::read_dir(dir)
                 .map(|rd| {
                     rd.flatten()
                         .filter_map(|e| {
@@ -92,7 +92,7 @@ impl Cache {
         }
         self.checked = Some(Instant::now());
         let path = dir.join(name);
-        let Ok(meta) = std::fs::metadata(&path) else {
+        let Ok(meta) = increart_core::vfs::metadata(&path) else {
             self.lines = vec![format!("{} isn't there (yet).", path.display())];
             self.read = None;
             return;
@@ -149,7 +149,7 @@ fn read_tail(path: &Path, len: u64) -> (Vec<String>, bool) {
     use std::io::{Read, Seek, SeekFrom};
     let mut bytes = vec![];
     let from = len.saturating_sub(TAIL);
-    let ok = std::fs::File::open(path)
+    let ok = increart_core::vfs::File::open(path)
         .and_then(|mut f| f.seek(SeekFrom::Start(from)).and_then(|_| f.read_to_end(&mut bytes)))
         .is_ok();
     if !ok {
@@ -176,7 +176,7 @@ fn read_tail(path: &Path, len: u64) -> (Vec<String>, bool) {
 fn latest_has_error(path: &Path, len: u64) -> bool {
     use std::io::{Read, Seek, SeekFrom};
     let mut bytes = vec![];
-    let read = std::fs::File::open(path).and_then(|mut f| {
+    let read = increart_core::vfs::File::open(path).and_then(|mut f| {
         f.seek(SeekFrom::Start(len.saturating_sub(256 << 10))).and_then(|_| f.read_to_end(&mut bytes))
     });
     if read.is_err() {
@@ -192,7 +192,7 @@ fn latest_has_error(path: &Path, len: u64) -> bool {
 /// returns where its last whole line ends.
 fn find_launch(path: &Path, from: u64, launch: &mut Option<String>) -> u64 {
     use std::io::{BufRead, Seek, SeekFrom};
-    let Ok(mut f) = std::fs::File::open(path) else { return from };
+    let Ok(mut f) = increart_core::vfs::File::open(path) else { return from };
     if f.seek(SeekFrom::Start(from)).is_err() {
         return from;
     }
@@ -781,32 +781,35 @@ mod tests {
     fn a_log_reads_as_a_terminal_shows_it() {
         assert_eq!(strip_ansi("\u{1b}[1;32mready\u{1b}[0m at :1234"), "ready at :1234");
         let p = std::env::temp_dir().join(format!("increart-log-test-{}.log", std::process::id()));
-        std::fs::write(&p, "loading\n 10%\r 50%\r100%\r\ndone\n").unwrap();
-        let len = std::fs::metadata(&p).unwrap().len();
+        increart_core::vfs::write(&p, "loading\n 10%\r 50%\r100%\r\ndone\n").unwrap();
+        let len = increart_core::vfs::metadata(&p).unwrap().len();
         let read = read_tail(&p, len);
-        std::fs::remove_file(&p).unwrap();
+        increart_core::vfs::remove_file(&p).unwrap();
         assert_eq!(read, (vec!["loading".into(), "100%".into(), "done".into()], false));
     }
 
     #[test]
     fn the_last_launch_line_is_found_as_the_log_grows() {
         let p = std::env::temp_dir().join(format!("increart-launch-test-{}.log", std::process::id()));
-        std::fs::write(&p, "\n--- IncreArt, 2026-10-30 10:00:00: kcpp --port 1\nout\n--- IncreArt: no such file\n")
-            .unwrap();
+        increart_core::vfs::write(
+            &p,
+            "\n--- IncreArt, 2026-10-30 10:00:00: kcpp --port 1\nout\n--- IncreArt: no such file\n",
+        )
+        .unwrap();
         let mut launch = None;
         let at = find_launch(&p, 0, &mut launch);
         assert_eq!(launch.as_deref(), Some("--- IncreArt, 2026-10-30 10:00:00: kcpp --port 1"));
         let more = "--- IncreArt, 2026-10-30 10:01:00: reloading with a.kcpps, the settings for: kcpp\n--- IncreArt, 2026-10-30 11:00:00: kcpp --port 2";
-        std::fs::OpenOptions::new().append(true).open(&p).unwrap().write_all(more.as_bytes()).unwrap();
+        increart_core::vfs::OpenOptions::new().append(true).open(&p).unwrap().write_all(more.as_bytes()).unwrap();
         let at = find_launch(&p, at, &mut launch);
         assert_eq!(
             launch.as_deref(),
             Some("--- IncreArt, 2026-10-30 10:00:00: kcpp --port 1"),
             "reloads aren't launches; a part line waits"
         );
-        std::fs::OpenOptions::new().append(true).open(&p).unwrap().write_all(b"\n").unwrap();
+        increart_core::vfs::OpenOptions::new().append(true).open(&p).unwrap().write_all(b"\n").unwrap();
         find_launch(&p, at, &mut launch);
-        std::fs::remove_file(&p).unwrap();
+        increart_core::vfs::remove_file(&p).unwrap();
         assert_eq!(launch.as_deref(), Some("--- IncreArt, 2026-10-30 11:00:00: kcpp --port 2"));
     }
 }

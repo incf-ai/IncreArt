@@ -23,6 +23,7 @@ const FV_FIRST_ENTRY: (f32, f32) = (330.0, 140.0);
 const SCENES: &[&str] = &[
     "01-library-dialog",
     "53-library-wizard",
+    "53b-ephemeral-form",
     "55-library-open-wizard",
     "02-server-dialog",
     "02b-pe-settings",
@@ -246,6 +247,9 @@ const EXTRA_SCENES: &[&str] = &[
     "97j-check-library-click",
     "98-setting-sweep",
     "98b-model-sweep",
+    "98a-sweep-axes",
+    "98a2-lora-presets",
+    "98a3-lora-sweep",
     "98b2-image-sweep",
     "98b2b-image-sweep-all",
     "98b3-image-sweep-project",
@@ -335,7 +339,7 @@ impl Tour {
     pub fn from_env() -> Option<Tour> {
         let dir = PathBuf::from(std::env::var_os("INCREART_TOUR")?);
         let library = std::env::var("INCREART_TOUR_LIBRARY").unwrap_or_default();
-        std::fs::create_dir_all(&dir).ok()?;
+        increart_core::vfs::create_dir_all(&dir).ok()?;
         let scenes = match std::env::var("INCREART_TOUR_SCENES") {
             Ok(list) => {
                 let prefixes: Vec<_> =
@@ -376,11 +380,11 @@ impl Tour {
             exit 0\n\
             fi\n\
             exec sleep 600\n";
-        let _ = std::fs::write(&stand_in, script);
+        let _ = increart_core::vfs::write(&stand_in, script);
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            let _ = std::fs::set_permissions(&stand_in, std::fs::Permissions::from_mode(0o755));
+            let _ = increart_core::vfs::set_permissions(&stand_in, increart_core::vfs::Permissions::from_mode(0o755));
         }
         stand_in
     }
@@ -392,6 +396,11 @@ impl Tour {
                 let first = crate::startup::suggested_libraries().into_iter().next().map(|(_, p)| p);
                 vec![Msg::LibraryWizard(first.map(|p| (LibraryWizard::Create, p)))]
             }
+            // the wizard closed; a 32 GiB machine, so the shot doesn't vary
+            "53b-ephemeral-form" => vec![
+                Msg::LibraryWizard(None),
+                Msg::EphemeralForm(Some(increart_gui_core::EphemeralForm::new(Some(&self.library), Some(32.0)))),
+            ],
             // after 07 (a project with a prompt), without servers
             "56-server-status" => vec![Msg::ContinueWithoutServers, Msg::ServerStatus(true)],
             "57-no-server-warning" => vec![Msg::ServerStatus(false), Msg::QueueGenerate],
@@ -415,7 +424,7 @@ impl Tour {
                 }))]
             }
             "98h5-server-logs-folded" | "98h6-server-logs-errors-only" => {
-                let mut names: Vec<String> = std::fs::read_dir(increart_gui_core::runtime::log_dir())
+                let mut names: Vec<String> = increart_core::vfs::read_dir(increart_gui_core::runtime::log_dir())
                     .map(|rd| rd.flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect())
                     .unwrap_or_default();
                 names.sort();
@@ -788,21 +797,72 @@ impl Tour {
                 v.extend(fox_cafe(st).map(OutputSource::Project).map(Msg::ShowOutputs));
                 v
             }
-            "98-setting-sweep" | "98b-model-sweep" => {
+            "98a2-lora-presets" => {
+                use increart_core::config::{LoraPreset, PresetLora};
+                let lora = |file: &str, weight: f32, trigger: &str| PresetLora {
+                    file: file.into(),
+                    weight,
+                    trigger: trigger.into(),
+                };
+                let list = vec![
+                    LoraPreset {
+                        name: "pixel art".into(),
+                        loras: vec![lora("loras/pixel_art.safetensors", 1.0, "pixel art style")],
+                    },
+                    LoraPreset {
+                        name: "ink + film grain".into(),
+                        loras: vec![
+                            lora("loras/ink_wash.safetensors", 0.8, "ink wash"),
+                            lora("loras/film_grain.safetensors", 0.5, ""),
+                        ],
+                    },
+                    LoraPreset {
+                        name: "claymation".into(),
+                        loras: vec![lora("loras/clay.safetensors", 0.9, "claymation")],
+                    },
+                ];
+                let files = list.iter().flat_map(|p| p.loras.iter().map(|l| l.file.clone())).collect();
+                vec![
+                    Msg::ContinueWithoutServers,
+                    Msg::LoraEditorOpen,
+                    Msg::LoraEditor(Some(increart_gui_core::LoraEditor { list, selected: 1, files })),
+                ]
+            }
+            "98-setting-sweep" | "98b-model-sweep" | "98a-sweep-axes" | "98a3-lora-sweep" => {
                 let mut v = vec![
                     Msg::ContinueWithoutServers,
                     Msg::Preview(None),
                     Msg::Tab(Tab::Projects),
                     Msg::ProjectsTab(ProjectsTab::Generate),
                 ];
-                if let Some(p) = st.index.projects.iter().find(|p| p.name() == "stickers") {
+                // (the example library has no stickers: its first project)
+                let stickers = st.index.projects.iter().find(|p| p.name() == "stickers");
+                if let Some(p) = stickers.or(st.index.projects.first()) {
                     v.push(Msg::SelectProject(p.project.id.clone()));
                 }
                 let mut f = st.generate.clone();
                 f.prompt = "cute robot mascot sticker".into();
                 f.seeds = 3;
                 f.sweep.on = true;
-                if name == "98-setting-sweep" {
+                if name == "98a3-lora-sweep" {
+                    // the presets 98a2 made, saved; then LoRA × weight
+                    use increart_core::prompts::{SweepAxis, SweepVary};
+                    v.insert(0, Msg::LoraEditorSave);
+                    f.sweep.vary = SweepVary::Lora;
+                    f.sweep.loras = vec!["".into(), "pixel art".into(), "ink + film grain".into(), "claymation".into()];
+                    let values = "0.6, 1".to_string();
+                    f.sweep.axes = vec![SweepAxis { vary: SweepVary::LoraWeight, values, ..Default::default() }];
+                } else if name == "98a-sweep-axes" {
+                    // a tag first, then CFG, every combination
+                    use increart_core::prompts::{SweepAxis, SweepVary};
+                    f.prompt = "cute robot mascot sticker, {colour} paint".into();
+                    f.sweep.vary = SweepVary::Tag;
+                    f.sweep.tag_slot = "colour".into();
+                    f.sweep.tag_values = "red\nmint green\nchrome".into();
+                    f.cfg = 2.0;
+                    let values = increart_gui_core::update::sweep_defaults(SweepVary::Cfg, &f);
+                    f.sweep.axes = vec![SweepAxis { vary: SweepVary::Cfg, values, ..Default::default() }];
+                } else if name == "98-setting-sweep" {
                     f.sweep.vary = increart_core::prompts::SweepVary::Cfg;
                     f.cfg = 2.0;
                     f.sweep.values = increart_gui_core::update::sweep_defaults(f.sweep.vary, &f);

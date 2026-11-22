@@ -7,6 +7,7 @@
 //! `isPublicDomain`, Art Institute `is_public_domain`, the Library of
 //! Congress item's rights statement); one that no longer passes stops it.
 //! NASA imagery is not subject to US copyright (NASA media guidelines).
+#![allow(clippy::disallowed_methods)] // fixtures on disk: no overlay here
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;

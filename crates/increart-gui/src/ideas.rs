@@ -1,13 +1,18 @@
 //! Idea inbox (New idea · Grid · Discarded) and Input library (Grid with the
 //! folder tree).
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+
+use increart_core::vfs::PathExt;
 
 use eframe::egui::{self, Align2, Color32, FontId, Key, Panel, RichText, ScrollArea, Sense, Stroke};
 use increart_core::scan::IdeaEntry;
 use increart_core::{IdeaLoc, ImageRef, Tree, Verdict};
+use increart_gui_core::tile::TileImage;
 use increart_gui_core::{
-    AddIdea, AppState, IdeaAge, IdeaOrigin, InboxFilter, InboxTab, InfoPanel, LibTab, Msg, PickKind, Tab, ZoomGrid,
+    AddIdea, AppState, IdeaAge, IdeaOrigin, InboxFilter, InboxTab, InfoPanel, LibTab, Msg, PasteTo, PickKind, Tab,
+    ZoomGrid,
 };
 
 use crate::folder_pick;
@@ -244,8 +249,66 @@ fn desktop_drop(ui: &mut egui::Ui, out: &mut Vec<Msg>) {
     }
 }
 
+/// Files named by pasted text (copied in a file manager): those that exist.
+fn pasted_files(text: &str) -> Vec<PathBuf> {
+    crate::tiles::paths_in(text).into_iter().filter(|p| p.is_absolute() && p.vfs_is_file()).collect()
+}
+
+/// Ctrl+V this frame: images to `to`. Image data is taken even while a
+/// text field has the keyboard (it has no use for it); file paths in
+/// pasted text only when none has.
+fn paste_keys(ctx: &egui::Context, to: PasteTo, out: &mut Vec<Msg>) {
+    let typing = ctx.memory(|m| m.focused().is_some());
+    let (mut images, mut files) = (vec![], vec![]);
+    for e in ctx.input(|i| i.events.clone()) {
+        match e {
+            egui::Event::PasteImage(img) => {
+                let rgba = img.pixels.iter().flat_map(|c| c.to_srgba_unmultiplied()).collect();
+                let [w, h] = img.size;
+                if let Some(buf) = image::RgbaImage::from_raw(w as u32, h as u32, rgba) {
+                    images.push(TileImage(Arc::new(buf)));
+                }
+            }
+            egui::Event::Paste(text) if !typing => files.extend(pasted_files(&text)),
+            _ => {}
+        }
+    }
+    if !images.is_empty() || !files.is_empty() {
+        out.push(Msg::PasteImages { images, files, to });
+    }
+}
+
+/// A Paste button's click: the clipboard's image, else the image files its
+/// text names.
+fn paste_clipboard(to: PasteTo, out: &mut Vec<Msg>) {
+    let mut cb = match arboard::Clipboard::new() {
+        Ok(cb) => cb,
+        Err(e) => return out.push(Msg::Problem(format!("Clipboard: {e}"))),
+    };
+    if let Ok(img) = cb.get_image()
+        && let Some(buf) = image::RgbaImage::from_raw(img.width as u32, img.height as u32, img.bytes.into_owned())
+    {
+        return out.push(Msg::PasteImages { images: vec![TileImage(Arc::new(buf))], files: vec![], to });
+    }
+    let files = pasted_files(&cb.get_text().unwrap_or_default());
+    if files.is_empty() {
+        out.push(Msg::Info("No image on the clipboard".into()));
+    } else {
+        out.push(Msg::PasteImages { images: vec![], files, to });
+    }
+}
+
 pub fn inbox(ui: &mut egui::Ui, st: &AppState, tex: &mut Textures, out: &mut Vec<Msg>) {
     desktop_drop(ui, out);
+    // Ctrl+V: into the draft on New idea, new ideas on Grid and Import (the
+    // Folder tab pastes files itself); not under a window or preview
+    let dialog = st.idea_edit.is_some() || st.save_idea.is_some() || st.previewing();
+    match st.inbox_tab {
+        _ if dialog => {}
+        InboxTab::NewIdea => paste_keys(ui.ctx(), PasteTo::Draft, out),
+        InboxTab::Grid | InboxTab::Import => paste_keys(ui.ctx(), PasteTo::Inbox, out),
+        InboxTab::Folder | InboxTab::Discarded => {}
+    }
     let n = st.unreviewed_ideas().len();
     Panel::top("inbox_tabs").show(ui, |ui| {
         // groups wrap whole when the bar is short of room
@@ -272,6 +335,13 @@ pub fn inbox(ui: &mut egui::Ui, st: &AppState, tex: &mut Textures, out: &mut Vec
                     .clicked()
                 {
                     out.push(Msg::Pick(PickKind::ImportFiles));
+                }
+                if ui
+                    .button(ic(ph::CLIPBOARD, "Paste"))
+                    .on_hover_text("the clipboard's image (or image files) as new ideas   Ctrl+V on Grid or Import")
+                    .clicked()
+                {
+                    paste_clipboard(PasteTo::Inbox, out);
                 }
             });
             if st.inbox_tab == InboxTab::Grid {
@@ -372,6 +442,9 @@ pub fn edit_window(ctx: &egui::Context, st: &AppState, tex: &mut Textures, out: 
     let Some(ed) = &st.idea_edit else { return };
     let Some(root) = st.library.as_deref() else { return };
     let idea = st.idea(&ed.id).map(|e| e.idea.clone());
+    if !st.previewing() {
+        paste_keys(ctx, PasteTo::Edit(ed.id.clone()), out);
+    }
     let mut open = true;
     egui::Window::new(ic(ph::PENCIL_SIMPLE, "Edit idea")).open(&mut open).default_width(620.0).collapsible(false).show(
         ctx,
@@ -411,6 +484,9 @@ pub fn edit_window(ctx: &egui::Context, st: &AppState, tex: &mut Textures, out: 
                 }
                 if e.images.is_empty() {
                     ui.weak("none");
+                }
+                if ui.button(ic(ph::CLIPBOARD, "Paste image")).on_hover_text("from the clipboard   Ctrl+V").clicked() {
+                    paste_clipboard(PasteTo::Edit(e.id.clone()), out);
                 }
             });
             if let Some(i) = &idea
@@ -502,8 +578,11 @@ fn new_idea(ui: &mut egui::Ui, st: &AppState, tex: &mut Textures, out: &mut Vec<
             if ui.button(ic(ph::IMAGE, "Add images…")).clicked() {
                 out.push(Msg::Pick(PickKind::IdeaImages));
             }
+            if ui.button(ic(ph::CLIPBOARD, "Paste image")).on_hover_text("from the clipboard   Ctrl+V").clicked() {
+                paste_clipboard(PasteTo::Draft, out);
+            }
         });
-        ui.weak("Files dropped on this window become ideas of their own.");
+        ui.weak("Pasted images (Ctrl+V) are added here; files dropped on this window become ideas of their own.");
         ui.add_space(10.0);
         ui.horizontal(|ui| {
             if ui.button(ic(ph::TRAY, "Add to inbox")).clicked() {

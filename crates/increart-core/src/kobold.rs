@@ -3,7 +3,8 @@
 //! starts it for a chat model; image servers for an image model (and a chat
 //! model beside it, to be prompt enhance's server too).
 
-use std::fs::{self, OpenOptions};
+use crate::vfs::PathExt;
+use crate::vfs::{self as fs, OpenOptions};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 
@@ -208,7 +209,7 @@ pub fn command(binary: &str) -> Result<Command, String> {
     if b.is_empty() {
         return Err("no KoboldCpp binary set".into());
     }
-    if Path::new(b).exists() {
+    if Path::new(b).vfs_exists() {
         return Ok(Command::new(b));
     }
     let mut parts = b.split_whitespace();
@@ -251,7 +252,7 @@ pub fn find_binary_in(path: &std::ffi::OsStr, home: Option<&Path>) -> Option<Str
             .flatten()
             .filter(|e| e.file_name().to_string_lossy().to_lowercase().starts_with("koboldcpp"))
             .map(|e| e.path())
-            .filter(|p| p.is_dir())
+            .filter(|p| p.vfs_is_dir())
             .collect();
         own.sort();
         dirs.extend(own);
@@ -286,7 +287,7 @@ fn stem(p: &Path) -> String {
 #[cfg(unix)]
 fn executable(m: &fs::Metadata) -> bool {
     use std::os::unix::fs::PermissionsExt;
-    m.permissions().mode() & 0o111 != 0
+    m.disk().is_some_and(|m| m.permissions().mode() & 0o111 != 0)
 }
 
 #[cfg(not(unix))]

@@ -1,5 +1,6 @@
 //! Everything the GUI shows, and the lists derived from the library index.
 
+use increart_core::vfs::PathExt;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
@@ -1238,18 +1239,22 @@ impl ModelWizard {
     /// first whose diffusion model fits (the text encoder from RAM), else
     /// the smallest. None: one size, or the GPUs or the files' sizes not
     /// known yet (the size it's listed at).
+    /// The largest GPU's memory (a discrete one's, when there's one: an
+    /// integrated one shares the RAM), in GiB.
+    pub fn largest_vram_gib(&self) -> Option<f64> {
+        let gpus = self.gpus.as_ref()?.as_ref().ok()?;
+        let discrete = gpus.iter().any(|g| !g.integrated);
+        gpus.iter()
+            .filter(|g| !discrete || !g.integrated)
+            .map(|g| g.vram_gib)
+            .fold(None, |m: Option<f64>, v| Some(m.map_or(v, |m| m.max(v))))
+    }
+
     pub fn recommended_size(&self, p: &RecipePreset) -> Option<String> {
         if p.sizes.len() < 2 {
             return None;
         }
-        let gpus = self.gpus.as_ref()?.as_ref().ok()?;
-        // a discrete GPU's memory, when there's one (an integrated one shares RAM)
-        let discrete = gpus.iter().any(|g| !g.integrated);
-        let vram = gpus
-            .iter()
-            .filter(|g| !discrete || !g.integrated)
-            .map(|g| g.vram_gib)
-            .fold(None, |m: Option<f64>, v| Some(m.map_or(v, |m| m.max(v))))?;
+        let vram = self.largest_vram_gib()?;
         let fits: Vec<(String, GpuFit)> = p
             .each_size()
             .into_iter()
@@ -1423,7 +1428,7 @@ impl PresetNeeds {
         }
         let size_of = |f: &str| -> Option<u64> {
             match model_file_on_disk(f, dirs) {
-                Some(path) => std::fs::metadata(path).ok().map(|m| m.len()),
+                Some(path) => increart_core::vfs::metadata(path).ok().map(|m| m.len()),
                 None => match links.iter().find(|l| l.file == f) {
                     Some(l) => Some(l.bytes),
                     None => sizes.get(p.downloads.get(f)?).copied().flatten(),
@@ -1506,6 +1511,19 @@ impl PresetNeeds {
             GpuFit::Diffusion
         } else {
             GpuFit::No
+        })
+    }
+
+    /// The system RAM it takes beside a GPU of `vram_gib` (None: the
+    /// GPUs aren't known, so as much as goes to RAM when only the
+    /// diffusion model fits): the text encoder and VAE when they don't fit
+    /// beside the diffusion model, all of it when that doesn't either.
+    pub fn ram_bytes(&self, vram_gib: Option<f64>) -> Option<u64> {
+        let rest = self.total_bytes? - self.diffusion_bytes?;
+        Some(match vram_gib.map(|v| self.fit(v)) {
+            Some(Some(GpuFit::Whole)) => 0,
+            Some(Some(GpuFit::No)) => self.total_bytes?,
+            _ => rest,
         })
     }
 
@@ -2016,6 +2034,195 @@ pub struct Sheet<'a> {
     pub hidden: usize,
 }
 
+/// One axis of a sweep of several, for the sheet's counts: its name
+/// ("Style", "{fur}", "cfg") and each value's (label, [good, neutral,
+/// bad, unrated]) in the order first met.
+#[derive(Clone, Debug, PartialEq)]
+pub struct AxisCounts {
+    pub name: String,
+    pub values: Vec<(String, [usize; 4])>,
+}
+
+impl Sheet<'_> {
+    /// Verdict counts per value of each axis, over the rows shown; empty
+    /// for a sweep of one axis (its rows say it).
+    pub fn by_value(&self) -> Vec<AxisCounts> {
+        let tags: Vec<_> = self.rows.iter().filter_map(|r| r.run.sweep.as_ref().map(|t| (r, t))).collect();
+        let axes = tags.iter().map(|(_, t)| t.more.len()).min().unwrap_or(0);
+        if axes == 0 {
+            return vec![];
+        }
+        let first = tags[0].1.param.as_ref().map_or("Style".to_string(), |p| p.name.clone());
+        let mut out: Vec<AxisCounts> = std::iter::once(first)
+            .chain((0..axes).map(|j| tags[0].1.more[j].name.clone()))
+            .map(|name| AxisCounts { name, values: vec![] })
+            .collect();
+        for (row, tag) in &tags {
+            let mut n = [0; 4];
+            for c in &row.cells {
+                if let SheetCell::Image(o) = c {
+                    n[match o.verdict {
+                        Some(Verdict::Good) => 0,
+                        Some(Verdict::Neutral) => 1,
+                        Some(Verdict::Bad) => 2,
+                        None => 3,
+                    }] += 1;
+                }
+            }
+            let labels = std::iter::once(tag.first()).chain(tag.more[..axes].iter().map(|p| p.label()));
+            for (axis, label) in out.iter_mut().zip(labels) {
+                match axis.values.iter_mut().find(|(l, _)| *l == label) {
+                    Some((_, m)) => (0..4).for_each(|i| m[i] += n[i]),
+                    None => axis.values.push((label, n)),
+                }
+            }
+        }
+        out
+    }
+}
+
+/// **LoRA presets…**: a copy of the list, saved with Save; the one
+/// selected; the LoRA files found in the model directories when opened.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct LoraEditor {
+    pub list: Vec<increart_core::config::LoraPreset>,
+    pub selected: usize,
+    pub files: Vec<String>,
+}
+
+impl LoraEditor {
+    /// Why Save is refused: a name empty or used twice, a preset without
+    /// a LoRA file.
+    pub fn problem(&self) -> Option<String> {
+        for (i, p) in self.list.iter().enumerate() {
+            let name = p.name.trim();
+            if name.is_empty() {
+                return Some(format!("LoRA preset {} has no name", i + 1));
+            }
+            if self.list[..i].iter().any(|q| q.name.trim() == name) {
+                return Some(format!("Two LoRA presets are named “{name}”"));
+            }
+            if !p.loras.iter().any(|l| !l.file.trim().is_empty()) {
+                return Some(format!("“{name}” has no LoRA file"));
+            }
+        }
+        None
+    }
+
+    /// The trigger words a model preset's LoRA of this file has, if any.
+    pub fn trigger_for(file: &str, recipes: &[RecipePreset]) -> Option<String> {
+        recipes
+            .iter()
+            .flat_map(|r| &r.loras)
+            .find(|l| l.file == file && !l.trigger.trim().is_empty())
+            .map(|l| l.trigger.clone())
+    }
+}
+
+/// A pivot's choices: the axes as rows and columns (by number, the first
+/// axis 0), each other axis's value shown, and the seed (None: each
+/// combination's first image, whatever its seed).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct PivotSel {
+    pub rows: usize,
+    pub cols: usize,
+    pub fixed: Vec<usize>,
+    pub seed: Option<usize>,
+}
+
+/// A sweep of several axes laid out by two of them: `cells[row][col]`
+/// the image of that combination (and the other axes' values chosen) at
+/// the seed chosen.
+#[derive(Debug)]
+pub struct Pivot<'a> {
+    /// Each axis: its name and its values' labels, in the sweep's order.
+    pub axes: Vec<(String, Vec<String>)>,
+    /// The choices, made to fit.
+    pub sel: PivotSel,
+    pub seeds: Vec<u64>,
+    pub cells: Vec<Vec<SheetCell<'a>>>,
+}
+
+impl AppState {
+    /// The open sweep's sheet as a pivot, when it is one of several axes
+    /// and the pivot is on.
+    pub fn pivot(&self) -> Option<Pivot<'_>> {
+        let sel = self.sheet_pivot.clone()?;
+        let sheet = self.sheet()?;
+        let names: Vec<String> = sheet.by_value().into_iter().map(|a| a.name).collect();
+        if names.len() < 2 {
+            return None;
+        }
+        // each row's labels, one per axis
+        let labels = |row: &SheetRow| -> Vec<String> {
+            let Some(t) = row.run.sweep.as_ref() else { return vec![] };
+            std::iter::once(t.first()).chain(t.more.iter().map(|p| p.label())).collect()
+        };
+        let mut axes: Vec<(String, Vec<String>)> = names.into_iter().map(|n| (n, vec![])).collect();
+        for row in &sheet.rows {
+            for (axis, label) in axes.iter_mut().zip(labels(row)) {
+                if !axis.1.contains(&label) {
+                    axis.1.push(label);
+                }
+            }
+        }
+        let n = axes.len();
+        let mut sel = sel;
+        sel.rows = sel.rows.min(n - 1);
+        sel.cols = sel.cols.min(n - 1);
+        if sel.cols == sel.rows {
+            sel.cols = (sel.rows + 1) % n;
+        }
+        sel.fixed.resize(n, 0);
+        for (f, axis) in sel.fixed.iter_mut().zip(&axes) {
+            *f = (*f).min(axis.1.len().saturating_sub(1));
+        }
+        sel.seed = sel.seed.filter(|s| *s < sheet.seeds.len());
+        let seeds = sheet.seeds.clone();
+        let mut cells = vec![];
+        for r in 0..axes[sel.rows].1.len() {
+            let mut line = vec![];
+            for c in 0..axes[sel.cols].1.len() {
+                let want: Vec<&String> = (0..n)
+                    .map(|i| {
+                        let at = if i == sel.rows {
+                            r
+                        } else if i == sel.cols {
+                            c
+                        } else {
+                            sel.fixed[i]
+                        };
+                        &axes[i].1[at]
+                    })
+                    .collect();
+                // the rows of that combination (random per image: several)
+                let mut cell = SheetCell::Empty;
+                for row in sheet.rows.iter().filter(|row| labels(row).iter().collect::<Vec<_>>() == want) {
+                    let found = match sel.seed {
+                        Some(s) => row.cells.get(s),
+                        None => row
+                            .cells
+                            .iter()
+                            .find(|c| matches!(c, SheetCell::Image(_)))
+                            .or_else(|| row.cells.iter().find(|c| matches!(c, SheetCell::Pending))),
+                    };
+                    match found {
+                        Some(SheetCell::Image(o)) => {
+                            cell = SheetCell::Image(o);
+                            break;
+                        }
+                        Some(SheetCell::Pending) => cell = SheetCell::Pending,
+                        _ => {}
+                    }
+                }
+                line.push(cell);
+            }
+            cells.push(line);
+        }
+        Some(Pivot { axes, sel, seeds, cells })
+    }
+}
+
 #[derive(Debug)]
 pub struct SheetRow<'a> {
     pub run: &'a increart_core::model::Run,
@@ -2307,6 +2514,8 @@ impl RemoteRow {
 /// server preset and a recipe and opened.
 #[derive(Clone, Debug, PartialEq)]
 pub struct KoboldWizard {
+    /// The image model it sets up (MiniMax-H3-Image unless picked).
+    pub family: increart_core::tiers::Family,
     pub binary: String,
     /// Where the models go (in `koboldcpp/`); added to the model folders.
     pub models_dir: String,
@@ -2391,7 +2600,7 @@ impl KoboldWizard {
         let dir = std::path::Path::new(self.models_dir.trim());
         let pe =
             if self.pe_by_hand && layout == self.layout { self.pe_gpus.clone() } else { self.default_pe_gpus(layout) };
-        increart_core::tiers::plan(&self.ticked(), layout, &pe, self.runtime, binary, dir, self.ram_gib)
+        increart_core::tiers::plan(self.family, &self.ticked(), layout, &pe, self.runtime, binary, dir, self.ram_gib)
     }
 
     /// Prompt enhance's GPUs unless ticked by hand: with images on every
@@ -2405,7 +2614,12 @@ impl KoboldWizard {
         }
         self.ticked()
             .iter()
-            .filter(|(g, chosen)| chosen.and_then(tier).or_else(|| tier_for(g.vram_gib)).is_some_and(|t| !t.swap))
+            .filter(|(g, chosen)| {
+                chosen
+                    .and_then(|gb| tier(self.family, gb))
+                    .or_else(|| tier_for(self.family, g.vram_gib))
+                    .is_some_and(|t| !t.swap)
+            })
             .map(|(g, _)| g.number)
             .collect()
     }
@@ -2510,6 +2724,15 @@ pub struct GenerateForm {
     /// The Develop idea conversation about the prompt, kept with the
     /// draft to go on with.
     pub develop: Option<increart_core::pe::DevelopChat>,
+    /// A sweep's run: the LoRA presets its LoRA axis puts over its model
+    /// preset, by name (resolved when queued; never in a draft).
+    pub sweep_loras: Vec<String>,
+    /// A sweep's run: its LoRA weight axis's value.
+    pub lora_weight: Option<f32>,
+    /// `preset` is only the default (nobody chose it, no draft or run named
+    /// it): [`AppState::fit_generate_preset`] moves it to a model the open
+    /// servers can run.
+    pub preset_auto: bool,
 }
 
 /// A row of Review's scope tree at a folder: a subfolder or a project.
@@ -3562,6 +3785,9 @@ impl GenerateForm {
             source_idea: None,
             sweep: Sweep::default(),
             develop: None,
+            sweep_loras: vec![],
+            lora_weight: None,
+            preset_auto: true,
         };
         if let Some(p) = config.recipes.first() {
             f.apply_preset(0, p);
@@ -3577,6 +3803,7 @@ impl GenerateForm {
             width: self.width,
             height: self.height,
             preset: config.recipes.get(self.preset).map(|r| r.name.clone()).unwrap_or_default(),
+            preset_auto: self.preset_auto,
             steps: self.steps,
             cfg: self.cfg,
             flow_shift: self.flow_shift,
@@ -3598,13 +3825,14 @@ impl GenerateForm {
 
     /// The form from a saved draft (the model preset by name, else the first).
     pub fn from_draft(d: &GenerateDraft, config: &Config) -> GenerateForm {
+        let named = config.recipes.iter().position(|r| r.name == d.preset);
         GenerateForm {
             label: d.label.clone(),
             prompt: d.prompt.clone(),
             negative: d.negative_prompt.clone(),
             width: d.width,
             height: d.height,
-            preset: config.recipes.iter().position(|r| r.name == d.preset).unwrap_or(0),
+            preset: named.unwrap_or(0),
             steps: d.steps,
             cfg: d.cfg,
             flow_shift: d.flow_shift,
@@ -3618,6 +3846,9 @@ impl GenerateForm {
             // ticks from before Modify style was split, in the style tasks
             sweep: d.sweep.current(&increart_core::prompts::builtin()),
             develop: d.develop.clone(),
+            sweep_loras: vec![],
+            lora_weight: None,
+            preset_auto: d.preset_auto || named.is_none(),
         }
     }
 
@@ -3642,7 +3873,9 @@ impl GenerateForm {
         };
         f.images = images_of(&run.refs, init.as_ref());
         f.source_idea = run.source_idea.clone();
-        f.preset = config.recipes.iter().position(|r| r.recipe == run.model.recipe).unwrap_or(0);
+        let used = config.recipes.iter().position(|r| r.recipe == run.model.recipe);
+        f.preset = used.unwrap_or(0);
+        f.preset_auto = used.is_none();
         f
     }
 
@@ -4220,6 +4453,81 @@ pub struct StoreInfo {
     pub counts: increart_core::library::StoreCounts,
 }
 
+/// An ephemeral session (DESIGN.md, Ephemeral mode): the library in RAM,
+/// nothing of it reaching the disk unless exported.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Ephemeral {
+    /// The library on disk read (never written); None: a new empty one.
+    pub from: Option<PathBuf>,
+    /// The RAM it may fill, in bytes.
+    pub budget: u64,
+    pub when_full: WhenFull,
+    /// Bytes in RAM, last measured.
+    pub used: u64,
+    /// Generating stopped: the budget is full (and nothing more could be
+    /// deleted, or `when_full` is Halt). Started again once there's room.
+    pub halted: bool,
+    /// Images deleted to stay within the budget, this session.
+    pub freed: usize,
+    /// Whether what's in RAM can reach the disk through swap.
+    pub swap: increart_core::ephemeral::Swap,
+}
+
+/// What an ephemeral session does when its RAM budget is full.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum WhenFull {
+    /// The oldest images are deleted, reviewed or not.
+    #[default]
+    DeleteOldest,
+    /// Generating stops until images are deleted.
+    Halt,
+}
+
+/// **Ephemeral session…**: where it starts from and how much RAM it gets.
+#[derive(Clone, Debug, PartialEq)]
+pub struct EphemeralForm {
+    /// The library on disk to read; empty: a new empty library.
+    pub from: String,
+    pub new_library: bool,
+    pub budget_gib: f32,
+    pub when_full: WhenFull,
+    /// The machine's RAM, in GiB (None: not known).
+    pub ram_gib: Option<f64>,
+    pub error: Option<String>,
+}
+
+impl EphemeralForm {
+    pub fn new(from: Option<&str>, ram_gib: Option<f64>) -> EphemeralForm {
+        // a quarter of the RAM, from 1 to 16 GiB: room for servers and
+        // models beside it
+        let budget = ram_gib.map_or(4.0, |r| (r / 4.0).clamp(1.0, 16.0).floor() as f32);
+        EphemeralForm {
+            from: from.unwrap_or_default().to_string(),
+            new_library: from.is_none(),
+            budget_gib: budget,
+            when_full: WhenFull::default(),
+            ram_gib,
+            error: None,
+        }
+    }
+
+    /// Why it can't start, if it can't.
+    pub fn problem(&self) -> Option<String> {
+        if self.budget_gib.is_nan() || self.budget_gib < 0.25 {
+            return Some("Give it at least 0.25 GiB of RAM".into());
+        }
+        if let Some(r) = self.ram_gib
+            && f64::from(self.budget_gib) > r * 0.9
+        {
+            return Some(format!("This machine has {r:.0} GiB of RAM: give the session less"));
+        }
+        if !self.new_library && self.from.trim().is_empty() {
+            return Some("Choose the library to read, or start a new empty one".into());
+        }
+        None
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct AppState {
     pub config: Config,
@@ -4343,6 +4651,17 @@ pub struct AppState {
     /// The contact sheet's name filter: rows whose style (or run label)
     /// has every word of it.
     pub sheet_filter: String,
+    /// The contact sheet of a sweep of several axes as a pivot: which axes
+    /// are rows and columns, the others' values and the seed (None: flat).
+    pub sheet_pivot: Option<PivotSel>,
+    /// **LoRA presets…**: the list being edited.
+    pub lora_editor: Option<LoraEditor>,
+    /// The open library is ephemeral: in RAM, nothing of it saved.
+    pub ephemeral: Option<Ephemeral>,
+    /// An ephemeral session being opened (moved to `ephemeral` once open).
+    pub ephemeral_opening: Option<Ephemeral>,
+    /// **Ephemeral session…** on the library screen.
+    pub ephemeral_form: Option<EphemeralForm>,
     /// A new sweep asked for, waiting for its project's prompt history (the
     /// form it was queued with).
     pub new_sweep: Option<NewSweepAsk>,
@@ -4378,6 +4697,9 @@ pub struct AppState {
     pub saving_bug_report: bool,
     /// That warning was shown this session (it shows once per start).
     pub no_server_warned: bool,
+    /// Queue anyway was chosen past the model check: the run (or sweep)
+    /// queued next is queued anyway.
+    pub queue_anyway: bool,
     /// The runs and sweeps being saved (project, label): Queue again for
     /// one before it's saved (a double-click) would save it twice, as the
     /// label only moves on once it is.
@@ -5045,6 +5367,25 @@ impl AppState {
         runnable.into_iter().find(|&i| self.config.recipes[i].recipe == *recipe)
     }
 
+    /// A Generate form's default model the open servers can't run: the
+    /// first they can (its recipe's settings with it). A model chosen, or
+    /// named by a draft or run, stays.
+    pub fn fit_generate_preset(&mut self) {
+        let f = &self.generate;
+        let models_swept = f.sweep.on && f.sweep.vary == increart_core::prompts::SweepVary::Model;
+        if !f.preset_auto || models_swept || self.config.recipes.len() < 2 {
+            return;
+        }
+        let runnable = self.runnable_recipes();
+        if runnable.contains(&self.generate.preset) {
+            return;
+        }
+        if let Some(&i) = runnable.first() {
+            let p = self.config.recipes[i].clone();
+            self.generate.apply_preset(i, &p);
+        }
+    }
+
     /// The model presets (indices into `config.recipes`) an open server
     /// can run; all of them until one has said what it can load.
     pub fn runnable_recipes(&self) -> Vec<usize> {
@@ -5188,6 +5529,11 @@ impl AppState {
             sheet_cell: (0, 0),
             sheet_bands: 1,
             sheet_filter: String::new(),
+            sheet_pivot: None,
+            lora_editor: None,
+            ephemeral: None,
+            ephemeral_opening: None,
+            ephemeral_form: None,
             new_sweep: None,
             review_cursor: 0,
             review_follow: false,
@@ -5205,6 +5551,7 @@ impl AppState {
             logs: None,
             saving_bug_report: false,
             no_server_warned: false,
+            queue_anyway: false,
             queueing: vec![],
             queueing_cancel: HashMap::new(),
             hashing_notes: HashMap::new(),
@@ -5449,14 +5796,14 @@ impl AppState {
         if c.binary.is_empty() {
             return Some("No sd-server binary set".into());
         }
-        if c.binary.contains('/') && !Path::new(&c.binary).is_file() {
+        if c.binary.contains('/') && !Path::new(&c.binary).vfs_is_file() {
             return Some(format!("sd-server not found at {}", c.binary));
         }
         self.config
             .programs
             .model_dirs
             .iter()
-            .find(|m| !m.trim().is_empty() && !Path::new(m).is_dir())
+            .find(|m| !m.trim().is_empty() && !Path::new(m).vfs_is_dir())
             .map(|m| format!("Model directory not found: {m}"))
     }
 

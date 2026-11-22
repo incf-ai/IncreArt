@@ -1,5 +1,6 @@
 //! `increart-apitest`: validates the servers of an IncreArt config (see
 //! the library's docs, and DESIGN.md, Validating servers).
+#![allow(clippy::disallowed_methods)] // fixtures on disk: no overlay here
 
 use std::io::{BufRead, Write};
 use std::path::PathBuf;

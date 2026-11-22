@@ -612,8 +612,11 @@ pub fn sweep_panel(
             for v in SweepVary::EVERY {
                 let tip = match v {
                     SweepVary::Style => "a run per chosen prompt preset",
+                    SweepVary::Tag => "a run per value of a blank of the prompt, e.g. {hair}: red, silver, …",
                     SweepVary::Strength if f.init().is_none() => "needs a start image",
                     SweepVary::Model => "a run per model, each with its own steps and CFG",
+                    SweepVary::Lora => "a run per LoRA preset, each over the model preset (or none)",
+                    SweepVary::LoraWeight => "a run per weight of the LoRA axis's LoRAs (else the model preset's own)",
                     SweepVary::Image => "a run per image, each its run's <image1> (or start image)",
                     _ => "a run per value, the rest as the form has it",
                 };
@@ -625,23 +628,458 @@ pub fn sweep_panel(
                     if v == SweepVary::Model && f.sweep.models.is_empty() {
                         f.sweep.models = st.config.recipes.get(f.preset).map(|p| p.name.clone()).into_iter().collect();
                     }
+                    if v == SweepVary::Lora && f.sweep.loras.is_empty() {
+                        f.sweep.loras = axis_start(st, f, v, 0).loras;
+                    }
                 }
             }
         });
         match f.sweep.vary {
             SweepVary::Style => style_sweep(ui, st, f, out),
             SweepVary::Image => image_sweep(ui, st, root, tex, f, out),
-            _ => setting_sweep(ui, st, f),
+            _ => setting_sweep(ui, st, f, out),
+        }
+        ui.separator();
+        more_axes(ui, st, f, out);
+    });
+}
+
+/// The blanks the sweep's tag axes vary, but for axis `but` (0: the first).
+fn tag_blanks(f: &GenerateForm, but: usize) -> Vec<String> {
+    use increart_core::prompts::SweepVary;
+    let first = (f.sweep.vary == SweepVary::Tag).then(|| f.sweep.tag_slot.clone());
+    let more = f.sweep.axes.iter().map(|a| (a.vary == SweepVary::Tag).then(|| a.tag_slot.clone()));
+    std::iter::once(first).chain(more).enumerate().filter(|(i, _)| *i != but).filter_map(|(_, b)| b).collect()
+}
+
+/// A new axis's values to start from: around the form's own, its model,
+/// a blank no other axis varies.
+fn axis_start(
+    st: &AppState,
+    f: &GenerateForm,
+    vary: increart_core::prompts::SweepVary,
+    but: usize,
+) -> increart_core::prompts::SweepAxis {
+    use increart_core::prompts::{SweepAxis, SweepVary};
+    let mut a = SweepAxis { vary, values: increart_gui_core::update::sweep_defaults(vary, f), ..Default::default() };
+    if vary == SweepVary::Model {
+        a.models = st.config.recipes.get(f.preset).map(|p| p.name.clone()).into_iter().collect();
+    }
+    if vary == SweepVary::Lora {
+        // none, and the first preset
+        a.loras =
+            std::iter::once(String::new()).chain(st.config.lora_presets.first().map(|p| p.name.clone())).collect();
+    }
+    if vary == SweepVary::Tag {
+        let taken = tag_blanks(f, but);
+        let blanks = increart_core::prompts::slot_names([f.prompt.as_str()]);
+        a.tag_slot = blanks.into_iter().find(|b| !taken.contains(b)).unwrap_or_default();
+    }
+    a
+}
+
+/// The axes after the first (each with its kind, values and ×), **Add
+/// axis**, how they're put together, and the runs they make
+/// (DESIGN.md, Sweep axes).
+fn more_axes(ui: &mut egui::Ui, st: &AppState, f: &mut GenerateForm, out: &mut Vec<Msg>) {
+    use increart_core::prompts::{Combine, SweepVary};
+    let image_first = f.sweep.vary == SweepVary::Image;
+    let mut remove = None;
+    for i in 0..f.sweep.axes.len() {
+        ui.push_id(("sweep_axis", i), |ui| {
+            let vary = f.sweep.axes[i].vary;
+            ui.horizontal(|ui| {
+                ui.label(RichText::new(format!("Axis {}", i + 2)).strong());
+                egui::ComboBox::from_id_salt("kind").selected_text(vary.name()).show_ui(ui, |ui| {
+                    for v in SweepVary::MORE {
+                        let ok = v != SweepVary::Strength || f.init().is_some();
+                        if ui.add_enabled(ok, egui::Button::selectable(vary == v, v.name())).clicked() && vary != v {
+                            f.sweep.axes[i] = axis_start(st, f, v, i + 1);
+                        }
+                    }
+                });
+                if ui.small_button(ph::X).on_hover_text("take this axis out").clicked() {
+                    remove = Some(i);
+                }
+            });
+            let mut t = f.clone();
+            t.sweep = f.sweep.axes[i].as_first(&f.sweep);
+            axis_values(ui, st, &mut t, out, &tag_blanks(f, i + 1));
+            f.sweep.axes[i].take(&t.sweep);
+        });
+    }
+    if let Some(i) = remove {
+        f.sweep.axes.remove(i);
+    }
+    ui.horizontal_wrapped(|ui| {
+        ui.menu_button(ic(ph::PLUS, "Add axis"), |ui| {
+            for v in SweepVary::MORE {
+                let ok = v != SweepVary::Strength || f.init().is_some();
+                if ui.add_enabled(ok, egui::Button::new(v.name())).clicked() {
+                    let a = axis_start(st, f, v, f.sweep.axes.len() + 1);
+                    f.sweep.axes.push(a);
+                    ui.close();
+                }
+            }
+        })
+        .response
+        .on_hover_text("vary something else too: each run has a value of every axis");
+        if image_first && f.sweep.axes.is_empty() {
+            return;
+        }
+        ui.separator();
+        ui.label("Put together");
+        for c in Combine::EVERY {
+            let tip = match c {
+                Combine::Every => "a run for every combination of the axes' values",
+                Combine::Paired => "the first value of each axis together, then the second, …",
+                Combine::Random => "K combinations picked at random, the same seeds in each",
+                Combine::PerImage => "every seed its own combination, picked at random (a run of one seed each)",
+            };
+            if ui.add(egui::Button::selectable(f.sweep.combine == c, c.name())).on_hover_text(tip).clicked() {
+                f.sweep.combine = c;
+                if c == Combine::Random && f.sweep.combine_k == 0 {
+                    f.sweep.combine_k = 8;
+                }
+            }
+        }
+        if f.sweep.combine == Combine::Random {
+            ui.add(crate::widgets::drag_value(&mut f.sweep.combine_k).range(1..=10_000).prefix("K "));
+        }
+        if matches!(f.sweep.combine, Combine::Random | Combine::PerImage)
+            && ui.small_button(ic(ph::DICE_FIVE, "Reroll")).on_hover_text("pick again").clicked()
+        {
+            let sw = &mut f.sweep;
+            sw.combine_seed = (ui.input(|i| i.time) * 1e6) as u64 ^ sw.combine_seed.rotate_left(17);
         }
     });
+    if f.sweep.axes.is_empty() && f.sweep.combine == Combine::Every {
+        return;
+    }
+    match increart_gui_core::update::sweep_runs(st) {
+        Err(e) => {
+            ui.colored_label(BAD, e);
+        }
+        Ok((runs, _)) => {
+            let secs: f32 = runs.iter().map(|(r, _)| crate::projects::estimate(st, r) * r.seeds as f32).sum();
+            let images: u64 = runs.iter().map(|(r, _)| r.seeds).sum();
+            let time = crate::projects::fmt_secs(secs);
+            let line = if f.sweep.combine == Combine::PerImage {
+                format!("{images} images, each its own combination ≈ {time} of GPU time")
+            } else {
+                format!("{} runs × {} seeds = {images} images ≈ {time} of GPU time", runs.len(), f.seeds)
+            };
+            if images > increart_gui_core::update::BIG_SWEEP {
+                ui.colored_label(crate::widgets::NEUTRAL, format!("{line} (Queue asks first)"));
+            } else {
+                ui.label(line);
+            }
+            let rows: Vec<String> = runs.iter().take(12).map(|(_, t)| t.row()).collect();
+            let more = runs.len().saturating_sub(12);
+            let tail = if more > 0 { format!(" · and {more} more") } else { String::new() };
+            ui.add(egui::Label::new(RichText::new(format!("{}{tail}", rows.join(" · "))).weak()).wrap());
+        }
+    }
+}
+
+/// A LoRA axis's LoRA presets: "no LoRA" and each preset, ticked, kept in
+/// the list's order; **LoRA presets…** to edit them.
+fn lora_values(ui: &mut egui::Ui, st: &AppState, f: &mut GenerateForm, out: &mut Vec<Msg>) {
+    let list = &st.config.lora_presets;
+    let mut ticked = f.sweep.loras.clone();
+    ui.horizontal_wrapped(|ui| {
+        ui.label("LoRAs");
+        let rows = std::iter::once(("", "the model preset as it is".to_string()))
+            .chain(list.iter().map(|p| (p.name.as_str(), p.files())));
+        for (name, tip) in rows {
+            let mut on = ticked.iter().any(|t| t == name);
+            let label = if name.is_empty() { "no LoRA" } else { name };
+            if ui.checkbox(&mut on, label).on_hover_text(tip).changed() {
+                if on {
+                    ticked.push(name.to_string());
+                } else {
+                    ticked.retain(|t| t != name);
+                }
+            }
+        }
+        // ticked ones since renamed or deleted, to untick
+        for gone in f.sweep.loras.iter().filter(|n| !n.is_empty() && !list.iter().any(|p| &p.name == *n)) {
+            let mut on = true;
+            if ui.checkbox(&mut on, RichText::new(gone).color(BAD)).on_hover_text("no longer a LoRA preset").changed() {
+                ticked.retain(|t| t != gone);
+            }
+        }
+        if ui
+            .button(ic(ph::PENCIL_SIMPLE, "LoRA presets…"))
+            .on_hover_text("name LoRAs (one, or several stacked) to sweep")
+            .clicked()
+        {
+            out.push(Msg::LoraEditorOpen);
+        }
+    });
+    if list.is_empty() {
+        ui.weak("No LoRA presets yet: make them with LoRA presets….");
+    }
+    // in the list's order, "no LoRA" first
+    let order = |n: &String| {
+        if n.is_empty() { 0 } else { list.iter().position(|p| &p.name == n).map_or(usize::MAX, |i| i + 1) }
+    };
+    ticked.sort_by_key(order);
+    f.sweep.loras = ticked;
+    ui.weak("Each is added to the run's model preset, its trigger words before the prompt.");
+}
+
+/// **LoRA presets…**: the list (new, duplicate, delete) and the selected
+/// one's name and LoRAs (file, trigger words, weight); Save or Close.
+pub fn lora_window(ctx: &egui::Context, st: &AppState, out: &mut Vec<Msg>) {
+    use increart_core::config::{LoraPreset, PresetLora};
+    let Some(e) = &st.lora_editor else { return };
+    let mut e = e.clone();
+    let mut save = false;
+    let mut close = false;
+    let m = egui::Modal::new(egui::Id::unique("lora_presets")).show(ctx, |ui| {
+        ui.set_width(820.0);
+        ui.heading(ic(ph::STACK, "LoRA presets"));
+        ui.weak(
+            "A LoRA preset names one LoRA, or several stacked, each at its weight with its trigger words. A sweep's \
+             LoRA axis puts each over the run's model preset, with no reload.",
+        );
+        ui.add_space(4.0);
+        ui.horizontal_top(|ui| {
+            ui.vertical(|ui| {
+                ui.set_width(180.0);
+                egui::ScrollArea::vertical().id_salt("lora_list").max_height(320.0).show(ui, |ui| {
+                    for (i, p) in e.list.iter().enumerate() {
+                        let name = if p.name.trim().is_empty() { "(no name)" } else { p.name.as_str() };
+                        if ui.selectable_label(e.selected == i, name).on_hover_text(p.files()).clicked() {
+                            e.selected = i;
+                        }
+                    }
+                });
+                ui.horizontal(|ui| {
+                    if ui.small_button(ic(ph::PLUS, "New")).clicked() {
+                        e.list.push(LoraPreset {
+                            name: format!("LoRA {}", e.list.len() + 1),
+                            loras: vec![PresetLora { file: String::new(), weight: 1.0, trigger: String::new() }],
+                        });
+                        e.selected = e.list.len() - 1;
+                    }
+                    if let Some(p) = e.list.get(e.selected).cloned()
+                        && ui.small_button(ph::COPY).on_hover_text("duplicate").clicked()
+                    {
+                        e.list.insert(e.selected + 1, LoraPreset { name: format!("{} copy", p.name), ..p });
+                        e.selected += 1;
+                    }
+                    if e.selected < e.list.len() && ui.small_button(ph::TRASH).on_hover_text("delete").clicked() {
+                        e.list.remove(e.selected);
+                        e.selected = e.selected.min(e.list.len().saturating_sub(1));
+                    }
+                });
+            });
+            // (a separator here would take all the modal's height)
+            ui.add_space(12.0);
+            ui.vertical(|ui| {
+                let files = e.files.clone();
+                let Some(p) = e.list.get_mut(e.selected) else {
+                    ui.weak("No LoRA presets: New makes one.");
+                    return;
+                };
+                ui.horizontal(|ui| {
+                    ui.label("Name");
+                    ui.add(egui::TextEdit::singleline(&mut p.name).desired_width(240.0));
+                });
+                let mut remove = None;
+                egui::Grid::new("lora_rows").num_columns(4).spacing([6.0, 4.0]).show(ui, |ui| {
+                    for (i, l) in p.loras.iter_mut().enumerate() {
+                        ui.horizontal(|ui| {
+                            ui.add(
+                                egui::TextEdit::singleline(&mut l.file)
+                                    .hint_text("loras/style.safetensors")
+                                    .desired_width(220.0),
+                            );
+                            ui.menu_button(ph::CARET_DOWN, |ui| {
+                                if files.is_empty() {
+                                    ui.weak("No LoRA files in the model directories' loras folders");
+                                }
+                                egui::ScrollArea::vertical().max_height(300.0).show(ui, |ui| {
+                                    for f in &files {
+                                        if ui.selectable_label(l.file == *f, f).clicked() {
+                                            l.file = f.clone();
+                                            // a model preset's trigger words for it
+                                            if l.trigger.trim().is_empty()
+                                                && let Some(t) =
+                                                    increart_gui_core::LoraEditor::trigger_for(f, &st.config.recipes)
+                                            {
+                                                l.trigger = t;
+                                            }
+                                            ui.close();
+                                        }
+                                    }
+                                });
+                            })
+                            .response
+                            .on_hover_text("the LoRA files found in the model directories");
+                        });
+                        ui.add_sized(
+                            [180.0, 20.0],
+                            egui::TextEdit::singleline(&mut l.trigger).hint_text("trigger words"),
+                        )
+                        .on_hover_text("words it was trained on: put before the prompt when the prompt hasn't them");
+                        ui.add(crate::widgets::drag_value(&mut l.weight).range(-4.0..=4.0).speed(0.01).max_decimals(2))
+                            .on_hover_text("weight: 1 as trained, 0 off, below 0 against it");
+                        if ui.small_button(ph::TRASH).on_hover_text("remove").clicked() {
+                            remove = Some(i);
+                        }
+                        ui.end_row();
+                    }
+                });
+                if let Some(i) = remove {
+                    p.loras.remove(i);
+                }
+                if ui.small_button(ic(ph::PLUS, "LoRA")).on_hover_text("stack another LoRA in this preset").clicked() {
+                    p.loras.push(PresetLora { file: String::new(), weight: 1.0, trigger: String::new() });
+                }
+            });
+        });
+        ui.add_space(6.0);
+        let problem = e.problem();
+        let changed = e.list != st.config.lora_presets;
+        if let Some(why) = &problem {
+            ui.colored_label(BAD, why);
+        } else if changed {
+            ui.weak("Not saved yet: Close drops the changes");
+        }
+        crate::widgets::dialog_buttons(ui, |ui| {
+            if ui
+                .add_enabled(
+                    problem.is_none() && changed,
+                    egui::Button::new(RichText::new(ic(ph::CHECK, "Save")).strong()),
+                )
+                .clicked()
+            {
+                save = true;
+            }
+            if ui.button("Close   Esc").clicked() {
+                close = true;
+            }
+        });
+    });
+    if m.should_close() {
+        close = true;
+    }
+    if close {
+        out.push(Msg::LoraEditor(None));
+    } else if Some(&e) != st.lora_editor.as_ref() {
+        out.push(Msg::LoraEditor(Some(e)));
+    }
+    if save {
+        out.push(Msg::LoraEditorSave);
+    }
+}
+
+/// A tag sweep's blank and its values, a line each; prompt enhance's
+/// suggestions for the blank as chips, a click putting one in the values
+/// or taking it out (DESIGN.md, Tag sweeps).
+fn tag_values(ui: &mut egui::Ui, st: &AppState, f: &mut GenerateForm, out: &mut Vec<Msg>, taken: &[String]) {
+    let blanks = increart_core::prompts::slot_names([f.prompt.as_str()]);
+    let free: Vec<&String> = blanks.iter().filter(|b| !taken.contains(b)).collect();
+    if free.is_empty() {
+        return;
+    }
+    // the prompt's only blank, or its first until one is chosen (another
+    // axis's blank isn't offered)
+    if !free.contains(&&f.sweep.tag_slot) {
+        f.sweep.tag_slot = free[0].clone();
+    }
+    let key = increart_gui_core::BlankKey { style: None, slot: f.sweep.tag_slot.clone() };
+    ui.horizontal_wrapped(|ui| {
+        ui.label("Blank");
+        for b in &blanks {
+            let ok = !taken.contains(b);
+            let r = ui.add_enabled(ok, egui::Button::selectable(f.sweep.tag_slot == *b, format!("{{{b}}}")));
+            if r.on_disabled_hover_text("another axis varies it").clicked() {
+                f.sweep.tag_slot = b.clone();
+            }
+        }
+        ui.separator();
+        if let Some(j) = st.pe.blank_job(&key) {
+            let tip = format!("{}{}\nclick to stop", crate::rewrite::progress(st, j), retry_text(st, &key));
+            if ui.add(egui::Spinner::new()).interact(egui::Sense::click()).on_hover_text(tip).clicked() {
+                out.push(Msg::PeStop(vec![j.id]));
+            }
+        } else if st.pe.server.is_some() {
+            let b = ui.add_enabled(!locked(st), egui::Button::new(ic(ph::MAGIC_WAND, "Suggest")).small());
+            if b.on_hover_text("suggest values for the blank (prompt enhance), to pick from").clicked() {
+                out.push(Msg::PeSuggest(vec![key.clone()]));
+            }
+            let b = ui.add_enabled(!locked(st), egui::Button::new(ph::SLIDERS_HORIZONTAL).small());
+            if b.on_hover_text("Suggest…: with instructions, how many, how varied").clicked() {
+                out.push(Msg::PeSuggestOpen(key.clone()));
+            }
+        }
+        if let Some(why) = st.pe.blank_failed.get(&key) {
+            ui.colored_label(BAD, ph::WARNING)
+                .on_hover_text(format!("the last ask got nothing new: {why}\n(gone when asked again)"));
+        }
+    });
+    ui.horizontal_top(|ui| {
+        ui.label("Values");
+        ui.add(
+            egui::TextEdit::multiline(&mut f.sweep.tag_values)
+                .hint_text("one a line, e.g.\nred\nsilver\nbraided, waist-length")
+                .desired_rows(4)
+                .desired_width(360.0),
+        );
+    });
+    if let Some(offered) = st.blank_shown(&key) {
+        let tags = f.sweep.tags();
+        let mut toggle = None;
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing = CHIP_SPACING;
+            ui.weak("Suggested");
+            for v in offered {
+                let (label, cut) = chip_label(v);
+                let r = ui.selectable_label(tags.contains(v), label);
+                let r = if cut { r.on_hover_text(v) } else { r };
+                if r.clicked() {
+                    toggle = Some(v.clone());
+                }
+            }
+            let rest: Vec<&String> = offered.iter().filter(|v| !tags.contains(v)).collect();
+            if !rest.is_empty() && ui.small_button(format!("Add all {}", rest.len())).clicked() {
+                for v in rest {
+                    f.sweep.toggle_tag(v);
+                }
+            }
+        });
+        if let Some(v) = toggle {
+            f.sweep.toggle_tag(&v);
+        }
+    }
 }
 
 /// A setting sweep's values (a model sweep's model presets), the runs
 /// they make and how long they take.
-fn setting_sweep(ui: &mut egui::Ui, st: &AppState, f: &mut GenerateForm) {
+fn setting_sweep(ui: &mut egui::Ui, st: &AppState, f: &mut GenerateForm, out: &mut Vec<Msg>) {
+    use increart_gui_core::update::param_runs;
+    axis_values(ui, st, f, out, &tag_blanks(f, 0));
+    // with more axes, theirs says it all
+    if f.sweep.axes.is_empty() {
+        summary(ui, st, f, param_runs(f, &st.config.recipes));
+    }
+}
+
+/// What a setting, model or tag axis takes, edited as the sweep's first
+/// axis (`f.sweep`'s): the values typed or ticked, the blank; `taken`, the
+/// blanks other axes vary.
+fn axis_values(ui: &mut egui::Ui, st: &AppState, f: &mut GenerateForm, out: &mut Vec<Msg>, taken: &[String]) {
     use increart_core::prompts::SweepVary;
-    use increart_gui_core::update::{param_runs, range_values};
-    if f.sweep.vary == SweepVary::Model {
+    use increart_gui_core::update::range_values;
+    if f.sweep.vary == SweepVary::Tag {
+        tag_values(ui, st, f, out, taken);
+    } else if f.sweep.vary == SweepVary::Lora {
+        lora_values(ui, st, f, out);
+    } else if f.sweep.vary == SweepVary::Model {
         ui.horizontal_wrapped(|ui| {
             ui.label("Models");
             // those the servers run, and any still ticked
@@ -717,7 +1155,17 @@ fn setting_sweep(ui: &mut egui::Ui, st: &AppState, f: &mut GenerateForm) {
             ui.data_mut(|d| d.insert_temp(id, r));
         });
     }
-    match param_runs(f, &st.config.recipes) {
+}
+
+/// The first axis's runs: how many images, how long, and their rows.
+fn summary(
+    ui: &mut egui::Ui,
+    st: &AppState,
+    f: &GenerateForm,
+    runs: Result<Vec<(GenerateForm, increart_core::model::SweepTag)>, String>,
+) {
+    use increart_core::prompts::SweepVary;
+    match runs {
         Err(e) => {
             ui.colored_label(BAD, e);
         }
@@ -801,6 +1249,9 @@ fn image_sweep(
         }
         None => {}
     }
+    if !f.sweep.axes.is_empty() {
+        return;
+    }
     match increart_gui_core::update::image_runs(f, &st.swept_names(&f.sweep.images)) {
         Err(e) => {
             ui.colored_label(BAD, e);
@@ -831,6 +1282,8 @@ fn style_sweep(ui: &mut egui::Ui, st: &AppState, f: &mut GenerateForm, out: &mut
     let seeds = f.seeds;
     let refs = f.images.iter().filter(|i| i.reference).count();
     let prompt = f.prompt.clone();
+    // the blanks tag axes vary take their values from those
+    let varied = tag_blanks(f, usize::MAX);
     let sw = &mut f.sweep;
     let base = sw.clone();
     {
@@ -877,7 +1330,8 @@ fn style_sweep(ui: &mut egui::Ui, st: &AppState, f: &mut GenerateForm, out: &mut
         let mut remove: Option<Removed> = None;
         // the slots of the template and the chosen presets, asked once each,
         // with what needs them
-        let names = slot_names(std::iter::once(prompt.as_str()).chain(sw.blank_texts(&chosen)));
+        let mut names = slot_names(std::iter::once(prompt.as_str()).chain(sw.blank_texts(&chosen)));
+        names.retain(|n| !varied.contains(n));
         // styles' own values, from before their prompts could be edited,
         // become their prompts
         let keyed: Vec<_> = chosen
@@ -979,7 +1433,10 @@ fn style_sweep(ui: &mut egui::Ui, st: &AppState, f: &mut GenerateForm, out: &mut
 /// queued.
 pub fn prompt_blanks(ui: &mut egui::Ui, st: &AppState, f: &mut GenerateForm, out: &mut Vec<Msg>) {
     use increart_core::prompts::slot_names;
-    let names = slot_names([f.prompt.as_str()]);
+    // those a tag sweep varies take their values from it
+    let varied = if f.sweep.on { tag_blanks(f, usize::MAX) } else { vec![] };
+    let mut names = slot_names([f.prompt.as_str()]);
+    names.retain(|n| !varied.contains(n));
     if names.is_empty() {
         return;
     }

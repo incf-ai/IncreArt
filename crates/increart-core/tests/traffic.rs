@@ -1,4 +1,5 @@
 //! The servers' traffic log (its own process: it's one log for the app).
+#![allow(clippy::disallowed_methods)] // fixtures on disk: no overlay here
 
 mod common;
 

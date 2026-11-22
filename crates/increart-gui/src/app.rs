@@ -1,6 +1,7 @@
 //! The eframe app: feeds runtime messages and UI messages through the
 //! reducer, carries out effects, and draws the current state.
 
+use increart_core::vfs::PathExt;
 use std::path::PathBuf;
 
 use eframe::egui::{self, Color32, Panel, RichText, Sense};
@@ -10,7 +11,7 @@ use increart_gui_core::{AppState, Msg, Phase, ProjectsTab, Runtime, Tab, update}
 
 use crate::textures::Textures;
 use crate::tour::Tour;
-use crate::widgets::{ACCENT, BAD, GOOD, NEUTRAL, dialog_buttons, dialog_footer, ic, ph};
+use crate::widgets::{ACCENT, BAD, GOOD, NEUTRAL, dialog_buttons, dialog_footer, ic, ph, short_name};
 use crate::{home, ideas, projects, review};
 
 pub struct App {
@@ -56,7 +57,7 @@ impl App {
         if let Some(p) = &st.export_prefs_path {
             st.export_prefs = increart_core::exportimages::Prefs::load(p);
         }
-        st.suite_found = increart_core::apitest::binary().is_file();
+        st.suite_found = increart_core::apitest::binary().vfs_is_file();
         for w in warnings {
             st.messages_info(w);
         }
@@ -539,6 +540,9 @@ fn server_statuses(ui: &mut egui::Ui, st: &AppState, out: &mut Vec<Msg>, compact
 /// servers stay connected).
 fn library_menu(ui: &mut egui::Ui, st: &AppState, out: &mut Vec<Msg>, compact: bool) {
     let Some(root) = &st.library else { return };
+    if let Some(e) = &st.ephemeral {
+        return session_menu(ui, st, e, root, out, compact);
+    }
     let mut name = root.file_name().map_or(root.display().to_string(), |n| n.to_string_lossy().into_owned());
     let max = if compact { 10 } else { 24 };
     if name.chars().count() > max {
@@ -581,6 +585,123 @@ fn library_menu(ui: &mut egui::Ui, st: &AppState, out: &mut Vec<Msg>, compact: b
     r.response.on_hover_text(format!("Library: {}\nclick to switch libraries", root.display()));
 }
 
+/// What an ephemeral session leaves out (DESIGN.md, Ephemeral mode).
+pub const EPHEMERAL_NOT_COVERED: &str = "Not covered: a server keeps the prompts it was sent in memory until it \
+     is restarted; servers IncreArt didn't start keep their own logs; a machine that hibernates writes its RAM \
+     to disk.";
+
+/// Top right in an ephemeral session: the library's name marked as in
+/// RAM, and the session's menu (its RAM, export, leaving it).
+fn session_menu(
+    ui: &mut egui::Ui,
+    st: &AppState,
+    e: &increart_gui_core::Ephemeral,
+    root: &std::path::Path,
+    out: &mut Vec<Msg>,
+    compact: bool,
+) {
+    use increart_gui_core::WhenFull;
+    use increart_gui_core::update::show_gib;
+    // measured live: an atomic count, cheap each frame
+    let used = increart_core::vfs::overlay(root).map_or(e.used, |o| o.used());
+    let full = used as f64 / e.budget.max(1) as f64;
+    let name = root.file_name().map_or(String::new(), |n| n.to_string_lossy().into_owned());
+    let name = short_name(&name, if compact { 10 } else { 20 });
+    let color = if e.halted || full > 0.95 { BAD } else { ACCENT };
+    let text =
+        RichText::new(format!("{} {name} · in RAM {:.0}% {}", ph::LOCK, full * 100.0, ph::CARET_DOWN)).color(color);
+    let r = ui.menu_button(text, |ui| {
+        ui.set_min_width(380.0);
+        ui.label(RichText::new(ic(ph::LOCK, "Ephemeral session")).strong());
+        ui.label(match &e.from {
+            Some(p) => format!("Reads {} (never written). Everything made or changed is in RAM only.", p.display()),
+            None => "A new library, wholly in RAM.".into(),
+        });
+        ui.weak("Nothing of it reaches the disk unless you export it; it's gone when you leave or quit.");
+        ui.add_space(4.0);
+        let bar = egui::ProgressBar::new(full.min(1.0) as f32).desired_width(360.0).text(format!(
+            "{} of {} in RAM",
+            show_gib(used),
+            show_gib(e.budget)
+        ));
+        ui.add(bar);
+        ui.horizontal(|ui| {
+            ui.label("Budget");
+            let mut gib = e.budget as f32 / (1u64 << 30) as f32;
+            let r = ui.add(egui::DragValue::new(&mut gib).range(0.25..=1024.0).speed(0.25).suffix(" GiB"));
+            if r.changed() {
+                out.push(Msg::EphemeralBudget(gib));
+            }
+        });
+        ui.horizontal(|ui| {
+            ui.label("When it's full:");
+            if ui.radio(e.when_full == WhenFull::DeleteOldest, "delete the oldest images").clicked() {
+                out.push(Msg::EphemeralWhenFull(WhenFull::DeleteOldest));
+            }
+            if ui.radio(e.when_full == WhenFull::Halt, "stop generating").clicked() {
+                out.push(Msg::EphemeralWhenFull(WhenFull::Halt));
+            }
+        });
+        if e.freed > 0 {
+            ui.weak(format!("{} image(s) deleted so far to make room", e.freed));
+        }
+        swap_line(ui, e.swap);
+        let free = ui.button(ic(ph::TRASH, "Delete discarded images for good")).on_hover_text(
+            "Discarded images (and any nothing refers to any more) keep their RAM until deleted for good: \
+             no undo",
+        );
+        if free.clicked() {
+            out.push(Msg::FreeDiscarded);
+            ui.close();
+        }
+        ui.separator();
+        ui.label(RichText::new("Keep it").strong());
+        if let Some(a) = &st.archiving {
+            archive_progress(ui, a, out);
+        } else {
+            archive_rows(ui, st, out);
+        }
+        ui.weak("Or export images from Review, the contact sheet or a collection.");
+        ui.separator();
+        if ui.button(ic(ph::SIGN_OUT, "Leave the session…")).on_hover_text("Everything in it is deleted").clicked() {
+            out.push(Msg::OtherLibrary(None));
+            ui.close();
+        }
+        ui.add_space(4.0);
+        ui.add(egui::Label::new(RichText::new(EPHEMERAL_NOT_COVERED).weak().small()).wrap());
+    });
+    r.response.on_hover_text(format!(
+        "Ephemeral session: {} of {} in RAM, nothing saved\nclick for the session menu",
+        show_gib(used),
+        show_gib(e.budget)
+    ));
+}
+
+/// Whether the session's RAM can reach the disk through swap.
+pub fn swap_line(ui: &mut egui::Ui, swap: increart_core::ephemeral::Swap) {
+    use increart_core::ephemeral::Swap;
+    let refused = increart_core::vfs::pin_failed();
+    match swap {
+        Swap::None => ui.colored_label(GOOD, ic(ph::CHECK, "No swap here: the OS can't write the session to disk")),
+        Swap::Pinned if !refused => ui.colored_label(GOOD, ic(ph::CHECK, "Kept out of swap")),
+        Swap::Limited(n) if n > 0 => ui.colored_label(
+            NEUTRAL,
+            ic(
+                ph::WARNING,
+                &format!(
+                    "Only {} can be kept out of swap: the rest may be written to it. Raise the memlock limit \
+                     (ulimit -l), or turn swap off or encrypt it",
+                    increart_gui_core::update::show_gib(n)
+                ),
+            ),
+        ),
+        _ => ui.colored_label(
+            NEUTRAL,
+            ic(ph::WARNING, "The OS may write some of it to swap: turn swap off, or encrypt it, to be sure"),
+        ),
+    };
+}
+
 /// Export library (zip, tar.gz) and Unpack a library archive, or the one
 /// being written or unpacked, with Stop.
 fn archive_rows(ui: &mut egui::Ui, st: &AppState, out: &mut Vec<Msg>) {
@@ -604,6 +725,9 @@ fn archive_rows(ui: &mut egui::Ui, st: &AppState, out: &mut Vec<Msg>) {
     if tar.clicked() {
         out.push(Msg::ExportLibrary(ArchiveFormat::TarGz));
         ui.close();
+    }
+    if st.ephemeral.is_some() {
+        return;
     }
     let open = ui.button(ic(ph::PACKAGE, UNPACK_ARCHIVE)).on_hover_text(UNPACK_ARCHIVE_HOVER);
     if open.clicked() {
@@ -676,7 +800,7 @@ fn zoom_control(ui: &mut egui::Ui, st: &AppState, out: &mut Vec<Msg>) {
 /// the log viewer (none while it has no log file yet).
 fn message_log_button(ui: &mut egui::Ui, m: &increart_gui_core::Message, out: &mut Vec<Msg>) {
     let Some(file) = &m.log else { return };
-    if !increart_gui_core::runtime::log_dir().join(file).is_file() {
+    if !increart_gui_core::runtime::log_dir().join(file).vfs_is_file() {
         return;
     }
     if ui.small_button(ic(ph::SCROLL, "Log")).on_hover_text(format!("open the server's log ({file})")).clicked() {
@@ -1076,7 +1200,7 @@ fn export_plan(
         return p;
     }
     let dest = std::path::PathBuf::from(e.prefs.dest.trim());
-    let there = |p: &std::path::Path| !dest.as_os_str().is_empty() && dest.join(p).exists();
+    let there = |p: &std::path::Path| !dest.as_os_str().is_empty() && dest.join(p).vfs_exists();
     let p = std::sync::Arc::new(increart_core::exportimages::plan(&e.items, &e.template, &e.prefs, there));
     ctx.data_mut(|d| d.insert_temp(id, (key, p.clone())));
     p
@@ -1475,6 +1599,7 @@ impl eframe::App for App {
                 let archiving = self.st.archiving.as_ref();
                 egui::CentralPanel::default()
                     .show(ui, |ui| crate::startup::library(ui, &d, recent, back, archiving, &mut out));
+                crate::startup::ephemeral_window(&ctx, &self.st, &mut out);
             }
             Phase::Servers(d) => {
                 let st = &self.st;
@@ -1518,6 +1643,7 @@ impl eframe::App for App {
             crate::ideas::save_window(&ctx, &self.st, &mut out);
             crate::ideas::collect_window(&ctx, &self.st, &mut out);
             crate::projects::sweep_order_window(&ctx, &self.st, &mut out);
+            crate::presets::lora_window(&ctx, &self.st, &mut out);
             crate::tree::rename_window(&ctx, &self.st, &mut out);
             if self.st.tab == Tab::Projects && self.st.projects_tab == ProjectsTab::Generate {
                 crate::presets::window(&ctx, &self.st, &mut out);

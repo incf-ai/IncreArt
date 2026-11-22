@@ -2,6 +2,7 @@
 //! touches disk, servers or the engine is an [`Effect`] the runtime carries
 //! out, reporting back with more [`Msg`]s.
 
+use increart_core::vfs::PathExt;
 use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -22,7 +23,7 @@ use increart_core::pe::PeRun;
 use increart_core::prompts::{BatchAsk, EnhanceAsk, PromptPreset, PromptPresets, SUGGEST_COUNT, SuggestAsk};
 
 use crate::state::*;
-use crate::tile::{Tile, TileContent};
+use crate::tile::{Tile, TileContent, TileImage};
 
 // A few messages carry a whole library index; they are rare, so the size
 // doesn't matter.
@@ -40,6 +41,23 @@ pub enum Msg {
     /// Opens a library wizard on a folder (`None` closes it).
     LibraryWizard(Option<(LibraryWizard, String)>),
     LibraryOpened(Result<(PathBuf, Index), String>),
+    // ---- ephemeral sessions (DESIGN.md, Ephemeral mode)
+    /// **Ephemeral session…** on the library screen (`None` closes it).
+    EphemeralForm(Option<EphemeralForm>),
+    /// Opens the form's ephemeral session.
+    StartEphemeral,
+    /// Whether the session's RAM can reach the disk through swap.
+    EphemeralSwap(increart_core::ephemeral::Swap),
+    /// The session's bytes in RAM.
+    RamUsed(u64),
+    /// Images deleted to make room (how many), and the bytes in RAM after.
+    RamFreed(Result<(usize, u64), String>),
+    /// The session's RAM budget, in GiB.
+    EphemeralBudget(f32),
+    EphemeralWhenFull(WhenFull),
+    /// Deletes the discarded images for good (in RAM, they hold it until
+    /// then).
+    FreeDiscarded,
     /// Opening's one-time metadata upgrade: images done, of how many.
     LibraryUpgrading(usize, usize),
     /// The background check of the images' usage counts after opening:
@@ -114,6 +132,9 @@ pub enum Msg {
     WizardGpus(Result<Vec<increart_core::tiers::Gpu>, String>, Option<f64>),
     /// The wizard's GPU runtime changed: its GPUs listed again.
     WizardRuntime(increart_core::pe::GpuRuntime),
+    /// The wizard's KoboldCpp image model picked (the KoboldCpp page
+    /// opened if it isn't).
+    WizardFamily(increart_core::tiers::Family),
     /// The KoboldCpp page edited (binary, folder, GPUs, layout).
     EditKoboldWizard(crate::state::KoboldWizard),
     /// The KoboldCpp page: download its models, then save and open.
@@ -279,6 +300,13 @@ pub enum Msg {
     /// Add the draft: to the inbox, straight to the library, or keep it and make a project.
     AddIdea(AddIdea),
     DropFiles(Vec<PathBuf>),
+    /// Pasted images (Ctrl+V or a Paste button): image data, and image
+    /// files named by the clipboard's text.
+    PasteImages {
+        images: Vec<TileImage>,
+        files: Vec<PathBuf>,
+        to: PasteTo,
+    },
     InboxCursor(usize),
     /// Idea inbox Grid: the search, filters and order (the cursor starts over).
     InboxFilter(InboxFilter),
@@ -394,6 +422,9 @@ pub enum Msg {
     QueueChecked,
     /// Queue, past the model check (the preset no open server can run).
     QueueModelChecked,
+    /// Queue anyway, past the model check's warning: the runs go to the
+    /// servers whatever they list ([`increart_core::model::Run::queued_anyway`]).
+    QueueAnyway,
     /// Queue the Sweep mode's runs (`true`: a big one was confirmed).
     QueueSweep(bool),
     /// Jobs: how the queue shares the servers (saved in the config).
@@ -439,6 +470,15 @@ pub enum Msg {
     ShowInfo(InfoPanel, bool),
     /// The contact sheet's name filter.
     SheetFilter(String),
+    /// The contact sheet as a pivot (Some), or flat.
+    SheetPivot(Option<PivotSel>),
+    /// Opens **LoRA presets…** on the config's list.
+    LoraEditorOpen,
+    /// **LoRA presets…** edited (None: closed, the changes dropped).
+    LoraEditor(Option<LoraEditor>),
+    /// **LoRA presets…**'s Save: into the config; sweeps' ticks follow
+    /// renames.
+    LoraEditorSave,
     /// The contact sheet's cell size; `save`: into the config (at the end
     /// of a drag).
     SheetZoom {
@@ -656,6 +696,10 @@ pub enum Msg {
     SetTimeouts(increart_core::config::Timeouts),
     /// `--version` of the shared KoboldCpp binary, unless known.
     CheckKoboldVersion,
+    /// **Check again**: `--version` asked anew (the wizard's binary when
+    /// the wizard is open, else the shared one), the earlier answer
+    /// forgotten: a binary made executable or replaced since.
+    RecheckKoboldVersion,
     /// (binary, `--version`'s answer)
     KoboldVersion(String, Result<String, String>),
     // ---- drafts
@@ -1138,6 +1182,18 @@ pub enum AddIdea {
     NewProject,
 }
 
+/// Where pasted images go.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PasteTo {
+    /// Each a new idea in the inbox (pasted data from the clipboard,
+    /// files as if dropped).
+    Inbox,
+    /// The New idea draft's images.
+    Draft,
+    /// The images of the idea open in Edit idea.
+    Edit(Id),
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum Effect {
     SaveConfig(Box<Config>, PathBuf),
@@ -1153,6 +1209,18 @@ pub enum Effect {
         path: PathBuf,
         create: bool,
     },
+    /// Opens an ephemeral library: `from` read, or a new one; its RAM
+    /// (and the logs') kept out of swap as far as `budget` bytes allow.
+    OpenEphemeral {
+        from: Option<PathBuf>,
+        budget: u64,
+    },
+    /// Measures the ephemeral library's RAM ([`Msg::RamUsed`]).
+    CheckRam,
+    /// Deletes its oldest images until it holds at most this many bytes.
+    FreeRam(u64),
+    /// Deletes its discarded images for good, and what nothing refers to.
+    FreeDiscarded,
     ListDevices(String),
     /// What the server at this address is (`detect::detect`), answered
     /// with `ServerFound`.
@@ -1432,6 +1500,14 @@ pub enum LibOp {
     ImportFiles(Vec<PathBuf>),
     /// Import images into the input store (for the New idea draft).
     ImportImages(Vec<PathBuf>),
+    /// Pasted images into the input store, image data and files: each a
+    /// new idea in the inbox, or images for the draft or the idea being
+    /// edited.
+    ImportPasted {
+        images: Vec<TileImage>,
+        files: Vec<PathBuf>,
+        to: PasteTo,
+    },
     /// Import images into the input store as Generate references.
     ImportRefs(Vec<PathBuf>),
     ReviewIdea(Id, Verdict),
@@ -1465,6 +1541,8 @@ pub enum LibOp {
         preset: Box<RecipePreset>,
         model_dirs: Vec<String>,
         queue: bool,
+        /// Queued anyway ([`increart_core::model::Run::queued_anyway`]).
+        anyway: bool,
         /// Handed back with the run, for the history's queued checkpoint.
         queued: Box<Queued>,
     },
@@ -1475,6 +1553,7 @@ pub enum LibOp {
         runs: Vec<(GenerateForm, SweepTag, RecipePreset)>,
         model_dirs: Vec<String>,
         queue: bool,
+        anyway: bool,
         queued: Box<Queued>,
     },
     /// Rates output links (each to its own verdict; `None`: unrated), all
@@ -1634,6 +1713,10 @@ pub enum OpOk {
     Sweep(Vec<Id>, String, Box<Queued>),
     /// Images imported for the draft.
     Imported(Vec<Id>),
+    /// Images imported for the idea open in Edit idea.
+    ImportedForEdit(Id, Vec<Id>),
+    /// Pasted images made into inbox ideas (how many).
+    PastedIdeas(usize),
     /// Images imported as references for the Generate form.
     ImportedRefs(Vec<Id>),
     /// Seeds added to a run: queue it.
@@ -1672,9 +1755,110 @@ fn open_library(state: &mut AppState, path: PathBuf, create: bool) -> Vec<Effect
     fx
 }
 
+const GIB: f64 = (1u64 << 30) as f64;
+
+/// Bytes as GiB: "8 GiB", "1.5 GiB".
+pub fn show_gib(bytes: u64) -> String {
+    let g = bytes as f64 / GIB;
+    let s = format!("{g:.1}");
+    format!("{} GiB", s.strip_suffix(".0").unwrap_or(&s))
+}
+
+/// **Ephemeral session…**'s Start: the library screen opens it, as it does
+/// a library.
+fn start_ephemeral(state: &mut AppState) -> Vec<Effect> {
+    let Some(f) = &mut state.ephemeral_form else { return vec![] };
+    if let Some(why) = f.problem() {
+        f.error = Some(why);
+        return vec![];
+    }
+    f.error = None;
+    let from = (!f.new_library).then(|| PathBuf::from(f.from.trim()));
+    let budget = (f64::from(f.budget_gib) * GIB) as u64;
+    state.ephemeral_opening = Some(Ephemeral {
+        from: from.clone(),
+        budget,
+        when_full: f.when_full,
+        used: 0,
+        halted: false,
+        freed: 0,
+        swap: increart_core::ephemeral::Swap::Unknown,
+    });
+    let mut fx = vec![];
+    if let Some(sw) = &mut state.switching
+        && !sw.stopped
+        && state.engine_running
+    {
+        sw.stopped = true;
+        fx.push(Effect::StopEngine);
+    }
+    if let Phase::Library(d) = &mut state.phase {
+        d.busy = true;
+        d.error = None;
+    }
+    fx.push(Effect::OpenEphemeral { from, budget });
+    fx
+}
+
+/// The ephemeral library holds `used` bytes: within its budget, generating
+/// goes on (again); over it, the oldest images are deleted (`may_free`:
+/// not tried yet for this measure) or generating stops.
+fn ram_used(state: &mut AppState, used: u64, may_free: bool) -> Vec<Effect> {
+    let Some(e) = &mut state.ephemeral else { return vec![] };
+    e.used = used;
+    let budget = e.budget;
+    if used <= budget {
+        if !e.halted {
+            return vec![];
+        }
+        e.halted = false;
+        state.messages_info("There's room in the session's RAM again: generating goes on");
+        if state.servers.is_empty() || state.engine_running {
+            return vec![];
+        }
+        state.engine_running = true;
+        return vec![Effect::StartEngine {
+            shared: state.config.programs.sd_server.clone(),
+            preview: state.config.preview,
+            order: state.config.job_order,
+            random: state.job_random(),
+            skip_ram_check: state.config.skip_ram_check,
+        }];
+    }
+    if e.when_full == WhenFull::DeleteOldest && may_free {
+        return vec![Effect::FreeRam(budget)];
+    }
+    if e.halted {
+        return vec![];
+    }
+    e.halted = true;
+    let why = match e.when_full {
+        WhenFull::DeleteOldest => "nothing more of it can be deleted (the rest are inputs and images read from disk)",
+        WhenFull::Halt => "delete images, or give it more",
+    };
+    state.messages_error(format!(
+        "Generating stopped: the session's RAM ({} of {}) is full; {why}. Deleted images free theirs once deleted \
+         for good (the session menu's Delete discarded images)",
+        show_gib(used),
+        show_gib(budget)
+    ));
+    if state.engine_running {
+        state.engine_running = false;
+        return vec![Effect::StopEngine];
+    }
+    vec![]
+}
+
 /// Runs `then`, asking first while runs are generating (switching stops
-/// them; they continue when their library is opened again).
+/// them; they continue when their library is opened again), and always
+/// leaving an ephemeral session (everything in it goes).
 fn ask_while_generating(state: &mut AppState, then: Msg) -> Vec<Effect> {
+    if state.ephemeral.is_some() {
+        let text = "Leaving this ephemeral session deletes everything made or changed in it: nothing of it \
+                    was saved. Export what you want to keep first (the session menu in the top bar).";
+        state.confirm = Some(Confirm::new(text, "Leave and delete", then));
+        return vec![];
+    }
     let n = state.active_runs.len();
     if n == 0 {
         return update(state, then);
@@ -1747,6 +1931,7 @@ fn queue_checked(state: &mut AppState) -> Vec<Effect> {
         preset: Box::new(preset),
         model_dirs: state.config.programs.model_dirs.clone(),
         queue: state.engine_running,
+        anyway: std::mem::take(&mut state.queue_anyway),
         queued,
     };
     if !state.engine_running {
@@ -1980,7 +2165,7 @@ fn model_wizard(state: &mut AppState, msg: Msg) -> Vec<Effect> {
             let picked: Vec<RecipePreset> =
                 w.catalogue().iter().filter(|p| w.picked.contains(&p.name)).map(RecipePreset::installed).collect();
             w.started = true;
-            if fetch && let Err(e) = std::fs::create_dir_all(&dir) {
+            if fetch && let Err(e) = increart_core::vfs::create_dir_all(&dir) {
                 state.messages_error(format!("Couldn't make {dir}: {e}"));
                 return vec![];
             }
@@ -2214,8 +2399,9 @@ fn model_warning(state: &AppState) -> Option<String> {
         return None;
     }
     Some(format!(
-        "No open server can run {}:\n\n{}\n\nQueued anyway, a server still tries to load it: that can fail, \
-         or (KoboldCpp with an int8 file) pin tens of GB of RAM.",
+        "No open server can run {}:\n\n{}\n\nQueued anyway, it goes to a server whatever files it lists: \
+         a KoboldCpp started elsewhere makes it with the model it runs, whatever that is called; another server \
+         tries to load it, which can fail, or (KoboldCpp with an int8 file) pin tens of GB of RAM.",
         if lines.len() == 1 { "this model" } else { "these models" },
         lines.join("\n\n")
     ))
@@ -2255,6 +2441,8 @@ fn fresh_for_library(state: &mut AppState) {
     state.saving = old.saving;
     state.now = old.now;
     state.messages = old.messages;
+    // the session being opened (an ephemeral library's)
+    state.ephemeral_opening = old.ephemeral_opening;
     // (inside `update`: its nesting goes on)
     state.nav.depth = old.nav.depth;
 }
@@ -2693,6 +2881,10 @@ pub fn update(state: &mut AppState, msg: Msg) -> Vec<Effect> {
     if state.nav.depth == 0 && state.review_follow {
         follow_step(state);
     }
+    // the servers' files, or the form, changed
+    if state.nav.depth == 0 {
+        state.fit_generate_preset();
+    }
     if state.nav.depth == 0 && !state.nav.restoring && state.phase == Phase::Main {
         let now = state.place();
         if state.nav.current.as_ref() != Some(&now) {
@@ -2783,6 +2975,14 @@ fn part_of(msg: &Msg) -> usize {
         Msg::ForgetLibrary(..) => 0,
         Msg::LibraryWizard(..) => 0,
         Msg::LibraryOpened(..) => 0,
+        Msg::EphemeralForm(..)
+        | Msg::StartEphemeral
+        | Msg::EphemeralSwap(..)
+        | Msg::RamUsed(..)
+        | Msg::RamFreed(..)
+        | Msg::EphemeralBudget(..)
+        | Msg::EphemeralWhenFull(..)
+        | Msg::FreeDiscarded => 15,
         Msg::LibraryUpgrading(..) => 0,
         Msg::UsageCheck(..) => 18,
         Msg::SwitchLibrary(..) => 1,
@@ -2822,6 +3022,7 @@ fn part_of(msg: &Msg) -> usize {
         Msg::CancelConnect => 1,
         Msg::WizardGpus(..) => 1,
         Msg::WizardRuntime(..) => 1,
+        Msg::WizardFamily(..) => 1,
         Msg::EditKoboldWizard(..) => 1,
         Msg::FinishKoboldWizard => 1,
         Msg::SaveKoboldWizard => 1,
@@ -2900,6 +3101,7 @@ fn part_of(msg: &Msg) -> usize {
         Msg::Draft(..) => 4,
         Msg::AddIdea(..) => 4,
         Msg::DropFiles(..) => 4,
+        Msg::PasteImages { .. } => 4,
         Msg::InboxCursor(..) => 4,
         Msg::InboxFilter(..) => 4,
         Msg::ReviewCurrentIdea(..) => 4,
@@ -2967,6 +3169,7 @@ fn part_of(msg: &Msg) -> usize {
         Msg::QueueGenerate => 14,
         Msg::QueueChecked => 14,
         Msg::QueueModelChecked => 14,
+        Msg::QueueAnyway => 14,
         Msg::QueueSweep(..) => 14,
         Msg::JobOrder(..) => 14,
         Msg::JobRandom(..) => 14,
@@ -2988,6 +3191,8 @@ fn part_of(msg: &Msg) -> usize {
         Msg::NarrowToSiblings(..) => 15,
         Msg::ShowInfo(..) => 15,
         Msg::SheetFilter(..) => 15,
+        Msg::SheetPivot(..) => 15,
+        Msg::LoraEditorOpen | Msg::LoraEditor(..) | Msg::LoraEditorSave => 8,
         Msg::SheetZoom { .. } => 15,
         Msg::GridZoom { .. } => 15,
         Msg::UiZoom { .. } => 15,
@@ -3096,6 +3301,7 @@ fn part_of(msg: &Msg) -> usize {
         Msg::SetKoboldBinary(..) => 17,
         Msg::SetTimeouts(..) => 17,
         Msg::CheckKoboldVersion => 17,
+        Msg::RecheckKoboldVersion => 17,
         Msg::KoboldVersion(..) => 17,
         Msg::Tick(..) => 14,
         Msg::FlushDrafts => 14,
@@ -3428,7 +3634,13 @@ fn apply_0(state: &mut AppState, msg: Msg, rest: &mut Option<Msg>) -> Vec<Effect
                 }
                 fresh_for_library(state);
             }
-            state.config.add_recent_library(root.to_string_lossy().into_owned());
+            state.ephemeral = state.ephemeral_opening.take();
+            state.ephemeral_form = None;
+            // an ephemeral library: named nowhere on disk, and nothing
+            // outside changes it
+            if state.ephemeral.is_none() {
+                state.config.add_recent_library(root.to_string_lossy().into_owned());
+            }
             state.library = Some(root.clone());
             if let Some(d) = &index.idea_draft {
                 state.draft = IdeaDraft::from_file(d);
@@ -3441,7 +3653,11 @@ fn apply_0(state: &mut AppState, msg: Msg, rest: &mut Option<Msg>) -> Vec<Effect
             state.rates = crate::forecast::Rates::of(state.index.projects.iter().flat_map(|p| &p.runs));
             state.inbox_tab = if state.unreviewed_ideas().is_empty() { InboxTab::NewIdea } else { InboxTab::Grid };
             fx.extend(save_config(state));
-            fx.push(Effect::WatchLibrary(root));
+            if state.ephemeral.is_none() {
+                fx.push(Effect::WatchLibrary(root));
+            } else {
+                fx.push(Effect::CheckRam);
+            }
             fx.push(Effect::CheckUsage);
             if switched {
                 // the servers stay; the engine restarts on this library
@@ -3465,6 +3681,10 @@ fn apply_0(state: &mut AppState, msg: Msg, rest: &mut Option<Msg>) -> Vec<Effect
             fx
         }
         Msg::LibraryOpened(Err(e)) => {
+            state.ephemeral_opening = None;
+            if let Some(f) = &mut state.ephemeral_form {
+                f.error = Some(e.clone());
+            }
             if let Phase::Library(d) = &mut state.phase {
                 d.busy = false;
                 d.upgrading = None;
@@ -3865,6 +4085,7 @@ fn apply_1(state: &mut AppState, msg: Msg, rest: &mut Option<Msg>) -> Vec<Effect
                 return update(state, Msg::ListDevices);
             }
             d.kobold = Some(Box::new(KoboldWizard {
+                family: Default::default(),
                 binary,
                 models_dir,
                 gpus: None,
@@ -3880,6 +4101,20 @@ fn apply_1(state: &mut AppState, msg: Msg, rest: &mut Option<Msg>) -> Vec<Effect
             }));
             let mut fx = vec![Effect::DetectGpus(state.gpu_runtime)];
             fx.extend(update(state, Msg::CheckWizardBinary));
+            fx
+        }
+        Msg::WizardFamily(family) => {
+            let Phase::Servers(d) = &state.phase else { return vec![] };
+            let fx = if d.kobold.is_none() { update(state, Msg::WizardKobold(true)) } else { vec![] };
+            let Phase::Servers(d) = &mut state.phase else { return fx };
+            if let Some(k) = d.kobold.as_mut().filter(|k| k.family != family && k.downloading.is_none()) {
+                k.family = family;
+                // another model's presets: by memory again
+                if let Some(Ok(list)) = &mut k.gpus {
+                    list.iter_mut().for_each(|g| g.preset = None);
+                }
+                (k.pe_gpus, k.pe_by_hand, k.error) = (vec![], false, None);
+            }
             fx
         }
         Msg::WizardRuntime(runtime) => {
@@ -4101,7 +4336,11 @@ fn apply_2(state: &mut AppState, msg: Msg, rest: &mut Option<Msg>) -> Vec<Effect
             }
             let runnable = state.runnable_recipes();
             if !runnable.is_empty() && !runnable.contains(&state.generate.preset) {
-                return update(state, Msg::SelectRecipe(runnable[0]));
+                // a default stays one: other servers can move it again
+                let auto = state.generate.preset_auto;
+                let fx = update(state, Msg::SelectRecipe(runnable[0]));
+                state.generate.preset_auto = auto;
+                return fx;
             }
             vec![]
         }
@@ -4868,6 +5107,12 @@ fn apply_4(state: &mut AppState, msg: Msg, rest: &mut Option<Msg>) -> Vec<Effect
             state.busy += 1;
             vec![Effect::Lib(Box::new(LibOp::ImportFiles(paths)))]
         }
+        Msg::PasteImages { images, files, to } => {
+            if state.library.is_none() || (images.is_empty() && files.is_empty()) {
+                return vec![];
+            }
+            lib(state, LibOp::ImportPasted { images, files, to })
+        }
         Msg::InboxCursor(i) => {
             state.inbox_cursor = i.min(state.inbox_queue().len().saturating_sub(1));
             vec![]
@@ -5227,6 +5472,7 @@ fn apply_5(state: &mut AppState, msg: Msg, rest: &mut Option<Msg>) -> Vec<Effect
         Msg::SelectRecipe(i) => {
             if let Some(p) = state.config.recipes.get(i).cloned() {
                 state.generate.apply_preset(i, &p);
+                state.generate.preset_auto = false;
                 mark_generate(state);
             }
             vec![]
@@ -6819,6 +7065,10 @@ fn apply_10(state: &mut AppState, msg: Msg, rest: &mut Option<Msg>) -> Vec<Effec
                 Some(i) => (i, old.get(state.generate.preset) != state.config.recipes.get(i)),
                 None => (0, true),
             };
+            // its model deleted: the default again
+            if chosen.is_none() {
+                state.generate.preset_auto = true;
+            }
             state.generate.preset = i;
             // the form takes an edited preset's settings
             if changed && let Some(p) = state.config.recipes.get(i).cloned() {
@@ -8195,7 +8445,8 @@ fn apply_14(state: &mut AppState, msg: Msg, rest: &mut Option<Msg>) -> Vec<Effec
         }
         Msg::QueueGenerate => match model_warning(state) {
             Some(text) => {
-                let mut c = Confirm::new(text, "Queue anyway", Msg::QueueModelChecked);
+                state.queue_anyway = false;
+                let mut c = Confirm::new(text, "Queue anyway", Msg::QueueAnyway);
                 let sweep =
                     state.generate.sweep.on && state.generate.sweep.vary == increart_core::prompts::SweepVary::Model;
                 if !sweep && let Some(j) = state.runnable_alternative(state.generate.preset) {
@@ -8204,8 +8455,15 @@ fn apply_14(state: &mut AppState, msg: Msg, rest: &mut Option<Msg>) -> Vec<Effec
                 state.confirm = Some(c);
                 vec![]
             }
-            None => update(state, Msg::QueueModelChecked),
+            None => {
+                state.queue_anyway = false;
+                update(state, Msg::QueueModelChecked)
+            }
         },
+        Msg::QueueAnyway => {
+            state.queue_anyway = true;
+            update(state, Msg::QueueModelChecked)
+        }
         Msg::QueueModelChecked => {
             let unnamed = unnamed_refs(state);
             let tags: Vec<String> = unnamed.iter().map(|n| format!("<image{n}>")).collect();
@@ -8418,6 +8676,91 @@ fn apply_15(state: &mut AppState, msg: Msg, rest: &mut Option<Msg>) -> Vec<Effec
                 ZoomGrid::Inbox => state.config.inbox_grid_cell = size,
             }
             if save { save_config(state) } else { vec![] }
+        }
+        Msg::SheetPivot(p) => {
+            state.sheet_pivot = p;
+            vec![]
+        }
+        Msg::LoraEditorOpen => {
+            let files = increart_core::config::lora_files(&state.config.programs.model_dirs);
+            state.lora_editor = Some(LoraEditor { list: state.config.lora_presets.clone(), selected: 0, files });
+            vec![]
+        }
+        Msg::LoraEditor(e) => {
+            state.lora_editor = e;
+            vec![]
+        }
+        Msg::EphemeralForm(f) => {
+            state.ephemeral_form = f;
+            vec![]
+        }
+        Msg::StartEphemeral => start_ephemeral(state),
+        Msg::EphemeralSwap(swap) => {
+            if let Some(e) = state.ephemeral_opening.as_mut().or(state.ephemeral.as_mut()) {
+                e.swap = swap;
+            }
+            vec![]
+        }
+        Msg::RamUsed(used) => ram_used(state, used, true),
+        Msg::RamFreed(Err(e)) => {
+            state.messages_error(format!("freeing RAM: {e}"));
+            vec![]
+        }
+        Msg::RamFreed(Ok((n, used))) => {
+            let Some(e) = &mut state.ephemeral else { return vec![] };
+            e.freed += n;
+            if n > 0 {
+                let budget = show_gib(e.budget);
+                state.messages_info(format!("Deleted {n} image(s), the oldest: the session's RAM ({budget}) was full"));
+            }
+            let mut fx = vec![Effect::Rescan];
+            fx.extend(ram_used(state, used, false));
+            fx
+        }
+        Msg::EphemeralBudget(gib) => {
+            let Some(e) = &mut state.ephemeral else { return vec![] };
+            e.budget = (f64::from(gib.max(0.25)) * GIB) as u64;
+            vec![Effect::CheckRam]
+        }
+        Msg::EphemeralWhenFull(w) => {
+            let Some(e) = &mut state.ephemeral else { return vec![] };
+            e.when_full = w;
+            vec![Effect::CheckRam]
+        }
+        Msg::FreeDiscarded => match state.ephemeral {
+            Some(_) => vec![Effect::FreeDiscarded],
+            None => vec![],
+        },
+        Msg::LoraEditorSave => {
+            let Some(e) = state.lora_editor.take() else { return vec![] };
+            if let Some(why) = e.problem() {
+                state.messages_error(why);
+                state.lora_editor = Some(e);
+                return vec![];
+            }
+            // a renamed preset stays ticked (by its place in the list)
+            let old = std::mem::take(&mut state.config.lora_presets);
+            let renamed: Vec<(String, String)> = old
+                .iter()
+                .zip(&e.list)
+                .filter(|(a, b)| a.name != b.name && !e.list.iter().any(|x| x.name == a.name))
+                .map(|(a, b)| (a.name.clone(), b.name.trim().to_string()))
+                .collect();
+            let mut list = e.list;
+            for p in &mut list {
+                p.name = p.name.trim().to_string();
+            }
+            state.config.lora_presets = list;
+            let sw = &mut state.generate.sweep;
+            for names in std::iter::once(&mut sw.loras).chain(sw.axes.iter_mut().map(|a| &mut a.loras)) {
+                for n in names.iter_mut() {
+                    if let Some((_, to)) = renamed.iter().find(|(from, _)| from == n) {
+                        *n = to.clone();
+                    }
+                }
+            }
+            mark_generate(state);
+            save_config(state)
         }
         Msg::SheetFilter(f) => {
             state.sheet_filter = f;
@@ -8741,6 +9084,7 @@ fn apply_16(state: &mut AppState, msg: Msg, rest: &mut Option<Msg>) -> Vec<Effec
         Msg::QueueWithPreset(i) => {
             if i < state.config.recipes.len() {
                 state.generate.preset = i;
+                state.generate.preset_auto = false;
                 mark_generate(state);
             }
             update(state, Msg::QueueGenerate)
@@ -8803,7 +9147,7 @@ fn apply_16(state: &mut AppState, msg: Msg, rest: &mut Option<Msg>) -> Vec<Effec
                 PickKind::LibraryFolder => match &state.phase {
                     Phase::Library(d) if !d.path.is_empty() => {
                         let p = PathBuf::from(&d.path);
-                        Some(if p.is_dir() { p } else { p.parent().map(PathBuf::from).unwrap_or(p) })
+                        Some(if p.vfs_is_dir() { p } else { p.parent().map(PathBuf::from).unwrap_or(p) })
                     }
                     _ => None,
                 },
@@ -8812,7 +9156,7 @@ fn apply_16(state: &mut AppState, msg: Msg, rest: &mut Option<Msg>) -> Vec<Effec
                     dirs.get(i).or(dirs.last()).filter(|d| !d.trim().is_empty()).map(PathBuf::from)
                 }
                 PickKind::ModelWizardDir => {
-                    state.model_wizard.as_ref().map(|w| PathBuf::from(&w.dir)).filter(|p| p.is_dir())
+                    state.model_wizard.as_ref().map(|w| PathBuf::from(&w.dir)).filter(|p| p.vfs_is_dir())
                 }
                 // the current file's folder, else the model directory
                 PickKind::RecipeFile(slot) => {
@@ -8890,12 +9234,12 @@ fn apply_16(state: &mut AppState, msg: Msg, rest: &mut Option<Msg>) -> Vec<Effec
                         _ => String::new(),
                     };
                     let models = state.config.programs.model_dirs.first().map(PathBuf::from);
-                    PathBuf::from(p).parent().map(PathBuf::from).filter(|p| p.is_dir()).or(models)
+                    PathBuf::from(p).parent().map(PathBuf::from).filter(|p| p.vfs_is_dir()).or(models)
                 }
                 PickKind::WizardBinary | PickKind::WizardModels => match &state.phase {
                     Phase::Servers(ServerDialog { kobold: Some(k), .. }) => {
                         let p = PathBuf::from(if kind == PickKind::WizardBinary { &k.binary } else { &k.models_dir });
-                        if p.is_dir() { Some(p) } else { p.parent().map(PathBuf::from).filter(|p| p.is_dir()) }
+                        if p.vfs_is_dir() { Some(p) } else { p.parent().map(PathBuf::from).filter(|p| p.vfs_is_dir()) }
                     }
                     _ => None,
                 },
@@ -9146,6 +9490,12 @@ fn apply_17(state: &mut AppState, msg: Msg, rest: &mut Option<Msg>) -> Vec<Effec
             save_config(state)
         }
         Msg::CheckKoboldVersion => kobold_version_once(state),
+        Msg::RecheckKoboldVersion => {
+            let Phase::Servers(d) = &mut state.phase else { return vec![] };
+            d.kobold_version = None;
+            let wizard = d.kobold.is_some();
+            update(state, if wizard { Msg::CheckWizardBinary } else { Msg::CheckKoboldVersion })
+        }
         Msg::KoboldVersion(binary, r) => {
             if let Phase::Servers(d) = &mut state.phase {
                 d.kobold_version = Some((binary, r));
@@ -9952,11 +10302,25 @@ fn new_sweep(state: &mut AppState, ask: NewSweepAsk, entries: &[HistoryEntry]) -
                 }
             }
         }
+        Some(param) if let Some(slot) = param.tag() => {
+            s.vary = SweepVary::Tag;
+            s.tag_slot = slot.to_string();
+            let values = distinct(tags.iter().filter_map(|t| t.param.as_ref()).map(|p| p.value.as_str()));
+            s.tag_values = values.join("\n");
+            if form.is_none() {
+                // the form is the first run's: its prompt has the value in
+                if let Some(v) = values.first().filter(|v| f.prompt.matches(v.as_str()).count() == 1) {
+                    f.prompt = f.prompt.replace(v.as_str(), &format!("{{{slot}}}"));
+                }
+            }
+        }
         Some(param) => {
             s.vary = SweepVary::EVERY.into_iter().find(|v| v.key() == param.name).unwrap_or_default();
-            let values: Vec<String> = tags.iter().filter_map(|t| t.param.as_ref()).map(|p| p.value.clone()).collect();
+            let values = distinct(tags.iter().filter_map(|t| t.param.as_ref()).map(|p| p.value.as_str()));
             if s.vary == SweepVary::Model {
                 s.models = values;
+            } else if s.vary == SweepVary::Lora {
+                s.loras = values;
             } else {
                 s.values = values.join(", ");
             }
@@ -9965,15 +10329,19 @@ fn new_sweep(state: &mut AppState, ask: NewSweepAsk, entries: &[HistoryEntry]) -
             s.vary = SweepVary::Style;
             s.source = SweepSource::Selected;
             let list = &state.prompt_presets;
-            let keys: Vec<PresetKey> = tags
-                .iter()
-                .map(|t| {
-                    increart_core::prompts::current_key(
-                        &PresetKey { task: t.task.clone(), name: t.preset.clone() },
-                        list,
-                    )
-                })
-                .collect();
+            // a style once, with its first run (other axes' rows repeat it)
+            let mut keys: Vec<PresetKey> = vec![];
+            let mut style_runs = vec![];
+            for (t, run) in tags.iter().zip(&runs) {
+                let key = increart_core::prompts::current_key(
+                    &PresetKey { task: t.task.clone(), name: t.preset.clone() },
+                    list,
+                );
+                if !keys.contains(&key) {
+                    keys.push(key);
+                    style_runs.push(run);
+                }
+            }
             let find = |k: &PresetKey| {
                 list.tasks.iter().find(|t| t.name == k.task).and_then(|t| t.presets.iter().find(|p| p.name == k.name))
             };
@@ -9989,7 +10357,7 @@ fn new_sweep(state: &mut AppState, ask: NewSweepAsk, entries: &[HistoryEntry]) -
                 f.prompt = PRESET_SLOT.into();
                 let slots = f.sweep.slots.clone();
                 let mut own = vec![];
-                for (run, key) in runs.iter().zip(&keys) {
+                for (run, key) in style_runs.iter().zip(&keys) {
                     let Some(preset) = find(key) else { continue };
                     let enhanced = run.sweep.as_ref().is_some_and(|t| t.enhanced);
                     let from = sweep_prompt(PRESET_SLOT, &preset.prompt, &slots);
@@ -9999,6 +10367,7 @@ fn new_sweep(state: &mut AppState, ask: NewSweepAsk, entries: &[HistoryEntry]) -
             }
         }
     }
+    more_axes(&mut f, &tags, form.is_some());
     let n = runs.len();
     let mut fx = update(state, Msg::OpenInGenerate(ask.project.clone()));
     let g = &state.generate;
@@ -10029,12 +10398,74 @@ fn new_sweep(state: &mut AppState, ask: NewSweepAsk, entries: &[HistoryEntry]) -
     fx
 }
 
+/// Each value once, in order.
+fn distinct<'a>(values: impl Iterator<Item = &'a str>) -> Vec<String> {
+    let mut out: Vec<String> = vec![];
+    for v in values {
+        if !out.iter().any(|o| o == v) {
+            out.push(v.to_string());
+        }
+    }
+    out
+}
+
+/// **New sweep from these**: the axes after the first, each with the
+/// values of the rows picked (from the form it was queued with, else made
+/// from the runs' tags and the first run's prompt).
+fn more_axes(f: &mut GenerateForm, tags: &[&SweepTag], checkpoint: bool) {
+    use increart_core::prompts::{Combine, SweepAxis, SweepVary};
+    let n = tags.iter().map(|t| t.more.len()).min().unwrap_or(0);
+    if !checkpoint {
+        f.sweep.axes = vec![SweepAxis::default(); n];
+    }
+    f.sweep.axes.truncate(n);
+    for (j, axis) in f.sweep.axes.iter_mut().enumerate() {
+        let Some(first) = tags.first().map(|t| &t.more[j]) else { continue };
+        let values = distinct(tags.iter().map(|t| t.more[j].value.as_str()));
+        match first.tag() {
+            Some(slot) => {
+                axis.vary = SweepVary::Tag;
+                axis.tag_slot = slot.to_string();
+                axis.tag_values = values.join("\n");
+                // the first run's prompt has its value in
+                if let Some(v) = values.first().filter(|v| !checkpoint && f.prompt.matches(v.as_str()).count() == 1) {
+                    f.prompt = f.prompt.replace(v.as_str(), &format!("{{{slot}}}"));
+                }
+            }
+            None => {
+                axis.vary = SweepVary::EVERY.into_iter().find(|v| v.key() == first.name).unwrap_or_default();
+                if axis.vary == SweepVary::Model {
+                    axis.models = values;
+                } else if axis.vary == SweepVary::Lora {
+                    axis.loras = values;
+                } else {
+                    axis.values = values.join(", ");
+                }
+            }
+        }
+    }
+    // pairs picked may no longer pair up
+    if f.sweep.combine == Combine::Paired {
+        let first = distinct(tags.iter().map(|t| t.first()).collect::<Vec<_>>().iter().map(String::as_str)).len();
+        let even = f
+            .sweep
+            .axes
+            .iter()
+            .enumerate()
+            .all(|(j, _)| distinct(tags.iter().map(|t| t.more[j].value.as_str())).len() == first);
+        if !even {
+            f.sweep.combine = Combine::Every;
+        }
+    }
+}
+
 /// Leaving a sweep (or run) scope: the sheet goes with it.
 fn leave_sweep(state: &mut AppState) {
     state.review_sweep = None;
     state.review_run = None;
     state.picked.clear();
     state.sheet_filter.clear();
+    state.sheet_pivot = None;
     if state.review_view == ReviewView::Sheet {
         state.review_view = ReviewView::Single;
     }
@@ -10066,8 +10497,187 @@ pub const BIG_SWEEP: u64 = 100;
 /// The Sweep mode's runs, checked: (form, tag) per chosen preset that the
 /// references fit, and how many chosen presets need more references.
 pub fn sweep_runs(state: &AppState) -> Result<(Vec<(GenerateForm, SweepTag)>, usize), String> {
-    use increart_core::prompts::{slot_names, sweep_presets};
     let f = &state.generate;
+    // (a random pick or one per image is of the first axis alone too)
+    if f.sweep.axes.is_empty() && f.sweep.combine == increart_core::prompts::Combine::Every {
+        return first_axis_runs(state, f);
+    }
+    let recipes = &state.config.recipes;
+    let axes = axis_values(f, recipes)?;
+    // the axes' blanks are left for each run to fill, marked
+    let mut g = f.clone();
+    for a in f.sweep.axes.iter().filter(|a| a.vary == increart_core::prompts::SweepVary::Tag) {
+        g.sweep.slots.insert(a.tag_slot.clone(), tag_mark(&a.tag_slot));
+    }
+    let (first, unfit) = first_axis_runs(state, &g)?;
+    Ok((combine_runs(f, first, &axes, recipes)?, unfit))
+}
+
+/// Where an axis's blank goes in the prompt until its run's value does.
+fn tag_mark(slot: &str) -> String {
+    format!("\u{2063}{slot}\u{2063}")
+}
+
+/// The values of each axis after the first, checked: one kind once (a tag
+/// axis a blank once), none the first axis's.
+pub fn axis_values(f: &GenerateForm, recipes: &[RecipePreset]) -> Result<Vec<Vec<SweepParam>>, String> {
+    use increart_core::prompts::SweepVary;
+    let s = &f.sweep;
+    let mut seen: Vec<(SweepVary, &str)> = vec![(s.vary, if s.vary == SweepVary::Tag { &s.tag_slot } else { "" })];
+    let mut out = vec![];
+    for (i, a) in s.axes.iter().enumerate() {
+        if !SweepVary::MORE.contains(&a.vary) {
+            return Err(format!("{} can only be the first axis", a.vary.name()));
+        }
+        let slot = if a.vary == SweepVary::Tag { a.tag_slot.as_str() } else { "" };
+        if seen.contains(&(a.vary, slot)) {
+            return Err(if a.vary == SweepVary::Tag {
+                format!("Two axes vary {{{slot}}}: give axis {} another blank", i + 2)
+            } else {
+                format!("Two axes vary {}: change axis {}", a.vary.name(), i + 2)
+            });
+        }
+        seen.push((a.vary, slot));
+        let mut t = f.clone();
+        t.sweep = a.as_first(s);
+        out.push(sweep_values(&t, recipes).map_err(|e| format!("Axis {}: {e}", i + 2))?);
+    }
+    Ok(out)
+}
+
+/// A value of an axis put in a run: a setting, a model preset (its steps,
+/// CFG, sampler, schedule and flow shift), a blank's value.
+fn apply_param(run: &mut GenerateForm, p: &SweepParam, recipes: &[RecipePreset]) {
+    let v: f32 = p.value.parse().unwrap_or_default();
+    let named = if p.value == "default" { String::new() } else { p.value.clone() };
+    match p.name.as_str() {
+        "model" => {
+            if let Some(i) = recipes.iter().position(|r| r.name == p.value) {
+                run.apply_preset(i, &recipes[i]);
+            }
+        }
+        "steps" => run.steps = v as u32,
+        "cfg" => run.cfg = v,
+        "flow_shift" => run.flow_shift = Some(v),
+        "strength" => run.strength = v,
+        "sampler" => run.sampler = named,
+        "scheduler" => run.scheduler = named,
+        // (the first axis's value is put in again after a model axis's)
+        "lora" if !p.value.is_empty() && !run.sweep_loras.contains(&p.value) => run.sweep_loras.push(p.value.clone()),
+        "lora" => {}
+        "lora_weight" => run.lora_weight = Some(v),
+        _ => {
+            if let Some(slot) = p.tag() {
+                run.prompt = run.prompt.replace(&tag_mark(slot), &p.value).replace(&format!("{{{slot}}}"), &p.value);
+            }
+        }
+    }
+}
+
+/// A sweep run's model preset with its LoRA axis's presets' LoRAs added,
+/// and its LoRA weight on those (else on the preset's own).
+pub fn with_loras(
+    f: &GenerateForm,
+    mut preset: RecipePreset,
+    list: &[increart_core::config::LoraPreset],
+) -> Result<RecipePreset, String> {
+    let own = preset.loras.len();
+    for name in &f.sweep_loras {
+        let Some(lp) = list.iter().find(|l| l.name == *name) else {
+            return Err(format!("There's no LoRA preset “{name}” any more: tick another"));
+        };
+        preset.loras.extend(lp.loras.iter().filter(|l| !l.file.is_empty()).cloned());
+    }
+    if let Some(w) = f.lora_weight {
+        let from = if preset.loras.len() > own { own } else { 0 };
+        for l in &mut preset.loras[from..] {
+            l.weight = w;
+        }
+    }
+    Ok(preset)
+}
+
+/// splitmix64: a repeatable stream from a seed.
+fn splitmix(x: &mut u64) -> u64 {
+    *x = x.wrapping_add(0x9E37_79B9_7F4A_7C15);
+    let mut z = *x;
+    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    z ^ (z >> 31)
+}
+
+/// The first axis's runs with the other axes' values, put together as
+/// the sweep's Combine says.
+pub fn combine_runs(
+    f: &GenerateForm,
+    first: Vec<(GenerateForm, SweepTag)>,
+    axes: &[Vec<SweepParam>],
+    recipes: &[RecipePreset],
+) -> Result<Vec<(GenerateForm, SweepTag)>, String> {
+    use increart_core::prompts::Combine;
+    // every combination's index into each axis (the first axis first)
+    let sizes: Vec<usize> = std::iter::once(first.len()).chain(axes.iter().map(Vec::len)).collect();
+    let all: usize = sizes.iter().product();
+    let index = |mut n: usize| -> Vec<usize> {
+        let mut at = vec![0; sizes.len()];
+        for (i, size) in sizes.iter().enumerate().rev() {
+            at[i] = n % size;
+            n /= size;
+        }
+        at
+    };
+    let mut stream = f.sweep.combine_seed;
+    // (combination, its seeds: None for the form's)
+    let picks: Vec<(Vec<usize>, Option<u64>)> = match f.sweep.combine {
+        Combine::Every => (0..all).map(|n| (index(n), None)).collect(),
+        Combine::Paired => {
+            if let Some(n) = sizes.iter().find(|n| **n != sizes[0]) {
+                return Err(format!("Paired axes need as many values each: the first has {}, another {n}", sizes[0]));
+            }
+            (0..sizes[0]).map(|i| (vec![i; sizes.len()], None)).collect()
+        }
+        Combine::Random => {
+            let k = f.sweep.combine_k.max(1).min(all);
+            // a Fisher–Yates shuffle's first k, back in grid order
+            let mut order: Vec<usize> = (0..all).collect();
+            for i in 0..k {
+                let j = i + (splitmix(&mut stream) % (all - i) as u64) as usize;
+                order.swap(i, j);
+            }
+            let mut chosen = order[..k].to_vec();
+            chosen.sort();
+            chosen.into_iter().map(|n| (index(n), None)).collect()
+        }
+        Combine::PerImage => (0..f.seeds)
+            .map(|i| (index((splitmix(&mut stream) % all as u64) as usize), Some(f.first_seed + i)))
+            .collect(),
+    };
+    let runs = picks
+        .into_iter()
+        .map(|(at, seed)| {
+            let (base, tag) = &first[at[0]];
+            let mut run = base.clone();
+            let mut tag = tag.clone();
+            tag.more = axes.iter().zip(&at[1..]).map(|(v, i)| v[*i].clone()).collect();
+            // a model first, as its settings are the rest's to change
+            let (models, rest): (Vec<_>, Vec<_>) = tag.param.iter().chain(&tag.more).partition(|p| p.name == "model");
+            for p in models.into_iter().chain(rest) {
+                apply_param(&mut run, p, recipes);
+            }
+            run.label = format!("{} · {}", tag.name, tag.row());
+            if let Some(seed) = seed {
+                run.first_seed = seed;
+                run.seeds = 1;
+            }
+            (run, tag)
+        })
+        .collect();
+    Ok(runs)
+}
+
+/// The first axis's runs (Vary's), checked.
+fn first_axis_runs(state: &AppState, f: &GenerateForm) -> Result<(Vec<(GenerateForm, SweepTag)>, usize), String> {
+    use increart_core::prompts::{slot_names, sweep_presets};
     if f.sweep.vary == increart_core::prompts::SweepVary::Image {
         return image_runs(f, &state.swept_names(&f.sweep.images)).map(|r| (r, 0));
     }
@@ -10114,8 +10724,14 @@ pub fn sweep_runs(state: &AppState) -> Result<(Vec<(GenerateForm, SweepTag)>, us
             }
             run.label = format!("{name} · {}", p.name);
             let enhanced = f.sweep.style_prompt(&key(t, p)).is_some_and(|s| s.enhanced);
-            let tag =
-                SweepTag { name: name.clone(), task: t.name.clone(), preset: p.name.clone(), param: None, enhanced };
+            let tag = SweepTag {
+                name: name.clone(),
+                task: t.name.clone(),
+                preset: p.name.clone(),
+                param: None,
+                enhanced,
+                more: vec![],
+            };
             (run, tag)
         })
         .collect();
@@ -10165,9 +10781,18 @@ pub fn param_runs(f: &GenerateForm, recipes: &[RecipePreset]) -> Result<Vec<(Gen
     if f.prompt.contains(PRESET_SLOT) {
         return Err(format!("{PRESET_SLOT} in the prompt is for style sweeps: take it out, or vary the style"));
     }
-    let prompt = fill_slots(f.prompt.clone(), &f.sweep.slots);
-    let unfilled: Vec<String> =
-        increart_core::prompts::slot_names([prompt.as_str()]).into_iter().map(|n| format!("{{{n}}}")).collect();
+    // a tag sweep's blank is each run's to fill: its shared value isn't used
+    let tag = (f.sweep.vary == SweepVary::Tag).then_some(f.sweep.tag_slot.as_str());
+    let mut slots = f.sweep.slots.clone();
+    if let Some(tag) = tag {
+        slots.remove(tag);
+    }
+    let prompt = fill_slots(f.prompt.clone(), &slots);
+    let unfilled: Vec<String> = increart_core::prompts::slot_names([prompt.as_str()])
+        .into_iter()
+        .filter(|n| Some(n.as_str()) != tag)
+        .map(|n| format!("{{{n}}}"))
+        .collect();
     if !unfilled.is_empty() {
         return Err(format!("Fill in {} (type over it) before queueing", unfilled.join(", ")));
     }
@@ -10178,23 +10803,7 @@ pub fn param_runs(f: &GenerateForm, recipes: &[RecipePreset]) -> Result<Vec<(Gen
             let mut run = f.clone();
             run.sweep = Default::default();
             run.prompt = prompt.clone();
-            let v: f32 = param.value.parse().unwrap_or_default();
-            let named = if param.value == "default" { String::new() } else { param.value.clone() };
-            match f.sweep.vary {
-                SweepVary::Sampler => run.sampler = named,
-                SweepVary::Scheduler => run.scheduler = named,
-                SweepVary::Steps => run.steps = v as u32,
-                SweepVary::Cfg => run.cfg = v,
-                SweepVary::FlowShift => run.flow_shift = Some(v),
-                SweepVary::Strength => run.strength = v,
-                SweepVary::Model => {
-                    if let Some(i) = recipes.iter().position(|r| r.name == param.value) {
-                        let p = &recipes[i];
-                        run.apply_preset(i, p);
-                    }
-                }
-                SweepVary::Style | SweepVary::Image => {}
-            }
+            apply_param(&mut run, &param, recipes);
             run.label = format!("{name} · {}", param.label());
             let tag = SweepTag {
                 name: name.clone(),
@@ -10202,6 +10811,7 @@ pub fn param_runs(f: &GenerateForm, recipes: &[RecipePreset]) -> Result<Vec<(Gen
                 preset: String::new(),
                 param: Some(param),
                 enhanced: false,
+                more: vec![],
             };
             (run, tag)
         })
@@ -10252,6 +10862,7 @@ pub fn image_runs(f: &GenerateForm, names: &[String]) -> Result<Vec<(GenerateFor
                 preset: String::new(),
                 param: Some(param),
                 enhanced: false,
+                more: vec![],
             };
             (run, tag)
         })
@@ -10269,6 +10880,26 @@ pub fn sweep_values(f: &GenerateForm, recipes: &[RecipePreset]) -> Result<Vec<Sw
         let v: Vec<_> =
             recipes.iter().filter(|r| f.sweep.models.contains(&r.name)).map(|r| param(r.name.clone())).collect();
         return if v.is_empty() { Err("Tick the models to compare".into()) } else { Ok(v) };
+    }
+    if vary == SweepVary::Lora {
+        let v: Vec<_> = f.sweep.loras.iter().map(|n| param(n.clone())).collect();
+        return if v.is_empty() { Err("Tick the LoRA presets to compare".into()) } else { Ok(v) };
+    }
+    if vary == SweepVary::Tag {
+        let blanks = increart_core::prompts::slot_names([f.prompt.as_str()]);
+        let slot = &f.sweep.tag_slot;
+        if blanks.is_empty() {
+            return Err("A tag sweep varies a blank of the prompt: write one, e.g. {hair}".into());
+        }
+        if !blanks.contains(slot) {
+            return Err(if slot.is_empty() {
+                "Choose the blank to vary".into()
+            } else {
+                format!("The prompt has no {{{slot}}} any more: choose the blank to vary")
+            });
+        }
+        let v: Vec<_> = f.sweep.tags().iter().map(|t| SweepParam::of_tag(slot, t)).collect();
+        return if v.is_empty() { Err(format!("Type the values for {{{slot}}}, one a line")) } else { Ok(v) };
     }
     if vary.named() {
         let mut v: Vec<SweepParam> = vec![];
@@ -10291,6 +10922,7 @@ pub fn sweep_values(f: &GenerateForm, recipes: &[RecipePreset]) -> Result<Vec<Sw
         SweepVary::Steps => (1.0, 200.0),
         SweepVary::Cfg => (0.0, 30.0),
         SweepVary::FlowShift => (0.0, 20.0),
+        SweepVary::LoraWeight => (-4.0, 4.0),
         _ => (0.0, 1.0),
     };
     let mut v: Vec<f32> = vec![];
@@ -10300,7 +10932,8 @@ pub fn sweep_values(f: &GenerateForm, recipes: &[RecipePreset]) -> Result<Vec<Sw
             return Err(format!("Steps are whole numbers: {w}"));
         }
         // CFG may be 0 … 30 and steps 1 … 200; the rest above 0
-        let low_ok = if vary == SweepVary::Steps || vary == SweepVary::Cfg { x >= lo } else { x > lo };
+        let low_ok =
+            if matches!(vary, SweepVary::Steps | SweepVary::Cfg | SweepVary::LoraWeight) { x >= lo } else { x > lo };
         if !low_ok || x > hi {
             return Err(format!("{} goes from {lo} to {hi}: {w}", vary.name()));
         }
@@ -10358,6 +10991,7 @@ pub fn sweep_defaults(vary: increart_core::prompts::SweepVary, f: &GenerateForm)
             [0.5, 2.0 / 3.0, 1.0, 4.0 / 3.0, 2.0].iter().map(|k| round(x * k, 0.1)).collect()
         }
         SweepVary::Strength => vec![0.3, 0.45, 0.6, 0.75, 0.9],
+        SweepVary::LoraWeight => vec![0.4, 0.6, 0.8, 1.0, 1.2],
         _ => vec![],
     };
     let mut v = v;
@@ -10416,9 +11050,25 @@ fn queue_sweep(state: &mut AppState, confirmed: bool) -> Vec<Effect> {
         state.messages_error("No model");
         return vec![];
     };
-    let images = runs.len() as u64 * state.generate.seeds;
+    // with its LoRA axis's LoRAs, at its weight
+    let runs = match runs
+        .into_iter()
+        .map(|(f, t, p)| with_loras(&f, p, &state.config.lora_presets).map(|p| (f, t, p)))
+        .collect::<Result<Vec<_>, _>>()
+    {
+        Ok(r) => r,
+        Err(e) => {
+            state.messages_error(e);
+            return vec![];
+        }
+    };
+    let images: u64 = runs.iter().map(|(f, _, _)| f.seeds).sum();
     if images > BIG_SWEEP && !confirmed {
-        let text = format!("Queue {} runs × {} seeds = {images} images?", runs.len(), state.generate.seeds);
+        let text = if state.generate.sweep.combine == increart_core::prompts::Combine::PerImage {
+            format!("Queue {images} images, each its own combination?")
+        } else {
+            format!("Queue {} runs × {} seeds = {images} images?", runs.len(), state.generate.seeds)
+        };
         state.confirm = Some(Confirm::new(text, "Queue", Msg::QueueSweep(true)));
         return vec![];
     }
@@ -10445,6 +11095,7 @@ fn queue_sweep(state: &mut AppState, confirmed: bool) -> Vec<Effect> {
         runs,
         model_dirs: state.config.programs.model_dirs.clone(),
         queue: state.engine_running,
+        anyway: std::mem::take(&mut state.queue_anyway),
         queued,
     };
     if !state.engine_running {
@@ -11376,8 +12027,8 @@ fn restore_form(state: &mut AppState, d: &increart_core::model::GenerateDraft) {
     }
     if let Some(root) = &state.library {
         let before = f.images.len() + f.sweep.images.len();
-        f.images.retain(|i| i.image.path(root).is_file());
-        f.sweep.images.retain(|i| i.path(root).is_file());
+        f.images.retain(|i| i.image.path(root).vfs_is_file());
+        f.sweep.images.retain(|i| i.path(root).vfs_is_file());
         let gone = before - f.images.len() - f.sweep.images.len();
         if gone > 0 {
             notes.push(format!("{gone} image(s) no longer in the library were left out"));
@@ -12030,6 +12681,19 @@ fn op_done(state: &mut AppState, ok: OpOk) -> Vec<Effect> {
             }
             state.idea_dirty = Some(state.now);
         }
+        OpOk::ImportedForEdit(idea, ids) => match &mut state.idea_edit {
+            Some(ed) if ed.id == idea => {
+                for id in ids {
+                    if !ed.images.contains(&id) {
+                        ed.images.push(id);
+                    }
+                }
+            }
+            _ => state.messages_info("Pasted images not added: the idea's Edit window was closed"),
+        },
+        OpOk::PastedIdeas(n) => {
+            state.messages_info(format!("Pasted: {n} new idea{} in the inbox", if n == 1 { "" } else { "s" }))
+        }
         OpOk::ProjectFromIdeas { project, prompt, refs, idea } => {
             let fx = leave_generate(state);
             state.project = Some(project);
@@ -12227,7 +12891,10 @@ fn engine_event(state: &mut AppState, e: Event) -> Vec<Effect> {
                 state.live_done = Some((run.clone(), seed, image));
             }
             state.progress.remove(&(run, seed));
-            vec![Effect::Rescan]
+            match state.ephemeral {
+                Some(_) => vec![Effect::Rescan, Effect::CheckRam],
+                None => vec![Effect::Rescan],
+            }
         }
         Event::SeedFailed { run, seed, error, .. } => {
             state.sampling_times.remove(&(run.clone(), seed));
@@ -12268,9 +12935,12 @@ fn engine_event(state: &mut AppState, e: Event) -> Vec<Effect> {
         Event::ModelLoaded { server, recipe, took_s } => {
             let Some(s) = state.servers.get(server) else { return vec![] };
             state.load_times.record(&s.name, &recipe, took_s);
+            // an ephemeral session's: used while it lasts, not saved
             match &state.load_times_path {
-                Some(path) => vec![Effect::SaveLoadTimes(path.clone(), state.load_times.clone())],
-                None => vec![],
+                Some(path) if state.ephemeral.is_none() => {
+                    vec![Effect::SaveLoadTimes(path.clone(), state.load_times.clone())]
+                }
+                _ => vec![],
             }
         }
         Event::Log { run, line } => {

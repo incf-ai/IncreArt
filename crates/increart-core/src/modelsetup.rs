@@ -2,6 +2,7 @@
 //! files go, folders that already hold some, to add as model folders, and
 //! model files kept elsewhere, to link.
 
+use crate::vfs::PathExt;
 use std::path::{Path, PathBuf};
 
 /// A folder holding model files.
@@ -47,18 +48,18 @@ pub fn is_model_file(name: &str) -> bool {
 
 /// The model files under `dir`, `depth` folders down: count and bytes.
 pub fn count(dir: &Path, depth: u32) -> (usize, u64) {
-    let Ok(rd) = std::fs::read_dir(dir) else { return (0, 0) };
+    let Ok(rd) = crate::vfs::read_dir(dir) else { return (0, 0) };
     let (mut n, mut bytes) = (0, 0);
     for e in rd.flatten() {
         let p = e.path();
-        if p.is_dir() {
+        if p.vfs_is_dir() {
             if depth > 0 {
                 let (a, b) = count(&p, depth - 1);
                 (n, bytes) = (n + a, bytes + b);
             }
         } else if e.file_name().to_str().is_some_and(is_model_file) {
             n += 1;
-            bytes += std::fs::metadata(&p).map_or(0, |m| m.len());
+            bytes += crate::vfs::metadata(&p).map_or(0, |m| m.len());
         }
     }
     (n, bytes)
@@ -70,7 +71,7 @@ pub fn find_folders(home: &Path, more: &[PathBuf]) -> Vec<FoundFolder> {
     let mut seen: Vec<PathBuf> = vec![];
     let mut out = vec![];
     for dir in candidates(home).into_iter().chain(more.iter().cloned()) {
-        let Ok(real) = dir.canonicalize() else { continue };
+        let Ok(real) = dir.vfs_canonicalize() else { continue };
         if seen.contains(&real) {
             continue;
         }
@@ -98,7 +99,7 @@ impl FileIndex {
     /// each file once by name and real path.
     pub fn build(dirs: &[PathBuf]) -> FileIndex {
         fn walk(dir: &Path, depth: u32, seen: &mut std::collections::BTreeSet<(String, PathBuf)>, ix: &mut FileIndex) {
-            let Ok(list) = std::fs::read_dir(dir) else { return };
+            let Ok(list) = crate::vfs::read_dir(dir) else { return };
             for e in list.flatten() {
                 let Ok(kind) = e.file_type() else { continue };
                 let p = e.path();
@@ -112,8 +113,8 @@ impl FileIndex {
                 if !is_model_file(&name) {
                     continue;
                 }
-                let Ok(meta) = std::fs::metadata(&p) else { continue };
-                let real = p.canonicalize().unwrap_or_else(|_| p.clone());
+                let Ok(meta) = crate::vfs::metadata(&p) else { continue };
+                let real = p.vfs_canonicalize().unwrap_or_else(|_| p.clone());
                 if !meta.is_file() || !seen.insert((name.clone(), real)) {
                     continue;
                 }
@@ -153,12 +154,12 @@ mod tests {
     fn files_are_indexed_by_name_and_found_by_size() {
         let tmp = tempfile::tempdir().unwrap();
         let t = tmp.path();
-        std::fs::create_dir_all(t.join("a/deep/er")).unwrap();
-        std::fs::create_dir_all(t.join("b/blobs")).unwrap();
-        std::fs::write(t.join("a/deep/er/vae.safetensors"), b"12345").unwrap();
-        std::fs::write(t.join("b/vae.safetensors"), b"123").unwrap();
-        std::fs::write(t.join("b/blobs/x.gguf"), b"1").unwrap();
-        std::fs::write(t.join("b/notes.txt"), b"1").unwrap();
+        crate::vfs::create_dir_all(t.join("a/deep/er")).unwrap();
+        crate::vfs::create_dir_all(t.join("b/blobs")).unwrap();
+        crate::vfs::write(t.join("a/deep/er/vae.safetensors"), b"12345").unwrap();
+        crate::vfs::write(t.join("b/vae.safetensors"), b"123").unwrap();
+        crate::vfs::write(t.join("b/blobs/x.gguf"), b"1").unwrap();
+        crate::vfs::write(t.join("b/notes.txt"), b"1").unwrap();
         // the same file twice under one name (a folder searched twice): once
         let ix = FileIndex::build(&[t.join("a"), t.join("b"), t.join("b"), t.join("missing")]);
         assert_eq!(ix.len(), 2, "{ix:?}");
@@ -174,17 +175,17 @@ mod tests {
     fn folders_with_model_files_are_found_once() {
         let home = tempfile::tempdir().unwrap();
         let h = home.path();
-        std::fs::create_dir_all(h.join("ComfyUI/models/checkpoints")).unwrap();
-        std::fs::write(h.join("ComfyUI/models/checkpoints/a.safetensors"), b"12345").unwrap();
-        std::fs::write(h.join("ComfyUI/models/readme.txt"), b"x").unwrap();
+        crate::vfs::create_dir_all(h.join("ComfyUI/models/checkpoints")).unwrap();
+        crate::vfs::write(h.join("ComfyUI/models/checkpoints/a.safetensors"), b"12345").unwrap();
+        crate::vfs::write(h.join("ComfyUI/models/readme.txt"), b"x").unwrap();
         // an empty one, and one only of other files
-        std::fs::create_dir_all(h.join("models")).unwrap();
-        std::fs::create_dir_all(h.join("koboldcpp")).unwrap();
-        std::fs::write(h.join("koboldcpp/koboldcpp.py"), b"x").unwrap();
+        crate::vfs::create_dir_all(h.join("models")).unwrap();
+        crate::vfs::create_dir_all(h.join("koboldcpp")).unwrap();
+        crate::vfs::write(h.join("koboldcpp/koboldcpp.py"), b"x").unwrap();
         // another way to the same folder
-        std::fs::create_dir_all(h.join("AI")).unwrap();
+        crate::vfs::create_dir_all(h.join("AI")).unwrap();
         #[cfg(unix)]
-        std::os::unix::fs::symlink(h.join("ComfyUI/models"), h.join("AI/models")).unwrap();
+        crate::vfs::symlink(h.join("ComfyUI/models"), h.join("AI/models")).unwrap();
         let found = find_folders(h, &[]);
         assert_eq!(found.len(), 1, "{found:?}");
         assert_eq!(found[0].files, 1);

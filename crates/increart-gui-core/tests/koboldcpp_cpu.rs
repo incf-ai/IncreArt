@@ -17,6 +17,7 @@
 //! with `--usecpu`, and crashes on their virtual GPU).
 //! `INCREART_IT_OUT`, if set, gets the servers' logs afterwards, failed or
 //! not.
+#![allow(clippy::disallowed_methods)] // fixtures on disk: no overlay here
 
 use std::net::{SocketAddr, TcpStream};
 use std::path::{Path, PathBuf};

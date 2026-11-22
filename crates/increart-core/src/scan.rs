@@ -1,8 +1,9 @@
 //! Reading the whole library into an [`Index`]. Problems with single files
 //! (unparsable RSN, a stray file, a broken link) are collected, not fatal.
 
+use crate::vfs as fs;
+use crate::vfs::PathExt;
 use std::collections::BTreeSet;
-use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::error::{PathParts, Result};
@@ -276,18 +277,18 @@ pub fn scan(root: &Path) -> Result<Index> {
     scan_collections(root, &mut ix)?;
     scan_input_collections(root, &mut ix)?;
     let idea_draft = root.join(IDEA_DRAFT);
-    if idea_draft.is_file() {
+    if idea_draft.vfs_is_file() {
         match rsnfmt::read::<IdeaDraftFile>(&idea_draft) {
             Ok(d) => ix.idea_draft = Some(d),
             Err(e) => ix.problems.push(e.to_string()),
         }
     }
     let drop = root.join(INBOX_DROP);
-    if drop.is_dir() {
+    if drop.vfs_is_dir() {
         for e in fs::read_dir(&drop).map_err(|e| crate::Error::Io { path: drop.clone(), source: e })? {
             let Ok(e) = e else { continue };
             let p = e.path();
-            if !p.is_dir() && !fsutil::hidden(&p) {
+            if !p.vfs_is_dir() && !fsutil::hidden(&p) {
                 ix.inbox_drop.push(rel(root, &p));
             }
         }
@@ -317,7 +318,7 @@ fn read_idea(root: &Path, dir: &Path, loc: IdeaLoc, ix: &mut Index) {
 /// collections, upgraded when opened) are found too.
 fn scan_library(root: &Path, folder: &Path, ix: &mut Index) -> Result<()> {
     for dir in fsutil::subdirs(&root.join(INPUT_LIBRARY).join(folder))? {
-        if dir.join(IDEA_FILE).exists() {
+        if dir.join(IDEA_FILE).vfs_exists() {
             read_idea(root, &dir, IdeaLoc::Library, ix);
         } else {
             scan_library(root, &folder.join(dir.name()?), ix)?;
@@ -352,7 +353,7 @@ fn scan_input_collections(root: &Path, ix: &mut Index) -> Result<()> {
 fn scan_projects(root: &Path, folder: &Path, ix: &mut Index) -> Result<()> {
     for dir in fsutil::subdirs(&root.join(PROJECTS).join(folder))? {
         let name = dir.name()?;
-        if dir.join(PROJECT_FILE).exists() {
+        if dir.join(PROJECT_FILE).vfs_exists() {
             read_project(root, &dir, ix)?;
         } else {
             let sub = folder.join(name);
@@ -365,7 +366,7 @@ fn scan_projects(root: &Path, folder: &Path, ix: &mut Index) -> Result<()> {
 
 fn scan_discarded_projects(root: &Path, ix: &mut Index) -> Result<()> {
     for dir in fsutil::subdirs(&root.join(DISCARDED_PROJECTS))? {
-        if !dir.join(PROJECT_FILE).exists() {
+        if !dir.join(PROJECT_FILE).vfs_exists() {
             continue;
         }
         // read as a project, then kept apart
@@ -410,7 +411,7 @@ fn read_project(root: &Path, dir: &Path, ix: &mut Index) -> Result<()> {
         let mut files: Vec<_> = rd.filter_map(|e| e.ok().map(|e| e.path())).collect();
         files.sort();
         for p in files {
-            if fsutil::hidden(&p) || p.is_dir() {
+            if fsutil::hidden(&p) || p.vfs_is_dir() {
                 continue;
             }
             let file_name = p.name()?.to_string_lossy();
@@ -426,7 +427,7 @@ fn read_project(root: &Path, dir: &Path, ix: &mut Index) -> Result<()> {
         }
     }
     let draft_file = dir.join(DRAFT_FILE);
-    let draft = draft_file.is_file().then(|| rsnfmt::read::<GenerateDraft>(&draft_file)).and_then(|r| match r {
+    let draft = draft_file.vfs_is_file().then(|| rsnfmt::read::<GenerateDraft>(&draft_file)).and_then(|r| match r {
         Ok(d) => Some(d),
         Err(e) => {
             ix.problems.push(e.to_string());

@@ -22,13 +22,13 @@ pub struct LogStall {
 
 impl LogStall {
     pub fn new(log: &std::path::Path, wait: Duration) -> LogStall {
-        let len = std::fs::metadata(log).map_or(0, |m| m.len());
+        let len = crate::vfs::metadata(log).map_or(0, |m| m.len());
         LogStall { log: log.to_path_buf(), len, until: Instant::now() + wait, wait }
     }
 
     /// Whether the log has been quiet for the whole wait.
     pub fn stalled(&mut self) -> bool {
-        let len = std::fs::metadata(&self.log).map_or(0, |m| m.len());
+        let len = crate::vfs::metadata(&self.log).map_or(0, |m| m.len());
         if len != self.len {
             self.len = len;
             self.until = Instant::now() + self.wait;
@@ -74,8 +74,10 @@ pub fn spawn_error(program: &str, e: &io::Error) -> String {
 /// through a pipe returned for [`stamp_into`], which puts the time before
 /// each line; else straight into the file (a server left running when the
 /// app goes, which would lose the pipe's reader).
-pub fn output_to(cmd: &mut Command, log: &std::fs::File, stamped: bool) -> io::Result<Option<io::PipeReader>> {
-    if !stamped {
+pub fn output_to(cmd: &mut Command, log: &crate::vfs::File, stamped: bool) -> io::Result<Option<io::PipeReader>> {
+    // a log in RAM (an ephemeral session's) can't be a child's output:
+    // it goes through the pipe
+    if let Some(log) = log.disk().filter(|_| !stamped) {
         cmd.stdout(log.try_clone()?).stderr(log.try_clone()?);
         return Ok(None);
     }
@@ -88,7 +90,7 @@ pub fn output_to(cmd: &mut Command, log: &std::fs::File, stamped: bool) -> io::R
 /// own, [the time](crate::logview::stamp) before each line, until the server
 /// (and whatever it started) has closed the pipe. Written as it comes, a
 /// line's start before its end (progress bars rewrite theirs with `\r`).
-pub fn stamp_into(pipe: io::PipeReader, log: std::fs::File) {
+pub fn stamp_into(pipe: io::PipeReader, log: crate::vfs::File) {
     use std::io::{Read, Write};
     let copy = move || {
         let (mut pipe, mut log) = (pipe, log);
@@ -372,12 +374,12 @@ mod tests {
         use std::io::Write;
         let dir = tempfile::tempdir().unwrap();
         let log = dir.path().join("s.log");
-        std::fs::write(&log, "starting\n").unwrap();
+        crate::vfs::write(&log, "starting\n").unwrap();
         let mut stall = LogStall::new(&log, Duration::from_millis(300));
         let t = Instant::now();
         // a line every 100 ms for 600 ms: twice the wait, still going
         while t.elapsed() < Duration::from_millis(600) {
-            std::fs::OpenOptions::new().append(true).open(&log).unwrap().write_all(b"loading\n").unwrap();
+            crate::vfs::OpenOptions::new().append(true).open(&log).unwrap().write_all(b"loading\n").unwrap();
             assert!(!stall.stalled());
             std::thread::sleep(Duration::from_millis(100));
         }
@@ -469,7 +471,7 @@ mod tests {
     fn stand_in_launcher() {
         let Ok(out) = std::env::var("INCREART_LAUNCHER") else { return };
         let helper = stand_in().spawn().unwrap();
-        std::fs::write(&out, helper.id().to_string()).unwrap();
+        crate::vfs::write(&out, helper.id().to_string()).unwrap();
         std::thread::sleep(Duration::from_secs(60));
     }
 
@@ -495,7 +497,7 @@ mod tests {
             return;
         }
         let child = std::thread::spawn(|| spawn_with_app(stand_in()).unwrap()).join().unwrap();
-        std::fs::write(&out, child.id().to_string()).unwrap();
+        crate::vfs::write(&out, child.id().to_string()).unwrap();
         std::thread::sleep(Duration::from_secs(60));
     }
 
@@ -523,10 +525,10 @@ mod tests {
         }
         let mut app = app.spawn().unwrap();
         let t = Instant::now();
-        while std::fs::read_to_string(&out).map_or(true, |s| s.is_empty()) && t.elapsed() < Duration::from_secs(20) {
+        while crate::vfs::read_to_string(&out).map_or(true, |s| s.is_empty()) && t.elapsed() < Duration::from_secs(20) {
             std::thread::sleep(Duration::from_millis(20));
         }
-        let server: u32 = std::fs::read_to_string(&out).unwrap().parse().unwrap();
+        let server: u32 = crate::vfs::read_to_string(&out).unwrap().parse().unwrap();
         std::thread::sleep(Duration::from_millis(300));
         assert!(alive(server), "the thread that opened it ending doesn't stop it");
         app.kill().unwrap();
@@ -556,10 +558,10 @@ mod tests {
             .stderr(Stdio::null());
         let child = background(&mut launcher, true).spawn().unwrap();
         let t = Instant::now();
-        while std::fs::read_to_string(&out).map_or(true, |s| s.is_empty()) && t.elapsed() < Duration::from_secs(20) {
+        while crate::vfs::read_to_string(&out).map_or(true, |s| s.is_empty()) && t.elapsed() < Duration::from_secs(20) {
             std::thread::sleep(Duration::from_millis(20));
         }
-        let server: u32 = std::fs::read_to_string(&out).unwrap().parse().unwrap();
+        let server: u32 = crate::vfs::read_to_string(&out).unwrap().parse().unwrap();
         let launched = child.id();
         stop(child);
         assert!(wait_gone(launched) && wait_gone(server), "the launcher and its server stopped");

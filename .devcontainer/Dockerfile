@@ -46,13 +46,29 @@ RUN apt-get update && apt-get install -y \
 # Only the userspace runtime and HIP compiler are installed. The amdgpu kernel
 # driver lives on the host and is passed through via /dev/kfd and /dev/dri, so
 # amdgpu-dkms is never installed here.
+#
+# Only what sd.cpp's SD_HIPBLAS build links against: ROCm's clang, the HIP
+# runtime and headers, hipBLAS and rocBLAS (which pull in rocSOLVER and
+# hipBLASLt), plus rocminfo and rocm-smi (increart-core runs rocm-smi to read
+# VRAM). The rocm-dev + rocm-libs metapackages made this layer 21 GB;
+# MIOpen, rocFFT, RCCL, composable_kernel's static libs etc. aren't used.
+#
+# rocBLAS and hipBLASLt ship prebuilt kernels for a dozen GPU architectures.
+# Kernels for anything but GPU_ARCH are deleted in the same RUN, so they never
+# reach a layer. Files without an architecture in their name are kept.
 ARG ROCM_VERSION=7.2.4
+ARG GPU_ARCH=gfx1201
 RUN mkdir --parents --mode=0755 /etc/apt/keyrings \
     && wget -qO- https://repo.radeon.com/rocm/rocm.gpg.key | gpg --dearmor > /etc/apt/keyrings/rocm.gpg \
     && printf 'deb [arch=amd64 signed-by=/etc/apt/keyrings/rocm.gpg] https://repo.radeon.com/rocm/apt/%s noble main\ndeb [arch=amd64 signed-by=/etc/apt/keyrings/rocm.gpg] https://repo.radeon.com/graphics/%s/ubuntu noble main\n' "$ROCM_VERSION" "$ROCM_VERSION" > /etc/apt/sources.list.d/rocm.list \
     && printf 'Package: *\nPin: release o=repo.radeon.com\nPin-Priority: 600\n' > /etc/apt/preferences.d/rocm-pin-600 \
     && apt-get update \
-    && apt-get install -y rocm-dev rocm-libs \
+    && apt-get install -y --no-install-recommends \
+        rocm-llvm hipcc hip-dev hip-runtime-amd rocm-device-libs rocm-cmake \
+        hipblas-dev rocblas-dev \
+        rocminfo rocm-smi-lib \
+    && find /opt/rocm-${ROCM_VERSION}/lib/rocblas/library /opt/rocm-${ROCM_VERSION}/lib/hipblaslt/library \
+        -type f -name '*gfx*' ! -name "*${GPU_ARCH}*" -delete \
     && rm -rf /var/lib/apt/lists/*
 
 # /dev/kfd and /dev/dri are owned by the host's video/render GIDs (`getent

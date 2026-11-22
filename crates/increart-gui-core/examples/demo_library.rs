@@ -25,6 +25,7 @@
 //! `also_in` input collections too, gives a project's outputs their `tags`
 //! (a list per output, in the same order as the verdicts) and links them
 //! into the output collections of `collect` (folder → output indices).
+#![allow(clippy::disallowed_methods)] // fixtures on disk: no overlay here
 
 use std::collections::BTreeMap;
 use std::fs;

@@ -65,7 +65,7 @@ pub fn size_info(w: u32, h: u32) -> String {
 pub fn copy_image(ctx: &egui::Context, root: &Path, img: &increart_core::ImageRef) {
     let (ctx, path) = (ctx.clone(), img.path(root));
     std::thread::spawn(move || {
-        if let Ok(decoded) = image::open(&path) {
+        if let Ok(decoded) = increart_core::vfs::open_image(&path) {
             let rgba = decoded.to_rgba8();
             let size = [rgba.width() as usize, rgba.height() as usize];
             ctx.copy_image(egui::ColorImage::from_rgba_unmultiplied(size, rgba.as_raw()));
