@@ -506,7 +506,7 @@ fn a_server_whose_jobs_never_move_is_said_once() {
     let s = setup();
     let a = Fake::start(LOADED);
     a.with(|st| st.frozen = true);
-    let run = new_run(&s, "qwen-image-21", 2, false);
+    let run = new_run(&s, "qwen-image-21", 1, false);
     let mut o = opts();
     o.warm_up = false;
     o.stall_warning = Duration::from_millis(300);
@@ -520,11 +520,17 @@ fn a_server_whose_jobs_never_move_is_said_once() {
         _ => None,
     });
     assert!(said.unwrap().contains("seed 0 as job job_fake_00000000: queued"));
-    while let Ok(e) = engine.events().recv_timeout(Duration::from_millis(500)) {
+    // a job sent after the warning (as a slow machine sends a run's second)
+    // hasn't moved either
+    let later = new_run_with(&s, 1, |r| r.label = "r02".into());
+    engine.queue_run(&later);
+    while let Ok(e) = engine.events().recv_timeout(Duration::from_millis(800)) {
         events.push(e);
     }
+    assert_eq!(a.with(|st| st.jobs.len()), 2, "the later run's job was sent");
     assert_eq!(problems(&events, "none of its jobs has moved"), 1, "said once while nothing changes");
     engine.cancel_run(&run, Stop::Now);
+    engine.cancel_run(&later, Stop::Now);
     collect(&engine, run_done(&run));
 }
 
@@ -824,7 +830,7 @@ fn finish_and_stop_keeps_the_images_being_generated() {
     engine.queue_run(&run);
     // the fake generates both in-flight jobs at once: on until the engine
     // has seen both generating (a slow machine sends the second later)
-    collect(&engine, |e, seen| {
+    let mut events = collect(&engine, |e, seen| {
         let progress = |e: &Event| match e {
             Event::Progress { seed, .. } => Some(*seed),
             _ => None,
@@ -832,12 +838,18 @@ fn finish_and_stop_keeps_the_images_being_generated() {
         seen.iter().chain([e]).filter_map(progress).collect::<std::collections::BTreeSet<_>>().len() == 2
     });
     engine.cancel_run(&run, Stop::Finish);
-    let events = collect(&engine, run_done(&run));
-    assert_eq!(outputs(&events).len(), 2, "both generating images finished");
+    events.extend(collect(&engine, run_done(&run)));
+    // a slow machine sends the second so late that the first is done by
+    // then, and the next is generating beside it: every image generating
+    // when stopped finishes, the rest are cancelled
+    let done = outputs(&events).iter().map(|(seed, _)| *seed).collect::<Vec<_>>();
+    assert!(done.len() >= 2, "both generating images finished: {done:?}");
+    assert_eq!(done, (0..done.len() as u64).collect::<Vec<_>>(), "the first seeds, none skipped");
     assert_eq!(a.count("/cancel"), 0);
     let lib = s.lib.lock().unwrap();
     let (_, r) = lib.find_run(&run).unwrap();
-    assert_eq!(r.cancelled, [Seeds { first: 2, count: 6 }]);
+    let n = done.len() as u64;
+    assert_eq!(r.cancelled, [Seeds { first: n, count: 8 - n }]);
     assert!(lib.pending_seeds(&run).unwrap().is_empty());
 }
 

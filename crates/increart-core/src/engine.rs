@@ -1478,6 +1478,8 @@ fn worker(
                         longest = longest.max(Duration::from_secs_f64(s));
                     }
                     let step_s = jobs.remove(i).step_s();
+                    // a job ending is the server moving on
+                    (moved, stall_told) = (Instant::now(), false);
                     if !report(Report::Finished { ticket, job: Box::new(job), step_s }) {
                         return;
                     }
@@ -1486,10 +1488,12 @@ fn worker(
                 Ok(job) => {
                     let j = &mut jobs[i];
                     let seen = (job.status_name(), job.queue_position, job.preview.as_ref().map(|p| (p.pass, p.step)));
-                    if j.seen != Some(seen) {
-                        j.seen = Some(seen);
+                    // a job seen for the first time hasn't moved: one sent
+                    // to a stuck server after its warning would say it again
+                    if j.seen.is_some_and(|s| s != seen) {
                         (moved, stall_told) = (Instant::now(), false);
                     }
+                    j.seen = Some(seen);
                     if !j.generating && job.status == JobStatus::Generating {
                         j.generating = true;
                         if !report(Report::Generating { ticket }) {
