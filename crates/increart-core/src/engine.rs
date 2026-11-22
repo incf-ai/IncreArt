@@ -1448,6 +1448,11 @@ fn worker(
                 } else {
                     match client.img_gen(&body) {
                         Ok(id) => {
+                            // an idle server isn't stuck: its time
+                            // starts with its first job
+                            if jobs.is_empty() {
+                                (moved, stall_told) = (Instant::now(), false);
+                            }
                             jobs.push(Polled::new(ticket, id.clone()));
                             report(Report::Submitted { ticket, id })
                         }
