@@ -1123,7 +1123,10 @@ fn a_koboldcpp_stopping_sends_its_seeds_to_another() {
     let (k1, k2) = (FakeKobold::start(""), FakeKobold::start(""));
     let (a1, a2) = (admin(&k1, tmp1.path()), admin(&k2, tmp2.path()));
     k1.with(|st| st.gen_ms = 400);
-    k2.with(|st| st.gen_ms = 400);
+    // k2 finishes nothing before k1 generates: k1's load may wait for
+    // other tests' (one local load at a time), and k2 alone would have
+    // done the run by then
+    k2.with(|st| (st.gen_ms, st.paused) = (400, true));
     let mut cut = common::cut::Cut::start(&k1.url);
     let run = new_run(&s, "qwen-image-21", 6, false);
     let servers = vec![
@@ -1146,6 +1149,7 @@ fn a_koboldcpp_stopping_sends_its_seeds_to_another() {
         assert!(Instant::now() < deadline, "k1 never generated");
         std::thread::sleep(Duration::from_millis(5));
     }
+    k2.with(|st| st.paused = false);
     cut.cut();
     let events = collect(&engine, run_done(&run));
     let failed: Vec<_> = events.iter().filter(|e| matches!(e, Event::SeedFailed { .. })).collect();

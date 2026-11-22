@@ -29,6 +29,8 @@ pub struct State {
     /// 10 s): what a test of progress needs, however slow the machine is
     /// at asking.
     pub hold_for_progress: bool,
+    /// A generation doesn't end while set (read as it goes on).
+    pub paused: bool,
     /// Times progress was asked for while a generation was going on.
     pub progress_asks: u32,
     /// Every request: (method, path, JSON body).
@@ -178,7 +180,8 @@ fn handle(st: &Mutex<State>, method: &Method, path: &str, body: Value, auth: &st
             drop(s);
             let t = Instant::now();
             loop {
-                let held = hold && st.lock().unwrap().progress_asks == asked && t.elapsed() < Duration::from_secs(10);
+                let (asks, paused) = st.lock().map(|s| (s.progress_asks, s.paused)).unwrap();
+                let held = paused || hold && asks == asked && t.elapsed() < Duration::from_secs(10);
                 if t.elapsed() >= Duration::from_millis(gen_ms) && !held {
                     break;
                 }

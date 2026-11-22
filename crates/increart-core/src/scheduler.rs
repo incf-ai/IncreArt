@@ -131,6 +131,8 @@ struct Server {
     loadable: Option<Loadable>,
     /// Models that failed to load on it, with why.
     failed: HashMap<ModelKey, String>,
+    /// Its first probe ended (its list, if it has one, came before).
+    heard: bool,
 }
 
 #[derive(Debug)]
@@ -182,6 +184,7 @@ impl Scheduler {
                     failures: 0,
                     loadable: None,
                     failed: HashMap::new(),
+                    heard: false,
                 })
                 .collect(),
             runs: vec![],
@@ -275,9 +278,15 @@ impl Scheduler {
         // server that loads them as they are can
         if why.is_none()
             && let Some(less) = srv.loadable.as_ref().and_then(|l| l.second_choice(&model.models))
-            && self.listed_elsewhere(s, model)
         {
-            return Some(format!("{less}, and another server lists the files"));
+            if self.listed_elsewhere(s, model) {
+                return Some(format!("{less}, and another server lists the files"));
+            }
+            // a KoboldCpp answers first: an sd-server not heard from yet
+            // may list them
+            if self.servers.iter().enumerate().any(|(i, o)| i != s && !o.heard) {
+                return Some(format!("{less}, and a server not heard from yet may list the files"));
+            }
         }
         why
     }
@@ -415,6 +424,7 @@ impl Scheduler {
         if self.servers[s].state != ServerState::Probing {
             return;
         }
+        self.servers[s].heard = true;
         match result {
             Ok(loaded) => {
                 let srv = &mut self.servers[s];
@@ -1232,6 +1242,41 @@ mod tests {
         // the one listing them can't load it: KoboldCpp may
         s.loaded(1, LoadResult::Broken { still_loaded: None, why: "no".into() }, now);
         assert_eq!(s.why_not(0, &m), None);
+        assert_eq!(s.poll(now), [Action::Load { server: 0, model: m }]);
+    }
+
+    #[test]
+    fn a_second_choice_waits_for_a_server_not_heard_from_yet() {
+        // as run: KoboldCpp (the file in int8, a second choice) answers
+        // before the sd-server listing it
+        let now = Instant::now();
+        let mut s = Scheduler::new(2);
+        assert_eq!(s.poll(now).len(), 2);
+        let mut kobold = Loadable::files(["krea.safetensors".to_string()]);
+        if let Loadable::Files { second_choice, .. } = &mut kobold {
+            second_choice.insert("krea.safetensors".into(), "is int8".into());
+        }
+        s.set_loadable(0, Some(kobold));
+        s.probed(0, Ok(None), now);
+        let m = with_file("krea", "krea.safetensors");
+        s.add_seeds(&run(0), m.clone(), seeds(1));
+        assert!(s.poll(now).is_empty(), "KoboldCpp loaded it before the sd-server answered");
+        assert!(s.why_not(0, &m).unwrap().contains("not heard from yet"));
+        assert!(s.stuck_runs().is_empty());
+        // the sd-server lists them: it loads it
+        s.set_loadable(1, Some(Loadable::files(["krea.safetensors".to_string()])));
+        s.probed(1, Ok(None), now);
+        assert_eq!(s.poll(now), [Action::Load { server: 1, model: m.clone() }]);
+        // one that never answers holds nothing up after its first probe
+        let mut s = Scheduler::new(2);
+        s.poll(now);
+        s.set_loadable(0, Some(Loadable::files(["krea.safetensors".to_string()])));
+        if let Some(Loadable::Files { second_choice, .. }) = &mut s.servers[0].loadable {
+            second_choice.insert("krea.safetensors".into(), "is int8".into());
+        }
+        s.probed(0, Ok(None), now);
+        s.probed(1, Err(()), now);
+        s.add_seeds(&run(0), m.clone(), seeds(1));
         assert_eq!(s.poll(now), [Action::Load { server: 0, model: m }]);
     }
 
