@@ -9675,12 +9675,16 @@ fn a_crashed_server_is_started_again() {
     assert_eq!(crash(&mut s).len(), 1);
 }
 
-/// Every file below `dir` with its bytes (symlinks: their targets).
+/// Every file below `dir` with its bytes (symlinks: their targets). The
+/// library's lock file only by name: an ephemeral session holds a shared
+/// lock on it, and Windows refuses to read a locked file's bytes.
 fn disk_snapshot(dir: &Path) -> std::collections::BTreeMap<PathBuf, Vec<u8>> {
     let mut out = std::collections::BTreeMap::new();
     for p in increart_core::fsutil::walk(dir).unwrap() {
         let m = std::fs::symlink_metadata(&p).unwrap();
-        let bytes = if m.file_type().is_symlink() {
+        let bytes = if p.strip_prefix(dir).unwrap() == Path::new(increart_core::library::LOCK_FILE) {
+            vec![]
+        } else if m.file_type().is_symlink() {
             std::fs::read_link(&p).unwrap().into_os_string().into_encoded_bytes()
         } else if m.is_file() {
             std::fs::read(&p).unwrap()
