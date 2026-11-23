@@ -4,8 +4,10 @@
 
 [![Chat: #increart on the KoboldAI Discord](https://img.shields.io/badge/chat-%23increart%20on%20Discord-5865F2?logo=discord&logoColor=white)](https://discord.gg/7D4jgg6J6Z)
 
-A desktop app for making images with **Qwen-Image 2.1** on your own GPUs,
-built around fast review. Collect ideas, turn them into projects, generate
+A desktop app for making images on your own GPUs, built for
+reference-to-image models such as **MiniMax-H3-Image** and **Qwen-Image 2.1**
+(give it reference images and a prompt), and around fast review. It runs many
+other models too. Collect ideas, turn them into projects, generate
 many seeds across every GPU you have, and sort the results with the keyboard.
 Every image keeps the recipe that made it.
 
@@ -23,9 +25,14 @@ Questions, or something you made to share? Come say hi in
   *Output library*. Both queues use arrows to move and `Ctrl+Z` to undo.
 - **Projects, runs and seeds.** A project holds runs, and a run is one prompt
   over many seeds. Runs are spread across all your GPUs and queued as jobs.
-- **Text-to-image and editing with references.** Point the prompt at
-  reference images (`image1`, `image2`, …) from your libraries or from
-  earlier outputs.
+- **Reference-to-image first.** Point the prompt at reference images
+  (`image1`, `image2`, …) from your libraries or from earlier outputs, to
+  restyle, edit or combine them. Plain text-to-image works too.
+- **Many models.** MiniMax-H3-Image and Qwen-Image 2.1 are what it's built
+  and tuned for. Built-in presets also cover Qwen-Image Edit, FLUX.1
+  (dev, Kontext), FLUX.2/FLUX.3 Klein, Z-Image Turbo, Anima, Krea 2,
+  Fibo 2 Edit and MOSS-Image, each with its download links. Any other model
+  your backend loads can be added as your own preset.
 - **Prompt enhance.** An optional Qwen3-VL chat model rewrites or expands
   prompts, fills `{blanks}`, and describes images. The original prompt is
   always kept beside the rewritten one.
