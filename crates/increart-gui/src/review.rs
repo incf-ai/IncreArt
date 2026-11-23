@@ -2677,20 +2677,24 @@ pub fn tag_chips(ui: &mut egui::Ui, st: &AppState, image: &increart_core::ImageR
     }
     ui.horizontal_wrapped(|ui| {
         ui.weak("tags");
+        // a chip goes to the next line whole: squeezed into what was left
+        // of the line, its name wrapped a letter a line
         for t in st.image_tags(image) {
-            egui::Frame::new()
-                .fill(ui.visuals().faint_bg_color)
-                .stroke(egui::Stroke::new(1.0, ui.visuals().widgets.noninteractive.bg_stroke.color))
-                .corner_radius(8.0)
-                .inner_margin(egui::Margin { left: 6, right: 2, top: 0, bottom: 0 })
-                .show(ui, |ui| {
-                    ui.spacing_mut().item_spacing.x = 2.0;
-                    ui.label(t);
-                    let x = ui.add(egui::Button::new(RichText::new(ph::X).small()).frame(false));
-                    if x.on_hover_text(format!("take “{t}” off (undo: 4 / Ctrl+Z)")).clicked() {
-                        out.push(Msg::RemoveTag(image.clone(), t.clone()));
-                    }
-                });
+            crate::widgets::group(ui, &format!("tag {t}"), |ui| {
+                egui::Frame::new()
+                    .fill(ui.visuals().faint_bg_color)
+                    .stroke(egui::Stroke::new(1.0, ui.visuals().widgets.noninteractive.bg_stroke.color))
+                    .corner_radius(8.0)
+                    .inner_margin(egui::Margin { left: 6, right: 2, top: 0, bottom: 0 })
+                    .show(ui, |ui| {
+                        ui.spacing_mut().item_spacing.x = 2.0;
+                        ui.add(egui::Label::new(t.as_str()).extend());
+                        let x = ui.add(egui::Button::new(RichText::new(ph::X).small()).frame(false));
+                        if x.on_hover_text(format!("take “{t}” off (undo: 4 / Ctrl+Z)")).clicked() {
+                            out.push(Msg::RemoveTag(image.clone(), t.clone()));
+                        }
+                    });
+            });
         }
         if st.image_tags(image).is_empty() {
             ui.weak("none");

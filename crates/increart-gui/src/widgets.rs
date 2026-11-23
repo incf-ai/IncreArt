@@ -575,10 +575,12 @@ pub fn verdict_color(v: Option<increart_core::Verdict>) -> Color32 {
 
 /// One unit of a wrapping row (`horizontal_wrapped`): it goes to the next
 /// line whole when it doesn't fit (by its width last frame), so a label
-/// stays with its control.
+/// stays with its control. Not drawn before, it starts a line: put on
+/// the line unmeasured, a row too long for its panel widens the panel
+/// (a side panel grows to its content, and keeps that width).
 pub fn group<R>(ui: &mut egui::Ui, id: &str, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
     let id = ui.scope_id().with(("group", id));
-    let width = ui.ctx().data(|d| d.get_temp::<f32>(id)).unwrap_or(0.0);
+    let width = ui.ctx().data(|d| d.get_temp::<f32>(id)).unwrap_or(f32::INFINITY);
     let at_start = ui.cursor().min.x <= ui.max_rect().min.x + 1.0;
     if !at_start && width > ui.available_size_before_wrap().x {
         ui.end_row();
@@ -596,9 +598,9 @@ pub fn group<R>(ui: &mut egui::Ui, id: &str, add: impl FnOnce(&mut egui::Ui) -> 
 /// the line, else on the next line like the others.
 pub fn right_group<R>(ui: &mut egui::Ui, id: &str, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
     let key = ui.scope_id().with(("group", id));
-    let width = ui.ctx().data(|d| d.get_temp::<f32>(key)).unwrap_or(0.0);
+    let width = ui.ctx().data(|d| d.get_temp::<f32>(key)).unwrap_or(f32::INFINITY);
     let room = ui.available_size_before_wrap().x - ui.spacing().item_spacing.x;
-    if width > 0.0 && width <= room {
+    if width <= room {
         ui.add_space(room - width);
     }
     group(ui, id, add)

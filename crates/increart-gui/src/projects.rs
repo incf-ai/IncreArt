@@ -2766,9 +2766,13 @@ fn generate(ui: &mut egui::Ui, st: &AppState, tex: &mut Textures, out: &mut Vec<
             {
                 ui.colored_label(NEUTRAL, "No {preset} in the template: each run uses its preset's prompt alone.");
             }
-            ui.horizontal(|ui| {
-                crate::rewrite::button(ui, st, increart_gui_core::PeTarget::Prompt, "Rewrite", out);
-                crate::rewrite::develop_button(ui, st, increart_gui_core::PeTarget::Prompt, out);
+            // wrapped: a line too long for the form widens it, and the rows
+            // after it wrap past the images pane
+            ui.horizontal_wrapped(|ui| {
+                crate::widgets::group(ui, "pe", |ui| {
+                    crate::rewrite::button(ui, st, increart_gui_core::PeTarget::Prompt, "Rewrite", out);
+                    crate::rewrite::develop_button(ui, st, increart_gui_core::PeTarget::Prompt, out);
+                });
                 ui.weak("For a transparent background, ask for it in the prompt (e.g. \"make the background transparent\").");
             });
             let style_sweep = f.sweep.on && f.sweep.vary == increart_core::prompts::SweepVary::Style;
