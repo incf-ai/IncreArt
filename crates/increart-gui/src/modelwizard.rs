@@ -53,8 +53,9 @@ fn gpu_line(ui: &mut egui::Ui, w: &ModelWizard) {
 
 /// The servers screen's right half: your models and the built-in ones,
 /// read only, greyed until there's a server setup. Opens its state (folders
-/// found, GPUs, sizes) the first time it's shown.
-pub fn panel(ui: &mut egui::Ui, st: &AppState, list_height: f32, out: &mut Vec<Msg>) {
+/// found, GPUs, sizes) the first time it's shown. `height`: the height the
+/// panel fills, its list taking what the rest leaves.
+pub fn panel(ui: &mut egui::Ui, st: &AppState, height: f32, out: &mut Vec<Msg>) {
     let Some(old) = &st.model_wizard else {
         out.push(Msg::OpenModelWizard);
         ui.spinner();
@@ -64,7 +65,8 @@ pub fn panel(ui: &mut egui::Ui, st: &AppState, list_height: f32, out: &mut Vec<M
     out.push(Msg::IndexModelFiles);
     let mut w = old.clone();
     let servers = !st.config.server_presets.is_empty();
-    let r = ui.add_enabled_ui(servers, |ui| overview(ui, st, &mut w, list_height, out));
+    let bottom = ui.cursor().top() + height;
+    let r = ui.add_enabled_ui(servers, |ui| overview(ui, st, &mut w, bottom, out));
     if !servers {
         // disabled widgets only fade a little: dim the half too, and say why
         let rect = r.response.rect.expand(6.0);
@@ -85,7 +87,8 @@ pub fn panel(ui: &mut egui::Ui, st: &AppState, list_height: f32, out: &mut Vec<M
     }
 }
 
-fn overview(ui: &mut egui::Ui, st: &AppState, w: &mut ModelWizard, list_height: f32, out: &mut Vec<Msg>) {
+/// `bottom`: where the panel ends; the list is as tall as that leaves.
+fn overview(ui: &mut egui::Ui, st: &AppState, w: &mut ModelWizard, bottom: f32, out: &mut Vec<Msg>) {
     let catalogue = w.catalogue();
     let model_dirs = &st.config.programs.model_dirs;
     let lists = ModelLists::of(&st.config.recipes, &catalogue, model_dirs, &w.sizes, w.index.as_deref());
@@ -147,8 +150,16 @@ fn overview(ui: &mut egui::Ui, st: &AppState, w: &mut ModelWizard, list_height: 
             "None: every built-in model is installed.",
         ),
     ];
+    // what's under the list is measured: last frame's height
+    let below_id = egui::Id::unique("models_overview_below");
+    let below: f32 = ui.data(|d| d.get_temp(below_id)).unwrap_or(40.0);
+    let list_height = (bottom - ui.cursor().top() - below).max(180.0);
+    // no wider than the panel: a scroll area grows to content wider than it
+    // across, and the tables, sized to the width there, grew with it
+    let width = ui.available_width();
     egui::ScrollArea::vertical()
         .id_salt("models_overview")
+        .max_width(width)
         .min_scrolled_height(list_height)
         .max_height(list_height)
         .show(ui, |ui| {
@@ -178,8 +189,11 @@ fn overview(ui: &mut egui::Ui, st: &AppState, w: &mut ModelWizard, list_height: 
                     });
             }
         });
+    let top = ui.cursor().top();
     ui.add_space(6.0);
     download_line(ui, st, out);
+    let h = ui.min_rect().bottom() - top;
+    ui.data_mut(|d| d.insert_temp(below_id, h));
 }
 
 /// Search, kind, fits a GPU, order: one row, for the lists and the window's.
@@ -316,6 +330,8 @@ fn links_tip(needs: &PresetNeeds) -> Option<String> {
 const NAME_W: f32 = 260.0;
 const SIZE_W: f32 = 62.0;
 const FILES_W: f32 = 190.0;
+/// The GPU fit column's least width.
+const FITS_W: f32 = 100.0;
 
 /// The column headings, each a click to sort by it (again: the other way;
 /// a third time: the list's order), the order shown by an arrow.
@@ -526,17 +542,25 @@ fn list_table(
     }
     let mut clicked = None;
     let what = if section == Section::Available { "click to install it" } else { "click to open it" };
+    // the name and files columns narrower when the panel is (the servers
+    // screen's half of a small window): at their full widths the table
+    // widened the screen past the window's edge
+    // (the other columns and the gaps between keep their widths)
+    let gaps = ui.spacing().item_spacing.x * if fits { 3.0 } else { 2.0 };
+    let fixed = SIZE_W + if fits { FITS_W } else { 0.0 } + gaps;
+    let k = ((ui.available_width() - fixed) / (NAME_W + FILES_W)).clamp(0.5, 1.0);
+    let (name_w, files_w) = (NAME_W * k, FILES_W * k);
     let mut table = TableBuilder::new(ui)
         .id_salt(id)
         .striped(true)
         .vscroll(false)
         .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
-        .column(Column::exact(NAME_W).clip(true))
+        .column(Column::exact(name_w).clip(true))
         .column(Column::exact(SIZE_W));
     table = if fits {
-        table.column(Column::exact(FILES_W).clip(true)).column(Column::remainder().at_least(100.0).clip(true))
+        table.column(Column::exact(files_w).clip(true)).column(Column::remainder().at_least(FITS_W).clip(true))
     } else {
-        table.column(Column::remainder().at_least(FILES_W).clip(true))
+        table.column(Column::remainder().at_least(files_w).clip(true))
     };
     let dirs = st.config.programs.model_dirs.clone();
     table.header(20.0, |mut h| heads(&mut h, "", &mut w.sort, fits)).body(|mut body| {

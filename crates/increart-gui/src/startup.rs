@@ -771,20 +771,33 @@ pub fn servers(ui: &mut egui::Ui, st: &AppState, d: &ServerDialog, out: &mut Vec
     let screen = ui.ctx().content_rect();
     let width = (screen.width() - 120.0).clamp(960.0, 1400.0);
     let half = (width - 32.0) / 2.0;
-    let table_height = (screen.height() - 470.0).clamp(180.0, 560.0);
+    // Both halves fill the window's height, less the box's margins and
+    // footer (measured last frame: the box is redone when its size
+    // changes); a half with more scrolls, so the footer stays in sight.
+    let id = egui::Id::unique("servers_heights");
+    let other: f32 = ui.data(|d| d.get_temp(id)).unwrap_or(120.0);
+    let fill = (ui.available_height() - 32.0 - other).max(240.0);
     centered(ui, "servers", width, |ui| {
+        let top = ui.cursor().top();
         // the divider drawn after: a separator would stretch to the screen's height
         let r = ui
             .horizontal_top(|ui| {
                 ui.vertical(|ui| {
                     ui.set_width(half);
-                    servers_half(ui, st, d, out);
+                    egui::ScrollArea::vertical()
+                        .id_salt("servers_half")
+                        // a row gives its height as the room there is: the least, then
+                        .min_scrolled_height(fill)
+                        .max_height(fill)
+                        .max_width(half)
+                        .auto_shrink([false, true])
+                        .show(ui, |ui| servers_half(ui, st, d, out));
                 });
                 // the row adds its item spacing after the left half: the gap is 32 with it
                 ui.add_space(32.0 - ui.spacing().item_spacing.x);
                 ui.vertical(|ui| {
                     ui.set_width(half);
-                    crate::modelwizard::panel(ui, st, table_height, out);
+                    crate::modelwizard::panel(ui, st, fill, out);
                 });
             })
             .response
@@ -794,6 +807,9 @@ pub fn servers(ui: &mut egui::Ui, st: &AppState, d: &ServerDialog, out: &mut Vec
         ui.painter().vline(x, r.y_range(), stroke);
         ui.separator();
         footer(ui, st, d, out);
+        // the frame's margins (20 a side) and stroke are outside this ui
+        let other = ui.min_rect().bottom() - top - r.height() + 42.0;
+        ui.data_mut(|d| d.insert_temp(id, other));
     });
 }
 
