@@ -816,7 +816,7 @@ pub fn open(server: &PeServer, log_dir: &Path, wait: Duration, cancel: &AtomicBo
     };
     let log = log_path(log_dir, server);
     // (started from the PE thread, which lasts as long as the app)
-    let (child, _) = crate::kobold::spawn(binary, &command_args(&server.run), &run_env(&server.run), &log, true)
+    let (child, _, _) = crate::kobold::spawn(binary, &command_args(&server.run), &run_env(&server.run), &log, true)
         .map_err(|e| format!("{}: {e}", server.name))?;
     proc.child = Some(child);
     proc.log = Some(log.clone());

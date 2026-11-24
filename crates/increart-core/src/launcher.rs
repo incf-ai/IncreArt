@@ -139,6 +139,8 @@ pub struct ServerProcess {
     group: bool,
     /// Where this start's lines begin in `log`.
     log_start: u64,
+    /// When the server's output is all in `log`.
+    drained: crate::process::Drained,
 }
 
 impl ServerProcess {
@@ -159,6 +161,7 @@ impl ServerProcess {
     pub fn exited(&mut self) -> Option<Exit> {
         let status = self.child.as_mut()?.try_wait().ok()??;
         self.child = None;
+        self.drained.wait(DRAIN);
         let last = self.log.as_ref().map(|l| last_lines(&tail(l, self.log_start), 3)).unwrap_or_default();
         Some(Exit { status: status.to_string(), last })
     }
@@ -298,6 +301,7 @@ pub fn open_cancellable(
         log: None,
         group: false,
         log_start: 0,
+        drained: Default::default(),
     };
     let asked = match client.capabilities() {
         Ok(_) => return Ok(proc),
@@ -322,14 +326,21 @@ pub fn open_cancellable(
     out.write_all(crate::process::log_header(&cmd).as_bytes())?;
     let start = out.metadata()?.len();
     let program = shared.sd_server.binary.trim().to_string();
-    let spawned = if shared.sd_server.leave_running { cmd.spawn() } else { crate::process::spawn_with_app(cmd) };
+    // the command holds the pipe's other end: gone once spawned, so the
+    // pipe closes when the server does
+    let spawned = if shared.sd_server.leave_running {
+        let mut cmd = cmd;
+        cmd.spawn()
+    } else {
+        crate::process::spawn_with_app(cmd)
+    };
     let child = spawned.map_err(|e| {
         let why = crate::process::spawn_error(&program, &e);
         let _ = writeln!(out, "--- IncreArt: {why}");
         LaunchError::Spawn { name: name.clone(), why }
     })?;
     if let Some(pipe) = pipe {
-        crate::process::stamp_into(pipe, out.try_clone()?);
+        proc.drained = crate::process::stamp_into(pipe, out.try_clone()?);
     }
     proc.child = Some(child);
     proc.log = Some(log.clone());
@@ -378,6 +389,7 @@ fn open_kobold(
         log: None,
         group: true,
         log_start: 0,
+        drained: Default::default(),
     };
     let asked = match client.capabilities() {
         Ok(_) => return Ok(proc),
@@ -387,13 +399,18 @@ fn open_kobold(
         return Err(unanswered(name, k.base_url(), "KoboldCpp", &asked, crate::config::timeouts().request()));
     };
     fs::create_dir_all(log_dir)?;
-    let (child, start) = crate::kobold::spawn(&binary, &args, &env, &log, !shared.sd_server.leave_running)
+    let (child, start, drained) = crate::kobold::spawn(&binary, &args, &env, &log, !shared.sd_server.leave_running)
         .map_err(|why| LaunchError::Spawn { name: name.clone(), why })?;
     proc.child = Some(child);
     proc.log = Some(log.clone());
     proc.log_start = start;
+    proc.drained = drained;
     wait_up(proc, log, start, wait, cancel)
 }
+
+/// How long an exited server's last output is waited for (see
+/// [`crate::process::Drained`]).
+const DRAIN: Duration = Duration::from_secs(2);
 
 /// Waits for a started server to answer (its log since `start` says why
 /// if it exits).
@@ -415,6 +432,7 @@ fn wait_up(
             && let Some(status) = child.try_wait()?
         {
             proc.child = None;
+            proc.drained.wait(DRAIN);
             return Err(LaunchError::Exited { name, status: status.to_string(), tail: tail(&log, start), log });
         }
         if cancel.load(std::sync::atomic::Ordering::Relaxed) {

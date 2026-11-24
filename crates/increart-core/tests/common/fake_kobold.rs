@@ -20,6 +20,9 @@ pub struct State {
     pub admin: Option<(PathBuf, String)>,
     /// Model files whose load fails (it comes back with none).
     pub broken: Vec<String>,
+    /// Its output, where a failed load says why (as the real one's log does
+    /// while it restarts).
+    pub out: Option<PathBuf>,
     pub gen_ms: u64,
     pub restart_ms: u64,
     pub down_until: Option<Instant>,
@@ -207,7 +210,17 @@ fn handle(st: &Mutex<State>, method: &Method, path: &str, body: Value, auth: &st
                 },
             };
             let model = args.iter().skip_while(|a| *a != "--sdmodel").nth(1).cloned().unwrap_or_default();
-            s.sdmodel = if s.broken.contains(&model) { String::new() } else { model };
+            s.sdmodel = if s.broken.contains(&model) {
+                if let Some(out) = &s.out {
+                    let file = Path::new(&model).file_name().unwrap_or_default().to_string_lossy();
+                    let mut f = std::fs::OpenOptions::new().append(true).create(true).open(out).unwrap();
+                    std::io::Write::write_all(&mut f, format!("Cannot find image model file: {file}\n").as_bytes())
+                        .unwrap();
+                }
+                String::new()
+            } else {
+                model
+            };
             let lora_dir = args.iter().skip_while(|a| *a != "--sdlora").nth(1).cloned();
             s.loras = lora_dir
                 .and_then(|d| std::fs::read_dir(d).ok())

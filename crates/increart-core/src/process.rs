@@ -90,9 +90,13 @@ pub fn output_to(cmd: &mut Command, log: &crate::vfs::File, stamped: bool) -> io
 /// own, [the time](crate::logview::stamp) before each line, until the server
 /// (and whatever it started) has closed the pipe. Written as it comes, a
 /// line's start before its end (progress bars rewrite theirs with `\r`).
-pub fn stamp_into(pipe: io::PipeReader, log: crate::vfs::File) {
+/// The [`Drained`] returned says when it's all in the log.
+pub fn stamp_into(pipe: io::PipeReader, log: crate::vfs::File) -> Drained {
     use std::io::{Read, Write};
+    let (done, drained) = std::sync::mpsc::channel::<()>();
     let copy = move || {
+        // dropped when the copy ends: the receiver hears it
+        let _done = done;
         let (mut pipe, mut log) = (pipe, log);
         let (mut buf, mut line_start, mut out) = ([0u8; 16 << 10], true, Vec::new());
         loop {
@@ -118,6 +122,28 @@ pub fn stamp_into(pipe: io::PipeReader, log: crate::vfs::File) {
     };
     if let Err(e) = std::thread::Builder::new().name("server output".into()).spawn(copy) {
         eprintln!("increart: can't read a server's output: {e}");
+    }
+    Drained(Some(std::sync::Mutex::new(drained)))
+}
+
+/// Whether a server's output is all in its log yet: what [`stamp_into`]
+/// copies comes a moment after the server writes it, so a server that has
+/// exited may have last lines still on their way.
+#[derive(Debug, Default)]
+pub struct Drained(Option<std::sync::Mutex<std::sync::mpsc::Receiver<()>>>);
+
+impl Drained {
+    /// Output written to the log directly: nothing to wait for.
+    pub fn none() -> Drained {
+        Drained(None)
+    }
+
+    /// Waits until the output is all in the log, at most `max` (a process
+    /// the server started can keep the pipe open after it exits).
+    pub fn wait(&self, max: Duration) {
+        if let Some(rx) = &self.0 {
+            let _ = rx.lock().map(|rx| rx.recv_timeout(max));
+        }
     }
 }
 

@@ -1297,17 +1297,14 @@ fn koboldcpp_failed_load_says_why() {
     std::fs::write(&log, "earlier: error loading\n").unwrap();
     admin.log = Some(log.clone());
     let model = format!("{}/diffusion_models/q.safetensors", admin.model_dirs[0]);
-    k.with(|st| st.broken.push(model.clone()));
     // the reason lands in the log while it restarts
-    let writer = std::thread::spawn(move || {
-        std::thread::sleep(Duration::from_millis(50));
-        let mut f = std::fs::OpenOptions::new().append(true).open(log).unwrap();
-        std::io::Write::write_all(&mut f, b"Cannot find image model file: q.safetensors\n").unwrap();
+    k.with(|st| {
+        st.broken.push(model.clone());
+        st.out = Some(log);
     });
     let client = Client::kobold(&k.url, "", Some(admin)).unwrap();
     let key = increart_core::sdserver::ModelKey::from(&model_sel());
     let err = client.load_model(&key).unwrap_err();
-    writer.join().unwrap();
     assert_eq!(err.to_string(), "model load failed: Cannot find image model file: q.safetensors");
     assert_eq!(client.model_status().unwrap().state, "empty");
     drop(s);

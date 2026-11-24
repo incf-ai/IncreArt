@@ -306,7 +306,7 @@ pub fn spawn(
     env: &[(String, String)],
     log: &Path,
     with_app: bool,
-) -> Result<(Child, u64), String> {
+) -> Result<(Child, u64, crate::process::Drained), String> {
     use std::io::Write;
     let log_error = |e: std::io::Error| format!("can't write its log {}: {e}", log.display());
     if let Some(dir) = log.parent() {
@@ -320,15 +320,24 @@ pub fn spawn(
     out.write_all(crate::process::log_header(&cmd).as_bytes()).map_err(log_error)?;
     let start = out.metadata().map_err(log_error)?.len();
     let program = cmd.get_program().to_string_lossy().into_owned();
-    let child = if with_app { crate::process::spawn_with_app(cmd) } else { cmd.spawn() }.map_err(|e| {
+    // the command holds the pipe's other end: gone once spawned, so the
+    // pipe closes when the server does
+    let child = if with_app {
+        crate::process::spawn_with_app(cmd)
+    } else {
+        let mut cmd = cmd;
+        cmd.spawn()
+    }
+    .map_err(|e| {
         let why = crate::process::spawn_error(&program, &e);
         let _ = writeln!(out, "--- IncreArt: {why}");
         why
     })?;
-    if let Some(pipe) = pipe {
-        crate::process::stamp_into(pipe, out.try_clone().map_err(log_error)?);
-    }
-    Ok((child, start))
+    let drained = match pipe {
+        Some(pipe) => crate::process::stamp_into(pipe, out.try_clone().map_err(log_error)?),
+        None => crate::process::Drained::none(),
+    };
+    Ok((child, start, drained))
 }
 
 #[cfg(test)]
@@ -386,7 +395,7 @@ mod tests {
         use std::time::{Duration, Instant};
         let dir = tempfile::tempdir().unwrap();
         let log = dir.path().join("logs/k.log");
-        let (child, start) = spawn("sh", &["-c".into(), "echo up; sleep 30".into()], &[], &log, false).unwrap();
+        let (child, start, _) = spawn("sh", &["-c".into(), "echo up; sleep 30".into()], &[], &log, false).unwrap();
         let output = || fs::read_to_string(&log).unwrap_or_default()[start as usize..].to_string();
         let deadline = Instant::now() + Duration::from_secs(5);
         while output().is_empty() && Instant::now() < deadline {
@@ -412,7 +421,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let log = dir.path().join("k.log");
         let script = "printf 'up\\n 1/2\\r 2/2\\n'; echo oops >&2; sleep 30";
-        let (child, start) = spawn("sh", &["-c".into(), script.into()], &[], &log, true).unwrap();
+        let (child, start, _) = spawn("sh", &["-c".into(), script.into()], &[], &log, true).unwrap();
         let output = || fs::read_to_string(&log).unwrap_or_default()[start as usize..].to_string();
         let deadline = Instant::now() + Duration::from_secs(5);
         while output().lines().count() < 3 && Instant::now() < deadline {
