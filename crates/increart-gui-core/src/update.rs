@@ -614,6 +614,8 @@ pub enum Msg {
     ConfirmNo,
     /// The question's other way out ([`Confirm::fix`]).
     ConfirmFix,
+    /// Closes the "kept on disk" notice ([`AppState::kept_on_disk`]).
+    DismissKeptOnDisk,
     /// Queue with this model preset instead (the model warning's fix).
     QueueWithPreset(usize),
     // ---- from the runtime
@@ -1603,7 +1605,7 @@ pub enum LibOp {
         links: Vec<(PathBuf, Option<Verdict>)>,
         undo: bool,
     },
-    /// Output links to Discarded (the images stay until Clean up).
+    /// Output links to Discarded (the images kept, to be restored).
     DeleteOutputs(Vec<PathBuf>),
     RestoreOutputs(Vec<PathBuf>),
     DeleteDiscardedOutputs(Vec<PathBuf>),
@@ -1733,6 +1735,9 @@ pub enum Restore {
 #[derive(Clone, Debug, PartialEq)]
 pub enum OpOk {
     Done,
+    /// Deleted for good: store images that stayed on disk because something
+    /// still uses them, and what (shown in a notice).
+    DeletedForGood(Vec<(ImageRef, Vec<String>)>),
     /// A run or sweep cancelled while it was being saved: nothing saved.
     Cancelled,
     Idea(Id),
@@ -3296,6 +3301,7 @@ fn part_of(msg: &Msg) -> usize {
         Msg::ConfirmYes => 16,
         Msg::ConfirmNo => 16,
         Msg::ConfirmFix => 16,
+        Msg::DismissKeptOnDisk => 16,
         Msg::QueueWithPreset(..) => 16,
         Msg::Scanned(..) => 16,
         Msg::OpDone(..) => 16,
@@ -9141,6 +9147,10 @@ fn apply_16(state: &mut AppState, msg: Msg, rest: &mut Option<Msg>) -> Vec<Effec
             state.confirm = None;
             vec![]
         }
+        Msg::DismissKeptOnDisk => {
+            state.kept_on_disk = None;
+            vec![]
+        }
         Msg::ConfirmFix => match state.confirm.take().and_then(|c| c.fix) {
             Some((_, then)) => update(state, *then),
             None => vec![],
@@ -12809,6 +12819,11 @@ fn cancel_queueing(state: &mut AppState, key: &(Id, String)) {
 fn op_done(state: &mut AppState, ok: OpOk) -> Vec<Effect> {
     match ok {
         OpOk::Done | OpOk::Cancelled | OpOk::Idea(_) => {}
+        OpOk::DeletedForGood(kept) => {
+            if !kept.is_empty() {
+                state.kept_on_disk.get_or_insert_with(Vec::new).extend(kept);
+            }
+        }
         OpOk::Tiled(_) => state.messages_info("Tiled image added to the input library"),
         OpOk::Edited(id, to) => return edited(state, ImageRef::input(id), to),
         OpOk::ImportedRefs(ids) => {

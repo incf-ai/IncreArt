@@ -195,7 +195,7 @@ pub fn folders(ui: &mut egui::Ui, st: &increart_gui_core::AppState, tree: increa
                         d.discarded.name,
                         match tree {
                             increart_core::Tree::InputCollections => "the ideas stay in the input library",
-                            _ => "the images stay in the store until Clean up",
+                            _ => "its images are deleted too unless still used elsewhere",
                         }
                     );
                     out.push(Msg::Ask(Confirm::new(text, "Delete", Msg::DeleteDiscardedFolder(tree, d.dir.clone()))));

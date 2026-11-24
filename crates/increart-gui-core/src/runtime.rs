@@ -24,7 +24,7 @@ use increart_core::launcher::{self, ServerProcess};
 use increart_core::model::{IdeaSource, LoraFile, Mode, ModelFile, ModelSelection, Sample, StoreFormat};
 use increart_core::request::GenOptions;
 use increart_core::sync::LockExt;
-use increart_core::{Id, IdeaLoc, ImageRef, Library, NewIdea, NewRun, Tree, Verdict, modelhash};
+use increart_core::{Discarded, Id, IdeaLoc, ImageRef, Library, NewIdea, NewRun, Tree, Verdict, modelhash};
 
 use crate::state::{EntryKind, EstimateOf, FvEntry, GenerateForm, PickKind, ReviewUndo};
 use crate::update::{DraftSave, Effect, LibOp, Msg, OpOk, PasteTo, PeJob, SaveRefs, TileTarget};
@@ -1426,15 +1426,10 @@ fn library_opened(ctx: &Ctx, lib: Library, t: std::time::Instant) -> Result<(Pat
 /// then every image nothing refers to: they free their RAM. How many.
 fn free_discarded(lib: &mut Library) -> increart_core::error::Result<usize> {
     let ix = lib.scan()?;
-    let mut n = 0;
-    for p in &ix.projects {
-        for o in &p.discarded {
-            lib.delete_discarded_output(&o.path)?;
-            n += 1;
-        }
-    }
+    let links: Vec<PathBuf> = ix.projects.iter().flat_map(|p| p.discarded.iter().map(|o| o.path.clone())).collect();
+    lib.delete_discarded_outputs(&links)?;
     lib.clean_up()?;
-    Ok(n)
+    Ok(links.len())
 }
 
 /// Why a file of an ephemeral session can't be opened in another app.
@@ -2282,6 +2277,16 @@ fn import_files(lib: &mut Library, paths: Vec<PathBuf>) -> Result<(), String> {
     Ok(())
 }
 
+/// A delete-for-good op as what it deletes.
+fn as_discarded(op: &LibOp) -> Option<Discarded> {
+    match op {
+        LibOp::DeleteDiscarded(id) => Some(Discarded::Idea(id.clone())),
+        LibOp::DeleteDiscardedProject(id) => Some(Discarded::Project(id.clone())),
+        LibOp::DeleteDiscardedFolder(tree, dir) => Some(Discarded::Folder(*tree, dir.clone())),
+        _ => None,
+    }
+}
+
 pub fn lib_op(lib: &mut Library, op: LibOp) -> Result<OpOk, String> {
     match op {
         // new_idea makes a new collection the idea is saved to
@@ -2366,18 +2371,25 @@ pub fn lib_op(lib: &mut Library, op: LibOp) -> Result<OpOk, String> {
         }
         LibOp::MoveIdea(id, loc) => lib.move_idea(&id, &loc).map(|_| OpOk::Done).map_err(err),
         LibOp::SetStar(id, on) => lib.update_idea(&id, |i| i.starred = on).map(|_| OpOk::Done).map_err(err),
-        LibOp::DeleteDiscarded(id) => lib.delete_discarded_idea(&id).map(|_| OpOk::Done).map_err(err),
+        LibOp::DeleteDiscarded(id) => lib.delete_discarded_idea(&id).map(|d| OpOk::DeletedForGood(d.kept)).map_err(err),
         LibOp::Each(ops) => {
+            // deletes for good together: what's still referred to is checked once
+            let discarded: Option<Vec<Discarded>> = ops.iter().map(as_discarded).collect();
+            if let Some(items) = discarded {
+                return lib.delete_for_good(&items).map(|d| OpOk::DeletedForGood(d.kept)).map_err(err);
+            }
             for op in ops {
                 lib_op(lib, op)?;
             }
             Ok(OpOk::Done)
         }
         LibOp::RestoreProject(id) => lib.restore_project(&id).map(|_| OpOk::Done).map_err(err),
-        LibOp::DeleteDiscardedProject(id) => lib.delete_discarded_project(&id).map(|_| OpOk::Done).map_err(err),
+        LibOp::DeleteDiscardedProject(id) => {
+            lib.delete_discarded_project(&id).map(|d| OpOk::DeletedForGood(d.kept)).map_err(err)
+        }
         LibOp::RestoreFolder(tree, dir) => lib.restore_folder(tree, &dir).map(|_| OpOk::Done).map_err(err),
         LibOp::DeleteDiscardedFolder(tree, dir) => {
-            lib.delete_discarded_folder(tree, &dir).map(|_| OpOk::Done).map_err(err)
+            lib.delete_discarded_folder(tree, &dir).map(|d| OpOk::DeletedForGood(d.kept)).map_err(err)
         }
         LibOp::NewProjectFromIdeas(ids, folder, name) => new_project_from_ideas(lib, &ids, &folder, &name),
         LibOp::CreateFolder(tree, parent) => {
@@ -2515,10 +2527,7 @@ pub fn lib_op(lib: &mut Library, op: LibOp) -> Result<OpOk, String> {
             Ok(OpOk::Done)
         }
         LibOp::DeleteDiscardedOutputs(links) => {
-            for l in links {
-                lib.delete_discarded_output(&l).map_err(err)?;
-            }
-            Ok(OpOk::Done)
+            lib.delete_discarded_outputs(&links).map(|d| OpOk::DeletedForGood(d.kept)).map_err(err)
         }
         LibOp::ReviewOutputs { links, undo } => review_outputs(lib, links, undo, ReviewUndo::default()),
         LibOp::CollectAndReview { folder, new, images, links } => {

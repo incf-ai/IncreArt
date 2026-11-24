@@ -1221,13 +1221,10 @@ impl Library {
         Ok(())
     }
 
-    /// Deletes a discarded idea for good (its folder; the store images stay
-    /// until Clean up).
-    pub fn delete_discarded_idea(&self, id: &Id) -> Result<()> {
-        match self.find_idea(id)? {
-            (IdeaLoc::Discarded, dir) => self.destroy(&dir),
-            _ => Err(Error::Refused(format!("idea {id} is not discarded"))),
-        }
+    /// Deletes a discarded idea for good: its folder, and the store images
+    /// it had that nothing else refers to now.
+    pub fn delete_discarded_idea(&mut self, id: &Id) -> Result<DeletedForGood> {
+        self.delete_for_good(&[Discarded::Idea(id.clone())])
     }
 
     /// A copy with a new ID: same text, variants, tags and images (new links
@@ -1673,12 +1670,11 @@ impl Library {
         self.restore_to(&abs, &self.root.join(tree.base()))
     }
 
-    /// Deletes a discarded folder and everything in it for good (only links
-    /// and entries: store images stay until Clean up, ideas in the input
-    /// library).
-    pub fn delete_discarded_folder(&self, tree: Tree, dir: &Path) -> Result<()> {
-        let abs = self.discarded_folder(tree, dir)?;
-        self.destroy(&abs)
+    /// Deletes a discarded folder and everything in it for good: its links
+    /// and entries, and the store images linked in it that nothing else
+    /// refers to now (ideas stay in the input library).
+    pub fn delete_discarded_folder(&mut self, tree: Tree, dir: &Path) -> Result<DeletedForGood> {
+        self.delete_for_good(&[Discarded::Folder(tree, dir.to_path_buf())])
     }
 
     /// Moves a discarded project or folder (absolute) back into `base`, to
@@ -1792,11 +1788,11 @@ impl Library {
         self.restore_to(&dir, &self.root.join(PROJECTS))
     }
 
-    /// Deletes a discarded project for good (its folder; the store images
-    /// stay until Clean up).
-    pub fn delete_discarded_project(&self, id: &Id) -> Result<()> {
-        let dir = self.find_discarded_project(id)?;
-        self.destroy(&dir)
+    /// Deletes a discarded project for good: its folder, and the store
+    /// images it linked or used (outputs, refs, cover) that nothing else
+    /// refers to now.
+    pub fn delete_discarded_project(&mut self, id: &Id) -> Result<DeletedForGood> {
+        self.delete_for_good(&[Discarded::Project(id.clone())])
     }
 
     /// A project's directory (absolute), wherever it has been moved.
@@ -2205,11 +2201,88 @@ impl Library {
         Ok(self.rel(&to))
     }
 
-    /// Deletes a discarded output link for good; the image stays in the
-    /// store until Clean up.
-    pub fn delete_discarded_output(&self, link_path: &Path) -> Result<()> {
-        let (_, abs) = self.discarded_output(link_path)?;
-        self.destroy(&abs)
+    /// Deletes a discarded output link for good, and its store image if
+    /// nothing else refers to it now (another link, a run's refs, an idea).
+    pub fn delete_discarded_output(&mut self, link_path: &Path) -> Result<DeletedForGood> {
+        self.delete_discarded_outputs(&[link_path.to_path_buf()])
+    }
+
+    /// [`delete_discarded_output`](Self::delete_discarded_output) for many
+    /// links, checking what's still referred to once. All are checked to be
+    /// discarded output links before any goes.
+    pub fn delete_discarded_outputs(&mut self, link_paths: &[PathBuf]) -> Result<DeletedForGood> {
+        let items: Vec<Discarded> = link_paths.iter().cloned().map(Discarded::Output).collect();
+        self.delete_for_good(&items)
+    }
+
+    /// Deletes discarded things for good, in order, then the store images
+    /// they had that nothing refers to now (with their thumbnails), checking
+    /// what's still referred to once. An output link is checked to be a
+    /// discarded one before anything goes. Says which images went, and which
+    /// stayed on disk because something still uses them, and what.
+    pub fn delete_for_good(&mut self, items: &[Discarded]) -> Result<DeletedForGood> {
+        for i in items {
+            if let Discarded::Output(l) = i {
+                self.discarded_output(l)?;
+            }
+        }
+        let mut ix = self.scan()?;
+        let mut had = Vec::new();
+        for i in items {
+            match i {
+                Discarded::Idea(id) => {
+                    let dir = match self.find_idea(id)? {
+                        (IdeaLoc::Discarded, dir) => dir,
+                        _ => return Err(Error::Refused(format!("idea {id} is not discarded"))),
+                    };
+                    if let Some(e) = ix.idea(id) {
+                        had.extend(e.idea.images.iter().cloned().map(ImageRef::input));
+                        match &e.idea.source {
+                            IdeaSource::FromOutput { image } | IdeaSource::Edited { image, .. } => {
+                                had.push(image.clone())
+                            }
+                            IdeaSource::Tiled { images } => had.extend(images.iter().cloned()),
+                            _ => {}
+                        }
+                    }
+                    had.extend(self.links_under(&dir, Store::Input)?);
+                    self.destroy(&dir)?;
+                    ix.ideas.retain(|e| &e.idea.id != id);
+                }
+                Discarded::Project(id) => {
+                    let dir = self.find_discarded_project(id)?;
+                    had.extend(self.links_under(&dir, Store::Output)?);
+                    if let Some(d) = ix.discarded_projects.iter().find(|d| &d.entry.project.id == id) {
+                        let p = &d.entry;
+                        had.extend(p.project.cover.iter().cloned());
+                        had.extend(p.draft.iter().flat_map(|d| d.refs.iter().chain(&d.sweep.images).cloned()));
+                        for r in &p.runs {
+                            had.extend(r.refs.iter().cloned());
+                            if let Mode::Edit { init: Some(init), .. } = &r.mode {
+                                had.push(init.clone());
+                            }
+                        }
+                    }
+                    self.destroy(&dir)?;
+                    ix.discarded_projects.retain(|d| &d.entry.project.id != id);
+                }
+                Discarded::Folder(tree, dir) => {
+                    let abs = self.discarded_folder(*tree, dir)?;
+                    let store = match tree {
+                        Tree::InputCollections => Store::Input,
+                        Tree::Projects | Tree::Collections => Store::Output,
+                    };
+                    had.extend(self.links_under(&abs, store)?);
+                    self.destroy(&abs)?;
+                }
+                Discarded::Output(l) => {
+                    let (_, abs) = self.discarded_output(l)?;
+                    had.extend(link::read_ref(&abs, Store::Output)?);
+                    self.destroy(&abs)?;
+                }
+            }
+        }
+        self.drop_unreferenced(&ix, had)
     }
 
     /// A discarded output link's project directory and the link (absolute).
@@ -2561,6 +2634,93 @@ impl Library {
     }
 }
 
+/// What [`Library::delete_for_good`] did with the store images of what it
+/// deleted.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct DeletedForGood {
+    /// Deleted from disk (with their thumbnails): nothing used them any more.
+    pub gone: Vec<ImageRef>,
+    /// Kept on disk, each with what still uses it ([`uses_of`]).
+    pub kept: Vec<(ImageRef, Vec<String>)>,
+}
+
+/// What in the library uses a store image, a line each ("collection
+/// best/inner", "idea “Fox”", "references of project fox"…). An image
+/// kept only as an input of another kept image says so.
+pub fn uses_of(ix: &Index, r: &ImageRef) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let mut add = |s: String| out.push(s);
+    for p in &ix.projects {
+        let name = p.dir.strip_prefix(PROJECTS).unwrap_or(&p.dir).display().to_string();
+        if p.outputs.iter().any(|o| &o.image == r) {
+            add(format!("an output of project {name}"));
+        }
+        if p.discarded.iter().any(|o| &o.image == r) {
+            add(format!("a discarded output of project {name}"));
+        }
+        if project_uses(p, r) {
+            add(format!("references of project {name}"));
+        }
+    }
+    for d in &ix.discarded_projects {
+        let p = &d.entry;
+        if p.outputs.iter().chain(&p.discarded).any(|o| &o.image == r) || project_uses(p, r) {
+            add(format!("discarded project {}", d.discarded.name));
+        }
+    }
+    for c in ix.collection_links.iter().filter(|c| &c.image == r) {
+        add(format!("collection {}", c.folder.display()));
+    }
+    for d in ix.discarded_collections.iter().filter(|d| d.images.contains(r)) {
+        add(format!("discarded collection {}", d.discarded.name));
+    }
+    for e in &ix.ideas {
+        let image = r.store == Store::Input && e.idea.images.contains(&r.id);
+        let source = match &e.idea.source {
+            IdeaSource::FromOutput { image } | IdeaSource::Edited { image, .. } => image == r,
+            IdeaSource::Tiled { images } => images.contains(r),
+            _ => false,
+        };
+        if image || source {
+            let title = if e.idea.title.trim().is_empty() { e.idea.id.to_string() } else { e.idea.title.clone() };
+            let discarded = if e.loc == IdeaLoc::Discarded { "discarded " } else { "" };
+            add(format!("{discarded}idea “{title}”"));
+        }
+    }
+    if r.store == Store::Input && ix.idea_draft.as_ref().is_some_and(|d| d.images.contains(&r.id)) {
+        add("the New idea form".into());
+    }
+    let mut seen = HashSet::new();
+    out.retain(|s| seen.insert(s.clone()));
+    if out.is_empty() {
+        out.push("the recipe of another image that's kept".into());
+    }
+    out
+}
+
+/// A project's cover, Generate form or one of its runs uses the image.
+fn project_uses(p: &scan::ProjectEntry, r: &ImageRef) -> bool {
+    p.project.cover.as_ref() == Some(r)
+        || p.draft.as_ref().is_some_and(|d| d.refs.contains(r) || d.sweep.images.contains(r))
+        || p.runs
+            .iter()
+            .any(|run| run.refs.contains(r) || matches!(&run.mode, Mode::Edit { init: Some(init), .. } if init == r))
+}
+
+/// Something in a Discarded, to delete for good ([`Library::delete_for_good`]).
+#[derive(Clone, Debug, PartialEq)]
+pub enum Discarded {
+    /// A discarded idea.
+    Idea(Id),
+    /// A discarded project.
+    Project(Id),
+    /// A discarded collection or input collection folder (relative to the
+    /// library root).
+    Folder(Tree, PathBuf),
+    /// A discarded output link (relative to the library root).
+    Output(PathBuf),
+}
+
 // ------------------------------------------------------------------ clean up
 
 impl Library {
@@ -2569,7 +2729,23 @@ impl Library {
     /// source, and not a ref / edit init / parent in the recipe of an output
     /// that is itself kept.
     pub fn unreferenced(&self) -> Result<Vec<ImageRef>> {
-        let ix = self.scan()?;
+        let marked = self.referenced(&self.scan()?)?;
+        let mut out = Vec::new();
+        for store in [Store::Input, Store::Output] {
+            for id in self.store_ids(store)? {
+                let r = ImageRef { id, store };
+                if !marked.contains(&r) {
+                    out.push(r);
+                }
+            }
+        }
+        Ok(out)
+    }
+
+    /// Store images something refers to (see [`unreferenced`](Self::unreferenced)):
+    /// links are read from the folders as they are now, ideas, drafts and
+    /// projects taken from `ix`.
+    fn referenced(&self, ix: &Index) -> Result<HashSet<ImageRef>> {
         let mut marked: HashSet<ImageRef> = HashSet::new();
         let mut todo: Vec<ImageRef> = Vec::new();
         let dirs = [
@@ -2601,6 +2777,9 @@ impl Library {
         if let Some(d) = &ix.idea_draft {
             todo.extend(d.images.iter().cloned().map(ImageRef::input));
         }
+        // outputs of a run listed here: their recipe's images are the run's
+        // refs and edit init, marked below, so their files needn't be read
+        let mut known: HashSet<&ImageRef> = HashSet::new();
         // discarded projects keep theirs, to be restored
         for p in ix.projects.iter().chain(ix.discarded_projects.iter().map(|d| &d.entry)) {
             todo.extend(p.project.cover.iter().cloned());
@@ -2611,34 +2790,67 @@ impl Library {
                     todo.push(init.clone());
                 }
             }
+            let runs: HashSet<&Id> = p.runs.iter().map(|r| &r.id).collect();
+            known.extend(p.outputs.iter().chain(&p.discarded).filter(|o| runs.contains(&o.name.run)).map(|o| &o.image));
         }
         while let Some(r) = todo.pop() {
             if !marked.insert(r.clone()) {
                 continue;
             }
             if r.store == Store::Output
+                && !known.contains(&r)
                 && let Ok(Some(recipe)) = self.recipe(&r.id)
             {
                 todo.extend(recipe.image_refs().cloned());
             }
         }
+        Ok(marked)
+    }
+
+    /// The store images linked at `path` or anywhere under it (`store`: the
+    /// store of links that aren't symlinks).
+    fn links_under(&self, path: &Path, store: Store) -> Result<Vec<ImageRef>> {
         let mut out = Vec::new();
-        for store in [Store::Input, Store::Output] {
-            for id in self.store_ids(store)? {
-                let r = ImageRef { id, store };
-                if !marked.contains(&r) {
-                    out.push(r);
-                }
+        for p in fsutil::walk(path)? {
+            if p.vfs_is_dir() && !fsutil::is_symlink(&p) {
+                continue;
+            }
+            if let Ok(Some(r)) = link::read_ref(&p, store) {
+                out.push(r);
             }
         }
         Ok(out)
     }
 
-    /// **Clean up library**: deletes every [unreferenced](Self::unreferenced)
-    /// store image (and its thumbnail) for good. Returns what was removed.
-    pub fn clean_up(&mut self) -> Result<Vec<ImageRef>> {
-        let gone = self.unreferenced()?;
-        for r in &gone {
+    /// Of `candidates`, the store images nothing refers to now (`ix`: the
+    /// library as scanned, less what was just deleted), deleted for good
+    /// with their thumbnails. Returns them.
+    fn drop_unreferenced(&mut self, ix: &Index, mut candidates: Vec<ImageRef>) -> Result<DeletedForGood> {
+        candidates.sort();
+        candidates.dedup();
+        candidates.retain(|r| fsutil::exists(&self.image_path(r)));
+        let mut out = DeletedForGood::default();
+        if candidates.is_empty() {
+            return Ok(out);
+        }
+        let marked = self.referenced(ix)?;
+        let (kept, gone): (Vec<_>, Vec<_>) = candidates.into_iter().partition(|r| marked.contains(r));
+        self.remove_store_images(&gone)?;
+        out.gone = gone;
+        if !kept.is_empty() {
+            let now = self.scan()?;
+            out.kept = kept.into_iter().map(|r| (uses_of(&now, &r), r)).map(|(u, r)| (r, u)).collect();
+        }
+        Ok(out)
+    }
+
+    /// Deletes store images for good, with their thumbnails, and forgets
+    /// them in the pixel index.
+    fn remove_store_images(&mut self, gone: &[ImageRef]) -> Result<()> {
+        if gone.is_empty() {
+            return Ok(());
+        }
+        for r in gone {
             self.destroy(&self.image_path(r))?;
             let thumb = crate::thumbs::path(&self.root, r);
             if fsutil::exists(&thumb) {
@@ -2648,6 +2860,14 @@ impl Library {
             self.pixels.transparent.remove(r);
             self.pixels.uuids.retain(|_, u| u != r);
         }
+        self.save_pixel_index()
+    }
+
+    /// **Clean up library**: deletes every [unreferenced](Self::unreferenced)
+    /// store image (and its thumbnail) for good. Returns what was removed.
+    pub fn clean_up(&mut self) -> Result<Vec<ImageRef>> {
+        let gone = self.unreferenced()?;
+        self.remove_store_images(&gone)?;
         self.save_pixel_index()?;
         Ok(gone)
     }

@@ -1741,13 +1741,22 @@ WebP is chosen or WebP files exist, so an older IncreArt, which can't read
 them, refuses to open it instead of seeing missing images. Converting back
 to PNG returns it to format 1.
 
-**Clean up.** Deleting a discarded project or idea for good only removes
-links, so store images can become unreferenced. A **Clean up library**
-command (never automatic) marks every image still referenced (links, those
+**Clean up.** Deleting something from a Discarded for good (an output
+link, a project, an idea, a collection folder) also deletes the store
+images it linked or used that nothing refers to any more, by the same
+marking as below, with their thumbnails; one still referred to elsewhere
+stays, and a notice (**Some images were kept on disk**, OK to close) lists
+each such image with what uses it (a project's outputs or references, a
+collection, a discarded collection or project, an idea, the New idea form,
+or the recipe of another kept image), so a delete never looks complete
+when a file is left. Store images can still become unreferenced other ways (a collection
+entry deleted, a run's ref replaced, a library from an older IncreArt). A
+**Clean up library** command (never automatic) marks every image still referenced (links, those
 of discarded projects too, `idea.rsn` images, `run.rsn` refs (discarded
 projects' too, so a restore finds them), recipes' `refs` / `init` /
 `parent`, `FromOutput` sources) and deletes the rest (and their
-thumbnails) for good. An input image used as a ref by any
+thumbnails) for good. An output of a run the library lists needn't have its
+recipe read: it's that run's refs and init, already marked. An input image used as a ref by any
 kept output therefore survives even after its idea is gone.
 
 **Deleting for good.** Deleting goes to a Discarded first (ideas, projects,
@@ -3942,7 +3951,7 @@ the keys and mouse buttons go through that view's own history instead.
   - **Discarded**: discarded ideas (`input/discarded/`), newest first.
     Right-click: restore to the Idea inbox, restore to the input library ·
     copy text, copy image, describe image with PE · delete permanently (asks first; the idea's folder is deleted for
-    good, its images stay until Clean up). **Empty discarded…** deletes them
+    good, with its images that nothing else uses). **Empty discarded…** deletes them
     all (asks first). Ideas are selected as the Discarded images are (click,
     `Ctrl`/`Shift`+click, a box, `Ctrl+A`); the bar restores the selected
     to the Idea inbox or deletes them permanently. Restores can be undone
@@ -4076,7 +4085,7 @@ the keys and mouse buttons go through that view's own history instead.
     which is a review (undoable); moving them into another project is
     refused (use → input ref). They can't be renamed (the name carries run,
     revision and seed) or copied; deleting one moves the link to Output
-    library → Discarded, the image stays in the store until Clean up. Project subfolders, idea
+    library → Discarded, the image kept in the store for a restore. Project subfolders, idea
     images and metadata files are managed by the app.
   - Status bar: item count, selection count and size, current path (cut
     short when narrow).
@@ -4148,7 +4157,7 @@ the keys and mouse buttons go through that view's own history instead.
   **Restore** puts the project back in the folder it was in (made again if
   it is gone), under its name (numbered if taken); its pending
   seeds generate again. **Delete permanently** (asks first) deletes its folder
-  for good; the images stay until Clean up. **Empty
+  for good, with the images it linked or used that nothing else uses. **Empty
   discarded…** (asks first) does it for all of them.
 - **Jobs**: per-run progress and per-server state (loading / draining /
   generating). Runs being saved show first ("r02 · being saved, then
@@ -4420,7 +4429,8 @@ the keys and mouse buttons go through that view's own history instead.
     Discarded view. **Restore** puts it back in its project, rated as it
     was, and its seed is no longer deleted (refused if a link of that name is
     there). **Delete permanently** (asks first) deletes the link
-    for good; the image stays until Clean up. **Empty discarded…** (asks first)
+    for good, and its store image (and thumbnail) if nothing else uses it: another
+    link, an idea, a run's refs or edit init. **Empty discarded…** (asks first)
     does it for all of them. Clean up and store conversion count discarded
     images' links, so a restore finds its image.
     **Discarded folders**: above the images, the discarded collection folders
@@ -4430,7 +4440,7 @@ the keys and mouse buttons go through that view's own history instead.
     collections/…" and when. **Restore** puts it back where it was, the
     folders it was in made again if gone, under its name (numbered if taken);
     **Delete permanently…** (asks first) deletes it for good, its links or
-    entries with it (images stay in the store until Clean up, ideas in the
+    entries with it (and the images linked in it that nothing else uses; ideas stay in the
     input library); **Delete all discarded folders…** (asks first) with more
     than one. A discarded collection's images count for Clean up, so a
     restore finds them.

@@ -1167,7 +1167,7 @@ fn discarded(ui: &mut egui::Ui, st: &AppState, folders: Option<Tree>, tex: &mut 
         });
         let sel = picks.sel.clone();
         action = action.or(picks.finish(ui, &bg, &all));
-        let after = "Their folders are deleted; their images stay in the store until Clean up.";
+        let after = "Their folders are deleted, and their images too unless still used elsewhere.";
         crate::review::discard_action(action, sel, all.len(), "idea", after, out, |a, s| match a {
             // the bar's Restore: to the Idea inbox, where they came from mostly
             crate::discards::BarAction::Restore => Msg::RestoreIdeas(s, IdeaLoc::Unreviewed),

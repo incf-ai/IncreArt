@@ -1442,7 +1442,12 @@ fn no_server_window(ctx: &egui::Context, out: &mut Vec<Msg>) {
 /// Back / forward from the keyboard and the mouse's side buttons, except
 /// in a folder view (which goes through its own history with them).
 fn nav_keys(ctx: &egui::Context, st: &AppState, out: &mut Vec<Msg>) {
-    if st.folder_view_shown() || st.confirm.is_some() || st.logs.is_some() || ctx.egui_wants_keyboard_input() {
+    if st.folder_view_shown()
+        || st.confirm.is_some()
+        || st.kept_on_disk.is_some()
+        || st.logs.is_some()
+        || ctx.egui_wants_keyboard_input()
+    {
         return;
     }
     ctx.input(|i| {
@@ -1484,6 +1489,49 @@ fn confirm_window(ctx: &egui::Context, c: &increart_gui_core::Confirm, out: &mut
     });
     if m.should_close() {
         out.push(Msg::ConfirmNo);
+    }
+}
+
+/// After a delete for good: the store images that stayed on disk because
+/// something still uses them, and what (`AppState::kept_on_disk`).
+fn kept_on_disk_window(ctx: &egui::Context, kept: &[(increart_core::ImageRef, Vec<String>)], out: &mut Vec<Msg>) {
+    let m = egui::Modal::new(egui::Id::unique("kept_on_disk")).show(ctx, |ui| {
+        ui.set_max_width(480.0);
+        let n = kept.len();
+        ui.heading(if n == 1 { "An image was kept on disk" } else { "Some images were kept on disk" });
+        ui.label(if n == 1 {
+            "Deleted, but this image is still used elsewhere, so its file stayed on disk. It goes when nothing \
+             uses it any more (remove what uses it, then Clean up library)."
+                .to_string()
+        } else {
+            format!(
+                "Deleted, but these {n} images are still used elsewhere, so their files stayed on disk. Each goes \
+                 when nothing uses it any more (remove what uses it, then Clean up library)."
+            )
+        });
+        ui.add_space(6.0);
+        egui::ScrollArea::vertical().max_height(260.0).auto_shrink([false, true]).show(ui, |ui| {
+            for (r, uses) in kept {
+                let store = match r.store {
+                    increart_core::Store::Input => "input image",
+                    increart_core::Store::Output => "output image",
+                };
+                ui.label(RichText::new(format!("{} {}", store, r.id)).strong());
+                for u in uses {
+                    ui.label(format!("    used by {u}"));
+                }
+                ui.add_space(4.0);
+            }
+        });
+        ui.add_space(8.0);
+        dialog_buttons(ui, |ui| {
+            if ui.button(RichText::new("OK").strong()).clicked() {
+                out.push(Msg::DismissKeptOnDisk);
+            }
+        });
+    });
+    if m.should_close() {
+        out.push(Msg::DismissKeptOnDisk);
     }
 }
 
@@ -1670,6 +1718,9 @@ impl eframe::App for App {
         crate::presets::added_blanks_window(&ctx, &self.st, &mut out);
         if let Some(c) = &self.st.confirm {
             confirm_window(&ctx, c, &mut out);
+        }
+        if let Some(kept) = &self.st.kept_on_disk {
+            kept_on_disk_window(&ctx, kept, &mut out);
         }
         // over the preset editor
         if let Some(t) = &self.st.server_test {

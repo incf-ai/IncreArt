@@ -1708,7 +1708,8 @@ fn zoom_keys(ui: &egui::Ui, st: &AppState) -> bool {
         || st.collect.is_some()
         || st.tagging.is_some()
         || st.use_ref.is_some()
-        || st.confirm.is_some())
+        || st.confirm.is_some()
+        || st.kept_on_disk.is_some())
 }
 
 /// A/B compare's Link zoom: both sides over the same part of their images.
@@ -3123,7 +3124,7 @@ fn discarded_outputs(ui: &mut egui::Ui, st: &AppState, root: &Path, tex: &mut Te
                 }
                 let restore = || Msg::RestoreOutput(o.path.clone());
                 let delete = || {
-                    let text = "Delete this image permanently? Its link is deleted; the image stays in the store until Clean up.";
+                    let text = "Delete this image permanently? Its link is deleted, and the image too unless it's still used elsewhere (a collection, an idea, a run's refs).";
                     Msg::Ask(Confirm::new(text, "Delete", Msg::DeleteDiscardedOutput(o.path.clone())))
                 };
                 if ui.rect_contains_pointer(r.rect) {
@@ -3175,7 +3176,7 @@ fn discarded_outputs(ui: &mut egui::Ui, st: &AppState, root: &Path, tex: &mut Te
         sel,
         all.len(),
         "image",
-        "Their links are deleted; the images stay in the store until Clean up.",
+        "Their links are deleted, and the images too unless still used elsewhere (a collection, an idea, a run's refs).",
         out,
         |a, s| match a {
             crate::discards::BarAction::Restore => Msg::RestoreOutputs(s),

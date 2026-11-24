@@ -415,10 +415,10 @@ fn whole_library_through_the_api() {
     for o in &ix.project(&project).unwrap().outputs {
         resolves(&lib, &o.path, Store::Output);
     }
-    lib.delete_discarded_idea(&junk).unwrap();
+    // deleted for good, with the store images nothing else refers to
+    let mut gone = lib.delete_discarded_idea(&junk).unwrap().gone;
     lib.delete_node(Tree::Projects, Path::new("fox 2")).unwrap();
-    lib.delete_discarded_project(&project).unwrap();
-    let mut gone = lib.unreferenced().unwrap();
+    gone.extend(lib.delete_discarded_project(&project).unwrap().gone);
     gone.sort();
     let mut expect = vec![
         ImageRef::input(sticker.clone()),
@@ -430,9 +430,8 @@ fn whole_library_through_the_api() {
     // outs[0]: in a collection; outs[1]: an idea's FromOutput source; the
     // photo: an idea image and a ref in outs[0]'s recipe.
     assert_eq!(gone, expect);
-    let mut cleaned = lib.clean_up().unwrap();
-    cleaned.sort();
-    assert_eq!(cleaned, gone);
+    assert!(lib.unreferenced().unwrap().is_empty());
+    assert!(lib.clean_up().unwrap().is_empty());
     assert!(!lib.image_path(&ImageRef::output(edited)).exists());
     assert!(!lib.image_path(&ImageRef::input(sticker.clone())).exists());
     let report = common::verify(&root);
@@ -779,15 +778,18 @@ fn deleted_outputs_are_discarded_restored_or_deleted_for_good() {
     let p = ix.project(&project).unwrap();
     assert_eq!((p.outputs.len(), p.discarded.len()), (2, 0));
 
+    let other_image = link::read_ref(&lib.path(&other), Store::Output).unwrap().unwrap();
     let gone = lib.delete_output_link(&other).unwrap();
-    lib.delete_discarded_output(&gone).unwrap();
+    // its store image goes with it: nothing else refers to it
+    assert_eq!(lib.delete_discarded_output(&gone).unwrap().gone, vec![other_image.clone()]);
     assert!(!lib.path(&gone).exists());
+    assert!(!lib.image_path(&other_image).exists());
     assert!(lib.delete_discarded_output(&bad).is_err());
     let ix = lib.scan().unwrap();
     let p = ix.project(&project).unwrap();
     assert_eq!((p.outputs.len(), p.discarded.len()), (1, 0));
     assert_eq!(lib.find_run(&run).unwrap().1.deleted, vec![Seeds { first: 1, count: 1 }]);
-    assert_eq!(lib.unreferenced().unwrap().len(), 1);
+    assert!(lib.unreferenced().unwrap().is_empty());
 }
 
 /// A library whose `library.rsn` names no link mode (the example library,

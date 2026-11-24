@@ -2778,7 +2778,7 @@ fn review_views_compare_and_rejected() {
     h.settle();
     assert!(h.state.confirm.is_none());
     assert!(h.state.output_source_images().is_empty(), "{:?}", h.errors());
-    assert!(first.path(&h.root).is_file(), "the image itself stays until Clean up");
+    assert!(second.path(&h.root).is_file(), "a discarded image is kept, to be restored");
 
     // the deleted image is in Discarded, rated as it was; restored, it's back
     let discarded =
@@ -2801,6 +2801,7 @@ fn review_views_compare_and_rejected() {
     h.settle();
     assert!(discarded(&h).is_empty(), "{:?}", h.errors());
     assert!(h.state.output_link(&second).is_none());
+    assert!(!second.path(&h.root).exists(), "its store image deleted with it");
 
     // any image can be discarded, a good one too, and Ctrl+Z puts it back
     h.send(Msg::DiscardImages(vec![first.clone()]));
@@ -2823,7 +2824,39 @@ fn review_views_compare_and_rejected() {
     h.send(Msg::DeleteDiscardedOutputs(all(&h)));
     h.settle();
     assert!(discarded(&h).is_empty() && h.state.output_link(&first).is_none(), "{:?}", h.errors());
-    assert!(first.path(&h.root).is_file(), "the image itself stays until Clean up");
+    assert!(!first.path(&h.root).exists(), "its store image deleted with it");
+    assert!(h.state.kept_on_disk.is_none(), "nothing kept, nothing to say");
+}
+
+/// Deleting for good an image something else still uses: its file stays,
+/// and a notice says what uses it.
+#[test]
+fn deleting_an_image_still_used_says_it_stayed_on_disk() {
+    let mut h = Harness::new();
+    h.send(Msg::NewProject(PathBuf::new()));
+    h.send(Msg::CommitRename);
+    h.settle();
+    let project = h.state.project.clone().unwrap();
+    Library_::steal(&h.root).write_two(&project);
+    h.rt.run(Effect::Rescan);
+    h.settle();
+    let image = h.state.review_queue()[0].image.clone();
+    h.send(Msg::NewCollection(PathBuf::new(), vec![image.clone()]));
+    h.settle();
+    let coll = h.state.renaming.clone().unwrap().path;
+    h.send(Msg::CancelRename);
+    h.send(Msg::DiscardImages(vec![image.clone()]));
+    h.settle();
+    let links: Vec<_> = h.state.discarded_outputs().iter().map(|o| o.path.clone()).collect();
+    assert_eq!(links.len(), 1, "{:?}", h.errors());
+    h.send(Msg::DeleteDiscardedOutputs(links));
+    h.settle();
+    assert!(h.state.discarded_outputs().is_empty(), "{:?}", h.errors());
+    assert!(image.path(&h.root).is_file(), "the collection still has it");
+    let why = format!("collection {}", coll.display());
+    assert_eq!(h.state.kept_on_disk, Some(vec![(image.clone(), vec![why])]));
+    h.send(Msg::DismissKeptOnDisk);
+    assert!(h.state.kept_on_disk.is_none());
 }
 
 #[test]

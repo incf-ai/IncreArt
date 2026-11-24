@@ -4721,6 +4721,9 @@ pub struct AppState {
     /// there are none, until the source changes or it is dismissed.
     pub output_notice: bool,
     pub confirm: Option<Confirm>,
+    /// Deleted for good, but these store images stayed on disk: something
+    /// still uses each (what, a line each). Shown until dismissed.
+    pub kept_on_disk: Option<Vec<(ImageRef, Vec<String>)>>,
     /// The server status window (the top bar's **Servers…**).
     pub server_status: bool,
     /// "No server is connected" showing, after Queue.
@@ -5585,6 +5588,7 @@ impl AppState {
             output_source: OutputSource::AllProjects,
             output_notice: false,
             confirm: None,
+            kept_on_disk: None,
             server_status: false,
             no_server_warning: false,
             logs: None,

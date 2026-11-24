@@ -320,16 +320,17 @@ fn collection_folders(mode: Option<LinkMode>) {
     }
     clean(&lib);
 
-    // for good: the links go, the store images stay until Clean up
+    // for good: the links go, and the store images nothing else refers to
     lib.delete_node(Tree::Collections, Path::new("a")).unwrap();
-    lib.delete_discarded_folder(Tree::Collections, Path::new("discarded_collections/a")).unwrap();
+    let mut gone = lib.delete_discarded_folder(Tree::Collections, Path::new("discarded_collections/a")).unwrap().gone;
+    gone.sort();
     assert!(!lib.path("discarded_collections/a").exists(), "{ctx}");
-    assert_eq!(stores(&lib), before, "{ctx}: store images untouched");
-    assert_eq!(ids(&lib.unreferenced().unwrap()), vec![outs[0].0.clone(), outs[1].0.clone()], "{ctx}");
-    let mut cleaned = lib.clean_up().unwrap();
-    cleaned.sort();
-    assert_eq!(ids(&cleaned), vec![outs[0].0.clone(), outs[1].0.clone()], "{ctx}");
-    assert!(!lib.image_path(&ImageRef::output(outs[0].0.clone())).exists(), "{ctx}");
+    assert_eq!(ids(&gone), vec![outs[0].0.clone(), outs[1].0.clone()], "{ctx}");
+    for r in &gone {
+        assert!(!lib.image_path(r).exists(), "{ctx}");
+        assert!(!increart_core::thumbs::path(&lib.path(""), r).exists(), "{ctx}: its thumbnail too");
+    }
+    assert!(lib.unreferenced().unwrap().is_empty(), "{ctx}");
     let kept = lib.image_path(&ImageRef::output(outs[2].0.clone()));
     assert_eq!(fs::read(&kept).unwrap(), before[&kept], "{ctx}: an image still collected stays whole");
     clean(&lib);
@@ -444,18 +445,17 @@ fn project_folders(mode: Option<LinkMode>) {
         resolves(&lib, &lib.path(&o.path));
     }
 
-    // for good: the folder goes, the store images stay until Clean up
-    lib.delete_discarded_project(&p2).unwrap();
+    // for good: the folder goes, and the store images nothing else refers to
+    let mut gone = lib.delete_discarded_project(&p2).unwrap().gone;
     lib.delete_node(Tree::Projects, Path::new("clients/acme/logo")).unwrap();
-    lib.delete_discarded_project(&p1).unwrap();
+    gone.extend(lib.delete_discarded_project(&p1).unwrap().gone);
     let ix = lib.scan().unwrap();
     assert!(ix.discarded_projects.is_empty(), "{ctx}");
     assert!(fsutil::walk(&lib.path("discarded_projects")).unwrap().is_empty(), "{ctx}");
-    assert_eq!(stores(&lib), before, "{ctx}: store images untouched");
-    assert!(matches!(lib.delete_discarded_project(&p1), Err(Error::NotFound(_))));
-    let gone = lib.unreferenced().unwrap();
     assert_eq!(gone.len(), 3, "{ctx}");
-    lib.clean_up().unwrap();
+    assert_eq!(stores(&lib).len(), before.len() - 3, "{ctx}");
+    assert!(matches!(lib.delete_discarded_project(&p1), Err(Error::NotFound(_))));
+    assert!(lib.unreferenced().unwrap().is_empty(), "{ctx}");
     for (id, _) in &o1 {
         assert!(!lib.image_path(&ImageRef::output(id.clone())).exists(), "{ctx}");
     }
@@ -464,7 +464,7 @@ fn project_folders(mode: Option<LinkMode>) {
 }
 
 #[test]
-fn deleted_ideas_and_outputs_leave_the_store_whole() {
+fn deleted_ideas_and_outputs_leave_the_rest_of_the_store_whole() {
     for mode in MODES {
         let (_tmp, mut lib) = setup(mode);
         let ctx = format!("{mode:?}");
@@ -472,19 +472,43 @@ fn deleted_ideas_and_outputs_leave_the_store_whole() {
         let before = stores(&lib);
         let bad = lib.review_output(&outs[0].1, Some(Verdict::Bad)).unwrap();
         let gone = lib.delete_output_link(&bad).unwrap();
-        lib.delete_discarded_output(&gone).unwrap();
+        let first = ImageRef::output(outs[0].0.clone());
+        assert_eq!(lib.delete_discarded_output(&gone).unwrap().gone, vec![first.clone()], "{ctx}");
         assert!(!lib.path(&gone).exists(), "{ctx}");
-        assert_eq!(stores(&lib), before, "{ctx}");
+        let mut expect = before.clone();
+        expect.remove(&lib.image_path(&first));
+        assert_eq!(stores(&lib), expect, "{ctx}: the other images whole");
         resolves(&lib, &lib.path(&outs[1].1));
         let idea = lib.new_idea(NewIdea::text("Junk", "")).unwrap();
         lib.review_idea(&idea, Verdict::Bad).unwrap();
         lib.delete_discarded_idea(&idea).unwrap();
         assert!(lib.find_idea(&idea).is_err(), "{ctx}");
         assert_eq!(lib.scan().unwrap().project(&project).unwrap().outputs.len(), 1);
-        assert_eq!(ids(&lib.unreferenced().unwrap()), vec![outs[0].0.clone()], "{ctx}");
-        lib.clean_up().unwrap();
-        assert!(!lib.image_path(&ImageRef::output(outs[0].0.clone())).exists(), "{ctx}");
+        assert!(lib.unreferenced().unwrap().is_empty(), "{ctx}");
+        assert!(lib.clean_up().unwrap().is_empty(), "{ctx}");
         resolves(&lib, &lib.path(&outs[1].1));
+        clean(&lib);
+    }
+}
+
+/// A discarded output whose image a collection still has: the link goes,
+/// the store image stays, and what keeps it is said.
+#[test]
+fn an_image_still_used_is_kept_and_what_uses_it_said() {
+    for mode in MODES {
+        let (_tmp, mut lib) = setup(mode);
+        let ctx = format!("{mode:?}");
+        let (_project, outs) = project_with(&mut lib, Path::new(""), "fox", 1);
+        lib.create_folder(Tree::Collections, Path::new(""), Some("best")).unwrap();
+        lib.add_to_collection(Path::new("best"), &outs[0].0).unwrap();
+        let bad = lib.review_output(&outs[0].1, Some(Verdict::Bad)).unwrap();
+        let gone = lib.delete_output_link(&bad).unwrap();
+        let image = ImageRef::output(outs[0].0.clone());
+        let d = lib.delete_discarded_output(&gone).unwrap();
+        assert!(d.gone.is_empty(), "{ctx}");
+        assert_eq!(d.kept, vec![(image.clone(), vec!["collection best".to_string()])], "{ctx}");
+        assert!(lib.image_path(&image).exists(), "{ctx}");
+        assert!(!lib.path(&gone).exists(), "{ctx}");
         clean(&lib);
     }
 }
@@ -528,15 +552,19 @@ fn an_ephemeral_library_deletes_nothing_on_disk() {
     let mut lib = Library::open_ephemeral(Some(&disk), false).unwrap();
     let project = lib.scan().unwrap().projects[0].project.id.clone();
     lib.delete_node(Tree::Projects, Path::new("fox")).unwrap();
-    lib.delete_discarded_project(&project).unwrap();
+    // the image not collected goes with the project, the other with the folder
+    assert_eq!(lib.delete_discarded_project(&project).unwrap().gone.len(), 1);
     lib.delete_node(Tree::Collections, Path::new("best")).unwrap();
-    lib.delete_discarded_folder(Tree::Collections, Path::new("discarded_collections/best")).unwrap();
+    assert_eq!(
+        lib.delete_discarded_folder(Tree::Collections, Path::new("discarded_collections/best")).unwrap().gone.len(),
+        1
+    );
     lib.delete_node(Tree::InputCollections, Path::new("places")).unwrap();
     let back = lib.restore_folder(Tree::InputCollections, Path::new("input/discarded_collections/places")).unwrap();
     assert_eq!(back, Path::new("places"));
     let ix = lib.scan().unwrap();
     assert!(ix.projects.is_empty() && ix.discarded_projects.is_empty() && ix.discarded_collections.is_empty());
-    assert_eq!(lib.clean_up().unwrap().len(), 2);
+    assert!(lib.clean_up().unwrap().is_empty());
     drop(lib);
     assert_eq!(snapshot(&disk), before);
 }

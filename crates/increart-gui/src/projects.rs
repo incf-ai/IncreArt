@@ -161,7 +161,7 @@ fn discarded(ui: &mut egui::Ui, st: &AppState, tex: &mut Textures, out: &mut Vec
                 let restore = || Msg::RestoreProject(id.clone());
                 let delete = || {
                     let text = format!(
-                        "Delete project {} permanently? Its folder is deleted with {} image link(s); the images stay in the store until Clean up.",
+                        "Delete project {} permanently? Its folder is deleted with {} image link(s), and the images too unless still used elsewhere.",
                         d.discarded.name,
                         p.outputs.len()
                     );
@@ -212,7 +212,7 @@ fn discarded(ui: &mut egui::Ui, st: &AppState, tex: &mut Textures, out: &mut Vec
     });
     let sel = picks.sel.clone();
     action = action.or(picks.finish(ui, &bg, &all));
-    let after = "Their folders are deleted with their image links; the images stay in the store until Clean up.";
+    let after = "Their folders are deleted with their image links, and the images too unless still used elsewhere.";
     crate::review::discard_action(action, sel, all.len(), "project", after, out, |a, s| match a {
         crate::discards::BarAction::Restore => Msg::RestoreProjects(s),
         crate::discards::BarAction::Delete => Msg::DeleteDiscardedProjects(s),
