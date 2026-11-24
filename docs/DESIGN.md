@@ -4147,6 +4147,13 @@ the keys and mouse buttons go through that view's own history instead.
   applies on Enter) or dragged. It's kept in the config (`ui_zoom`), not
   per library. egui's own keyboard zoom is off, so the config always has it.
   A divider separates it from the bell.
+- **Light or dark** (status bar, left of the zoom): three small icons, the
+  one in use lit: light (sun), dark (moon, the default whatever the system
+  is set to), or as the system is set (monitor). Kept in the config
+  (`theme`), not per library.
+  The start-up screens (Open a library, Servers) have a bar along the
+  bottom with the same two controls, so both can be set before a library
+  is open.
 - **Messages** (status bar, after the library path): the latest one, with
   "(+N more)" when there are others and ✕ to dismiss it. Clicking it opens
   a popover with every message, newest first, each with ✕, and **Clear all**.

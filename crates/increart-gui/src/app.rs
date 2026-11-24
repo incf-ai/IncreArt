@@ -142,6 +142,15 @@ impl App {
         if ctx.zoom_factor() != want {
             ctx.set_zoom_factor(want);
         }
+        use increart_core::config::Theme;
+        let want = match self.st.config.theme {
+            Theme::System => egui::ThemePreference::System,
+            Theme::Light => egui::ThemePreference::Light,
+            Theme::Dark => egui::ThemePreference::Dark,
+        };
+        if ctx.options(|o| o.theme_preference) != want {
+            ctx.set_theme(want);
+        }
     }
 
     fn dispatch(&mut self, msg: Msg) {
@@ -248,7 +257,7 @@ impl App {
                 ui.add_space(4.0);
                 ui.separator();
                 ui.add_space(2.0);
-                zoom_control(ui, st, out);
+                look_controls(ui, st, out);
                 if let Some((done, total)) = st.usage_check {
                     ui.add(
                         egui::ProgressBar::new(done as f32 / total.max(1) as f32)
@@ -757,6 +766,42 @@ pub fn archive_progress(ui: &mut egui::Ui, a: &increart_gui_core::Archiving, out
             out.push(Msg::CancelArchive);
         }
     });
+}
+
+/// A start-up screen's bar along the bottom: the interface zoom and look,
+/// where the main window's status bar has them.
+pub fn look_bar(ui: &mut egui::Ui, st: &AppState, out: &mut Vec<Msg>) {
+    Panel::bottom("look").show(ui, |ui| {
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| look_controls(ui, st, out));
+    });
+}
+
+/// The interface zoom and, left of it, light or dark (in a right-to-left row).
+fn look_controls(ui: &mut egui::Ui, st: &AppState, out: &mut Vec<Msg>) {
+    zoom_control(ui, st, out);
+    theme_control(ui, st, out);
+}
+
+/// Light, dark or as the system is: three small icons, the one in use lit.
+fn theme_control(ui: &mut egui::Ui, st: &AppState, out: &mut Vec<Msg>) {
+    use increart_core::config::Theme;
+    let now = st.config.theme;
+    ui.scope(|ui| {
+        // right to left: the last first
+        ui.spacing_mut().item_spacing.x = 2.0;
+        let every = [
+            (Theme::System, ph::MONITOR, "Light or dark as the system is"),
+            (Theme::Dark, ph::MOON, "Dark"),
+            (Theme::Light, ph::SUN, "Light"),
+        ];
+        for (theme, icon, tip) in every {
+            let b = egui::Button::selectable(now == theme, icon).small().min_size(egui::vec2(18.0, 0.0));
+            if ui.add(b).on_hover_text(tip).clicked() && now != theme {
+                out.push(Msg::UiTheme(theme));
+            }
+        }
+    });
+    ui.add_space(6.0);
 }
 
 /// The interface zoom, "− 100% +" in the status bar: the buttons step by
@@ -1645,12 +1690,14 @@ impl eframe::App for App {
                 let recent = &self.st.config.recent_libraries;
                 let back = self.st.switching.and(self.st.library.as_deref());
                 let archiving = self.st.archiving.as_ref();
+                look_bar(ui, &self.st, &mut out);
                 egui::CentralPanel::default()
                     .show(ui, |ui| crate::startup::library(ui, &d, recent, back, archiving, &mut out));
                 crate::startup::ephemeral_window(&ctx, &self.st, &mut out);
             }
             Phase::Servers(d) => {
                 let st = &self.st;
+                look_bar(ui, st, &mut out);
                 egui::CentralPanel::default().show(ui, |ui| crate::startup::servers(ui, st, &d, &mut out));
                 // the Models window: the Models half, and the server setup
                 // editor's gear, open it here

@@ -113,6 +113,9 @@ pub struct Config {
     /// The interface zoom in percent (0: 100%).
     #[serde(skip_serializing_if = "is_default")]
     pub ui_zoom: u32,
+    /// The interface's light or dark look.
+    #[serde(skip_serializing_if = "is_default")]
+    pub theme: Theme,
     /// The Tile dialog's settings, as last used.
     #[serde(skip_serializing_if = "is_default")]
     pub tile: TileSettings,
@@ -2566,6 +2569,17 @@ impl Default for FolderOrder {
     fn default() -> Self {
         FolderOrder(TreeOrder::Name)
     }
+}
+
+/// The interface's look.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Theme {
+    /// As the system is set, light or dark.
+    System,
+    Light,
+    /// What the interface's colours are chosen for.
+    #[default]
+    Dark,
 }
 
 /// How the sweep's **Choose styles** window orders the presets.

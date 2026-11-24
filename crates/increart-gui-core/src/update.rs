@@ -507,6 +507,8 @@ pub enum Msg {
     },
     /// Ctrl + / Ctrl −: the interface zoom to the next step up or down.
     UiZoomStep(bool),
+    /// The interface light, dark or as the system is (kept in config).
+    UiTheme(increart_core::config::Theme),
     /// The contact sheet's row headers (kept in config).
     SheetRows(increart_core::config::SheetRows),
     /// How many rows the contact sheet shows side by side.
@@ -3246,6 +3248,7 @@ fn part_of(msg: &Msg) -> usize {
         Msg::GridZoom { .. } => 15,
         Msg::UiZoom { .. } => 15,
         Msg::UiZoomStep(..) => 15,
+        Msg::UiTheme(..) => 15,
         Msg::SheetRows(..) => 15,
         Msg::SheetBands(..) => 15,
         Msg::SheetCell(..) => 15,
@@ -8732,6 +8735,10 @@ fn apply_15(state: &mut AppState, msg: Msg, rest: &mut Option<Msg>) -> Vec<Effec
             let percent =
                 if up { (z / UI_ZOOM_STEP + 1) * UI_ZOOM_STEP } else { (z - 1) / UI_ZOOM_STEP * UI_ZOOM_STEP };
             update(state, Msg::UiZoom { percent, save: true })
+        }
+        Msg::UiTheme(theme) => {
+            state.config.theme = theme;
+            save_config(state)
         }
         Msg::SheetZoom { size, save } => {
             state.config.sheet_cell = size.clamp(SHEET_CELL_MIN, SHEET_CELL_MAX);

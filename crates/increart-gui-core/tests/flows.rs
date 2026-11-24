@@ -5991,6 +5991,18 @@ fn project_folders_collapse_and_are_remembered() {
 }
 
 #[test]
+fn interface_theme_is_kept_in_the_config() {
+    use increart_core::config::Theme;
+    let mut h = Harness::new();
+    // dark unless asked, whatever the system is set to
+    assert_eq!(h.state.config.theme, Theme::Dark);
+    h.send(Msg::UiTheme(Theme::Light));
+    assert_eq!(h.state.config.theme, Theme::Light);
+    h.send(Msg::UiTheme(Theme::System));
+    assert_eq!(h.state.config.theme, Theme::System);
+}
+
+#[test]
 fn interface_zoom_steps_and_stays_in_range() {
     let mut h = Harness::new();
     assert_eq!(h.state.ui_zoom(), 100);
