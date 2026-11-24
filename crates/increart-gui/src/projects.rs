@@ -3754,7 +3754,11 @@ fn run_line(ui: &mut egui::Ui, st: &AppState, r: &increart_gui_core::RunProgress
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 stop_buttons(ui, &r.run, finishing, r.sampling.len(), true, out);
                 // its time left, without the clock: the line is short
-                if let Some(s) = st.run_starts_in(&r.run) {
+                if let Some(stuck) = st.run_stuck(&r.run) {
+                    let text = RichText::new(ic(ph::WARNING, &format!("waits: no server can load {}", stuck.recipe)));
+                    ui.add(egui::Label::new(text.color(crate::widgets::NEUTRAL).small()).truncate())
+                        .on_hover_text(stuck.why.join("\n"));
+                } else if let Some(s) = st.run_starts_in(&r.run) {
                     let text = format!("starts in ~{}", increart_gui_core::timing::duration(s));
                     ui.weak(RichText::new(text).small());
                 } else if let Some(s) = st.run_left(&r.run).or(r.eta_s()).filter(|s| *s > 0.0) {
@@ -4461,13 +4465,21 @@ pub fn job_window(ctx: &egui::Context, st: &AppState, tex: &mut Textures, out: &
                 .filter_map(|(i, _)| st.servers.get(*i).map(|s| s.name.as_str()))
                 .collect();
             let sampling = st.progress.keys().any(|(r, _)| r == id);
+            let stuck = st.run_stuck(id);
             let state = match (active, on.is_empty()) {
                 (false, _) => "not queued".to_string(),
                 (true, true) if sampling => "generating".to_string(),
+                (true, true) if let Some(s) = stuck => format!("waiting: no server can load {}", s.recipe),
                 (true, true) => "waiting for a server (see the log)".to_string(),
                 (true, false) => format!("generating on {}", on.join(", ")),
             };
             ui.add(egui::ProgressBar::new(j.fraction()).text(format!("{} / {} seeds · {state}", j.done, j.total)));
+            if let Some(s) = stuck {
+                // each server's reason, one a line
+                for why in &s.why {
+                    ui.colored_label(crate::widgets::NEUTRAL, ic(ph::WARNING, why));
+                }
+            }
             sampling_bars(ui, st, tex, j, None, out);
             sent_lines(ui, j);
         }

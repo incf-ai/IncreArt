@@ -4910,11 +4910,28 @@ fn gpu_idle_alert_repeats_while_it_lasts() {
     assert_eq!(at(&mut s, 44.0), 0);
     assert_eq!(at(&mut s, 45.0), 1);
     assert_eq!(s.alerts.idle_text.as_deref(), Some("All GPUs idle for 5 min"));
+    // idle because its runs wait for a model no server loads: it says so
+    update(
+        &mut s,
+        Msg::Engine(increart_core::engine::Event::Stuck(vec![increart_core::engine::Stuck {
+            recipe: "minimax-h3-image".into(),
+            runs: vec![],
+            why: vec!["a: it doesn't have x.safetensors".into()],
+        }])),
+    );
+    assert_eq!(at(&mut s, 45.02), 0, "said, not sounded again");
+    assert_eq!(
+        s.alerts.idle_text.as_deref(),
+        Some("All GPUs idle for 5 min, but runs wait: no server can load minimax-h3-image (click the run for why)")
+    );
+    update(&mut s, Msg::Engine(increart_core::engine::Event::Stuck(vec![])));
+    at(&mut s, 45.04);
+    assert_eq!(s.alerts.idle_text.as_deref(), Some("All GPUs idle for 5 min"));
 
     // snoozed: held back, then played when the snooze ends
     update(&mut s, Msg::Snooze(Some(30.0 * 60.0)));
     assert_eq!(at(&mut s, 60.0), 0);
-    assert_eq!(at(&mut s, 75.0), 1);
+    assert_eq!(at(&mut s, 76.0), 1);
     update(&mut s, Msg::Snooze(None));
     assert_eq!(at(&mut s, 200.0), 0, "muted until restart");
     update(&mut s, Msg::Unsnooze);

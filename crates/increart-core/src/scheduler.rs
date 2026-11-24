@@ -323,6 +323,11 @@ impl Scheduler {
         out
     }
 
+    /// The runs of `model` with seeds still to dispatch.
+    pub fn waiting_runs(&self, model: &ModelKey) -> Vec<Id> {
+        self.runs.iter().filter(|r| &r.model == model && !r.pending.is_empty()).map(|r| r.id.clone()).collect()
+    }
+
     pub fn is_idle(&self) -> bool {
         self.runs.is_empty()
     }

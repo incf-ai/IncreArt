@@ -4869,6 +4869,9 @@ pub struct AppState {
     pub job_log: Vec<String>,
     /// The runs each server (by index) has a job of now.
     pub server_jobs: HashMap<usize, Vec<Id>>,
+    /// The queued models no server can load, with their runs and why (the
+    /// engine's latest word; empty when it starts).
+    pub stuck: Vec<increart_core::engine::Stuck>,
     /// The Settings window.
     pub settings_open: bool,
     pub settings_tab: SettingsTab,
@@ -5656,6 +5659,7 @@ impl AppState {
             job_info: None,
             job_log: vec![],
             server_jobs: HashMap::new(),
+            stuck: vec![],
             settings_open: false,
             settings_tab: SettingsTab::Notifications,
             store: None,
@@ -7894,6 +7898,11 @@ impl AppState {
         format!("{:?}", self.config.job_order).hash(&mut h);
         self.config.job_random.hash(&mut h);
         h.finish()
+    }
+
+    /// Why a run waits, when no server can load its model.
+    pub fn run_stuck(&self, run: &Id) -> Option<&increart_core::engine::Stuck> {
+        self.stuck.iter().find(|s| s.runs.contains(run))
     }
 
     /// Seconds until a run in the engine is done, by the forecast.

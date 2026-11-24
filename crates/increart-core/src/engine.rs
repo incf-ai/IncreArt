@@ -137,9 +137,22 @@ pub enum Event {
     Log { run: Id, line: String },
     /// A server loaded a model (asked to), in `took_s` seconds.
     ModelLoaded { server: ServerIdx, recipe: String, took_s: f32 },
+    /// The queued models no server can load, with their runs and why (each
+    /// server's reason); sent when that changes, empty once none are.
+    Stuck(Vec<Stuck>),
     /// What a server's warm-up is doing (`run`: the run it was made from;
     /// none: the small one); `phase` None: it's over.
     WarmUp { server: ServerIdx, phase: Option<WarmUpPhase>, run: Option<Id> },
+}
+
+/// A queued model no server can load: its runs wait.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Stuck {
+    pub recipe: String,
+    /// Its runs with seeds still to make.
+    pub runs: Vec<Id>,
+    /// Each server's reason ("sd-rocm0: it doesn't have x.safetensors").
+    pub why: Vec<String>,
 }
 
 /// How far a warm-up job is, as its server says.
@@ -331,6 +344,7 @@ impl Engine {
             generating: HashSet::new(),
             submitted: HashSet::new(),
             told_stuck: HashSet::new(),
+            shown_stuck: vec![],
             logs: HashMap::new(),
             load_started: vec![],
             load_warming: vec![],
@@ -452,6 +466,8 @@ struct Coordinator {
     submitted: HashSet<Ticket>,
     /// Models said to be loadable nowhere (said once until that changes).
     told_stuck: HashSet<ModelKey>,
+    /// The stuck models last sent ([`Event::Stuck`]).
+    shown_stuck: Vec<Stuck>,
     /// Queued runs' generation logs.
     logs: HashMap<Id, PathBuf>,
     /// When each server's latest load was asked for.
@@ -674,16 +690,22 @@ impl Coordinator {
         let stuck: Vec<ModelKey> =
             self.sched.stuck_models().into_iter().filter(|m| !self.sched.gave_up(m)).cloned().collect();
         self.told_stuck.retain(|m| stuck.contains(m));
+        let mut shown = vec![];
         for m in stuck {
-            if !self.told_stuck.insert(m.clone()) {
-                continue;
-            }
             let why: Vec<String> = (0..self.servers.len())
                 .filter_map(|i| self.sched.why_not(i, &m).map(|w| format!("{}: {w}", self.servers[i].name)))
                 .collect();
             let text = format!("no server can load {}, so its runs wait ({})", m.recipe, why.join("; "));
+            shown.push(Stuck { recipe: m.recipe.clone(), runs: self.sched.waiting_runs(&m), why });
+            if !self.told_stuck.insert(m.clone()) {
+                continue;
+            }
             self.log_model(&m, None, &text);
             self.emit(Event::Problem(text));
+        }
+        if shown != self.shown_stuck {
+            self.shown_stuck = shown.clone();
+            self.emit(Event::Stuck(shown));
         }
     }
 

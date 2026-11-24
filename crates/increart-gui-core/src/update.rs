@@ -4508,6 +4508,7 @@ fn apply_2(state: &mut AppState, msg: Msg, rest: &mut Option<Msg>) -> Vec<Effect
                 state.phase = Phase::Main;
                 state.engine_running = true;
                 state.servers.iter_mut().for_each(|s| (s.idle_since, s.worked) = (None, false));
+                state.stuck.clear();
                 return vec![Effect::StartEngine {
                     shared: state.config.programs.sd_server.clone(),
                     preview: state.config.preview,
@@ -4556,6 +4557,7 @@ fn apply_2(state: &mut AppState, msg: Msg, rest: &mut Option<Msg>) -> Vec<Effect
             state.phase = Phase::Main;
             state.engine_running = true;
             state.servers.iter_mut().for_each(|s| (s.idle_since, s.worked) = (None, false));
+            state.stuck.clear();
             vec![Effect::StartEngine {
                 shared: state.config.programs.sd_server.clone(),
                 preview: state.config.preview,
@@ -12046,6 +12048,7 @@ fn start_with_up(state: &mut AppState, progress: &[ServerProgress]) -> Vec<Effec
     }
     state.engine_running = true;
     state.servers.iter_mut().for_each(|s| (s.idle_since, s.worked) = (None, false));
+    state.stuck.clear();
     vec![Effect::StartEngine {
         shared: state.config.programs.sd_server.clone(),
         preview: state.config.preview,
@@ -13081,6 +13084,10 @@ fn engine_event(state: &mut AppState, e: Event) -> Vec<Effect> {
                 _ => vec![],
             }
         }
+        Event::Stuck(stuck) => {
+            state.stuck = stuck;
+            vec![]
+        }
         Event::Log { run, line } => {
             if state.job_info.as_ref() == Some(&run) {
                 state.job_log.push(line);
@@ -13117,9 +13124,11 @@ fn check_alerts(state: &mut AppState) -> Vec<Effect> {
     let holds = state.engine_running
         && !state.servers.is_empty()
         && if n.all_gpus { idle.len() == state.servers.len() } else { !idle.is_empty() };
+    // idle with runs queued that no server can load: said, not just idle
+    let stuck = stuck_text(state);
     let text = holds.then(|| {
         let mins = |d: f64| (d / 60.0).floor() as u64;
-        if n.all_gpus {
+        let idle_text = if n.all_gpus {
             let least = idle.iter().map(|(_, d)| *d).fold(f64::INFINITY, f64::min);
             format!("All GPUs idle for {} min", mins(least))
         } else {
@@ -13127,6 +13136,10 @@ fn check_alerts(state: &mut AppState) -> Vec<Effect> {
             let s = &state.servers[i];
             let name = if s.device.is_empty() { &s.name } else { &s.device };
             format!("{name} idle for {} min", mins(d))
+        };
+        match &stuck {
+            Some(t) => format!("{idle_text}, but runs wait: {t}"),
+            None => idle_text,
         }
     });
     fx.extend(alert(state, true, n.gpu_idle.on.then_some(text).flatten()));
@@ -13194,6 +13207,17 @@ fn alert(state: &mut AppState, idle: bool, text: Option<String>) -> Vec<Effect> 
     }
     *played = Some(state.now);
     ring(state, rule.sound, text)
+}
+
+/// "no server can load minimax-h3-image (see the run's log)": runs queued
+/// that wait for a model no server loads; None when there are none.
+pub fn stuck_text(state: &AppState) -> Option<String> {
+    let recipes: Vec<&str> = state.stuck.iter().map(|s| s.recipe.as_str()).collect();
+    match recipes.as_slice() {
+        [] => None,
+        [one] => Some(format!("no server can load {one} (click the run for why)")),
+        many => Some(format!("no server can load {} (click a run for why)", many.join(", "))),
+    }
 }
 
 /// Sound an alert now, with the taskbar flash and message if so set.

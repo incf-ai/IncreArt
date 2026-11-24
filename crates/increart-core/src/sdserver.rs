@@ -230,6 +230,21 @@ impl Loadable {
         }
     }
 
+    /// sd-server's `model-files` errors (file → message) as files it has
+    /// but won't load, each with why: not one another of its folders lists
+    /// at that path (that one it loads).
+    pub fn with_errors(mut self, errors: FileErrors) -> Loadable {
+        if let Loadable::Files { ids, refused, .. } = &mut self {
+            for (file, message) in errors {
+                let id = portable_id(&file).to_string();
+                if !id.is_empty() && !ids.contains(&id) {
+                    refused.entry(id).or_insert_with(|| refusal(&message));
+                }
+            }
+        }
+        self
+    }
+
     /// Its ID for a file IncreArt names `id`: `id` when it lists it, else
     /// (by name) the one file it lists of the same name; None when it has
     /// none (or, by name, several).
@@ -575,11 +590,27 @@ impl Client {
     }
 
     pub fn model_files(&self) -> ApiResult<Vec<ModelFileEntry>> {
+        Ok(self.model_files_and_errors()?.0)
+    }
+
+    /// Its model files, and those in its folders it won't list (file → its
+    /// message: a link out of its model folders, one to nothing).
+    pub fn model_files_and_errors(&self) -> ApiResult<(Vec<ModelFileEntry>, FileErrors)> {
         #[derive(Deserialize)]
         struct Files {
             files: Vec<ModelFileEntry>,
+            #[serde(default)]
+            errors: Vec<FileError>,
         }
-        Ok(self.get::<Files>("model-files")?.files)
+        #[derive(Deserialize)]
+        struct FileError {
+            #[serde(default)]
+            file: String,
+            #[serde(default)]
+            message: String,
+        }
+        let f = self.get::<Files>("model-files")?;
+        Ok((f.files, f.errors.into_iter().map(|e| (e.file, e.message)).collect()))
     }
 
     /// Whether it runs on this machine (its loads share this RAM).
@@ -601,7 +632,8 @@ impl Client {
         if let Some(k) = &self.kobold {
             return k.loadable();
         }
-        Ok(Loadable::listed(self.model_files()?.into_iter().map(|f| portable_id(&f.id).to_string())))
+        let (files, errors) = self.model_files_and_errors()?;
+        Ok(Loadable::listed(files.into_iter().map(|f| portable_id(&f.id).to_string())).with_errors(errors))
     }
 
     pub fn refresh_models(&self) -> ApiResult<Value> {
@@ -734,6 +766,24 @@ pub fn portable_id(id: &str) -> &str {
     }
 }
 
+/// sd-server's `model-files` errors: (file, message).
+pub type FileErrors = Vec<(String, String)>;
+
+/// Why sd-server won't load a file, from its `model-files` error: what's
+/// after the file's name in a notice ("x.safetensors is a link …").
+fn refusal(message: &str) -> String {
+    let low = message.to_ascii_lowercase();
+    if low.contains("escapes") {
+        "is a link to a file outside sd-server's model folders, which it won't load: add the folder the file is \
+         in as a model folder (Manage models… → Folders), or move the file into one"
+            .into()
+    } else if low.contains("no such file") {
+        "is a link to a file that isn't there".into()
+    } else {
+        format!("is refused by sd-server ({message})")
+    }
+}
+
 /// sd-server's name for a file IncreArt names `id`, among those it lists:
 /// `id` itself when its first folder has it, else another folder's file at
 /// that path, else the one file it lists of that file name (a proxy, or
@@ -773,6 +823,28 @@ fn portable_status(mut s: ModelStatus) -> ModelStatus {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn files_sd_server_refuses_say_why() {
+        let files = |m: &[(&str, &str)]| m.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
+        let asked: BTreeMap<String, String> =
+            files(&[("diffusion_model", "diffusion_models/h3.safetensors"), ("vae", "vae/v.safetensors")]);
+        // a link out of its model folders, as sd-server's model-files says
+        let escapes = |f: &str| (format!("@47bd5b897693bd24/{f}"), "path escapes model directory".to_string());
+        let l = Loadable::listed(["vae/v.safetensors".to_string()])
+            .with_errors(vec![escapes("diffusion_models/h3.safetensors")]);
+        let why = l.why_not(&asked).unwrap();
+        assert!(why.starts_with("h3.safetensors is a link to a file outside sd-server's model folders"), "{why}");
+        assert!(why.contains("Manage models… → Folders"), "{why}");
+        // a link to nothing
+        let gone = ("@47bd5b897693bd24/vae/v.safetensors".to_string(), "No such file or directory".to_string());
+        let l = Loadable::listed(["diffusion_models/h3.safetensors".to_string()]).with_errors(vec![gone]);
+        assert_eq!(l.why_not(&asked).as_deref(), Some("v.safetensors is a link to a file that isn't there"));
+        // another of its folders lists the file at that path: that one loads
+        let l = Loadable::listed(["diffusion_models/h3.safetensors".to_string(), "vae/v.safetensors".to_string()])
+            .with_errors(vec![escapes("diffusion_models/h3.safetensors")]);
+        assert!(l.runs(&asked));
+    }
 
     #[test]
     fn a_file_listed_under_another_folder_is_found_by_its_name() {
