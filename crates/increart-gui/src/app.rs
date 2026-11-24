@@ -1641,6 +1641,7 @@ impl eframe::App for App {
             crate::home::start_project_window(&ctx, &self.st, &mut out);
             crate::projects::from_ideas_window(&ctx, &self.st, &mut out);
             crate::ideas::save_window(&ctx, &self.st, &mut out);
+            crate::ideas::add_refs_window(&ctx, &self.st, &mut out);
             crate::ideas::collect_window(&ctx, &self.st, &mut out);
             crate::projects::sweep_order_window(&ctx, &self.st, &mut out);
             crate::presets::lora_window(&ctx, &self.st, &mut out);

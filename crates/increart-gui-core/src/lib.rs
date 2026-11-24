@@ -13,7 +13,8 @@ pub mod watch;
 pub use runtime::Runtime;
 pub use state::*;
 pub use update::{
-    AddIdea, BLANK_RETRIES, DraftSave, Effect, LibOp, Msg, OpOk, PasteTo, PeUse, Queued, Restore, SelectHow,
-    TileTarget, estimate_of, from_ideas_folder, from_ideas_problem, kobold_binary, move_project_problem,
-    new_project_problem, project_folder, save_idea_folder, save_idea_problem, suggest_message, update,
+    AddIdea, BLANK_RETRIES, DraftSave, Effect, LibOp, Msg, OpOk, PasteTo, PeUse, Queued, Restore, SaveRefs, SelectHow,
+    TileTarget, add_refs_problem, estimate_of, folder_in, from_ideas_folder, from_ideas_problem, kobold_binary,
+    move_project_problem, new_project_problem, project_folder, save_idea_folder, save_idea_problem, suggest_message,
+    update,
 };

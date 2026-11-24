@@ -3862,7 +3862,7 @@ the keys and mouse buttons go through that view's own history instead.
   (`new project`, numbered if taken; made at the top of `projects/`) and
   whether to add reference images: from the libraries (the default; From
   library… opens on its Generate form once it is made), image files (Add
-  file…'s picker), or not now.
+  file…'s picker, then the Add images dialog below), or not now.
 - **Idea inbox**: tabs **New idea** · **Grid** · **Folder** · **Import** ·
   **Discarded**. (PE rewrites have no tab; see Prompt rewriting.) Files dragged from the desktop onto any Idea
   inbox tab are imported as new ideas (images re-encoded as usual, text files
@@ -4110,8 +4110,20 @@ the keys and mouse buttons go through that view's own history instead.
   images already referenced are marked and can't be chosen; double-click
   for the full-size preview. The footer counts the references after adding
   (red past 9). **Add N reference(s)** or Enter adds them, Esc or Cancel
-  closes, and it reopens on the last source), and image files
-  dropped on the panel (imported as references, not as ideas); the img2img
+  closes, and it reopens on the last source), image files
+  dropped on the panel, and images pasted (**Paste**, or Ctrl+V on the
+  Generate form with no dialog open: images or copied image files). Images
+  from outside the libraries (picked, dropped or pasted) first open **Add
+  the N images to <project>**: a name for each (a file's stem; a pasted one
+  starts empty) and a folder of the input library picked as in **Save to
+  input library** (opening on the last one used, a new folder allowed).
+  **Save & add** (Enter) makes each image an image-only idea in that folder
+  (source Dropped file or Clipboard), every one needing a name (an image
+  that's already an input library idea of its own isn't made a second one:
+  that idea is put in the folder too); **Only add
+  to the project** imports them into the input store as references alone,
+  in no idea; Cancel or Esc adds nothing. Either way they become
+  references; the img2img
   start image with strength (see Output → input).
 - **Status bar jobs indicator** (bottom right): an overall progress bar and
   "N run(s) · done / total seeds" (or "no jobs · N server(s) ready"). Click

@@ -27,7 +27,7 @@ use increart_core::sync::LockExt;
 use increart_core::{Id, IdeaLoc, ImageRef, Library, NewIdea, NewRun, Tree, Verdict, modelhash};
 
 use crate::state::{EntryKind, EstimateOf, FvEntry, GenerateForm, PickKind, ReviewUndo};
-use crate::update::{DraftSave, Effect, LibOp, Msg, OpOk, PasteTo, PeJob, TileTarget};
+use crate::update::{DraftSave, Effect, LibOp, Msg, OpOk, PasteTo, PeJob, SaveRefs, TileTarget};
 
 /// The library and the image servers with the engine using them.
 #[derive(Default)]
@@ -2311,12 +2311,13 @@ pub fn lib_op(lib: &mut Library, op: LibOp) -> Result<OpOk, String> {
                     import_files(lib, files)?;
                     Ok(OpOk::PastedIdeas(n))
                 }
-                PasteTo::Draft | PasteTo::Edit(_) => {
+                PasteTo::Draft | PasteTo::Edit(_) | PasteTo::Generate => {
                     for p in &files {
                         ids.push(lib.import_file(p).map_err(err)?.image);
                     }
                     Ok(match to {
                         PasteTo::Edit(idea) => OpOk::ImportedForEdit(idea, ids),
+                        PasteTo::Generate => OpOk::ImportedRefs(ids),
                         _ => OpOk::Imported(ids),
                     })
                 }
@@ -2326,9 +2327,38 @@ pub fn lib_op(lib: &mut Library, op: LibOp) -> Result<OpOk, String> {
             let ids = paths.iter().map(|p| lib.import_file(p).map(|i| i.image)).collect::<Result<Vec<_>, _>>();
             ids.map(OpOk::Imported).map_err(err)
         }
-        LibOp::ImportRefs(paths) => {
-            let ids = paths.iter().map(|p| lib.import_file(p).map(|i| i.image)).collect::<Result<Vec<_>, _>>();
-            ids.map(OpOk::ImportedRefs).map_err(err)
+        LibOp::ImportRefs { files, pasted, save } => {
+            let mut ids = vec![];
+            let mut sources = vec![];
+            for p in &files {
+                ids.push(lib.import_file(p).map_err(err)?.image);
+                sources.push(IdeaSource::DroppedFile { original_path: p.to_string_lossy().into() });
+            }
+            for img in pasted {
+                let mut png = std::io::Cursor::new(vec![]);
+                img.0.write_to(&mut png, image::ImageFormat::Png).map_err(|e| e.to_string())?;
+                ids.push(lib.import_bytes(png.get_ref(), &Default::default()).map_err(err)?.image);
+                sources.push(IdeaSource::Clipboard);
+            }
+            if let Some(SaveRefs { names, folder, known }) = save {
+                for ((id, source), title) in ids.iter().zip(sources).zip(names) {
+                    if let Some((_, idea)) = known.iter().find(|(image, _)| image == id) {
+                        lib.make_input_collection(&folder).map_err(err)?;
+                        lib.link_idea(idea, &folder).map_err(err)?;
+                        continue;
+                    }
+                    let idea = NewIdea {
+                        title,
+                        source,
+                        images: vec![id.clone()],
+                        loc: IdeaLoc::Library,
+                        collection: folder.clone(),
+                        ..NewIdea::text("", "")
+                    };
+                    lib.new_idea(idea).map_err(err)?;
+                }
+            }
+            Ok(OpOk::ImportedRefs(ids))
         }
         LibOp::ReviewIdea(id, v) => lib.review_idea(&id, v).map(|_| OpOk::Done).map_err(err),
         LibOp::SaveToLibrary(id, title, folder) => {

@@ -522,6 +522,13 @@ fn images_pane(
             out.push(Msg::RefPicker(true));
         }
         if ui
+            .button(ic(ph::CLIPBOARD, "Paste"))
+            .on_hover_text("the clipboard's image, or the image files it names   Ctrl+V")
+            .clicked()
+        {
+            crate::ideas::paste_clipboard(increart_gui_core::PasteTo::Generate, out);
+        }
+        if ui
             .add_enabled(!f.images.is_empty(), egui::Button::new(ic(ph::SQUARES_FOUR, "Tile…")))
             .on_hover_text("all these images (parked ones too), tiled in this order")
             .on_disabled_hover_text("no images in Generate")
@@ -530,7 +537,7 @@ fn images_pane(
             out.push(Msg::TileGenerateImages);
         }
     });
-    ui.weak("or drop image files here");
+    ui.weak("or drop image files here, or paste them (Ctrl+V)");
     // what the prompt names vs what's there
     let tags: std::collections::BTreeSet<usize> =
         increart_gui_core::image_tags(&f.prompt).into_iter().map(|(_, n)| n).collect();
@@ -2659,6 +2666,10 @@ fn generate(ui: &mut egui::Ui, st: &AppState, tex: &mut Textures, out: &mut Vec<
     let (hovering, dropped) = ui.ctx().input(|i| (!i.raw.hovered_files.is_empty(), i.raw.dropped_files.clone()));
     if !dropped.is_empty() {
         out.push(Msg::DropRefs(dropped.iter().map(|f| f.path().to_path_buf()).collect()));
+    }
+    // Ctrl+V: the clipboard's images too, when no window is over Generate
+    if ui.ctx().memory(|m| m.top_modal_layer().is_none()) {
+        crate::ideas::paste_keys(ui.ctx(), increart_gui_core::PasteTo::Generate, out);
     }
     if hovering {
         let painter =

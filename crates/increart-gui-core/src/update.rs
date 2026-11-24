@@ -4,7 +4,7 @@
 
 use increart_core::vfs::PathExt;
 use std::collections::HashSet;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use increart_core::config::{Config, MODEL_SLOTS, RecipePreset, SdServerConfig, ServerConfig, ServerPreset};
@@ -691,8 +691,18 @@ pub enum Msg {
     Pick(PickKind),
     Picked(PickKind, Vec<PathBuf>),
     RemoveDraftImage(usize),
-    /// Files dropped on the Generate panel: imported as references.
+    /// Files picked or dropped for the Generate form's references: asks
+    /// whether to save them to the input library first (`AddRefsDialog`).
     DropRefs(Vec<PathBuf>),
+    /// The Add images dialog: an image's idea name (by its place).
+    AddRefsName(usize, String),
+    AddRefsFolder(PathBuf),
+    AddRefsNewFolder(Option<String>),
+    AddRefsFilter(String),
+    /// Imports the dialog's images as references: saved to the input
+    /// library first (`true`), or only added to the project.
+    ConfirmAddRefs(bool),
+    CancelAddRefs,
     SetSdServer(SdServerConfig),
     /// The model directories, searched in order by every server.
     SetModelDirs(Vec<String>),
@@ -1199,6 +1209,9 @@ pub enum PasteTo {
     Draft,
     /// The images of the idea open in Edit idea.
     Edit(Id),
+    /// The project's Generate form references (asks whether to save them
+    /// to the input library first).
+    Generate,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -1497,6 +1510,18 @@ pub enum DraftSave {
     ClearIdea,
 }
 
+/// [`LibOp::ImportRefs`] saving its images to the input library.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SaveRefs {
+    /// Each image's idea title, files' then pasted ones'.
+    pub names: Vec<String>,
+    /// The input collection they go in.
+    pub folder: PathBuf,
+    /// Input library ideas holding only one image, by that image: an
+    /// image among these goes in `folder` as that idea, not as a new one.
+    pub known: Vec<(Id, Id)>,
+}
+
 /// Library changes, carried out in order by the runtime.
 #[derive(Clone, Debug, PartialEq)]
 pub enum LibOp {
@@ -1515,8 +1540,15 @@ pub enum LibOp {
         files: Vec<PathBuf>,
         to: PasteTo,
     },
-    /// Import images into the input store as Generate references.
-    ImportRefs(Vec<PathBuf>),
+    /// Import images into the input store as Generate references, files and
+    /// pasted image data; with `save`, each also an image-only idea in the
+    /// input library, named (files', then pasted ones') and in this input
+    /// collection.
+    ImportRefs {
+        files: Vec<PathBuf>,
+        pasted: Vec<TileImage>,
+        save: Option<SaveRefs>,
+    },
     ReviewIdea(Id, Verdict),
     /// An inbox idea to the input library: retitled (when given), into this
     /// folder (made if missing).
@@ -3308,6 +3340,12 @@ fn part_of(msg: &Msg) -> usize {
         Msg::Picked(..) => 16,
         Msg::RemoveDraftImage(..) => 17,
         Msg::DropRefs(..) => 17,
+        Msg::AddRefsName(..) => 17,
+        Msg::AddRefsFolder(..) => 17,
+        Msg::AddRefsNewFolder(..) => 17,
+        Msg::AddRefsFilter(..) => 17,
+        Msg::ConfirmAddRefs(..) => 17,
+        Msg::CancelAddRefs => 17,
         Msg::SetSdServer(..) => 17,
         Msg::SetModelDirs(..) => 17,
         Msg::SetKoboldBinary(..) => 17,
@@ -5121,6 +5159,12 @@ fn apply_4(state: &mut AppState, msg: Msg, rest: &mut Option<Msg>) -> Vec<Effect
         }
         Msg::PasteImages { images, files, to } => {
             if state.library.is_none() || (images.is_empty() && files.is_empty()) {
+                return vec![];
+            }
+            if to == PasteTo::Generate {
+                if state.project.is_some() {
+                    state.add_refs = Some(AddRefsDialog::new(state, files, images));
+                }
                 return vec![];
             }
             lib(state, LibOp::ImportPasted { images, files, to })
@@ -9464,10 +9508,70 @@ fn apply_16(state: &mut AppState, msg: Msg, rest: &mut Option<Msg>) -> Vec<Effec
 fn apply_17(state: &mut AppState, msg: Msg, rest: &mut Option<Msg>) -> Vec<Effect> {
     match msg {
         Msg::DropRefs(paths) => {
-            if paths.is_empty() || state.project.is_none() {
+            if paths.is_empty() || state.project.is_none() || state.library.is_none() {
                 return vec![];
             }
-            lib(state, LibOp::ImportRefs(paths))
+            state.add_refs = Some(AddRefsDialog::new(state, paths, vec![]));
+            vec![]
+        }
+        Msg::AddRefsName(i, name) => {
+            if let Some(n) = state.add_refs.as_mut().and_then(|d| d.names.get_mut(i)) {
+                *n = name;
+            }
+            vec![]
+        }
+        Msg::AddRefsFolder(f) => {
+            if let Some(d) = &mut state.add_refs {
+                d.folder = f;
+            }
+            vec![]
+        }
+        Msg::AddRefsNewFolder(f) => {
+            if let Some(d) = &mut state.add_refs {
+                d.new_folder = f;
+            }
+            vec![]
+        }
+        Msg::AddRefsFilter(f) => {
+            if let Some(d) = &mut state.add_refs {
+                d.filter = f;
+            }
+            vec![]
+        }
+        Msg::ConfirmAddRefs(save) => {
+            let Some(d) = state.add_refs.take() else { return vec![] };
+            if state.project.is_none() {
+                return vec![];
+            }
+            let save = if save {
+                if let Some(e) = add_refs_problem(&d) {
+                    state.messages_error(e);
+                    state.add_refs = Some(d);
+                    return vec![];
+                }
+                let (folder, _) = folder_in(state, &d.folder, d.new_folder.as_deref());
+                state.save_idea_last = Some(folder.clone());
+                // an image already an input library idea of its own isn't
+                // made one again
+                let known = state
+                    .index
+                    .ideas
+                    .iter()
+                    .filter(|e| e.loc == IdeaLoc::Library)
+                    .filter_map(|e| match e.idea.images.as_slice() {
+                        [image] => Some((image.clone(), e.idea.id.clone())),
+                        _ => None,
+                    })
+                    .collect();
+                Some(SaveRefs { names: d.names.iter().map(|n| n.trim().to_string()).collect(), folder, known })
+            } else {
+                None
+            };
+            lib(state, LibOp::ImportRefs { files: d.files, pasted: d.pasted, save })
+        }
+        Msg::CancelAddRefs => {
+            state.add_refs = None;
+            vec![]
         }
         Msg::RemoveDraftImage(i) => {
             if i < state.draft.images.len() {
@@ -10092,14 +10196,30 @@ pub fn save_idea_problem(d: &SaveIdeaDialog) -> Option<String> {
     increart_core::library::validate_name(folder).err().map(|e| format!("new folder: {e}"))
 }
 
+/// Why the Add images dialog can't save the images to the input library:
+/// one without a name, or a bad new folder name.
+pub fn add_refs_problem(d: &AddRefsDialog) -> Option<String> {
+    if d.names.iter().any(|n| n.trim().is_empty()) {
+        return Some(if d.names.len() == 1 { "the image needs a name" } else { "every image needs a name" }.into());
+    }
+    let folder = d.new_folder.as_deref().map(str::trim)?;
+    increart_core::library::validate_name(folder).err().map(|e| format!("new folder: {e}"))
+}
+
 /// Where Save to input library puts the ideas: the dialog's folder, or its
 /// new folder in it (an existing one of that name, any case, is used); and
 /// whether that folder exists.
 pub fn save_idea_folder(state: &AppState, d: &SaveIdeaDialog) -> (PathBuf, bool) {
-    let Some(new) = &d.new_folder else {
-        return (d.folder.clone(), true);
+    folder_in(state, &d.folder, d.new_folder.as_deref())
+}
+
+/// The input collection `folder`, or `new` in it (an existing one of that
+/// name, any case, is used); and whether that exists.
+pub fn folder_in(state: &AppState, folder: &Path, new: Option<&str>) -> (PathBuf, bool) {
+    let Some(new) = new else {
+        return (folder.to_path_buf(), true);
     };
-    let at = d.folder.join(new.trim());
+    let at = folder.join(new.trim());
     let same = |f: &&PathBuf| f.to_string_lossy().to_lowercase() == at.to_string_lossy().to_lowercase();
     match state.index.input_collection_folders.iter().find(same) {
         Some(f) => (f.clone(), true),

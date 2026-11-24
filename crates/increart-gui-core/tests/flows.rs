@@ -3141,10 +3141,13 @@ fn form_from_latest_run_and_refs_from_files() {
     let png = h._tmp.path().join("ref.png");
     image::RgbImage::from_pixel(32, 32, image::Rgb([9, 9, 9])).save(&png).unwrap();
     h.send(Msg::Picked(PickKind::GenerateRefs, vec![png.clone()]));
+    assert!(h.state.add_refs.is_some(), "asks whether to save it first");
+    h.send(Msg::ConfirmAddRefs(false));
     h.settle();
     assert_eq!(h.state.generate.refs().len(), 1);
     assert_eq!(h.state.generate.refs()[0].store, increart_core::Store::Input);
     h.send(Msg::DropRefs(vec![png]));
+    h.send(Msg::ConfirmAddRefs(false));
     h.settle();
     assert_eq!(h.state.generate.refs().len(), 1, "same pixels: same image, not added twice");
 
@@ -9872,4 +9875,75 @@ fn a_new_ephemeral_library_and_its_ram_budget() {
     h.send(Msg::FreeDiscarded);
     h.settle();
     assert!(!h.state.ephemeral.as_ref().unwrap().halted, "{:?}", h.errors());
+}
+
+#[test]
+fn images_from_outside_are_saved_to_the_input_library_or_only_added() {
+    use increart_gui_core::PasteTo;
+    use increart_gui_core::tile::TileImage;
+    let mut h = Harness::new();
+    // none without a project
+    let png = h._tmp.path().join("red fox.png");
+    image::RgbImage::from_pixel(32, 32, image::Rgb([200, 60, 10])).save(&png).unwrap();
+    h.send(Msg::DropRefs(vec![png.clone()]));
+    assert!(h.state.add_refs.is_none());
+    h.send(Msg::NewProject(PathBuf::new()));
+    h.send(Msg::CommitRename);
+    h.settle();
+    let library = |h: &Harness| h.state.index.ideas.iter().filter(|e| e.loc == IdeaLoc::Library).count();
+
+    // only added: a reference, and the library lists nothing
+    h.send(Msg::DropRefs(vec![png.clone()]));
+    assert_eq!(h.state.add_refs.as_ref().unwrap().names, ["red fox"], "named as the file");
+    h.send(Msg::ConfirmAddRefs(false));
+    h.settle();
+    assert_eq!((h.state.generate.refs().len(), library(&h)), (1, 0));
+    // cancelled: nothing
+    h.send(Msg::DropRefs(vec![png.clone()]));
+    h.send(Msg::CancelAddRefs);
+    h.settle();
+    assert!(h.state.add_refs.is_none());
+    assert_eq!((h.state.generate.refs().len(), library(&h)), (1, 0));
+
+    // pasted, with a file: each needs a name; saved, each an idea in the new collection
+    let px = TileImage(std::sync::Arc::new(image::RgbaImage::from_pixel(16, 16, image::Rgba([1, 2, 3, 255]))));
+    let owl = h._tmp.path().join("owl.png");
+    image::RgbImage::from_pixel(24, 24, image::Rgb([90, 90, 90])).save(&owl).unwrap();
+    h.send(Msg::PasteImages { images: vec![px], files: vec![owl.clone()], to: PasteTo::Generate });
+    let d = h.state.add_refs.as_ref().unwrap();
+    assert_eq!(d.names, ["owl", ""], "files first, pasted ones unnamed");
+    assert!(increart_gui_core::add_refs_problem(d).is_some());
+    h.send(Msg::ConfirmAddRefs(true));
+    assert!(h.state.add_refs.is_some(), "kept open without a name");
+    h.send(Msg::AddRefsName(1, "Blue square".into()));
+    h.send(Msg::AddRefsNewFolder(Some("a/b".into())));
+    assert!(increart_gui_core::add_refs_problem(h.state.add_refs.as_ref().unwrap()).is_some(), "bad folder name");
+    h.send(Msg::AddRefsNewFolder(Some("Refs".into())));
+    h.send(Msg::ConfirmAddRefs(true));
+    h.settle();
+    assert!(h.state.add_refs.is_none());
+    assert_eq!(h.state.generate.refs().len(), 3);
+    for (title, file) in [("owl", true), ("Blue square", false)] {
+        let e = h.state.index.ideas.iter().find(|e| e.idea.title == title).unwrap();
+        assert_eq!(e.loc, IdeaLoc::Library);
+        assert_eq!(e.idea.images.len(), 1);
+        assert!(h.state.generate.refs().iter().any(|r| r.id == e.idea.images[0]), "the same image as the reference");
+        assert_eq!(h.state.index.idea_collections(&e.idea.id), [Path::new("Refs")]);
+        assert_eq!(matches!(e.idea.source, increart_core::model::IdeaSource::DroppedFile { .. }), file);
+    }
+    // the next asks in the folder the last went to
+    h.send(Msg::Picked(PickKind::GenerateRefs, vec![owl]));
+    assert_eq!(h.state.add_refs.as_ref().unwrap().folder, PathBuf::from("Refs"));
+    // an image already an idea of its own: that idea goes in the folder, no second one
+    h.send(Msg::AddRefsName(0, "Owl again".into()));
+    h.send(Msg::AddRefsNewFolder(Some("Birds".into())));
+    h.send(Msg::ConfirmAddRefs(true));
+    h.settle();
+    assert_eq!(library(&h), 2);
+    assert!(h.state.index.ideas.iter().all(|e| e.idea.title != "Owl again"));
+    let owl = h.state.index.ideas.iter().find(|e| e.idea.title == "owl").unwrap();
+    let mut folders = h.state.index.idea_collections(&owl.idea.id);
+    folders.sort();
+    assert_eq!(folders, [Path::new("Refs"), Path::new("Refs/Birds")], "a new folder is made in the one picked");
+    assert_eq!(h.state.generate.refs().len(), 3, "already a reference");
 }

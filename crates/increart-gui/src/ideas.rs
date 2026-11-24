@@ -257,7 +257,7 @@ fn pasted_files(text: &str) -> Vec<PathBuf> {
 /// Ctrl+V this frame: images to `to`. Image data is taken even while a
 /// text field has the keyboard (it has no use for it); file paths in
 /// pasted text only when none has.
-fn paste_keys(ctx: &egui::Context, to: PasteTo, out: &mut Vec<Msg>) {
+pub(crate) fn paste_keys(ctx: &egui::Context, to: PasteTo, out: &mut Vec<Msg>) {
     let typing = ctx.memory(|m| m.focused().is_some());
     let (mut images, mut files) = (vec![], vec![]);
     for e in ctx.input(|i| i.events.clone()) {
@@ -280,7 +280,7 @@ fn paste_keys(ctx: &egui::Context, to: PasteTo, out: &mut Vec<Msg>) {
 
 /// A Paste button's click: the clipboard's image, else the image files its
 /// text names.
-fn paste_clipboard(to: PasteTo, out: &mut Vec<Msg>) {
+pub(crate) fn paste_clipboard(to: PasteTo, out: &mut Vec<Msg>) {
     let mut cb = match arboard::Clipboard::new() {
         Ok(cb) => cb,
         Err(e) => return out.push(Msg::Problem(format!("Clipboard: {e}"))),
@@ -2172,6 +2172,135 @@ pub fn save_window(ctx: &egui::Context, st: &AppState, out: &mut Vec<Msg>) {
     });
     if m.should_close() {
         out.push(Msg::CancelSaveIdea);
+    }
+}
+
+/// Images from outside on their way to the project's Generate form (files
+/// picked or dropped, pasted, Start project's image files): save them to the
+/// input library first (each image an idea: its name on the right, the
+/// collection on the left, as Save to input library), or only add them.
+pub fn add_refs_window(ctx: &egui::Context, st: &AppState, out: &mut Vec<Msg>) {
+    let opening = folder_pick::opening(ctx, "add_refs", st.add_refs.is_some());
+    let Some(d) = &st.add_refs else { return };
+    let n = d.names.len();
+    let project = st.project_entry().map(|p| p.name().to_string()).unwrap_or_default();
+    let m = egui::Modal::new(egui::Id::unique("add_refs")).show(ctx, |ui| {
+        ui.set_width(760.0);
+        let what = if n == 1 { "the image".to_string() } else { format!("the {n} images") };
+        ui.heading(ic(ph::IMAGES, &format!("Add {what} to {project}")));
+        ui.label(format!(
+            "Save {} to the input library first, to use again in other projects?",
+            if n == 1 { "it" } else { "them" }
+        ));
+        ui.add_space(4.0);
+        let mut d = d.clone();
+        let mut field_enter = false;
+        ui.horizontal_top(|ui| {
+            ui.vertical(|ui| {
+                ui.set_width(300.0);
+                let picker = folder_pick::Picker {
+                    id: "add_refs",
+                    folders: &st.index.input_collection_folders,
+                    root: (ph::BOOKS, "input library"),
+                    selected: &d.folder,
+                    filter: &d.filter,
+                    new_folder: d.new_folder.as_deref(),
+                    new_name: "",
+                    noun: "collection",
+                };
+                let picked = folder_pick::show(ui, &picker, 280.0);
+                field_enter |= picked.field_enter;
+                if let Some(f) = picked.filter {
+                    out.push(Msg::AddRefsFilter(f));
+                }
+                if let Some(f) = picked.select {
+                    out.push(Msg::AddRefsFolder(f));
+                }
+                if let Some(f) = picked.new_folder {
+                    out.push(Msg::AddRefsNewFolder(f.clone()));
+                    d.new_folder = f;
+                }
+            });
+            folder_pick::column_line(ui, 340.0);
+            ui.vertical(|ui| {
+                ui.label(RichText::new(if n == 1 { "Name" } else { "Names" }).strong());
+                ScrollArea::vertical().max_height(220.0).id_salt("add_refs_names").show(ui, |ui| {
+                    for (i, old) in d.names.clone().iter().enumerate() {
+                        ui.horizontal(|ui| {
+                            match d.pasted.get(i.wrapping_sub(d.files.len())) {
+                                Some(img) if i >= d.files.len() => {
+                                    let t = crate::tiles::pasted_texture_at(ui.ctx(), img, 96);
+                                    ui.add(egui::Image::new(&t).max_size(egui::vec2(40.0, 40.0)))
+                                        .on_hover_text(format!("pasted, {}×{}", img.0.width(), img.0.height()));
+                                }
+                                _ => {
+                                    let f = &d.files[i];
+                                    ui.label(RichText::new(ph::FILE_IMAGE).size(20.0))
+                                        .on_hover_text(f.display().to_string());
+                                }
+                            }
+                            let mut name = old.clone();
+                            let r = ui.add(
+                                egui::TextEdit::singleline(&mut name)
+                                    .desired_width(f32::INFINITY)
+                                    .hint_text("idea name"),
+                            );
+                            if opening && i == 0 {
+                                r.request_focus();
+                            }
+                            if name != *old {
+                                out.push(Msg::AddRefsName(i, name.clone()));
+                                d.names[i] = name;
+                            }
+                        });
+                    }
+                });
+                ui.add_space(8.0);
+                ui.label(RichText::new("Saved in").strong());
+                let (at, exists) = increart_gui_core::folder_in(st, &d.folder, d.new_folder.as_deref());
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(RichText::new(Path::new("input/library").display().to_string()).monospace());
+                    if !at.as_os_str().is_empty() {
+                        ui.label("in the collection");
+                        ui.label(RichText::new(at.display().to_string()).monospace());
+                    }
+                    if !exists {
+                        ui.weak("(new collection)");
+                    }
+                });
+                if let Some(e) = increart_gui_core::add_refs_problem(&d) {
+                    ui.add_space(4.0);
+                    ui.colored_label(crate::widgets::BAD, e);
+                }
+            });
+        });
+        ui.add_space(4.0);
+        let problem = increart_gui_core::add_refs_problem(&d);
+        let enter = ui.input(|i| i.key_pressed(egui::Key::Enter));
+        crate::widgets::dialog_buttons(ui, |ui| {
+            let save = egui::Button::new(RichText::new(ic(ph::BOOKMARK_SIMPLE, "Save & add   Enter")).strong());
+            if ui
+                .add_enabled(problem.is_none(), save)
+                .on_hover_text("each image an idea in the input library, then a reference in the project")
+                .clicked()
+                || enter && !field_enter && problem.is_none()
+            {
+                out.push(Msg::ConfirmAddRefs(true));
+            }
+            if ui
+                .button(ic(ph::IMAGES, "Only add to the project"))
+                .on_hover_text("references in this project only; the libraries don't list them")
+                .clicked()
+            {
+                out.push(Msg::ConfirmAddRefs(false));
+            }
+            if ui.button("Cancel   Esc").clicked() {
+                out.push(Msg::CancelAddRefs);
+            }
+        });
+    });
+    if m.should_close() {
+        out.push(Msg::CancelAddRefs);
     }
 }
 

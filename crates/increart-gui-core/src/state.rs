@@ -3184,6 +3184,40 @@ impl SaveIdeaDialog {
     }
 }
 
+/// Images from outside the libraries (files picked or dropped on Generate,
+/// pasted there, Start project's image files) on their way to the project's
+/// Generate form: saved to the input library first, each an image-only idea
+/// named and filed as Save to input library does, or only added.
+#[derive(Clone, Debug, PartialEq, Default)]
+pub struct AddRefsDialog {
+    pub files: Vec<PathBuf>,
+    pub pasted: Vec<crate::tile::TileImage>,
+    /// Each image's idea name: the files', then the pasted ones'. A file's
+    /// starts as its name; a pasted image's empty.
+    pub names: Vec<String>,
+    /// The input collection they're put in, relative to `input/collections/`
+    /// (empty: none).
+    pub folder: PathBuf,
+    /// A new collection to make in `folder` (an existing one of that name,
+    /// any case, is used).
+    pub new_folder: Option<String>,
+    /// The folder tree's filter.
+    pub filter: String,
+}
+
+impl AddRefsDialog {
+    /// Starting in the folder the last save to the input library went to.
+    pub fn new(state: &AppState, files: Vec<PathBuf>, pasted: Vec<crate::tile::TileImage>) -> AddRefsDialog {
+        let names = files
+            .iter()
+            .map(|f| f.file_stem().unwrap_or_default().to_string_lossy().into_owned())
+            .chain(pasted.iter().map(|_| String::new()))
+            .collect();
+        let folder = SaveIdeaDialog::new(state, vec![], String::new()).folder;
+        AddRefsDialog { files, pasted, names, folder, new_folder: None, filter: String::new() }
+    }
+}
+
 /// Naming the copy a project's Duplicate makes.
 #[derive(Clone, Debug, PartialEq)]
 pub struct DuplicateDialog {
@@ -4868,6 +4902,8 @@ pub struct AppState {
     /// Where the last Save to input library went (this session), the next
     /// one's first folder.
     pub save_idea_last: Option<PathBuf>,
+    /// Images from outside on their way to Generate: save them first?
+    pub add_refs: Option<AddRefsDialog>,
     /// Putting input library ideas in a collection.
     pub collect_ideas: Option<CollectIdeasDialog>,
     /// The input collection the last Add to collection went to (this
@@ -5614,6 +5650,7 @@ impl AppState {
             from_ideas_last: None,
             save_idea: None,
             save_idea_last: None,
+            add_refs: None,
             collect_ideas: None,
             collect_ideas_last: None,
             job_info: None,

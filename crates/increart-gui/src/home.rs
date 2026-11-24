@@ -417,9 +417,13 @@ pub fn start_project_window(ctx: &egui::Context, st: &AppState, out: &mut Vec<Ms
             (
                 StartRefs::Files,
                 ic(ph::FILE_IMAGE, "Yes, image files…"),
-                "files from the disk, copied into the input library",
+                "files from the disk; asks whether to save them to the input library as ideas too",
             ),
-            (StartRefs::None, ic(ph::X, "Not now"), "add them later with Add file… or From library… on Generate"),
+            (
+                StartRefs::None,
+                ic(ph::X, "Not now"),
+                "add them later on Generate: Add file…, From library…, Paste or a drop",
+            ),
         ] {
             if ui.radio(d.refs == refs, label).on_hover_text(tip).clicked() {
                 out.push(Msg::EditStartProject(StartProjectDialog { name: name.clone(), refs }));
