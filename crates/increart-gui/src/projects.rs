@@ -161,7 +161,7 @@ fn discarded(ui: &mut egui::Ui, st: &AppState, tex: &mut Textures, out: &mut Vec
                 let restore = || Msg::RestoreProject(id.clone());
                 let delete = || {
                     let text = format!(
-                        "Delete project {} permanently? Its folder goes to the trash with {} image link(s); the images stay in the store until Clean up.",
+                        "Delete project {} permanently? Its folder is deleted with {} image link(s); the images stay in the store until Clean up.",
                         d.discarded.name,
                         p.outputs.len()
                     );
@@ -212,7 +212,7 @@ fn discarded(ui: &mut egui::Ui, st: &AppState, tex: &mut Textures, out: &mut Vec
     });
     let sel = picks.sel.clone();
     action = action.or(picks.finish(ui, &bg, &all));
-    let after = "Their folders go to the trash with their image links; the images stay in the store until Clean up.";
+    let after = "Their folders are deleted with their image links; the images stay in the store until Clean up.";
     crate::review::discard_action(action, sel, all.len(), "project", after, out, |a, s| match a {
         crate::discards::BarAction::Restore => Msg::RestoreProjects(s),
         crate::discards::BarAction::Delete => Msg::DeleteDiscardedProjects(s),
@@ -231,7 +231,7 @@ fn key_hints(ui: &mut egui::Ui, tab: ProjectsTab) {
         ("Ctrl+A", "select all"),
         ("Ctrl+C X V", "copy / cut / paste"),
         ("F2", "rename"),
-        ("Delete", "discard (projects) / trash"),
+        ("Delete", "discard"),
         ("Ctrl+H", "show .rsn files"),
         ("Ctrl+L", "type a path"),
         ("Esc", "clear the selection"),

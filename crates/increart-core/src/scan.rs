@@ -39,6 +39,11 @@ pub const PROJECTS: &str = "projects";
 /// Discarded projects, each with a [`DISCARDED_FILE`]; restorable.
 pub const DISCARDED_PROJECTS: &str = "discarded_projects";
 pub const DISCARDED_FILE: &str = "discarded.rsn";
+/// Discarded collection folders, each with a [`DISCARDED_FILE`]; restorable.
+pub const DISCARDED_COLLECTIONS: &str = "discarded_collections";
+/// Discarded input collection folders, each with a [`DISCARDED_FILE`];
+/// restorable.
+pub const DISCARDED_INPUT_COLLECTIONS: &str = "input/discarded_collections";
 /// A project's discarded output links, under their rating folders.
 pub const DISCARDED_OUTPUTS: &str = "discarded";
 pub const COLLECTIONS: &str = "collections";
@@ -125,6 +130,21 @@ pub struct DiscardedEntry {
     pub discarded: DiscardedProject,
 }
 
+/// A collection folder in `discarded_collections/`, or an input collection
+/// folder in `input/discarded_collections/`, with everything in it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct DiscardedFolder {
+    /// Relative to the library root.
+    pub dir: PathBuf,
+    pub discarded: DiscardedProject,
+    /// The images linked in it and its subfolders (a collection).
+    pub images: Vec<ImageRef>,
+    /// The ideas with an entry in it or its subfolders (an input collection).
+    pub ideas: Vec<crate::Id>,
+    /// Its subfolders, at any depth.
+    pub folders: usize,
+}
+
 impl ProjectEntry {
     /// The project's name: its directory name.
     pub fn name(&self) -> String {
@@ -201,6 +221,12 @@ pub struct Index {
     /// Collection folders, relative to `collections/`.
     pub collection_folders: Vec<PathBuf>,
     pub collection_links: Vec<CollectionLink>,
+    /// Discarded collection folders (`discarded_collections/`), newest
+    /// first; their links not in `collection_links`.
+    pub discarded_collections: Vec<DiscardedFolder>,
+    /// Discarded input collection folders (`input/discarded_collections/`),
+    /// newest first; their entries not in `idea_links`.
+    pub discarded_input_collections: Vec<DiscardedFolder>,
     /// Files waiting in `input/inbox_drop/` (relative to the library root).
     pub inbox_drop: Vec<PathBuf>,
     /// The autosaved New idea form, if any.
@@ -212,6 +238,16 @@ pub struct Index {
 }
 
 impl Index {
+    /// The tree's discarded folders, newest first (none for projects, whose
+    /// folders send their projects to Discarded one by one).
+    pub fn discarded_folders(&self, tree: crate::Tree) -> &[DiscardedFolder] {
+        match tree {
+            crate::Tree::Projects => &[],
+            crate::Tree::Collections => &self.discarded_collections,
+            crate::Tree::InputCollections => &self.discarded_input_collections,
+        }
+    }
+
     /// A line per project whose generated images have lost output links
     /// ([`ProjectEntry::missing_outputs`]).
     pub fn missing_outputs(&self) -> Vec<String> {
@@ -276,6 +312,8 @@ pub fn scan(root: &Path) -> Result<Index> {
     scan_discarded_projects(root, &mut ix)?;
     scan_collections(root, &mut ix)?;
     scan_input_collections(root, &mut ix)?;
+    ix.discarded_collections = scan_discarded_folders(root, DISCARDED_COLLECTIONS, &mut ix.problems)?;
+    ix.discarded_input_collections = scan_discarded_folders(root, DISCARDED_INPUT_COLLECTIONS, &mut ix.problems)?;
     let idea_draft = root.join(IDEA_DRAFT);
     if idea_draft.vfs_is_file() {
         match rsnfmt::read::<IdeaDraftFile>(&idea_draft) {
@@ -381,6 +419,46 @@ fn scan_discarded_projects(root: &Path, ix: &mut Index) -> Result<()> {
     }
     ix.discarded_projects.sort_by_key(|d| std::cmp::Reverse(d.discarded.discarded));
     Ok(())
+}
+
+/// The folders discarded to `base` (relative to the root), newest first.
+fn scan_discarded_folders(root: &Path, base: &str, problems: &mut Vec<String>) -> Result<Vec<DiscardedFolder>> {
+    let mut out = Vec::new();
+    for dir in fsutil::subdirs(&root.join(base))? {
+        let note = dir.join(DISCARDED_FILE);
+        let discarded = match rsnfmt::read::<DiscardedProject>(&note) {
+            Ok(d) => d,
+            Err(e) => {
+                if note.vfs_exists() {
+                    problems.push(e.to_string());
+                }
+                let name = dir.name()?.to_string_lossy().into_owned();
+                DiscardedProject { name, from: PathBuf::new(), discarded: crate::id::Timestamp::default() }
+            }
+        };
+        let mut d = DiscardedFolder { dir: rel(root, &dir), discarded, images: vec![], ideas: vec![], folders: 0 };
+        for p in fsutil::walk(&dir)? {
+            if fs::symlink_metadata(&p).is_ok_and(|m| m.is_dir()) {
+                d.folders += 1;
+            } else if p == note || fsutil::hidden(&p) {
+                continue;
+            } else if base == DISCARDED_INPUT_COLLECTIONS {
+                match idea_link_id(&p) {
+                    Some(idea) => d.ideas.push(idea),
+                    None => problems.push(format!("{}: not an idea's entry (<idea-id>.idea)", p.display())),
+                }
+            } else {
+                match link::read_ref(&p, Store::Output) {
+                    Ok(Some(image)) => d.images.push(image),
+                    Ok(None) => problems.push(format!("{}: not a link into a store", p.display())),
+                    Err(e) => problems.push(e.to_string()),
+                }
+            }
+        }
+        out.push(d);
+    }
+    out.sort_by_key(|d: &DiscardedFolder| std::cmp::Reverse(d.discarded.discarded));
+    Ok(out)
 }
 
 fn read_project(root: &Path, dir: &Path, ix: &mut Index) -> Result<()> {

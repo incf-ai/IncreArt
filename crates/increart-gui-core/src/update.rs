@@ -363,6 +363,13 @@ pub enum Msg {
     DeleteDiscardedProject(Id),
     /// Every discarded project for good (asks first in the GUI).
     EmptyDiscardedProjects,
+    /// A discarded collection folder (`dir`, relative to the library root)
+    /// back where it was (Output / Input library → Discarded).
+    RestoreFolder(Tree, PathBuf),
+    /// A discarded collection folder for good (asks first in the GUI).
+    DeleteDiscardedFolder(Tree, PathBuf),
+    /// Every discarded folder of the tree for good (asks first in the GUI).
+    EmptyDiscardedFolders(Tree),
     // ---- input library
     LibFolder(Option<PathBuf>),
     /// An Input library smart folder, in place of a collection.
@@ -1519,6 +1526,8 @@ pub enum LibOp {
     DeleteDiscarded(Id),
     RestoreProject(Id),
     DeleteDiscardedProject(Id),
+    RestoreFolder(Tree, PathBuf),
+    DeleteDiscardedFolder(Tree, PathBuf),
     /// These, in order, in one op (one rescan); the first that fails stops
     /// the rest.
     Each(Vec<LibOp>),
@@ -1562,7 +1571,7 @@ pub enum LibOp {
         links: Vec<(PathBuf, Option<Verdict>)>,
         undo: bool,
     },
-    /// Output links to the trash (the images stay until Clean up).
+    /// Output links to Discarded (the images stay until Clean up).
     DeleteOutputs(Vec<PathBuf>),
     RestoreOutputs(Vec<PathBuf>),
     DeleteDiscardedOutputs(Vec<PathBuf>),
@@ -3136,6 +3145,9 @@ fn part_of(msg: &Msg) -> usize {
         Msg::RestoreProject(..) => 4,
         Msg::DeleteDiscardedProject(..) => 4,
         Msg::EmptyDiscardedProjects => 4,
+        Msg::RestoreFolder(..) => 4,
+        Msg::DeleteDiscardedFolder(..) => 4,
+        Msg::EmptyDiscardedFolders(_) => 4,
         Msg::LibFolder(..) => 5,
         Msg::LibSmart(..) => 5,
         Msg::LibInfo(..) => 5,
@@ -5280,6 +5292,12 @@ fn apply_4(state: &mut AppState, msg: Msg, rest: &mut Option<Msg>) -> Vec<Effect
         Msg::DeleteDiscarded(id) => lib(state, LibOp::DeleteDiscarded(id)),
         Msg::RestoreProject(id) => lib(state, LibOp::RestoreProject(id)),
         Msg::DeleteDiscardedProject(id) => lib(state, LibOp::DeleteDiscardedProject(id)),
+        Msg::RestoreFolder(tree, dir) => lib(state, LibOp::RestoreFolder(tree, dir)),
+        Msg::DeleteDiscardedFolder(tree, dir) => lib(state, LibOp::DeleteDiscardedFolder(tree, dir)),
+        Msg::EmptyDiscardedFolders(tree) => {
+            let dirs = state.index.discarded_folders(tree).iter().map(|d| d.dir.clone());
+            each(state, dirs.map(|d| LibOp::DeleteDiscardedFolder(tree, d)).collect())
+        }
         m @ (Msg::DiscardImages(_)
         | Msg::EmptyDiscardedProjects
         | Msg::DeleteDiscardedProjects(_)
@@ -9795,17 +9813,17 @@ fn apply_17(state: &mut AppState, msg: Msg, rest: &mut Option<Msg>) -> Vec<Effec
             }
             let text = if place == FvPlace::InputLibrary {
                 format!(
-                    "Remove {} item(s)? Ideas leave the collection and stay in the input library; collections go to the trash with their entries.",
+                    "Remove {} item(s)? Ideas leave the collection and stay in the input library; collections go to Input library → Discarded with their entries.",
                     targets.len()
                 )
             } else if place == FvPlace::Collections {
                 format!(
-                    "Remove {} item(s)? Collections go to the trash with their links; the images keep their rating and project.",
+                    "Remove {} item(s)? Collections go to Output library → Discarded with their links; the images keep their rating and project.",
                     targets.len()
                 )
             } else {
                 format!(
-                    "Delete {} item(s)? Projects go to Discarded (restore them from Projects → Discarded); images go to Output library → Discarded; folders go to the trash.",
+                    "Delete {} item(s)? Projects go to Discarded (restore them from Projects → Discarded); images go to Output library → Discarded; a folder sends its projects to Discarded and is deleted.",
                     targets.len()
                 )
             };

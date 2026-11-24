@@ -3,8 +3,10 @@
 //! space, Ctrl+A all, Esc none; the bar then restores or deletes them all.
 //! Kept in egui's memory per view (it's only what's highlighted).
 
-use crate::widgets::{ACCENT, ic, ph};
+use crate::widgets::{ACCENT, ic, ph, when};
 use eframe::egui::{self, Key, Rect, RichText, Sense};
+use increart_gui_core::{Confirm, Msg};
+use std::path::Path;
 
 /// What the bar asked for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -152,4 +154,61 @@ pub fn bar(ui: &mut egui::Ui, key: &str, hint: &str, selected: usize, total: usi
         });
     });
     action
+}
+
+/// The discarded collection folders of `tree` (Output library → Discarded:
+/// collections; Input library → Discarded: input collections), above the
+/// view's images or ideas: each with where it was and what's in it, to
+/// restore there or delete for good. Nothing when there are none.
+pub fn folders(ui: &mut egui::Ui, st: &increart_gui_core::AppState, tree: increart_core::Tree, out: &mut Vec<Msg>) {
+    let ds = st.index.discarded_folders(tree);
+    if ds.is_empty() {
+        return;
+    }
+    let (base, what) = match tree {
+        increart_core::Tree::InputCollections => ("input/collections", "idea"),
+        _ => ("collections", "image"),
+    };
+    let s = |n: usize| if n == 1 { "" } else { "s" };
+    let title = ic(ph::FOLDER, &format!("Discarded folders ({})", ds.len()));
+    egui::CollapsingHeader::new(title).id_salt(("discarded_folders", base)).default_open(true).show(ui, |ui| {
+        for d in ds {
+            let n = d.images.len() + d.ideas.len();
+            let from = Path::new(base).join(&d.discarded.from);
+            let inside = match d.folders {
+                0 => format!("{n} {what}{}", s(n)),
+                f => format!("{n} {what}{} in it and {f} subfolder{}", s(n), s(f)),
+            };
+            ui.horizontal(|ui| {
+                ui.label(RichText::new(&d.discarded.name).strong());
+                ui.weak(format!("· {inside} · from {} · discarded {}", from.display(), when(d.discarded.discarded)));
+                if ui
+                    .small_button(ic(ph::ARROW_COUNTER_CLOCKWISE, "Restore"))
+                    .on_hover_text("back where it was")
+                    .clicked()
+                {
+                    out.push(Msg::RestoreFolder(tree, d.dir.clone()));
+                }
+                if ui.small_button(ic(ph::TRASH, "Delete permanently…")).clicked() {
+                    let text = format!(
+                        "Delete folder {} permanently? It's deleted with its {inside}; {}.",
+                        d.discarded.name,
+                        match tree {
+                            increart_core::Tree::InputCollections => "the ideas stay in the input library",
+                            _ => "the images stay in the store until Clean up",
+                        }
+                    );
+                    out.push(Msg::Ask(Confirm::new(text, "Delete", Msg::DeleteDiscardedFolder(tree, d.dir.clone()))));
+                }
+                if ui.small_button(ic(ph::FOLDER_OPEN, "")).on_hover_text("show in file manager").clicked() {
+                    out.push(Msg::ShowInFileManager(st.library.clone().unwrap_or_default().join(&d.dir)));
+                }
+            });
+        }
+        if ds.len() > 1 && ui.small_button(ic(ph::TRASH, "Delete all discarded folders…")).clicked() {
+            let text = format!("Delete all {} discarded folders permanently?", ds.len());
+            out.push(Msg::Ask(Confirm::new(text, "Delete", Msg::EmptyDiscardedFolders(tree))));
+        }
+    });
+    ui.separator();
 }

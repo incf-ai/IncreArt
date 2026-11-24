@@ -106,9 +106,9 @@ fn folder_menu(ui: &mut egui::Ui, st: &AppState, tree: Tree, path: &Path, out: &
             ui.close();
         }
         let what = match tree {
-            Tree::InputCollections => "Delete… (its ideas stay)",
+            Tree::InputCollections => "Delete… (to Discarded, its ideas stay)",
             Tree::Projects => "Delete… (discards its projects)",
-            Tree::Collections => "Delete… (to the trash)",
+            Tree::Collections => "Delete… (to Discarded)",
         };
         if ui.button(ic(ph::TRASH, what)).clicked() {
             let name = path.file_name().unwrap_or_default().to_string_lossy();

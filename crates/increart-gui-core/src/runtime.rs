@@ -52,8 +52,6 @@ struct Session {
 /// Set by tests before anything starts (a second setting is ignored).
 #[derive(Default)]
 struct Paths {
-    /// Where libraries put deleted things; unset: the system trash.
-    disposal: OnceLock<increart_core::library::Disposal>,
     /// Where started servers log; unset: [`log_dir`].
     log_dir: OnceLock<PathBuf>,
     /// How often engines poll their jobs, and their first retry's wait;
@@ -173,12 +171,6 @@ fn cancel(slot: &Cell<Arc<AtomicBool>>) {
 }
 
 impl Runtime {
-    /// Libraries opened after this put what they delete in `dir` rather than
-    /// the system trash (tests: macOS's trash goes through Finder).
-    pub fn set_trash_dir(&self, dir: PathBuf) {
-        let _ = self.ctx.paths.disposal.set(increart_core::library::Disposal::Directory(dir));
-    }
-
     /// Servers started after this log into `dir` rather than [`log_dir`].
     pub fn set_log_dir(&self, dir: PathBuf) {
         let _ = self.ctx.paths.log_dir.set(dir);
@@ -1713,12 +1705,7 @@ fn work_on(ctx: &Ctx, fx: Effect) -> Vec<Msg> {
             if opened.is_ok() {
                 increart_core::ephemeral::logs_to_disk(&ctx.paths.logs());
             }
-            vec![Msg::LibraryOpened(opened.map_err(err).and_then(|mut lib| {
-                if let Some(d) = ctx.paths.disposal.get() {
-                    lib.set_disposal(d.clone());
-                }
-                library_opened(ctx, lib, t)
-            }))]
+            vec![Msg::LibraryOpened(opened.map_err(err).and_then(|lib| library_opened(ctx, lib, t)))]
         }
         Effect::OpenEphemeral { from, budget } => {
             let t = std::time::Instant::now();
@@ -2358,6 +2345,10 @@ pub fn lib_op(lib: &mut Library, op: LibOp) -> Result<OpOk, String> {
         }
         LibOp::RestoreProject(id) => lib.restore_project(&id).map(|_| OpOk::Done).map_err(err),
         LibOp::DeleteDiscardedProject(id) => lib.delete_discarded_project(&id).map(|_| OpOk::Done).map_err(err),
+        LibOp::RestoreFolder(tree, dir) => lib.restore_folder(tree, &dir).map(|_| OpOk::Done).map_err(err),
+        LibOp::DeleteDiscardedFolder(tree, dir) => {
+            lib.delete_discarded_folder(tree, &dir).map(|_| OpOk::Done).map_err(err)
+        }
         LibOp::NewProjectFromIdeas(ids, folder, name) => new_project_from_ideas(lib, &ids, &folder, &name),
         LibOp::CreateFolder(tree, parent) => {
             lib.create_folder(tree, &parent, None).map(|p| OpOk::Created(tree, p)).map_err(err)

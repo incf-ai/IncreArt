@@ -7368,11 +7368,13 @@ impl AppState {
             }
             Tree::InputCollections => {
                 let n = self.index.ideas_in_collection(Some(path)).len();
-                format!("{n} idea(s); the ideas stay in the input library")
+                format!(
+                    "{n} idea(s); it goes to Input library → Discarded (restorable), the ideas stay in the input library"
+                )
             }
             Tree::Collections => {
                 let n = self.index.collection_links.iter().filter(|l| l.folder.starts_with(path)).count();
-                format!("{n} link(s); the images stay")
+                format!("{n} link(s); it goes to Output library → Discarded (restorable), the images stay")
             }
         }
     }

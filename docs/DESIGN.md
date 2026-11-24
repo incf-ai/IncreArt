@@ -212,8 +212,7 @@ lazily, and a copy, rename or hard link of a file still on disk holds no
 RAM. Every write goes to RAM. All of the library's file access goes through
 `vfs`, with paths outside a mount going to `std::fs`; clippy's
 `disallowed-methods` (clippy.toml) rejects `std::fs`, `Path::exists` and
-the like, `image::open` and `trash::delete` in the app crates so none
-bypasses it. The session holds a shared lock on the disk library's
+the like and `image::open` in the app crates so none bypasses it. The session holds a shared lock on the disk library's
 `library.lock`: no instance opens it meanwhile, though a second ephemeral
 session can.
 
@@ -236,8 +235,8 @@ is dropped.
 **Outside the library**: the log folder becomes an overlay over itself (the
 app log, the traffic log and the logs of servers the app starts, piped
 through the app) and is put back on leaving. The recent-libraries list,
-the library watcher and load timings aren't updated. Nothing goes to the
-system trash (deletion removes). **Show in the file manager**, **Open in
+the library watcher and load timings aren't updated. Deleting for good
+removes from RAM without overwriting anything on disk. **Show in the file manager**, **Open in
 editor** say the file is in RAM (nothing is dragged out of the app). Notifications are
 in-app only and name nothing outside.
 
@@ -1747,8 +1746,23 @@ links, so store images can become unreferenced. A **Clean up library**
 command (never automatic) marks every image still referenced (links, those
 of discarded projects too, `idea.rsn` images, `run.rsn` refs (discarded
 projects' too, so a restore finds them), recipes' `refs` / `init` /
-`parent`, `FromOutput` sources) and moves the rest to the system trash. An input image used as a ref by any
+`parent`, `FromOutput` sources) and deletes the rest (and their
+thumbnails) for good. An input image used as a ref by any
 kept output therefore survives even after its idea is gone.
+
+**Deleting for good.** Deleting goes to a Discarded first (ideas, projects,
+output links, collection and input-collection folders), from where it can
+be restored; a project folder sends its projects there one by one, and the
+emptied folders are deleted. An entry deleted from a collection (an
+image's link, an idea's entry) is deleted at once: its image or idea stays.
+What's deleted from Discarded (one, the selected, Empty discarded…), and
+what Clean up removes, is permanent and never goes to a system trash: each
+file is overwritten with random bytes, flushed, then deleted. A file with
+another hard link (an output link in hard-link mode, a store image a link
+shares) is only unlinked, since its data is the other name's; a symlink is
+removed, never followed. A file that can't be written is still deleted.
+`tests/deletion.rs` checks all of it in every link mode on every OS CI
+runs.
 
 ## Scheduling (same as Yue2, plus model switching)
 
@@ -1991,6 +2005,7 @@ costs ~4% speed and frees ~21 GiB: see Measurements so far).
     library/<idea-id>/                input library: every kept idea, flat
     collections/<folder>/…/<idea-id>.idea  input collections: empty files naming ideas
     discarded/<idea-id>/              discarded ideas (recoverable)
+    discarded_collections/<folder>/   discarded input collections (+ discarded.rsn), made when first needed
     edited/<idea-id>/                 cropped and marked copies (Crop / mark…), hidden
   projects/                           folder tree (see Project folders)
     <folder>/…/<project>/             output queue + output library (per project)
@@ -1999,7 +2014,9 @@ costs ~4% speed and frees ~21 GiB: see Measurements so far).
       runs/<run-id>/generation.log    what the engine did for it and its servers' answers (Job window ▸ Generation log)
       unreviewed/<run-id>_r<rev>_s<seed>.png  link → output_images/<image-id>.png
       reviewed/{good,neutral,bad}/...         links
+  discarded_projects/<project>/       discarded projects (+ discarded.rsn: name, folder it was in, when)
   collections/<folder>/…/<image-id>.png  output-library collections: links into output_images/
+  discarded_collections/<folder>/     discarded collections (+ discarded.rsn), made when first needed
   thumbs/{input,output}/<image-id>.webp   shared cache, deletable
   cache/pixel-index.rsn               pixel hash → image ID, transparent images, UUID → image; deletable
   cache/conditioning/                 future: disk conditioning cache (needs sd.cpp patch)
@@ -2089,7 +2106,8 @@ A whole library as one file, from the library menu (`archive.rs`):
 Review moves files or idea folders between folders (like Yue2); the folder is
 the source of truth for the verdict on both sides (for ideas: inbox, library
 or discarded; the star lives in `idea.rsn`). A `notify` watcher picks
-up external moves/deletes. Deleting goes to the system trash.
+up external moves/deletes. Deleting goes to Discarded; deleting from there
+is for good (see Deleting for good).
 
 ### Drafts
 
@@ -3710,7 +3728,8 @@ real directories under `projects/`, so it looks the same in a file manager.
     (numbered if the name is taken there) with a `discarded.rsn` noting its
     name, the folder it was in and when; it leaves the tree, the queue,
     Review and the Output library, and shows under **Projects → Discarded**.
-    A folder itself goes to the system trash once its projects are out.
+    A folder itself, emptied of its projects, is deleted (with any other
+    file in it, overwritten first).
   - **Drag and drop** moves, like cut + paste: drop on a folder to move into
     it, on a project to move beside it, or on "All projects" / the empty
     area for the top level. The target is outlined blue, or red when the drop
@@ -3763,7 +3782,10 @@ idea can be in any number of collections, or in none. The differences:
   entries. **Move** moves entries or collections; an entry already in the
   destination just leaves the source.
 - **Delete** on an entry takes the idea out of the collection; on a
-  collection, it goes to the trash with its entries. Ideas are never
+  collection, it moves to `input/discarded_collections/` with its entries
+  (numbered if the name is taken there) and a `discarded.rsn` noting its
+  name, the collection it was in and when, and shows under **Input library →
+  Discarded** (see Discarded folders). Ideas are never
   discarded by either: discarding stays a Grid action (`Ctrl+Z` undoes it).
 - An idea can't be renamed from a collection: its title is edited in the
   Edit idea window.
@@ -3919,8 +3941,8 @@ the keys and mouse buttons go through that view's own history instead.
     originals after N days, clear them now; see Open questions).
   - **Discarded**: discarded ideas (`input/discarded/`), newest first.
     Right-click: restore to the Idea inbox, restore to the input library ·
-    copy text, copy image, describe image with PE · delete permanently (asks first; the idea's folder goes to the system
-    trash, its images stay until Clean up). **Empty discarded…** deletes them
+    copy text, copy image, describe image with PE · delete permanently (asks first; the idea's folder is deleted for
+    good, its images stay until Clean up). **Empty discarded…** deletes them
     all (asks first). Ideas are selected as the Discarded images are (click,
     `Ctrl`/`Shift`+click, a box, `Ctrl+A`); the bar restores the selected
     to the Idea inbox or deletes them permanently. Restores can be undone
@@ -4053,8 +4075,8 @@ the keys and mouse buttons go through that view's own history instead.
     dragged) between `unreviewed/` and `reviewed/*/` of their own project,
     which is a review (undoable); moving them into another project is
     refused (use → input ref). They can't be renamed (the name carries run,
-    revision and seed) or copied; deleting one moves the link to the trash,
-    the image stays in the store until Clean up. Project subfolders, idea
+    revision and seed) or copied; deleting one moves the link to Output
+    library → Discarded, the image stays in the store until Clean up. Project subfolders, idea
     images and metadata files are managed by the app.
   - Status bar: item count, selection count and size, current path (cut
     short when narrow).
@@ -4111,10 +4133,10 @@ the keys and mouse buttons go through that view's own history instead.
   newest first, as tiles (cover, name, rating counts, "from projects/…",
   when). Hovered, a tile shows **Restore** and **Delete** on its cover;
   right-click: Restore, Open in file manager, Delete permanently…
-  **Restore** puts the project back in the folder it was in (the top level
-  if that folder is gone), under its name (numbered if taken); its pending
-  seeds generate again. **Delete permanently** (asks first) sends its folder
-  to the system trash; the images stay until Clean up. **Empty
+  **Restore** puts the project back in the folder it was in (made again if
+  it is gone), under its name (numbered if taken); its pending
+  seeds generate again. **Delete permanently** (asks first) deletes its folder
+  for good; the images stay until Clean up. **Empty
   discarded…** (asks first) does it for all of them.
 - **Jobs**: per-run progress and per-server state (loading / draining /
   generating). Runs being saved show first ("r02 · being saved, then
@@ -4322,8 +4344,9 @@ the keys and mouse buttons go through that view's own history instead.
     the Output library and the folder views (which also offers **New
     collection**), or Review's **Add to collection…**, which can rate too. On disk: `collections/<folder>/…/<image-id>.png`, links into
     `output_images/`; removing an image from a collection removes only that
-    link, deleting a collection removes its links (asks first), the images
-    keep their rating and project. In the side panel collections nest,
+    link, deleting a collection moves it with its links to
+    `discarded_collections/` (asks first; restore it from **Discarded**), the
+    images keep their rating and project. In the side panel collections nest,
     each with how many images are in it and the ones inside it;
     right-click one for New collection inside, Rename, Move to the top
     level, Open in file manager, Delete… (the Input library's collections
@@ -4384,10 +4407,21 @@ the keys and mouse buttons go through that view's own history instead.
     same selection and bar are in Projects → Discarded and the ideas'
     Discarded view. **Restore** puts it back in its project, rated as it
     was, and its seed is no longer deleted (refused if a link of that name is
-    there). **Delete permanently** (asks first) sends the link to the system
-    trash; the image stays until Clean up. **Empty discarded…** (asks first)
+    there). **Delete permanently** (asks first) deletes the link
+    for good; the image stays until Clean up. **Empty discarded…** (asks first)
     does it for all of them. Clean up and store conversion count discarded
     images' links, so a restore finds its image.
+    **Discarded folders**: above the images, the discarded collection folders
+    (collapsible, with the tab's count including them; the Input library's
+    Discarded tab has its input collections the same way), newest first, each
+    with its name, what it holds ("2 images in it and 1 subfolder"), "from
+    collections/…" and when. **Restore** puts it back where it was, the
+    folders it was in made again if gone, under its name (numbered if taken);
+    **Delete permanently…** (asks first) deletes it for good, its links or
+    entries with it (images stay in the store until Clean up, ideas in the
+    input library); **Delete all discarded folders…** (asks first) with more
+    than one. A discarded collection's images count for Clean up, so a
+    restore finds them.
   - **Titles**: an output image can be given a title (**Set title…** in the
     Grid's right-click menu, `F2` on the selected image, or the pencil in
     the lineage view). A small dialog edits it: Enter saves, an empty title

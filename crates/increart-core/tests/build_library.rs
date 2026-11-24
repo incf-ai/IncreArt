@@ -13,8 +13,8 @@ use chrono::TimeZone;
 use image::{DynamicImage, ImageEncoder, Rgb, RgbImage, Rgba, RgbaImage};
 use increart_core::model::*;
 use increart_core::{
-    Disposal, Error, IdeaLoc, ImageRef, Library, NewIdea, NewRun, Original, Store, Tree, Verdict, container, fsutil,
-    import, link, png,
+    Error, IdeaLoc, ImageRef, Library, NewIdea, NewRun, Original, Store, Tree, Verdict, container, fsutil, import,
+    link, png,
 };
 
 fn t0() -> increart_core::id::Timestamp {
@@ -148,7 +148,6 @@ fn setup(mode: Option<LinkMode>) -> (tempfile::TempDir, Library) {
     let tmp = tempfile::tempdir().unwrap();
     let mut lib = Library::create(&tmp.path().join("lib"), mode).unwrap();
     lib.set_clock(t0);
-    lib.set_disposal(Disposal::Directory(tmp.path().join("trash")));
     (tmp, lib)
 }
 
@@ -163,7 +162,7 @@ fn resolves(lib: &Library, rel: &Path, store: Store) -> ImageRef {
 #[test]
 fn whole_library_through_the_api() {
     // symlinks whatever INCREART_LINK_MODE says: this test reads them as such
-    let (tmp, mut lib) = setup(Some(LinkMode::Symlink));
+    let (_tmp, mut lib) = setup(Some(LinkMode::Symlink));
     let root = lib.root().to_path_buf();
     assert_eq!(lib.link_mode(), LinkMode::Symlink);
 
@@ -399,7 +398,7 @@ fn whole_library_through_the_api() {
     lib.delete_node(Tree::Projects, Path::new("fox")).unwrap();
     assert!(root.join("discarded_projects/fox/project.rsn").exists());
     lib.delete_discarded_project(&copy_id).unwrap();
-    assert!(tmp.path().join("trash/fox").join("project.rsn").exists());
+    assert!(!root.join("discarded_projects/fox").exists());
     assert!(lib.unreferenced().unwrap().is_empty());
     // a discarded project keeps its images through Clean up, and comes back
     // where it was, its links working
@@ -435,7 +434,7 @@ fn whole_library_through_the_api() {
     cleaned.sort();
     assert_eq!(cleaned, gone);
     assert!(!lib.image_path(&ImageRef::output(edited)).exists());
-    assert!(tmp.path().join("trash").join(format!("{sticker}.png")).exists());
+    assert!(!lib.image_path(&ImageRef::input(sticker.clone())).exists());
     let report = common::verify(&root);
     assert!(report.trim_end().ends_with("problems: none"), "{report}");
 
@@ -648,7 +647,6 @@ fn long_paths() {
     }
     let mut lib = Library::create(&root, None).unwrap();
     lib.set_clock(t0);
-    lib.set_disposal(Disposal::Directory(tmp.path().join("trash")));
     let photo = lib.import_bytes(&jpeg_bytes(picture(20, 20, 3)), &original("a photo with a long name.jpg")).unwrap();
     let idea = lib.new_idea(NewIdea { images: vec![photo.image], ..NewIdea::text("A", "") }).unwrap();
     lib.review_idea(&idea, Verdict::Good).unwrap();

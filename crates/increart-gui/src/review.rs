@@ -1829,7 +1829,8 @@ pub fn output_library(ui: &mut egui::Ui, st: &AppState, tex: &mut Textures, out:
                 if ui.selectable_label(st.output_tab == OutputTab::Folder, ic(ph::FOLDER, "Folder")).clicked() {
                     out.push(Msg::OutputTab(OutputTab::Folder));
                 }
-                let n = st.index.projects.iter().map(|p| p.discarded.len()).sum::<usize>();
+                let n = st.index.projects.iter().map(|p| p.discarded.len()).sum::<usize>()
+                    + st.index.discarded_collections.len();
                 let label = if n == 0 { "Discarded".to_string() } else { format!("Discarded ({n})") };
                 if ui.selectable_label(st.output_tab == OutputTab::Discarded, ic(ph::TRASH, &label)).clicked() {
                     out.push(Msg::OutputTab(OutputTab::Discarded));
@@ -3091,6 +3092,7 @@ pub fn collection_menu(ui: &mut egui::Ui, st: &AppState, images: &[increart_core
 /// The Discarded tab: the images deleted from projects, newest first, to
 /// restore to where they were or delete for good.
 fn discarded_outputs(ui: &mut egui::Ui, st: &AppState, root: &Path, tex: &mut Textures, out: &mut Vec<Msg>) {
+    crate::discards::folders(ui, st, Tree::Collections, out);
     let images = st.discarded_outputs();
     if images.is_empty() {
         ui.weak("No discarded images. Discard (right-click an image, or Del) puts one here, to restore later.");
@@ -3121,7 +3123,7 @@ fn discarded_outputs(ui: &mut egui::Ui, st: &AppState, root: &Path, tex: &mut Te
                 }
                 let restore = || Msg::RestoreOutput(o.path.clone());
                 let delete = || {
-                    let text = "Delete this image permanently? Its link goes to the trash; the image stays in the store until Clean up.";
+                    let text = "Delete this image permanently? Its link is deleted; the image stays in the store until Clean up.";
                     Msg::Ask(Confirm::new(text, "Delete", Msg::DeleteDiscardedOutput(o.path.clone())))
                 };
                 if ui.rect_contains_pointer(r.rect) {
@@ -3173,7 +3175,7 @@ fn discarded_outputs(ui: &mut egui::Ui, st: &AppState, root: &Path, tex: &mut Te
         sel,
         all.len(),
         "image",
-        "Their links go to the trash; the images stay in the store until Clean up.",
+        "Their links are deleted; the images stay in the store until Clean up.",
         out,
         |a, s| match a {
             crate::discards::BarAction::Restore => Msg::RestoreOutputs(s),

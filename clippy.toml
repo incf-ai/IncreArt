@@ -36,5 +36,4 @@ disallowed-methods = [
     { path = "image::open", reason = "use vfs::open_image" },
     { path = "image::ImageReader::open", reason = "read through vfs" },
     { path = "image::image_dimensions", reason = "use vfs::image_dimensions" },
-    { path = "trash::delete", reason = "nothing of an ephemeral library goes to the trash" },
 ]

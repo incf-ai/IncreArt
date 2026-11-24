@@ -31,7 +31,6 @@ impl Harness {
         let rt = Runtime::new(|| {}).unwrap();
         // started servers (stand-ins) log here, not in the real log folder
         rt.set_log_dir(tmp.path().join("logs"));
-        rt.set_trash_dir(tmp.path().join("trash"));
         // stand-in servers answer at once: no half-second polls
         rt.set_engine_timing(Duration::from_millis(10), Duration::from_millis(50));
         let mut h = Harness { state: AppState::new(config, None), rt, _tmp: tmp, root };
@@ -970,18 +969,18 @@ fn discarded_projects_restore_and_delete_for_good() {
     assert!(h.state.index.discarded_projects.is_empty());
     assert!(h.state.index.projects.iter().any(|p| p.dir == Path::new("projects/clients/new project")));
 
-    // a folder: its projects to Discarded, the folder to the trash; restored
-    // with the folder gone, to the top level
+    // a folder: its projects to Discarded, the folder deleted; restored
+    // with the folder gone, into the folder made again
     h.send(Msg::DeleteNode(Tree::Projects, "clients".into()));
     h.settle();
     assert!(h.state.index.projects.is_empty() && h.state.index.project_folders.is_empty());
     assert_eq!(h.state.index.discarded_projects.len(), 2);
     h.send(Msg::RestoreProject(id(&h, "new project 2")));
     h.settle();
-    assert_eq!(h.state.index.projects[0].dir, Path::new("projects/new project 2"));
+    assert_eq!(h.state.index.projects[0].dir, Path::new("projects/clients/new project 2"));
 
     // the selected restored at once
-    h.send(Msg::DeleteNode(Tree::Projects, "new project 2".into()));
+    h.send(Msg::DeleteNode(Tree::Projects, "clients/new project 2".into()));
     h.settle();
     h.send(Msg::RestoreProjects(vec![id(&h, "new project 2")]));
     h.settle();
@@ -992,6 +991,81 @@ fn discarded_projects_restore_and_delete_for_good() {
     h.settle();
     assert!(h.state.index.discarded_projects.is_empty());
     assert_eq!(names(&h), ["new project 2"]);
+    assert!(h.errors().is_empty(), "{:?}", h.errors());
+}
+
+#[test]
+fn discarded_collection_folders_restore_and_delete_for_good() {
+    use increart_core::Tree;
+    let mut h = Harness::new();
+    h.send(Msg::NewProject(PathBuf::new()));
+    h.send(Msg::CommitRename);
+    h.settle();
+    let project = h.state.project.clone().unwrap();
+    Library_::steal(&h.root).write_two(&project);
+    h.rt.run(Effect::Rescan);
+    h.settle();
+    let imgs: Vec<_> = h.state.review_queue().iter().map(|o| o.image.clone()).collect();
+    h.send(Msg::NewCollection(PathBuf::new(), imgs.clone()));
+    h.settle();
+    let coll = h.state.renaming.clone().unwrap().path;
+    h.send(Msg::CancelRename);
+    assert_eq!(h.state.index.collection_links.len(), 2);
+
+    // to Output library → Discarded, links and all
+    h.send(Msg::DeleteNode(Tree::Collections, coll.clone()));
+    h.settle();
+    assert!(h.state.index.collection_links.is_empty() && h.state.index.collection_folders.is_empty());
+    let d = &h.state.index.discarded_collections[0];
+    assert_eq!(d.images.len(), 2);
+    assert_eq!(h.state.index.discarded_folders(Tree::Collections).len(), 1);
+    assert!(h.state.index.discarded_folders(Tree::InputCollections).is_empty());
+    h.send(Msg::RestoreFolder(Tree::Collections, d.dir.clone()));
+    h.settle();
+    assert!(h.state.index.discarded_collections.is_empty(), "{:?}", h.errors());
+    assert_eq!(h.state.index.collection_folders, std::slice::from_ref(&coll));
+    assert_eq!(h.state.index.collection_links.len(), 2);
+
+    // for good, one and then all; the images stay in their project
+    h.send(Msg::DeleteNode(Tree::Collections, coll.clone()));
+    h.settle();
+    let dir = h.state.index.discarded_collections[0].dir.clone();
+    h.send(Msg::DeleteDiscardedFolder(Tree::Collections, dir.clone()));
+    h.settle();
+    assert!(h.state.index.discarded_collections.is_empty());
+    assert!(!h.root.join(&dir).exists());
+    for name in ["a", "b"] {
+        h.send(Msg::NewCollection(PathBuf::new(), imgs[..1].to_vec()));
+        h.settle();
+        h.send(Msg::EditRename(name.into()));
+        h.send(Msg::CommitRename);
+        h.settle();
+        h.send(Msg::DeleteNode(Tree::Collections, name.into()));
+        h.settle();
+    }
+    assert_eq!(h.state.index.discarded_collections.len(), 2, "{:?}", h.errors());
+    h.send(Msg::EmptyDiscardedFolders(Tree::Collections));
+    h.settle();
+    assert!(h.state.index.discarded_collections.is_empty());
+    assert_eq!(h.state.review_queue().len(), 2, "the images are still the project's");
+
+    // an input collection: its ideas stay in the input library
+    h.send(Msg::NewFolder(Tree::InputCollections, PathBuf::new()));
+    h.settle();
+    h.send(Msg::EditRename("places".into()));
+    h.send(Msg::CommitRename);
+    h.settle();
+    h.send(Msg::DeleteNode(Tree::InputCollections, "places".into()));
+    h.settle();
+    let dir = h.state.index.discarded_input_collections[0].dir.clone();
+    h.send(Msg::RestoreFolder(Tree::InputCollections, dir));
+    h.settle();
+    assert_eq!(h.state.index.input_collection_folders, [PathBuf::from("places")], "{:?}", h.errors());
+    h.send(Msg::DeleteNode(Tree::InputCollections, "places".into()));
+    h.settle();
+    h.send(Msg::EmptyDiscardedFolders(Tree::InputCollections));
+    h.settle();
+    assert!(h.state.index.discarded_input_collections.is_empty() && h.state.index.input_collection_folders.is_empty());
     assert!(h.errors().is_empty(), "{:?}", h.errors());
 }
 

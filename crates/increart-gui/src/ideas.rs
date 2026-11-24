@@ -359,7 +359,7 @@ pub fn inbox(ui: &mut egui::Ui, st: &AppState, tex: &mut Textures, out: &mut Vec
             egui::CentralPanel::default().show(ui, |ui| crate::folderview::view(ui, st, tex, out));
         }
         InboxTab::Import => import(ui, st, tex, out),
-        InboxTab::Discarded => discarded(ui, st, tex, out),
+        InboxTab::Discarded => discarded(ui, st, None, tex, out),
     }
 }
 
@@ -1101,9 +1101,14 @@ fn inbox_side(ui: &mut egui::Ui, st: &AppState, out: &mut Vec<Msg>) {
     }
 }
 
-fn discarded(ui: &mut egui::Ui, st: &AppState, tex: &mut Textures, out: &mut Vec<Msg>) {
+/// `folders`: the tree whose discarded folders it lists first (the input
+/// library's: its collections).
+fn discarded(ui: &mut egui::Ui, st: &AppState, folders: Option<Tree>, tex: &mut Textures, out: &mut Vec<Msg>) {
     egui::CentralPanel::default().show(ui, |ui| {
         let Some(root) = st.library.as_deref() else { return };
+        if let Some(tree) = folders {
+            crate::discards::folders(ui, st, tree, out);
+        }
         let ideas = st.discarded_ideas();
         if ideas.is_empty() {
             ui.weak("No discarded ideas.");
@@ -1162,7 +1167,7 @@ fn discarded(ui: &mut egui::Ui, st: &AppState, tex: &mut Textures, out: &mut Vec
         });
         let sel = picks.sel.clone();
         action = action.or(picks.finish(ui, &bg, &all));
-        let after = "Their folders go to the trash; their images stay in the store until Clean up.";
+        let after = "Their folders are deleted; their images stay in the store until Clean up.";
         crate::review::discard_action(action, sel, all.len(), "idea", after, out, |a, s| match a {
             // the bar's Restore: to the Idea inbox, where they came from mostly
             crate::discards::BarAction::Restore => Msg::RestoreIdeas(s, IdeaLoc::Unreviewed),
@@ -1289,7 +1294,7 @@ pub fn input_library(ui: &mut egui::Ui, st: &AppState, tex: &mut Textures, out: 
                 if ui.selectable_label(st.lib_tab == LibTab::Folder, ic(ph::FOLDER, "Folder")).clicked() {
                     out.push(Msg::LibTab(LibTab::Folder));
                 }
-                let n = st.discarded_ideas().len();
+                let n = st.discarded_ideas().len() + st.index.discarded_input_collections.len();
                 if ui
                     .selectable_label(st.lib_tab == LibTab::Discarded, ic(ph::TRASH, &format!("Discarded ({n})")))
                     .clicked()
@@ -1315,7 +1320,7 @@ pub fn input_library(ui: &mut egui::Ui, st: &AppState, tex: &mut Textures, out: 
         });
     });
     if st.lib_tab == LibTab::Discarded {
-        return discarded(ui, st, tex, out);
+        return discarded(ui, st, Some(Tree::InputCollections), tex, out);
     }
     if st.lib_tab == LibTab::Folder {
         egui::CentralPanel::default().show(ui, |ui| crate::folderview::view(ui, st, tex, out));
