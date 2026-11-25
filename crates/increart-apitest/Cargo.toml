@@ -1,6 +1,6 @@
 [package]
 name = "increart-apitest"
-version = "0.1.0"
+version = "0.1.1"
 edition.workspace = true
 license.workspace = true
 description = "Validates the servers of an IncreArt config: each call the app makes, one test case at a time"
@@ -13,7 +13,7 @@ fake = ["dep:tiny_http"]
 base64 = "0.22"
 chrono = { version = "0.4.45", default-features = false, features = ["std", "clock"] }
 image = { version = "0.25.10", default-features = false, features = ["png"] }
-increart-core = { version = "0.1.0", path = "../increart-core" }
+increart-core = { version = "0.1.1", path = "../increart-core" }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 tiny_http = { version = "0.12.0", optional = true }

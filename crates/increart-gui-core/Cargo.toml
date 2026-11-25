@@ -1,6 +1,6 @@
 [package]
 name = "increart-gui-core"
-version = "0.1.0"
+version = "0.1.1"
 edition.workspace = true
 license.workspace = true
 
@@ -10,7 +10,7 @@ avif = ["increart-core/avif"]
 [dependencies]
 ab_glyph = "0.2.32"
 chrono = { version = "0.4.45", default-features = false, features = ["std", "clock"] }
-increart-core = { version = "0.1.0", path = "../increart-core" }
+increart-core = { version = "0.1.1", path = "../increart-core" }
 epaint_default_fonts = "0.37.0"
 image = { version = "0.25.10", default-features = false, features = ["png"] }
 rfd = { version = "0.17.2", default-features = false, features = ["xdg-portal"] }
